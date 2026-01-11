@@ -33,11 +33,14 @@ RUN useradd -m -u 501 -s /bin/bash paulbiggar && \
 # Switch to paulbiggar user
 USER paulbiggar
 
+# Add Rust and local bin to PATH
+ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
+
 # Install Rust for benchmarking
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Install beads (bd) issue tracking
-RUN curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
 # Install darklang interpreter
 RUN mkdir -p ~/.local/bin && \
@@ -53,9 +56,6 @@ RUN git config --global alias.ci commit && \
 # Configure nice bash prompt with git branch
 RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> ~/.bashrc && \
     echo 'PS1="\[\033[1;32m\]\u@dark\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]\[\033[1;33m\]\$(parse_git_branch | sed \"s/.*/ (&)/\")\[\033[0m\]\$ "' >> ~/.bashrc
-
-# Add Rust and local bin to PATH
-ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
 # Set working directory to match host path
 WORKDIR /Users/paulbiggar/projects/compiler-for-dark
