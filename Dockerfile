@@ -39,6 +39,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 # Install beads (bd) issue tracking
 RUN curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
+# Install darklang interpreter
+RUN mkdir -p ~/.local/bin && \
+    curl -sSL https://github.com/darklang/dark/releases/download/v0.0.4/darklang-alpha-2c1adf536e-linux-arm64.gz | \
+    gunzip > ~/.local/bin/darklang-interpreter && \
+    chmod +x ~/.local/bin/darklang-interpreter
+
 # Configure git aliases
 RUN git config --global alias.ci commit && \
     git config --global alias.co checkout && \
