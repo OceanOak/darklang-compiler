@@ -16,7 +16,7 @@ Use Beads for planning and progress tracking.
 
 5. Some tasks will involve many thousands of small-ish fixes, such as improving performance or test coverage. In the main task, only add the issues - they can be solved later. EXCEPTION: truly tiny fixes.
 
-6. Make a git commit of that feature.
+6. Make a git commit of that feature. Include in the commit message a large discussion of the feature and choices and assumptions made
 
 ONLY WORK ON A SINGLE ISSUE.
 
