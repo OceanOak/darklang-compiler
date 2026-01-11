@@ -143,12 +143,12 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 - `compilePreamble` and `compileTestWithPreamble` for test preamble caching
 - `compileAndRunWithStdlibCachedTimed` for E2E test execution with timing
 
-## Docker Development (with Codex Integration)
+## Docker Development (with Codex + Claude Code Integration)
 
 ### Initial Setup
 
 ```bash
-# Build container image (includes Codex CLI)
+# Build container image (includes Codex CLI + Claude Code)
 ./docker.sh build
 
 # Start container
@@ -182,6 +182,31 @@ codex
 ```
 
 Your Codex configuration, conversation history, and session memory are persisted via volume mount at `~/.codex`.
+
+### Using Claude Code Inside Container
+
+**First time setup - Authenticate:**
+```bash
+# Enter container
+./docker.sh shell
+
+# Inside container - authenticate Claude Code
+claude login
+# Follow prompts to enter your API key
+```
+
+**Subsequent sessions:**
+```bash
+./docker.sh shell
+claude
+```
+
+**Once-off install (if you are already inside a running container):**
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Your Claude configuration and session data are persisted via volume mount at `~/.claude`.
 
 ### Development Workflow
 
@@ -218,9 +243,11 @@ dotnet clean                    # Clean build artifacts
 ### What's Included
 
 - ✅ Codex CLI pre-installed
+- ✅ Claude Code pre-installed
 - ✅ Build compiler DLL in container
 - ✅ Volume mount for source code (edit on host or in container)
 - ✅ Codex config/history persisted via volume mount
+- ✅ Claude config/history persisted via volume mount
 - ✅ Full filesystem isolation and sandboxing
 - ✅ Run all tests in container (generates Linux ELF binaries)
 

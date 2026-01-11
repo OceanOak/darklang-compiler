@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Codex CLI
-RUN npm install -g @openai/codex
+# Install Codex CLI + Claude Code
+RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
 # Create project directory structure as root
 RUN mkdir -p /Users/paulbiggar/projects
