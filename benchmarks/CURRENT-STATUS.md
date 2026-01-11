@@ -31,43 +31,7 @@ These benchmarks compile and run reliably.
 | merkletrees   | Tree/Hashing   | Recursive tree hashing                  |
 | spectral_norm | Numerical      | Float array operations                  |
 | matmul        | Matrix         | Matrix multiplication                   |
-
----
-
-## CRITICAL BUG: Negative Floats in Recursive Functions
-
-**Status: CAUSES WRONG RESULTS**
-
-Negative float values passed to recursive functions with 4+ float parameters produce incorrect results.
-
-### Affected Benchmarks:
-
-| Benchmark  | Impact                                                  |
-| ---------- | ------------------------------------------------------- |
-| mandelbrot | Outputs 24091 instead of correct 15909 for 200x200 grid |
-
-### Minimal Reproduction:
-
-```dark
-def iterate(cr: Float, ci: Float, zr: Float, zi: Float, iter: Int64, maxIter: Int64) : Int64 =
-    if iter >= maxIter then 0
-    else
-        let zr2 = zr * zr in
-        let zi2 = zi * zi in
-        if zr2 + zi2 > 4.0 then 1  // BUG: This incorrectly returns 1 when cr is negative
-        else iterate(cr, ci, zr, zi, iter + 1, maxIter)
-
-// Returns 1 (WRONG - should be 0 since 0*0 + 0*0 = 0 < 4)
-iterate(0.0 - 1.5, 0.0, 0.0, 0.0, 0, 3)
-
-// Returns 0 (CORRECT)
-iterate(1.5, 0.0, 0.0, 0.0, 0, 3)
-```
-
-### Notes:
-
-- Bug only manifests when first float parameter is negative
-- Works correctly with positive values or fewer parameters
+| mandelbrot    | Numerical      | Complex number iteration, fractal       |
 
 ---
 
@@ -98,7 +62,6 @@ These benchmarks have implementations but are limited by stack depth or bugs.
 
 | Benchmark  | Status             | Limitation                                                     |
 | ---------- | ------------------ | -------------------------------------------------------------- |
-| mandelbrot | WRONG OUTPUT       | Outputs 24091 instead of correct 15909 (negative float bug)    |
 | quicksort  | COMPILE ERROR      | "Undefined variable: pivot" - closure variable capture bug     |
 | pisum      | Working (reduced)  | Uses 5 rounds, n=1000 (full size causes stack overflow)        |
 | nsieve     | Stack overflow     | Uses n=1000 (n=100000 causes stack overflow) - outputs 168     |
@@ -122,7 +85,6 @@ These benchmarks are in the suite for other languages but don't have Dark implem
 
 | Feature                    | Benchmarks Blocked                                                           |
 | -------------------------- | ---------------------------------------------------------------------------- |
-| **Negative float bug**     | mandelbrot                                                                   |
 | **Closure variable capture** | quicksort                                                                  |
 | Stack depth / TCO          | pisum (full), nsieve (full), fannkuch (full), edigits (full), fasta (full)  |
 
@@ -132,3 +94,4 @@ These benchmarks are in the suite for other languages but don't have Dark implem
 
 - Expected outputs for reduced-size benchmarks need to be updated to match reduced parameters
 - The non-deterministic segfault bug mentioned in previous versions appears to be fixed
+- The mandelbrot "negative float bug" was actually a semantic mismatch - the Dark code was counting escaped points while the Rust reference counts points in the set. Fixed.

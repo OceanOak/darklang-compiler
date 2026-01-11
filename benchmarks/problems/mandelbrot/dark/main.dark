@@ -7,26 +7,24 @@
 // - Nested loops
 // - Complex number simulation
 // - Iteration limits
-//
-// Expected output for 10x10 with maxIter=10 is 50.
 
 // Check if point (cr, ci) is in the Mandelbrot set
-// Returns 1 if point escapes within maxIter iterations, 0 otherwise
+// Returns 1 if point stays bounded (in set), 0 if it escapes
 def iterate(cr: Float, ci: Float, zr: Float, zi: Float, iter: Int64, maxIter: Int64) : Int64 =
     if iter >= maxIter then
-        0  // Point is in the set
+        1  // Point stayed bounded - in the set
     else
         let zr2 = zr * zr in
         let zi2 = zi * zi in
         if zr2 + zi2 > 4.0 then
-            1  // Point escaped
+            0  // Point escaped - not in set
         else
             // z = z^2 + c
             let newZr = zr2 - zi2 + cr in
             let newZi = 2.0 * zr * zi + ci in
             iterate(cr, ci, newZr, newZi, iter + 1, maxIter)
 
-// Count escaped points in a row from x=startX to x=endX-1
+// Count points in the set in a row from x=startX to x=endX-1
 def countRow(y: Int64, startX: Int64, endX: Int64, size: Int64, maxIter: Int64, count: Int64) : Int64 =
     if startX >= endX then
         count
@@ -36,10 +34,10 @@ def countRow(y: Int64, startX: Int64, endX: Int64, size: Int64, maxIter: Int64, 
         let yf = Stdlib.Int64.toFloat(y) in
         let cr = 2.0 * xf / sizeF - 1.5 in
         let ci = 2.0 * yf / sizeF - 1.0 in
-        let escaped = iterate(cr, ci, 0.0, 0.0, 0, maxIter) in
-        countRow(y, startX + 1, endX, size, maxIter, count + escaped)
+        let inSet = iterate(cr, ci, 0.0, 0.0, 0, maxIter) in
+        countRow(y, startX + 1, endX, size, maxIter, count + inSet)
 
-// Count escaped points in all rows from y=startY to y=endY-1
+// Count points in the set in all rows from y=startY to y=endY-1
 def countAll(startY: Int64, endY: Int64, size: Int64, maxIter: Int64, count: Int64) : Int64 =
     if startY >= endY then
         count
