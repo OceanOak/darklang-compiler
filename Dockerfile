@@ -44,6 +44,10 @@ RUN git config --global alias.ci commit && \
     git config --global alias.co checkout && \
     git config --global alias.st status
 
+# Configure nice bash prompt with git branch
+RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> ~/.bashrc && \
+    echo 'PS1="\[\033[1;32m\]\u@dark\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]\[\033[1;33m\]\$(parse_git_branch | sed \"s/.*/ (&)/\")\[\033[0m\]\$ "' >> ~/.bashrc
+
 # Add Rust and local bin to PATH
 ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
