@@ -174,13 +174,12 @@ Stdlib.List.length(Stdlib.Dict.entries(setInt(emptyInt(), 1, 100))) = 1
 let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.List.length(Stdlib.Dict.entries(d)) = 2
 
 // ========== Dict.fold tests ==========
-// Note: fold uses closures with TCO which still has a bug
 
 // fold to sum values
-let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + v) = 30 disable_opt_tco=true
+let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + v) = 30
 
 // fold to sum keys
-let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + k) = 3 disable_opt_tco=true
+let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + k) = 3
 
 // fold on empty dict
 Stdlib.Dict.fold(emptyInt(), 100, (acc: Int64, k: Int64, v: Int64) => acc + v) = 100
@@ -197,16 +196,15 @@ let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.size(Stdlib.Dict
 Stdlib.Dict.isEmpty(Stdlib.Dict.map(emptyInt(), (k: Int64, v: Int64) => v * 2)) = true
 
 // ========== Dict.filter tests ==========
-// Note: filter uses closures with TCO which still has a bug
 
 // filter to keep values > 15
-let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.size(Stdlib.Dict.filter(d, (k: Int64, v: Int64) => v > 15)) = 1 disable_opt_tco=true
+let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.size(Stdlib.Dict.filter(d, (k: Int64, v: Int64) => v > 15)) = 1
 
 // filter on empty dict
 Stdlib.Dict.isEmpty(Stdlib.Dict.filter(emptyInt(), (k: Int64, v: Int64) => v > 0)) = true
 
 // filter to keep all
-let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.size(Stdlib.Dict.filter(d, (k: Int64, v: Int64) => true)) = 2 disable_opt_tco=true
+let d = setInt(setInt(emptyInt(), 1, 10), 2, 20) in Stdlib.Dict.size(Stdlib.Dict.filter(d, (k: Int64, v: Int64) => true)) = 2
 
 // filter to keep none
 Stdlib.Dict.isEmpty(Stdlib.Dict.filter(setInt(emptyInt(), 1, 10), (k: Int64, v: Int64) => false)) = true
@@ -237,8 +235,7 @@ Stdlib.Dict.size(Stdlib.Dict.fromList([(1, 100)])) = 1
 Stdlib.Dict.size(Stdlib.Dict.fromList([(1, 10), (2, 20), (3, 30)])) = 3
 
 // fromList get value
-// Note: TCO has a bug with recursive Dict operations
-getOrDefault(Stdlib.Dict.fromList([(1, 42), (2, 99)]), 1, -1) = 42 disable_opt_tco=true
+getOrDefault(Stdlib.Dict.fromList([(1, 42), (2, 99)]), 1, -1) = 42
 
 // ========== Dict.getOrDefault tests ==========
 

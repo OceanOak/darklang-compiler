@@ -8,7 +8,7 @@
 # - Dict: Large-scale insert/retrieve, collision handling, enumeration
 # - FingerTree: Index verification, push/tail operations, concat
 #
-# Note: Some tests may fail due to known bugs (TCO, FingerTree deep chain bug)
+# Note: Some tests may fail due to known bugs (FingerTree deep chain bug)
 
 set -e
 

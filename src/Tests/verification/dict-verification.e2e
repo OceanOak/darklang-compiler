@@ -4,7 +4,7 @@
 //   ./run-tests --verification --filter=verification
 // Or use: ./run-verification-tests
 //
-// Note: Some tests may fail due to known bugs (TCO, FingerTree deep chain bug)
+// Note: See run-verification-tests for known bugs (FingerTree deep chain bug)
 
 // ===================================================================
 // Helper Functions
@@ -190,17 +190,17 @@ getOrDefault(set(emptyDict(), -999999, 42), -999999, -1) = 42
 getOrDefault(set(emptyDict(), 9223372036854775807, 42), 9223372036854775807, -1) = 42
 
 // ===================================================================
-// Fold Tests (with TCO workaround)
+// Fold Tests
 // ===================================================================
 
 // Sum values of 10-entry dict
-let d = buildDict(10, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + v) = 550 disable_opt_tco=true
+let d = buildDict(10, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + v) = 550
 
 // Sum keys of 10-entry dict
-let d = buildDict(10, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + k) = 55 disable_opt_tco=true
+let d = buildDict(10, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + k) = 55
 
 // Count entries via fold
-let d = buildDict(50, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + 1) = 50 disable_opt_tco=true
+let d = buildDict(50, emptyDict()) in Stdlib.Dict.fold(d, 0, (acc: Int64, k: Int64, v: Int64) => acc + 1) = 50
 
 // ===================================================================
 // Contains Tests at Scale
