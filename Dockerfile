@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     npm \
     htop \
     jq \
+    bash-completion \
     # Benchmarking tools
     python3 \
     hyperfine \
@@ -39,8 +40,9 @@ ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 # Install Rust for benchmarking
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# Install beads (bd) issue tracking
-RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+# Install beads (bd) issue tracking with bash completion
+RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash && \
+    echo 'source <(bd completion bash)' >> ~/.bashrc
 
 # Install darklang interpreter
 RUN mkdir -p ~/.local/bin && \
