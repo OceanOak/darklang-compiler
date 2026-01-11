@@ -1,6 +1,6 @@
 # Beads Workflow Context
 
-This code uses `bd` (beads) for tracking tasks, and ./ralph.sh to run tasks.
+This code uses `bd` (beads) for tracking tasks.
 
 > **Context Recovery**: Read WORKFLOW.md after compaction, clear, or new session
 

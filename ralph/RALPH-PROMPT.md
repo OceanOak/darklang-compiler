@@ -1,23 +1,19 @@
-# Ralph Loop Prompt
+# Do one task
 
-Use this with: `/ralph-loop:ralph-loop "$(cat RALPH-PROMPT.md)" --completion-promise "COMPLETE"`
+Use Beads (bd) for planning and progress tracking. See WORKFLOW.md for how it works.
 
----
-
-Use Beads for planning and progress tracking.
+ONLY WORK ON A SINGLE ISSUE.
 
 1. Decide which issue to work on next using `bd ready` / `bd list` / `bd show`. This should be the one YOU decide has the highest priority - not necessarily the first in the list.
 
 2. Update the issue to in_progress before starting work.
 
-3. Check any feedback loops, such as types and tests. Verify code compiles, tests pass, and benchmarks are not slower. NEVER commit anything not hitting these quality thresholds.
+3. Check any feedback loops. Verify code compiles, tests pass, and benchmarks are not slower. NEVER commit anything not hitting these quality thresholds. Do not consider an issue closed if it does not meet pass these.
 
-4. Record progress with `bd comments add <issue-id> "..."` and close the issue with `bd close` when complete.
+4. Be eager about adding subi-issues via bd. Some issues will involve many sub-issues - add these using `bd`.
 
-5. Some tasks will involve many thousands of small-ish fixes, such as improving performance or test coverage. In the main task, only add the issues - they can be solved later. EXCEPTION: truly tiny fixes.
+5. Record progress with `bd comments add <issue-id> "..."`.
 
-6. Make a git commit of that feature. Include in the commit message a large discussion of the feature and choices and assumptions made
+6. If the issue is finished use `bd close` to complete it. If the issue is not complete, it is ok to finish this workflow even if the issue is incomplete if the next step is to take another issue to make progress.
 
-ONLY WORK ON A SINGLE ISSUE.
-
-If, while implementing the issue, you notice that all work is complete, output `<promise>COMPLETE</promise>`.
+7. Make a git commit of this one feature and the .beads directory. Include in the commit message a large discussion of the task and choices and assumptions made.
