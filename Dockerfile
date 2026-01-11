@@ -39,6 +39,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 # Install beads (bd) issue tracking
 RUN curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
+# Configure git aliases
+RUN git config --global alias.ci commit && \
+    git config --global alias.co checkout
+
 # Add Rust and local bin to PATH
 ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
