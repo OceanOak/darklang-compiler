@@ -2732,13 +2732,29 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let finalExpr = ANF.Return resultAtom
                     let exprWithBindings = wrapBindings resultBindings finalExpr
                     (exprWithBindings, varGen3)
-                else
-                    // Multiple elements: DEEP with prefix and suffix
+                else if count <= 5 then
+                    // 2-5 elements: DEEP with prefix and suffix
                     // Split into prefix (first element) and suffix (rest, up to 4)
                     let prefixNodes = [List.head leafAtoms]
-                    let suffixNodes = List.tail leafAtoms |> List.truncate 4
-                    // For more than 5 elements, we'd need the middle spine, but for now support up to 5
+                    let suffixNodes = List.tail leafAtoms
                     let (resultAtom, resultBindings, varGen3) = allocDeep count prefixNodes suffixNodes varGen2 leafBindings
+                    let finalExpr = ANF.Return resultAtom
+                    let exprWithBindings = wrapBindings resultBindings finalExpr
+                    (exprWithBindings, varGen3)
+                else
+                    // 6+ elements: Build list using pushBack operations (appends to end)
+                    // Start with empty list and append each element
+                    let rec buildList (elems: ANF.Atom list) (vg: ANF.VarGen) (currentList: ANF.Atom) (bindings: (ANF.TempId * ANF.CExpr) list) =
+                        match elems with
+                        | [] -> (currentList, bindings, vg)
+                        | elem :: rest ->
+                            let (pushVar, vg1) = ANF.freshVar vg
+                            // Call Stdlib.FingerTree.pushBack_i64 to append element to end
+                            let pushExpr = ANF.Call ("Stdlib.FingerTree.pushBack_i64", [currentList; elem])
+                            buildList rest vg1 (ANF.Var pushVar) (bindings @ [(pushVar, pushExpr)])
+
+                    let emptyList = ANF.IntLiteral (ANF.Int64 0L)  // EMPTY = 0
+                    let (resultAtom, resultBindings, varGen3) = buildList elemAtoms varGen2 emptyList leafBindings
                     let finalExpr = ANF.Return resultAtom
                     let exprWithBindings = wrapBindings resultBindings finalExpr
                     (exprWithBindings, varGen3))
@@ -4997,13 +5013,27 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     // Single element: SINGLE(LEAF(elem))
                     let (resultAtom, resultBindings, varGen3) = allocSingle (List.head leafAtoms) varGen2 leafBindings
                     Ok (resultAtom, resultBindings, varGen3)
-                else
-                    // Multiple elements: DEEP with prefix and suffix
-                    // Split into prefix (first element) and suffix (rest, up to 4)
+                else if count <= 5 then
+                    // 2-5 elements: DEEP with prefix and suffix
+                    // Split into prefix (first element) and suffix (rest)
                     let prefixNodes = [List.head leafAtoms]
-                    let suffixNodes = List.tail leafAtoms |> List.truncate 4
-                    // For more than 5 elements, we'd need the middle spine, but for now support up to 5
+                    let suffixNodes = List.tail leafAtoms
                     let (resultAtom, resultBindings, varGen3) = allocDeep count prefixNodes suffixNodes varGen2 leafBindings
+                    Ok (resultAtom, resultBindings, varGen3)
+                else
+                    // 6+ elements: Build list using pushBack operations (appends to end)
+                    // Start with empty list and append each element
+                    let rec buildList (elems: ANF.Atom list) (vg: ANF.VarGen) (currentList: ANF.Atom) (bindings: (ANF.TempId * ANF.CExpr) list) =
+                        match elems with
+                        | [] -> (currentList, bindings, vg)
+                        | elem :: rest ->
+                            let (pushVar, vg1) = ANF.freshVar vg
+                            // Call Stdlib.FingerTree.pushBack_i64 to append element to end
+                            let pushExpr = ANF.Call ("Stdlib.FingerTree.pushBack_i64", [currentList; elem])
+                            buildList rest vg1 (ANF.Var pushVar) (bindings @ [(pushVar, pushExpr)])
+
+                    let emptyList = ANF.IntLiteral (ANF.Int64 0L)  // EMPTY = 0
+                    let (resultAtom, resultBindings, varGen3) = buildList elemAtoms varGen2 emptyList leafBindings
                     Ok (resultAtom, resultBindings, varGen3))
 
     | AST.ListCons (headElements, tail) ->
