@@ -41,7 +41,8 @@ RUN curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/in
 
 # Configure git aliases
 RUN git config --global alias.ci commit && \
-    git config --global alias.co checkout
+    git config --global alias.co checkout && \
+    git config --global alias.st status
 
 # Add Rust and local bin to PATH
 ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
