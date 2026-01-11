@@ -466,7 +466,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                 // 2. Allocate heap: length + 16 bytes
                 // 3. Store length at [heap]
                 // 4. Copy bytes from pool to [heap+8]
-                // 5. Store refcount=1 at [heap+8+length]
+                // 5. Store refcount=1 at [heap+8+aligned(length)]
                 // 6. dest = heap address
                 //
                 // IMPORTANT: Use X13 for loop counter, not X0!
@@ -1963,20 +1963,25 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         // Store length (known at compile time)
                     ] @ loadImmediate ARM64.X11 (int64 len) @ [
                         ARM64.STR (ARM64.X11, ARM64.X9, 0s)   // Store length at heap[0]
-                        // Copy bytes: counter in X12, limit in X11
-                        ARM64.MOVZ (ARM64.X12, 0us, 0)  // X12 = 0
-                        // Loop start (if X12 >= len, done)
-                        ARM64.CMP_reg (ARM64.X12, ARM64.X11)
+                        // Copy bytes: counter in X13, limit in X11
+                        ARM64.MOVZ (ARM64.X13, 0us, 0)  // X13 = 0
+                        // Loop start (if X13 >= len, done)
+                        ARM64.CMP_reg (ARM64.X13, ARM64.X11)
                         ARM64.B_cond (ARM64.GE, 7)  // Skip 7 instructions to exit loop
-                        ARM64.LDRB (ARM64.X15, ARM64.X10, ARM64.X12)  // X15 = pool[X12]
+                        ARM64.LDRB (ARM64.X15, ARM64.X10, ARM64.X13)  // X15 = pool[X13]
                         ARM64.ADD_imm (ARM64.X14, ARM64.X9, 8us)  // X14 = heap + 8
-                        ARM64.ADD_reg (ARM64.X14, ARM64.X14, ARM64.X12)  // X14 = heap + 8 + X12
-                        ARM64.STRB_reg (ARM64.X15, ARM64.X14)  // heap_data[X12] = byte
-                        ARM64.ADD_imm (ARM64.X12, ARM64.X12, 1us)  // X12++
+                        ARM64.ADD_reg (ARM64.X14, ARM64.X14, ARM64.X13)  // X14 = heap + 8 + X13
+                        ARM64.STRB_reg (ARM64.X15, ARM64.X14)  // heap_data[X13] = byte
+                        ARM64.ADD_imm (ARM64.X13, ARM64.X13, 1us)  // X13++
                         ARM64.B (-7)  // Loop back to CMP
-                        // Store refcount = 1
-                        ARM64.ADD_imm (ARM64.X14, ARM64.X9, 8us)
-                        ARM64.ADD_reg (ARM64.X14, ARM64.X14, ARM64.X11)  // X14 = heap + 8 + len
+                        // Store refcount at aligned offset
+                        // aligned(x) = ((x + 7) >> 3) << 3
+                        ARM64.ADD_imm (ARM64.X14, ARM64.X11, 7us)        // X14 = len + 7
+                        ARM64.MOVZ (ARM64.X15, 3us, 0)                   // X15 = 3
+                        ARM64.LSR_reg (ARM64.X14, ARM64.X14, ARM64.X15)  // X14 = (len + 7) >> 3
+                        ARM64.LSL_reg (ARM64.X14, ARM64.X14, ARM64.X15)  // X14 = aligned(len)
+                        ARM64.ADD_imm (ARM64.X15, ARM64.X9, 8us)         // X15 = heap + 8
+                        ARM64.ADD_reg (ARM64.X14, ARM64.X15, ARM64.X14)  // X14 = heap + 8 + aligned(len)
                         ARM64.MOVZ (ARM64.X15, 1us, 0)
                         ARM64.STR (ARM64.X15, ARM64.X14, 0s)  // refcount = 1
                         // Store heap string address to tuple slot
