@@ -16,56 +16,21 @@ Micro-benchmark suite for the Darklang compiler, inspired by standard micro-benc
 
 These benchmarks compile and run reliably.
 
-| Benchmark    | Category       | What It Tests                           |
-| ------------ | -------------- | --------------------------------------- |
-| factorial    | Recursion      | Basic recursion, multiplication         |
-| fib          | Recursion      | Exponential recursion, addition         |
-| sum_to_n     | Tail Recursion | Tail call optimization (currently slow) |
-| ackermann    | Deep Recursion | Extreme recursion depth, call overhead  |
-| tak          | Recursion      | Takeuchi function, nested calls         |
-| binary_trees | Memory         | Heap allocation, tree traversal         |
-| primes       | Arithmetic     | Integer ops, conditionals, loops        |
-| collatz      | Iteration      | Collatz sequence steps                  |
-| leibniz      | Numerical      | Float arithmetic, pi approximation      |
-| nqueen       | Backtracking   | N-Queens via bitwise operations         |
-| merkletrees  | Tree/Hashing   | Recursive tree hashing                  |
-
----
-
-## CRITICAL BUG: Non-Deterministic Segfaults
-
-**Status: BLOCKING multiple benchmarks**
-
-Several benchmarks experience intermittent segmentation faults. The crashes are non-deterministic - the same binary may work on one run and crash on the next.
-
-### Affected Benchmarks:
-
-| Benchmark     | Notes                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------- |
-| spectral_norm | Crashes ~40% of runs even with small n=5                                               |
-| nbody         | Crashes with >10-20 iterations, also produces wrong output (0 instead of energy value) |
-| matmul        | Crashes intermittently even with n=3                                                   |
-
-### Symptoms:
-
-- Non-deterministic: Same code crashes sometimes, works other times
-- More likely to fail with more iterations/larger inputs
-- When it doesn't crash, may produce incorrect results (e.g., nbody outputs 0)
-
-### Suspected Cause:
-
-- Memory corruption or uninitialized memory
-- Stack corruption
-- Register allocation issues in code generator
-- Affects both float and integer heavy code
-
-### Reproduction:
-
-```bash
-# Run multiple times to see non-deterministic behavior
-./dark benchmarks/problems/spectral_norm/dark/main.dark -o /tmp/sn
-for i in 1 2 3 4 5; do /tmp/sn; done
-```
+| Benchmark     | Category       | What It Tests                           |
+| ------------- | -------------- | --------------------------------------- |
+| factorial     | Recursion      | Basic recursion, multiplication         |
+| fib           | Recursion      | Exponential recursion, addition         |
+| sum_to_n      | Tail Recursion | Tail call optimization (currently slow) |
+| ackermann     | Deep Recursion | Extreme recursion depth, call overhead  |
+| tak           | Recursion      | Takeuchi function, nested calls         |
+| binary_trees  | Memory         | Heap allocation, tree traversal         |
+| primes        | Arithmetic     | Integer ops, conditionals, loops        |
+| collatz       | Iteration      | Collatz sequence steps                  |
+| leibniz       | Numerical      | Float arithmetic, pi approximation      |
+| nqueen        | Backtracking   | N-Queens via bitwise operations         |
+| merkletrees   | Tree/Hashing   | Recursive tree hashing                  |
+| spectral_norm | Numerical      | Float array operations                  |
+| matmul        | Matrix         | Matrix multiplication                   |
 
 ---
 
@@ -77,9 +42,9 @@ Negative float values passed to recursive functions with 4+ float parameters pro
 
 ### Affected Benchmarks:
 
-| Benchmark  | Impact                                          |
-| ---------- | ----------------------------------------------- |
-| mandelbrot | Outputs 96 instead of correct 50 for 10x10 grid |
+| Benchmark  | Impact                                                  |
+| ---------- | ------------------------------------------------------- |
+| mandelbrot | Outputs 24091 instead of correct 15909 for 200x200 grid |
 
 ### Minimal Reproduction:
 
@@ -103,7 +68,27 @@ iterate(1.5, 0.0, 0.0, 0.0, 0, 3)
 
 - Bug only manifests when first float parameter is negative
 - Works correctly with positive values or fewer parameters
-- Expected output files updated to match buggy behavior for CI
+
+---
+
+## BUG: Closure Variable Capture
+
+**Status: BLOCKS quicksort**
+
+Closures cannot capture variables from enclosing scopes properly. The quicksort benchmark fails with "Undefined variable: pivot" because the closures passed to `filter` reference a variable defined in the outer `let` binding.
+
+### Minimal Reproduction:
+
+```dark
+def quicksort(arr: List<Int64>) : List<Int64> =
+    let len = Stdlib.List.length<Int64>(arr) in
+    if len <= 1 then arr
+    else
+        let pivot = getAtOrDefault(arr, len / 2, 0) in
+        // BUG: These closures cannot access 'pivot' from outer scope
+        let left = Stdlib.List.filter<Int64>(arr, (x: Int64) => x < pivot) in
+        ...
+```
 
 ---
 
@@ -111,32 +96,39 @@ iterate(1.5, 0.0, 0.0, 0.0, 0, 3)
 
 These benchmarks have implementations but are limited by stack depth or bugs.
 
-| Benchmark     | Status                  | Limitation                                                     |
-| ------------- | ----------------------- | -------------------------------------------------------------- |
-| spectral_norm | INTERMITTENT SEGFAULT   | Works sometimes with n=5, crashes other times                  |
-| nbody         | SEGFAULT + WRONG OUTPUT | Crashes after 10-20 iterations, outputs 0                      |
-| mandelbrot    | WRONG OUTPUT            | Uses 10x10 grid, outputs 96 instead of correct 50              |
-| pisum         | Working (reduced)       | Uses 5 rounds, n=1000 (full size causes stack overflow)        |
-| matmul        | INTERMITTENT SEGFAULT   | Implemented with n=3, crashes intermittently                   |
-| quicksort     | Stack overflow          | Works only with 3 elements                                     |
-| nsieve        | Stack overflow          | Uses n=1000 (n=100000 causes stack overflow) - outputs 168     |
-| fannkuch      | Stack overflow          | Uses n=6 (n=9 causes stack overflow) - outputs 10              |
-| edigits       | Stack overflow          | Uses 50 digits, 1 iteration (full: 1000 digits, 10 iterations) |
-| fasta         | Stack overflow          | Uses n=100 (n=100000 causes stack overflow)                    |
+| Benchmark  | Status             | Limitation                                                     |
+| ---------- | ------------------ | -------------------------------------------------------------- |
+| mandelbrot | WRONG OUTPUT       | Outputs 24091 instead of correct 15909 (negative float bug)    |
+| quicksort  | COMPILE ERROR      | "Undefined variable: pivot" - closure variable capture bug     |
+| pisum      | Working (reduced)  | Uses 5 rounds, n=1000 (full size causes stack overflow)        |
+| nsieve     | Stack overflow     | Uses n=1000 (n=100000 causes stack overflow) - outputs 168     |
+| fannkuch   | Stack overflow     | Uses n=6 (n=9 causes stack overflow) - outputs 10              |
+| edigits    | Stack overflow     | Uses 50 digits, 1 iteration (full: 1000 digits, 10 iterations) |
+| fasta      | Stack overflow     | Uses n=100 (n=100000 causes stack overflow)                    |
+
+---
+
+## Not Implemented
+
+These benchmarks are in the suite for other languages but don't have Dark implementations:
+
+| Benchmark | Notes                                             |
+| --------- | ------------------------------------------------- |
+| nbody     | No Dark implementation exists                     |
 
 ---
 
 ## Feature Requirements Summary
 
-| Feature                            | Benchmarks Blocked                                                                                       |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Non-deterministic segfault bug** | spectral_norm, nbody, matmul                                                                             |
-| Stack depth / TCO                  | pisum (full), mandelbrot (full), quicksort, nsieve (full), fannkuch (full), edigits (full), fasta (full) |
+| Feature                    | Benchmarks Blocked                                                           |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| **Negative float bug**     | mandelbrot                                                                   |
+| **Closure variable capture** | quicksort                                                                  |
+| Stack depth / TCO          | pisum (full), nsieve (full), fannkuch (full), edigits (full), fasta (full)  |
 
 ---
 
 ## Notes
 
 - Expected outputs for reduced-size benchmarks need to be updated to match reduced parameters
-- The non-deterministic segfault bug is the highest priority issue to fix
-- Float-heavy code (spectral_norm, nbody) seems most affected but integer code (matmul) also crashes
+- The non-deterministic segfault bug mentioned in previous versions appears to be fixed
