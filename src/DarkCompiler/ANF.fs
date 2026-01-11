@@ -210,7 +210,7 @@ let isHeapType (t: AST.Type) : bool =
 let payloadSize (t: AST.Type) (typeReg: Map<string, (string * AST.Type) list>) : int =
     match t with
     | AST.TTuple ts -> List.length ts * 8
-    | AST.TRecord name ->
+    | AST.TRecord (name, _) ->
         match Map.tryFind name typeReg with
         | Some fields -> List.length fields * 8
         | None -> failwith $"payloadSize: Record type '{name}' not found in typeReg"

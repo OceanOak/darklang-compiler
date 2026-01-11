@@ -990,7 +990,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                     | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
                 Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
 
-        | AST.TRecord typeName ->
+        | AST.TRecord (typeName, _) ->
             // Print record with field names and values
             match Map.tryFind typeName recordRegistry with
             | Some fields ->

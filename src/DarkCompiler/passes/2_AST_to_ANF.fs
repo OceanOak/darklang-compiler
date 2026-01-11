@@ -49,7 +49,7 @@ let rec typeToString (ty: AST.Type) : string =
     | AST.TUnit -> "unit"
     | AST.TRawPtr -> "ptr"
     | AST.TVar name -> name
-    | AST.TRecord name -> name
+    | AST.TRecord (name, args) -> name + (if List.isEmpty args then "" else "<" + (args |> List.map typeToString |> String.concat ",") + ">")
     | AST.TSum (name, args) -> name + "<" + (args |> List.map typeToString |> String.concat ",") + ">"
     | AST.TList elemType -> "List<" + typeToString elemType + ">"
     | AST.TDict (keyType, valueType) -> "Dict<" + typeToString keyType + "," + typeToString valueType + ">"
@@ -253,7 +253,7 @@ type AliasRegistry = Map<string, AST.Type>
 /// Otherwise returns the original name
 let rec resolveRecordTypeName (aliasReg: AliasRegistry) (typeName: string) : string =
     match Map.tryFind typeName aliasReg with
-    | Some (AST.TRecord targetName) -> resolveRecordTypeName aliasReg targetName
+    | Some (AST.TRecord (targetName, _)) -> resolveRecordTypeName aliasReg targetName
     | Some (AST.TSum (targetName, _)) -> resolveRecordTypeName aliasReg targetName
     | _ -> typeName
 
@@ -263,7 +263,7 @@ let expandTypeRegWithAliases (typeReg: TypeRegistry) (aliasReg: AliasRegistry) :
     aliasReg
     |> Map.fold (fun accReg aliasName targetType ->
         match targetType with
-        | AST.TRecord targetName ->
+        | AST.TRecord (targetName, _) ->
             let resolvedName = resolveRecordTypeName aliasReg targetName
             match Map.tryFind resolvedName typeReg with
             | Some fields -> Map.add aliasName fields accReg
@@ -348,7 +348,10 @@ let rec typeToMangledName (t: AST.Type) : string =
     | AST.TTuple elemTypes ->
         let elemsStr = elemTypes |> List.map typeToMangledName |> String.concat "_"
         $"tup_{elemsStr}"
-    | AST.TRecord name -> name
+    | AST.TRecord (name, []) -> name
+    | AST.TRecord (name, typeArgs) ->
+        let argsStr = typeArgs |> List.map typeToMangledName |> String.concat "_"
+        $"{name}_{argsStr}"
     | AST.TSum (name, []) -> name
     | AST.TSum (name, typeArgs) ->
         let argsStr = typeArgs |> List.map typeToMangledName |> String.concat "_"
@@ -408,9 +411,13 @@ let rec applySubstToType (subst: Substitution) (typ: AST.Type) : AST.Type =
         AST.TList (applySubstToType subst elemType)
     | AST.TDict (keyType, valueType) ->
         AST.TDict (applySubstToType subst keyType, applySubstToType subst valueType)
+    | AST.TSum (name, typeArgs) ->
+        AST.TSum (name, List.map (applySubstToType subst) typeArgs)
+    | AST.TRecord (name, typeArgs) ->
+        AST.TRecord (name, List.map (applySubstToType subst) typeArgs)
     | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
     | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
-    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRecord _ | AST.TSum _ | AST.TRawPtr ->
+    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRawPtr ->
         typ  // Concrete types are unchanged
 
 /// Apply a substitution to an expression, replacing type variables in type annotations
@@ -813,6 +820,7 @@ type LiftState = {
     LiftedFunctions: AST.FunctionDef list
     TypeEnv: Map<string, AST.Type>  // Variable name -> Type (for tracking types of captured variables)
     FuncReturnTypes: Map<string, AST.Type>  // Function name -> Return type (for inferring call result types)
+    GenericFuncDefs: Map<string, string list * AST.Type>  // Function name -> (TypeParams, ReturnType) for TypeApp substitution
 }
 
 /// Collect free variables in an expression (variables not bound by let or lambda parameters)
@@ -879,7 +887,7 @@ let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
 
 /// Simple type inference for lambda lifting - infers types of simple expressions
 /// This allows let-bound variables to be captured in nested lambdas
-let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcReturnTypes: Map<string, AST.Type>) : AST.Type option =
+let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcReturnTypes: Map<string, AST.Type>) (genericFuncDefs: Map<string, string list * AST.Type>) : AST.Type option =
     match expr with
     | AST.IntLiteral _ -> Some AST.TInt64
     | AST.Int8Literal _ -> Some AST.TInt8
@@ -897,14 +905,14 @@ let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcR
     | AST.Var name -> Map.tryFind name typeEnv
     | AST.TupleLiteral elements ->
         // Recursively infer types of tuple elements
-        let elemTypes = elements |> List.map (fun e -> simpleInferType e typeEnv funcReturnTypes)
+        let elemTypes = elements |> List.map (fun e -> simpleInferType e typeEnv funcReturnTypes genericFuncDefs)
         if List.forall Option.isSome elemTypes then
             Some (AST.TTuple (elemTypes |> List.map Option.get))
         else
             None
     | AST.RecordLiteral (typeName, _) ->
         // Record literal has the record's type
-        Some (AST.TRecord typeName)
+        Some (AST.TRecord (typeName, []))
     | AST.Constructor (typeName, _, _) ->
         // Sum type constructor has the sum type
         Some (AST.TSum (typeName, []))
@@ -917,9 +925,16 @@ let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcR
     | AST.Call (funcName, _) ->
         // Look up the function's return type
         Map.tryFind funcName funcReturnTypes
-    | AST.TypeApp (funcName, _, _) ->
-        // Look up the generic function's return type
-        Map.tryFind funcName funcReturnTypes
+    | AST.TypeApp (funcName, typeArgs, _) ->
+        // Look up the generic function's definition and apply type substitution
+        match Map.tryFind funcName genericFuncDefs with
+        | Some (typeParams, returnType) when List.length typeParams = List.length typeArgs ->
+            // Build substitution from type params to type args
+            let subst = List.zip typeParams typeArgs |> Map.ofList
+            Some (applySubstToType subst returnType)
+        | _ ->
+            // Fall back to funcReturnTypes for non-generic or arity mismatch
+            Map.tryFind funcName funcReturnTypes
     | _ -> None  // Complex expressions require full type inference
 
 /// Lift lambdas in an expression, returning (transformed expr, new state)
@@ -941,7 +956,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
         liftLambdasInExpr value state
         |> Result.bind (fun (value', state1) ->
             // Try to infer the type of the value for capturing in nested lambdas
-            let valueType = simpleInferType value' state1.TypeEnv state1.FuncReturnTypes
+            let valueType = simpleInferType value' state1.TypeEnv state1.FuncReturnTypes state1.GenericFuncDefs
             let state1' = match valueType with
                           | Some t -> { state1 with TypeEnv = Map.add name t state1.TypeEnv }
                           | None -> state1
@@ -1036,7 +1051,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
                         AST.Let (capName, accessor, acc)) <| body'
 
             // Infer return type from body expression
-            let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes |> Option.defaultValue AST.TInt64
+            let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes stateWithLambdaParams.GenericFuncDefs |> Option.defaultValue AST.TInt64
 
             let funcDef : AST.FunctionDef = {
                 Name = funcName
@@ -1050,6 +1065,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
                 LiftedFunctions = funcDef :: state1.LiftedFunctions
                 TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
                 FuncReturnTypes = state1.FuncReturnTypes
+                GenericFuncDefs = state1.GenericFuncDefs
             }
             // Replace lambda with Closure
             let captureExprs = captures |> List.map AST.Var
@@ -1119,7 +1135,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                                 AST.Let (capName, accessor, acc)) <| body'
 
                     // Infer return type from body expression
-                    let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes |> Option.defaultValue AST.TInt64
+                    let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes stateWithLambdaParams.GenericFuncDefs |> Option.defaultValue AST.TInt64
 
                     let funcDef : AST.FunctionDef = {
                         Name = funcName
@@ -1133,6 +1149,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                         LiftedFunctions = funcDef :: state1.LiftedFunctions
                         TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
                         FuncReturnTypes = state1.FuncReturnTypes
+                        GenericFuncDefs = state1.GenericFuncDefs
                     }
                     // Replace lambda with Closure (captures may be empty for non-capturing lambdas)
                     let captureExprs = captures |> List.map AST.Var
@@ -1158,6 +1175,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                     LiftedFunctions = wrapperDef :: state.LiftedFunctions
                     TypeEnv = state.TypeEnv
                     FuncReturnTypes = state.FuncReturnTypes
+                    GenericFuncDefs = state.GenericFuncDefs
                 }
                 // Create trivial closure with no captures
                 loop rest state' (AST.Closure (wrapperName, []) :: acc)
@@ -1293,10 +1311,31 @@ let rec liftLambdasInProgram (program: AST.Program) : Result<AST.Program, string
         |> List.map (fun (qualifiedName, moduleFunc) -> (qualifiedName, moduleFunc.ReturnType))
         |> Map.ofList
 
+    // Collect user generic function definitions (for TypeApp substitution)
+    let userGenericFuncDefs : Map<string, string list * AST.Type> =
+        topLevels
+        |> List.choose (function
+            | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
+                Some (f.Name, (f.TypeParams, f.ReturnType))
+            | _ -> None)
+        |> Map.ofList
+
+    // Collect module generic function definitions (for TypeApp substitution)
+    let moduleGenericFuncDefs : Map<string, string list * AST.Type> =
+        moduleRegistry
+        |> Map.toList
+        |> List.choose (fun (qualifiedName, moduleFunc) ->
+            if not (List.isEmpty moduleFunc.TypeParams) then
+                Some (qualifiedName, (moduleFunc.TypeParams, moduleFunc.ReturnType))
+            else
+                None)
+        |> Map.ofList
+
     let funcParams = Map.fold (fun acc k v -> Map.add k v acc) userFuncParams moduleFuncParams
     let funcReturnTypes = Map.fold (fun acc k v -> Map.add k v acc) userFuncReturnTypes moduleFuncReturnTypes
+    let genericFuncDefs = Map.fold (fun acc k v -> Map.add k v acc) userGenericFuncDefs moduleGenericFuncDefs
 
-    let initialState = { Counter = 0; LiftedFunctions = []; TypeEnv = Map.empty; FuncReturnTypes = funcReturnTypes }
+    let initialState = { Counter = 0; LiftedFunctions = []; TypeEnv = Map.empty; FuncReturnTypes = funcReturnTypes; GenericFuncDefs = genericFuncDefs }
 
     let rec processTopLevels (remaining: AST.TopLevel list) (state: LiftState) (acc: AST.TopLevel list) : Result<AST.TopLevel list * LiftState, string> =
         match remaining with
@@ -1768,7 +1807,7 @@ let rec generateStructuralEquality
 
         compareElements 0 elemTypes [] [] varGen
 
-    | AST.TRecord typeName ->
+    | AST.TRecord (typeName, _) ->
         // Compare each record field and AND the results
         match Map.tryFind typeName typeReg with
         | None ->
@@ -1892,13 +1931,13 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     typeFieldNames = literalFieldNames)
                 |> List.map fst
             match matchingTypes with
-            | [singleMatch] -> Ok (AST.TRecord singleMatch)
+            | [singleMatch] -> Ok (AST.TRecord (singleMatch, []))
             | [] -> Error "Cannot infer type: no record type matches the field names"
             | matches ->
                 let names = String.concat ", " matches
                 Error $"Ambiguous record literal: matches multiple types: {names}"
         else
-            Ok (AST.TRecord typeName)
+            Ok (AST.TRecord (typeName, []))
     | AST.RecordUpdate (recordExpr, _) ->
         // Record update returns the same type as the record being updated
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
@@ -1906,7 +1945,7 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord typeName ->
+            | AST.TRecord (typeName, _) ->
                 match Map.tryFind typeName typeReg with
                 | Some fields ->
                     match List.tryFind (fun (name, _) -> name = fieldName) fields with
@@ -2545,7 +2584,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord typeName ->
+            | AST.TRecord (typeName, _) ->
                 match Map.tryFind typeName typeReg with
                 | Some typeFields ->
                     // Build a map of updates
@@ -2571,7 +2610,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord typeName ->
+            | AST.TRecord (typeName, _) ->
                 // Look up field index in the specific record type
                 match Map.tryFind typeName typeReg with
                 | Some fields ->
@@ -3050,7 +3089,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             // Extract field types from record type (look up in type registry)
                             let fieldTypes =
                                 match sourceType with
-                                | AST.TRecord recordName ->
+                                | AST.TRecord (recordName, _) ->
                                     match Map.tryFind recordName typeReg with
                                     | Some fields -> fields |> List.map snd
                                     | None -> List.replicate (List.length fieldPatterns) AST.TInt64
@@ -3148,7 +3187,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // Extract field types from record type
                     let fieldTypes =
                         match scrutType with
-                        | AST.TRecord recordName ->
+                        | AST.TRecord (recordName, _) ->
                             match Map.tryFind recordName typeReg with
                             | Some fields -> fields |> List.map snd
                             | None -> List.replicate (List.length fieldPatterns) AST.TInt64
@@ -3478,7 +3517,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | AST.PRecord (_, fieldPatterns) ->
                         let fieldTypes =
                             match sourceType with
-                            | AST.TRecord recordName ->
+                            | AST.TRecord (recordName, _) ->
                                 match Map.tryFind recordName typeReg with
                                 | Some fields -> fields |> List.map snd
                                 | None -> List.replicate (List.length fieldPatterns) AST.TInt64
@@ -4937,7 +4976,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord typeName ->
+            | AST.TRecord (typeName, _) ->
                 match Map.tryFind typeName typeReg with
                 | Some typeFields ->
                     let updateMap = Map.ofList updates
@@ -4958,7 +4997,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord typeName ->
+            | AST.TRecord (typeName, _) ->
                 // Look up field index in the specific record type
                 match Map.tryFind typeName typeReg with
                 | Some fields ->

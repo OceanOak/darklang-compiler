@@ -561,7 +561,7 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
                 (TSum (fullTypeName, typeArgs), remaining))
         | _ ->
             // Simple type without type arguments
-            Ok (TRecord fullTypeName, afterTypeName)
+            Ok (TRecord (fullTypeName, []), afterTypeName)
     | TLParen :: rest ->
         // Could be a function type: (int, int) -> bool
         // Or a tuple type: (int, int)
@@ -674,7 +674,7 @@ let rec parseTypeArgType (tokens: Token list) : Result<Type * Token list, string
                 (TSum (fullTypeName, typeArgs), remaining))
         | _ ->
             // Simple type without type arguments
-            Ok (TRecord fullTypeName, afterTypeName)
+            Ok (TRecord (fullTypeName, []), afterTypeName)
     | TLParen :: rest ->
         // Tuple type or function type: (Type1, Type2, ...) or (Type1, Type2) -> RetType
         parseTypeArgTupleElements rest []
@@ -899,12 +899,12 @@ let parseTypeDef (tokens: Token list) : Result<TypeDef * Token list, string> =
                     //    - End of input → SUM TYPE (backwards compat for single-variant enums)
                     //    - Otherwise → TYPE ALIAS (reference to existing type)
                     match targetType with
-                    | TRecord potentialVariant when potentialVariant = typeName ->
+                    | TRecord (potentialVariant, _) when potentialVariant = typeName ->
                         // Same name as type being defined - this is a recursive variant definition
                         // e.g., type Unit2 = Unit2 defines a sum type with variant Unit2
                         let variant = { Name = potentialVariant; Payload = None }
                         Ok (SumTypeDef (typeName, typeParams, [variant]), remaining)
-                    | TRecord potentialVariant when
+                    | TRecord (potentialVariant, _) when
                         // Not a primitive type and at end of input - treat as sum type for backwards compat
                         potentialVariant <> "Int64" && potentialVariant <> "Int32" && potentialVariant <> "Int16" && potentialVariant <> "Int8" &&
                         potentialVariant <> "UInt64" && potentialVariant <> "UInt32" && potentialVariant <> "UInt16" && potentialVariant <> "UInt8" &&

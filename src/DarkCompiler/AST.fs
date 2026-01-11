@@ -38,7 +38,7 @@ type Type =
     | TUnit
     | TFunction of Type list * Type  // parameter types * return type
     | TTuple of Type list             // tuple type: (Int, Bool, String)
-    | TRecord of string               // record type by name: Point, Color, etc.
+    | TRecord of string * Type list   // record type by name with type args: Point<T>, Pair<A, B>, etc.
     | TSum of string * Type list      // sum type by name with type args: Result<Int64, String>
     | TList of Type                    // List<T> - polymorphic list type
     | TVar of string                  // type variable: T, A, B, etc. (for generics)

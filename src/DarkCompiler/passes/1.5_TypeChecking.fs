@@ -58,7 +58,10 @@ let rec typeToString (t: Type) : string =
     | TTuple elemTypes ->
         let elemsStr = elemTypes |> List.map typeToString |> String.concat ", "
         $"({elemsStr})"
-    | TRecord name -> name
+    | TRecord (name, []) -> name
+    | TRecord (name, typeArgs) ->
+        let argsStr = typeArgs |> List.map typeToString |> String.concat ", "
+        $"{name}<{argsStr}>"
     | TSum (name, []) -> name
     | TSum (name, typeArgs) ->
         let argsStr = typeArgs |> List.map typeToString |> String.concat ", "
@@ -159,7 +162,7 @@ let mergeTypeCheckEnv (baseEnv: TypeCheckEnv) (overlay: TypeCheckEnv) : TypeChec
 /// If the name is an alias, recursively resolve to the underlying type name
 let rec resolveTypeName (aliasReg: AliasRegistry) (typeName: string) : string =
     match Map.tryFind typeName aliasReg with
-    | Some ([], TRecord targetName) -> resolveTypeName aliasReg targetName
+    | Some ([], TRecord (targetName, _)) -> resolveTypeName aliasReg targetName
     | _ -> typeName
 
 /// Apply a substitution to a type, replacing type variables with concrete types
@@ -246,7 +249,7 @@ let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
 /// Returns the fully resolved type with all aliases replaced by their targets
 let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
     match typ with
-    | TRecord name ->
+    | TRecord (name, typeArgs) ->
         // Check if this record name is actually a type alias
         match Map.tryFind name aliasReg with
         | Some ([], targetType) ->
@@ -448,9 +451,20 @@ let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list,
         | TList actualElem -> matchTypes patternElem actualElem
         | TVar name -> Ok [(name, pattern)]  // Bind TVar to List type
         | _ -> Error $"Expected List<...>, got {typeToString actual}"
-    | TRecord name ->
+    | TRecord (name, patternArgs) ->
         match actual with
-        | TRecord n when n = name -> Ok []
+        | TRecord (n, actualArgs) when n = name ->
+            // Unify type arguments if both have them
+            if List.length patternArgs <> List.length actualArgs then
+                Error $"Record type arity mismatch for {name}"
+            else
+                List.zip patternArgs actualArgs
+                |> List.map (fun (p, a) -> matchTypes p a)
+                |> List.fold (fun acc res ->
+                    match acc, res with
+                    | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                    | Error e, _ -> Error e
+                    | _, Error e -> Error e) (Ok [])
         | TVar varName -> Ok [(varName, pattern)]  // Bind TVar to Record type
         | _ -> Error $"Expected {name}, got {typeToString actual}"
     | TSum (name, patternArgs) ->
@@ -1602,14 +1616,14 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | None -> checkFieldsInOrder rest accFields // Already checked for missing fields
 
                         checkFieldsInOrder expectedFields []
-                        |> Result.map (fun fields' -> (TRecord resolvedTypeName, RecordLiteral (resolvedTypeName, fields')))
+                        |> Result.map (fun fields' -> (TRecord (resolvedTypeName, []), RecordLiteral (resolvedTypeName, fields')))
 
     | RecordUpdate (recordExpr, updates) ->
         // Check the record expression to get its type
         checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
-            | TRecord typeName ->
+            | TRecord (typeName, _) ->
                 // Resolve type alias before looking up in typeReg
                 let resolvedTypeName = resolveTypeName aliasReg typeName
                 match Map.tryFind resolvedTypeName typeReg with
@@ -1647,7 +1661,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                     Error (GenericError $"Field {fname} not found in record type {typeName}")
 
                         checkUpdates updates []
-                        |> Result.map (fun updates' -> (TRecord typeName, RecordUpdate (recordExpr', updates')))
+                        |> Result.map (fun updates' -> (TRecord (typeName, []), RecordUpdate (recordExpr', updates')))
             | other ->
                 Error (GenericError $"Cannot use record update syntax on non-record type {typeToString other}"))
 
@@ -1656,7 +1670,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
-            | TRecord typeName ->
+            | TRecord (typeName, _) ->
                 // Resolve type alias before looking up in typeReg
                 let resolvedTypeName = resolveTypeName aliasReg typeName
                 match Map.tryFind resolvedTypeName typeReg with
@@ -1829,7 +1843,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | _ -> Error (GenericError "Tuple pattern used on non-tuple type")
                 | PRecord (_, fieldPatterns) ->
                     match patternType with
-                    | TRecord recordName ->
+                    | TRecord (recordName, _) ->
                         // Resolve type alias before looking up in typeReg
                         let resolvedRecordName = resolveTypeName aliasReg recordName
                         match Map.tryFind resolvedRecordName typeReg with
