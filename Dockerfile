@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     sudo \
     nodejs \
     npm \
+    htop \
+    jq \
     # Benchmarking tools
     python3 \
     hyperfine \
@@ -34,7 +36,10 @@ USER paulbiggar
 # Install Rust for benchmarking
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# Add Rust to PATH
+# Install beads (bd) issue tracking
+RUN curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+
+# Add Rust and local bin to PATH
 ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
 # Set working directory to match host path
