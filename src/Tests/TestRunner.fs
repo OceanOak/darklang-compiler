@@ -206,6 +206,16 @@ let main args =
 
     let e2eDir = Path.Combine(testDataRoot, "e2e")
     let verificationDir = Path.Combine(testDataRoot, "verification")
+    let e2eTestFiles =
+        if Directory.Exists e2eDir then
+            Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
+        else
+            [||]
+    let verificationTestFiles =
+        if Directory.Exists verificationDir then
+            Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories)
+        else
+            [||]
 
     let unitStdlibSuites = [ "Compiler Caching Tests"; "Preamble Precompile Tests" ]
     let needsUnitStdlib = unitStdlibSuites |> List.exists (matchesFilter filter)
@@ -228,16 +238,42 @@ let main args =
         "Chordal Graph Tests"
     |]
 
-    let hasE2ETests =
-        Directory.Exists e2eDir
-        && Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories).Length > 0
+    let hasE2ETests = e2eTestFiles.Length > 0
+    let hasVerificationTests = verificationTestFiles.Length > 0
 
-    let hasVerificationTests =
-        Directory.Exists verificationDir
-        && Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories).Length > 0
+    let hasMatchingE2ETests =
+        if not hasE2ETests then
+            false
+        else
+            match filter with
+            | None -> true
+            | Some _ ->
+                e2eTestFiles
+                |> Array.exists (fun testFile ->
+                    match TestDSL.E2EFormat.parseE2ETestFile testFile with
+                    | Error _ -> false
+                    | Ok tests -> tests |> List.exists (fun test -> matchesFilter filter test.Name))
+
+    let hasMatchingVerificationTests =
+        if not hasVerificationTests then
+            false
+        else
+            match filter with
+            | None -> true
+            | Some _ ->
+                verificationTestFiles
+                |> Array.exists (fun testFile ->
+                    match TestDSL.E2EFormat.parseE2ETestFile testFile with
+                    | Error _ -> false
+                    | Ok tests -> tests |> List.exists (fun test -> matchesFilter filter test.Name))
 
     let shouldCompileStdlib =
-        shouldStartStdlibCompile hasE2ETests (verificationEnabled && hasVerificationTests) needsUnitStdlib
+        shouldStartStdlibCompile
+            hasE2ETests
+            (verificationEnabled && hasVerificationTests)
+            needsUnitStdlib
+            hasMatchingE2ETests
+            (verificationEnabled && hasMatchingVerificationTests)
 
     let stdlibWarmupPlan = decideStdlibWarmupPlan shouldCompileStdlib
 
@@ -813,9 +849,7 @@ let main args =
         recordResults unitSectionPassed unitSectionFailed (unitFailedTests |> Seq.toList)
 
     let runE2EAndVerification () : unit =
-        if Directory.Exists e2eDir then
-            let e2eTestFiles = Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
-            if e2eTestFiles.Length > 0 then
+        if e2eTestFiles.Length > 0 then
                 let sectionTimer = Stopwatch.StartNew()
                 println $"{Colors.cyan}🚀 E2E Tests{Colors.reset}"
 
@@ -823,30 +857,28 @@ let main args =
                 reportParseErrors "E2E" parseErrors
 
                 if allE2ETests.Length > 0 then
-                    match getStdlibResult () with
-                    | Error e ->
-                        println $"  {Colors.red}Stdlib compilation failed: {e}{Colors.reset}"
-                        println $"  {Colors.red}Skipping all E2E tests{Colors.reset}"
-                    | Ok stdlib ->
-                        let timingText =
-                            match tryGetStdlibCompileElapsed () with
-                            | Some elapsed -> $"(Stdlib compiled in {formatTime elapsed})"
-                            | None -> "(Stdlib compiled)"
-                        println $"  {Colors.gray}{timingText}{Colors.reset}"
-
-                        let testsArray =
-                            allE2ETests
-                            |> Array.filter (fun test -> matchesFilter filter test.Name)
-                            |> orderE2ETestsByEstimatedCost
-                        runE2ESuite "E2E" "E2E" testsArray stdlib
+                    let testsArray =
+                        allE2ETests
+                        |> Array.filter (fun test -> matchesFilter filter test.Name)
+                        |> orderE2ETestsByEstimatedCost
+                    if testsArray.Length > 0 then
+                        match getStdlibResult () with
+                        | Error e ->
+                            println $"  {Colors.red}Stdlib compilation failed: {e}{Colors.reset}"
+                            println $"  {Colors.red}Skipping all E2E tests{Colors.reset}"
+                        | Ok stdlib ->
+                            let timingText =
+                                match tryGetStdlibCompileElapsed () with
+                                | Some elapsed -> $"(Stdlib compiled in {formatTime elapsed})"
+                                | None -> "(Stdlib compiled)"
+                            println $"  {Colors.gray}{timingText}{Colors.reset}"
+                            runE2ESuite "E2E" "E2E" testsArray stdlib
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
                 println ""
 
-        if enableVerification && Directory.Exists verificationDir then
-            let verificationTestFiles = Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories)
-            if verificationTestFiles.Length > 0 then
+        if enableVerification && verificationTestFiles.Length > 0 then
                 let sectionTimer = Stopwatch.StartNew()
                 println $"{Colors.cyan}🔬 Verification Tests{Colors.reset}"
 
@@ -854,16 +886,17 @@ let main args =
                 reportParseErrors "Verification" parseErrors
 
                 if allVerifTests.Length > 0 then
-                    match getStdlibResult () with
-                    | Error err ->
-                        println $"  {Colors.red}Stdlib compilation failed: {err}{Colors.reset}"
-                        println $"  {Colors.red}Skipping verification tests{Colors.reset}"
-                    | Ok stdlib ->
-                        let testsArray =
-                            allVerifTests
-                            |> Array.filter (fun test -> matchesFilter filter test.Name)
-                            |> orderE2ETestsByEstimatedCost
-                        runE2ESuite "Verification" "Verification" testsArray stdlib
+                    let testsArray =
+                        allVerifTests
+                        |> Array.filter (fun test -> matchesFilter filter test.Name)
+                        |> orderE2ETestsByEstimatedCost
+                    if testsArray.Length > 0 then
+                        match getStdlibResult () with
+                        | Error err ->
+                            println $"  {Colors.red}Stdlib compilation failed: {err}{Colors.reset}"
+                            println $"  {Colors.red}Skipping verification tests{Colors.reset}"
+                        | Ok stdlib ->
+                            runE2ESuite "Verification" "Verification" testsArray stdlib
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"

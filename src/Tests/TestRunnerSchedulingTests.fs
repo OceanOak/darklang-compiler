@@ -63,20 +63,29 @@ let testSplitUnitTestsByStdlibNeed () : TestResult =
 
 let testShouldStartStdlibCompile () : TestResult =
     let cases = [
-        (false, false, false, false)
-        (true, false, false, true)
-        (false, true, false, true)
-        (false, false, true, true)
+        (false, false, false, false, false, false)
+        (true, false, false, false, false, false)
+        (true, false, false, true, false, true)
+        (false, true, false, false, false, false)
+        (false, true, false, false, true, true)
+        (false, false, true, false, false, true)
     ]
     let rec checkCases remaining =
         match remaining with
         | [] -> Ok ()
-        | (hasE2E, hasVerification, needsUnitStdlib, expected) :: rest ->
-            let actual = shouldStartStdlibCompile hasE2E hasVerification needsUnitStdlib
+        | (hasE2E, hasVerification, needsUnitStdlib, hasMatchingE2E, hasMatchingVerification, expected) :: rest ->
+            let actual =
+                shouldStartStdlibCompile
+                    hasE2E
+                    hasVerification
+                    needsUnitStdlib
+                    hasMatchingE2E
+                    hasMatchingVerification
             if actual = expected then
                 checkCases rest
             else
-                Error $"Expected shouldStartStdlibCompile({hasE2E}, {hasVerification}, {needsUnitStdlib}) to be {expected}, got {actual}"
+                Error
+                    $"Expected shouldStartStdlibCompile({hasE2E}, {hasVerification}, {needsUnitStdlib}, {hasMatchingE2E}, {hasMatchingVerification}) to be {expected}, got {actual}"
     checkCases cases
 
 let testShouldRunUnitAndE2EInParallel () : TestResult =

@@ -39,8 +39,14 @@ let splitUnitTestsByStdlibNeed
         |> Array.partition (fun suite -> Set.contains suite.Name needsStdlibSet)
     (noStdlibSuites, needsStdlibSuites)
 
-let shouldStartStdlibCompile (hasE2E: bool) (hasVerification: bool) (needsUnitStdlib: bool) : bool =
-    hasE2E || hasVerification || needsUnitStdlib
+let shouldStartStdlibCompile
+    (_hasE2E: bool)
+    (_hasVerification: bool)
+    (needsUnitStdlib: bool)
+    (hasMatchingE2E: bool)
+    (hasMatchingVerification: bool)
+    : bool =
+    needsUnitStdlib || hasMatchingE2E || hasMatchingVerification
 
 let shouldRunUnitAndE2EInParallel (hasUnit: bool) (hasE2E: bool) : bool =
     hasUnit && hasE2E
