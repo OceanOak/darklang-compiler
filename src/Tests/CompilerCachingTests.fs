@@ -32,7 +32,7 @@ let private makeTestSymbolicFunction (name: string) : LIRSymbolic.Function =
 /// Test that specialized functions are cached after compilation
 let testSpecializedFunctionCaching (sharedStdlib: StdlibResult) : TestResult =
     let stdlib = StdlibTestHarness.resetCaches sharedStdlib
-    let source = "Stdlib.List.length<Int64>(Stdlib.List.map<Int64, Int64>([1, 2, 3], (x: Int64) => x + 1))"
+    let source = "Stdlib.Option.withDefault<Int64>(Stdlib.Option.None, 0)"
     match Parser.parseString source with
     | Error err -> Error $"Parse error: {err}"
     | Ok userAst ->
