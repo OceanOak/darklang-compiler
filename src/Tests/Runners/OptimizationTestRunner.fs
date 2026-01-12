@@ -69,7 +69,8 @@ let getOptimizedMIR (source: string) : Result<string, string> =
                 match RefCountInsertion.insertRCInProgram convResultOptimized with
                 | Error e -> Error $"RC insertion error: {e}"
                 | Ok (anfAfterRC, typeMap) ->
-                    let (ANF.Program (functions, mainExpr)) = anfAfterRC
+                    let anfAfterTCO = TailCallDetection.detectTailCallsInProgram anfAfterRC
+                    let (ANF.Program (functions, mainExpr)) = anfAfterTCO
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR
@@ -108,7 +109,8 @@ let getOptimizedLIR (source: string) : Result<string, string> =
                 match RefCountInsertion.insertRCInProgram convResultOptimized with
                 | Error e -> Error $"RC insertion error: {e}"
                 | Ok (anfAfterRC, typeMap) ->
-                    let (ANF.Program (functions, mainExpr)) = anfAfterRC
+                    let anfAfterTCO = TailCallDetection.detectTailCallsInProgram anfAfterRC
+                    let (ANF.Program (functions, mainExpr)) = anfAfterTCO
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR

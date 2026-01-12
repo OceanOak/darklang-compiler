@@ -1,0 +1,67 @@
+// MIR Optimization Tests
+// Tests loop-invariant code motion in MIR (SSA).
+
+---NAME---
+licm_hoist_hash
+---INPUT---
+def loop(n: Int64, acc: Int64) : Int64 =
+    if n < 1 then acc
+    else
+        let h = __hash<String>("hello") in
+        loop(n - 1, acc + h)
+
+loop(3, 0)
+---EXPECTED---
+Function loop:
+  loop_entry:
+    v10015 <- StringHash(str[hello])
+    jump loop_body
+  loop_L0:
+    jump loop_L2
+  loop_L1:
+    v10016 <- v10013 - 1 : TInt64
+    v10017 <- v10012 + v10015 : TInt64
+    v10018 <- v10016 : TInt64
+    v10019 <- v10017 : TInt64
+    jump loop_body
+  loop_L2:
+    ret v10012
+  loop_body:
+    v10012 <- Phi([(v1, loop_entry), (v10019, loop_L1)]) : TInt64
+    v10013 <- Phi([(v0, loop_entry), (v10018, loop_L1)]) : TInt64
+    v10014 <- v10013 < 1 : TInt64
+    branch v10014 ? loop_L0 : loop_L1
+Function _start:
+  _start_body:
+    v10008 <- Call(loop, [3, 0])
+    Print(v10008, type=TInt64)
+    ret v10008
+
+---NAME---
+licm_skip_constant_move
+---INPUT---
+def loop(n: Int64) : Int64 =
+    if n < 1 then 0
+    else loop(1)
+
+loop(2)
+---EXPECTED---
+Function loop:
+  loop_entry:
+    jump loop_body
+  loop_L0:
+    jump loop_L2
+  loop_L1:
+    v10006 <- 1 : TInt64
+    jump loop_body
+  loop_L2:
+    ret 0
+  loop_body:
+    v10004 <- Phi([(v0, loop_entry), (v10006, loop_L1)]) : TInt64
+    v10005 <- v10004 < 1 : TInt64
+    branch v10005 ? loop_L0 : loop_L1
+Function _start:
+  _start_body:
+    v10003 <- Call(loop, [2])
+    Print(v10003, type=TInt64)
+    ret v10003
