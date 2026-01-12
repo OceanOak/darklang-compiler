@@ -35,6 +35,7 @@ type E2ETest = {
     DisableMIROpt: bool
     DisableLIROpt: bool
     DisableDCE: bool
+    DisableLeakCheck: bool
     /// Source file this test came from (for grouping in output)
     SourceFile: string
     /// Maps function names to their definition line numbers in the source file
@@ -51,6 +52,7 @@ type private OptFlags = {
     DisableMIROpt: bool
     DisableLIROpt: bool
     DisableDCE: bool
+    DisableLeakCheck: bool
 }
 
 let private defaultOptFlags = {
@@ -61,6 +63,7 @@ let private defaultOptFlags = {
     DisableMIROpt = false
     DisableLIROpt = false
     DisableDCE = false
+    DisableLeakCheck = false
 }
 
 /// Extract function name from a definition line (e.g., "def buildTree(...)" -> "buildTree")
@@ -132,7 +135,7 @@ let private isExpectationStart (rest: string) : bool =
     elif Char.IsDigit(trimmed.[0]) || trimmed.[0] = '-' then true
     elif trimmed.[0] = '"' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
     elif Char.IsLower(trimmed.[0]) then true
-    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
+    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
     else false
 
 let private isExpectationCandidate (rest: string) : bool =
@@ -145,6 +148,7 @@ let private isExpectationCandidate (rest: string) : bool =
          || trimmed.StartsWith("stderr")
          || trimmed.StartsWith("exit")
          || trimmed.StartsWith("no_free_list")
+         || trimmed.StartsWith("disable_leak_check")
          || trimmed.StartsWith("disable_opt_") then
         true
     else
@@ -166,6 +170,7 @@ let private isAttributeKey (key: string) : bool =
     | "stdout"
     | "stderr"
     | "no_free_list"
+    | "disable_leak_check"
     | "disable_opt_freelist"
     | "disable_opt_anf"
     | "disable_opt_inline"
@@ -395,6 +400,10 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                                 match parseBool value "disable_opt_dce" with
                                 | Some b -> optFlags <- { optFlags with DisableDCE = b }
                                 | None -> ()
+                            | "disable_leak_check" ->
+                                match parseBool value "disable_leak_check" with
+                                | Some b -> optFlags <- { optFlags with DisableLeakCheck = b }
+                                | None -> ()
                             | _ -> errors <- $"Unknown attribute: {key}" :: errors
                         | Error e -> errors <- e :: errors
 
@@ -432,6 +441,7 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                 DisableMIROpt = optFlags.DisableMIROpt
                 DisableLIROpt = optFlags.DisableLIROpt
                 DisableDCE = optFlags.DisableDCE
+                DisableLeakCheck = optFlags.DisableLeakCheck
                 SourceFile = filePath
                 FunctionLineMap = funcLineMap
             }

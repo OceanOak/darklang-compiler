@@ -29,6 +29,7 @@ let private makeTest (name: string) (source: string) (preamble: string) (sourceF
         DisableMIROpt = false
         DisableLIROpt = false
         DisableDCE = false
+        DisableLeakCheck = false
         SourceFile = sourceFile
         FunctionLineMap = Map.empty
     }

@@ -39,6 +39,17 @@ let testShouldShowNormal () : TestResult =
     else
         Ok ()
 
+/// Test that leak-check flag parses and sets the expected option
+let testLeakCheckFlag () : TestResult =
+    let args = [| "--leak-check"; "input.dark" |]
+    match parseArgs args with
+    | Error msg -> Error $"Expected leak-check flag to parse, got error: {msg}"
+    | Ok opts ->
+        if not opts.LeakCheck then
+            Error "Expected LeakCheck to be true"
+        else
+            Ok ()
+
 /// Test compiler option mapping from CLI options
 let testBuildCompilerOptions () : TestResult =
     let cliOpts = {
@@ -50,6 +61,7 @@ let testBuildCompilerOptions () : TestResult =
             DisableMIROpt = true
             DisableLIROpt = true
             DisableDCE = true
+            LeakCheck = true
             DumpANF = true
             DumpMIR = true
             DumpLIR = true
@@ -75,6 +87,8 @@ let testBuildCompilerOptions () : TestResult =
         Error "Expected DumpMIR to map into CompilerOptions"
     else if not compilerOpts.DumpLIR then
         Error "Expected DumpLIR to map into CompilerOptions"
+    else if not compilerOpts.EnableLeakCheck then
+        Error "Expected EnableLeakCheck to map into CompilerOptions"
     else if compilerOpts.EnableCoverage then
         Error "Expected EnableCoverage to remain false"
     else
@@ -83,6 +97,7 @@ let testBuildCompilerOptions () : TestResult =
 let tests = [
     ("IR dump flags", testDumpIrFlags)
     ("show normal output", testShouldShowNormal)
+    ("leak check flag", testLeakCheckFlag)
     ("build compiler options", testBuildCompilerOptions)
 ]
 

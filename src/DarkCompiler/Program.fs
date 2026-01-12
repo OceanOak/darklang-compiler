@@ -56,6 +56,7 @@ type CliOptions = {
     Help: bool
     Version: bool
     Argument: string option
+    LeakCheck: bool
     // Optimization flags
     DisableFreeList: bool
     DisableANFOpt: bool
@@ -79,6 +80,7 @@ let defaultOptions = {
     Help = false
     Version = false
     Argument = None
+    LeakCheck = false
     DisableFreeList = false
     DisableANFOpt = false
     DisableInlining = false
@@ -101,6 +103,7 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
     DisableLIROpt = cliOpts.DisableLIROpt
     DisableDCE = cliOpts.DisableDCE
     EnableCoverage = false
+    EnableLeakCheck = cliOpts.LeakCheck
     DumpANF = cliOpts.DumpANF
     DumpMIR = cliOpts.DumpMIR
     DumpLIR = cliOpts.DumpLIR
@@ -170,6 +173,9 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
         | "--dump-lir" :: rest ->
             parseFlags rest { opts with DumpLIR = true } lastVerbosity
+
+        | "--leak-check" :: rest ->
+            parseFlags rest { opts with LeakCheck = true } lastVerbosity
 
         | "-h" :: rest | "--help" :: rest ->
             parseFlags rest { opts with Help = true } lastVerbosity
@@ -340,6 +346,7 @@ let printUsage () =
     println "  --dump-anf           Dump ANF (all ANF stages)"
     println "  --dump-mir           Dump MIR (control-flow graph)"
     println "  --dump-lir           Dump LIR (before and after register allocation)"
+    println "  --leak-check         Enable leak checking (debug builds only)"
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
     println ""

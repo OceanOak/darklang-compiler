@@ -13,6 +13,7 @@
 //   exit=N         - Expected exit code (default: 0)
 //   stdout="..."   - Expected stdout with escape sequences: \n, \t, \\, \"
 //   stderr="..."   - Expected stderr (same escape sequences)
+//   disable_leak_check=true - Disable leak checking for this test (default: false)
 //
 // Examples:
 //   42 = 42                           // stdout="42\n", exit=0 (simple format)

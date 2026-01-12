@@ -1230,6 +1230,19 @@ let getStringPoolSize (stringPool: MIR.StringPool) : int =
         |> List.sumBy (fun (_, (str, _)) ->
             8 + System.Text.Encoding.UTF8.GetBytes(str).Length + 1)  // 8 for length + data + 1 for null
 
+/// Compute coverage data size in bytes (8 bytes per expression, 8-byte aligned)
+let getCoverageDataSize (coverageExprCount: int) : int =
+    if coverageExprCount <= 0 then 0
+    else ((coverageExprCount * 8 + 7) / 8) * 8
+
+/// Compute leak counter label position
+/// Returns map with "_leak_count" label after all other data, 8-byte aligned
+let computeLeakCounterLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize: int) (stringPoolSize: int) : Map<string, int> =
+    let floatStart = (codeFileOffset + codeSize + 7) &&& (~~~7)
+    let stringStart = floatStart + floatPoolSize
+    let leakStart = (stringStart + stringPoolSize + 7) &&& (~~~7)
+    Map.ofList [("_leak_count", leakStart)]
+
 /// Compute coverage data label position
 /// Returns map with "_coverage_data" label after all other data, 8-byte aligned
 let computeCoverageLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize: int) (stringPoolSize: int) : Map<string, int> =
@@ -1242,7 +1255,13 @@ let computeCoverageLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize: i
 /// Encoding with string and float pool support
 /// Computes label positions and encodes ADRP/ADD_label correctly
 /// codeFileOffset: where code will be placed in the final binary (for correct PC-relative addressing)
-let encodeAllWithPools (instructions: ARM64.Instr list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (codeFileOffset: int) : ARM64.MachineCode list =
+let encodeAllWithPools
+    (instructions: ARM64.Instr list)
+    (stringPool: MIR.StringPool)
+    (floatPool: MIR.FloatPool)
+    (codeFileOffset: int)
+    (enableLeakCheck: bool)
+    : ARM64.MachineCode list =
     // Step 1: Compute code size
     let codeSize = getCodeSize instructions
 
@@ -1253,6 +1272,13 @@ let encodeAllWithPools (instructions: ARM64.Instr list) (stringPool: MIR.StringP
     // Step 3: Compute string label positions (after headers + code + floats)
     let stringLabels = computeStringLabels codeFileOffset codeSize floatPoolSize stringPool
 
+    let stringPoolSize = getStringPoolSize stringPool
+    let leakLabels =
+        if enableLeakCheck then
+            computeLeakCounterLabel codeFileOffset codeSize floatPoolSize stringPoolSize
+        else
+            Map.empty
+
     // Step 4: Compute code label positions (relative to code start, add file offset)
     let rawCodeLabels = computeLabelPositions instructions
     let codeLabelMap = rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset)
@@ -1262,6 +1288,7 @@ let encodeAllWithPools (instructions: ARM64.Instr list) (stringPool: MIR.StringP
         codeLabelMap
         |> Map.fold (fun acc k v -> Map.add k v acc) floatLabels
         |> Map.fold (fun acc k v -> Map.add k v acc) stringLabels
+        |> Map.fold (fun acc k v -> Map.add k v acc) leakLabels
 
     // Step 5: Encode with label resolution (current offset includes file offset)
     let rec encodeLoop instrs offset acc =
@@ -1276,12 +1303,12 @@ let encodeAllWithPools (instructions: ARM64.Instr list) (stringPool: MIR.StringP
 
 /// Backwards-compatible version for code with only strings (no floats)
 let encodeAllWithStrings (instructions: ARM64.Instr list) (stringPool: MIR.StringPool) (codeFileOffset: int) : ARM64.MachineCode list =
-    encodeAllWithPools instructions stringPool MIR.emptyFloatPool codeFileOffset
+    encodeAllWithPools instructions stringPool MIR.emptyFloatPool codeFileOffset false
 
 /// Main encoding entry point with two-pass label resolution (for code without strings)
 let encodeAll (instructions: ARM64.Instr list) : ARM64.MachineCode list =
     // Use version with empty pools and 0 offset for backwards compatibility
-    encodeAllWithPools instructions MIR.emptyStringPool MIR.emptyFloatPool 0
+    encodeAllWithPools instructions MIR.emptyStringPool MIR.emptyFloatPool 0 false
 
 /// Encoding with coverage support
 /// Adds _coverage_data label pointing to BSS section after all data
@@ -1292,6 +1319,7 @@ let encodeAllWithCoverage
     (floatPool: MIR.FloatPool)
     (codeFileOffset: int)
     (coverageExprCount: int)
+    (enableLeakCheck: bool)
     : ARM64.MachineCode list =
 
     // Step 1: Compute code size
@@ -1312,6 +1340,17 @@ let encodeAllWithCoverage
         else
             Map.empty
 
+    let coverageSize = getCoverageDataSize coverageExprCount
+    let leakLabels =
+        if enableLeakCheck then
+            let floatStart = (codeFileOffset + codeSize + 7) &&& (~~~7)
+            let stringStart = floatStart + floatPoolSize
+            let coverageStart = (stringStart + stringPoolSize + 7) &&& (~~~7)
+            let leakStart = (coverageStart + coverageSize + 7) &&& (~~~7)
+            Map.ofList [("_leak_count", leakStart)]
+        else
+            Map.empty
+
     // Step 5: Compute code label positions (relative to code start, add file offset)
     let rawCodeLabels = computeLabelPositions instructions
     let codeLabelMap = rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset)
@@ -1322,6 +1361,7 @@ let encodeAllWithCoverage
         |> Map.fold (fun acc k v -> Map.add k v acc) floatLabels
         |> Map.fold (fun acc k v -> Map.add k v acc) stringLabels
         |> Map.fold (fun acc k v -> Map.add k v acc) coverageLabels
+        |> Map.fold (fun acc k v -> Map.add k v acc) leakLabels
 
     // Step 7: Encode with label resolution
     let rec encodeLoop instrs offset acc =

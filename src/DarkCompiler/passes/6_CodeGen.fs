@@ -25,6 +25,8 @@ type CodeGenOptions = {
     EnableCoverage: bool
     /// Number of coverage expressions (determines buffer size)
     CoverageExprCount: int
+    /// Enable leak checking instrumentation
+    EnableLeakCheck: bool
 }
 
 /// Default code generation options
@@ -32,6 +34,7 @@ let defaultOptions : CodeGenOptions = {
     DisableFreeList = false
     EnableCoverage = false
     CoverageExprCount = 0
+    EnableLeakCheck = false
 }
 
 /// Code generation context (passed through to instruction conversion)
@@ -42,6 +45,49 @@ type CodeGenContext = {
     StackSize: int
     UsedCalleeSaved: LIR.PhysReg list
 }
+
+let leakCounterLabel = "_leak_count"
+
+let generateLeakCounterInc (ctx: CodeGenContext) : ARM64.Instr list =
+    if ctx.Options.EnableLeakCheck then
+        [
+            ARM64.ADRP (ARM64.X17, leakCounterLabel)
+            ARM64.ADD_label (ARM64.X17, ARM64.X17, leakCounterLabel)
+            ARM64.LDR (ARM64.X16, ARM64.X17, 0s)
+            ARM64.ADD_imm (ARM64.X16, ARM64.X16, 1us)
+            ARM64.STR (ARM64.X16, ARM64.X17, 0s)
+        ]
+    else
+        []
+
+let generateLeakCounterDec (ctx: CodeGenContext) : ARM64.Instr list =
+    if ctx.Options.EnableLeakCheck then
+        [
+            ARM64.ADRP (ARM64.X17, leakCounterLabel)
+            ARM64.ADD_label (ARM64.X17, ARM64.X17, leakCounterLabel)
+            ARM64.LDR (ARM64.X16, ARM64.X17, 0s)
+            ARM64.SUB_imm (ARM64.X16, ARM64.X16, 1us)
+            ARM64.STR (ARM64.X16, ARM64.X17, 0s)
+        ]
+    else
+        []
+
+let generateLeakCheckReport (ctx: CodeGenContext) : ARM64.Instr list =
+    if ctx.Options.EnableLeakCheck then
+        let prefix = Runtime.generatePrintCharsToStderr [byte 'l'; byte 'e'; byte 'a'; byte 'k'; byte 's'; byte ':'; byte ' ']
+        let printCount = Runtime.generatePrintIntToStderrNoExit ()
+        let skipOffset = List.length prefix + 1 + List.length printCount + 1
+        [
+            ARM64.ADRP (ARM64.X17, leakCounterLabel)
+            ARM64.ADD_label (ARM64.X17, ARM64.X17, leakCounterLabel)
+            ARM64.LDR (ARM64.X16, ARM64.X17, 0s)
+            ARM64.CBZ_offset (ARM64.X16, skipOffset)
+        ]
+        @ prefix
+        @ [ARM64.MOV_reg (ARM64.X0, ARM64.X16)]
+        @ printCount
+    else
+        []
 
 /// Convert LIR.PhysReg to ARM64.Reg
 let lirPhysRegToARM64Reg (physReg: LIR.PhysReg) : ARM64.Reg =
@@ -509,7 +555,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X12, ARM64.X15, ARM64.X12)  // X12 = dest + 8 + aligned(len)
                         ARM64.MOVZ (ARM64.X15, 1us, 0)
                         ARM64.STR (ARM64.X15, ARM64.X12, 0s)  // [X12] = 1
-                    ])
+                    ] @ generateLeakCounterInc ctx)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.FloatRef _ ->
                 Error "Cannot MOV float reference - use FLoad instruction"
@@ -1274,7 +1320,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         [ARM64.ADR (ARM64.X15, fname); ARM64.STR (ARM64.X15, destReg, int16 offset)]
                     | other -> failwith $"ClosureAlloc: Unexpected capture operand type: {other}")
 
-            Ok (allocInstrs @ storeFuncAddr @ storeCaptures))
+            Ok (allocInstrs @ generateLeakCounterInc ctx @ storeFuncAddr @ storeCaptures))
 
     | LIR.ClosureCall (dest, funcPtr, args) ->
         // Call through closure - MIR_to_LIR already set up:
@@ -1547,7 +1593,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X12, ARM64.X15, ARM64.X12)  // X12 = dest + 8 + aligned(len)
                         ARM64.MOVZ (ARM64.X15, 1us, 0)
                         ARM64.STR (ARM64.X15, ARM64.X12, 0s)  // [X12] = 1
-                    ])
+                    ] @ generateLeakCounterInc ctx)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.FuncAddr funcName ->
                 Ok [ARM64.ADR (destARM64, funcName)]
@@ -1633,7 +1679,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X12, ARM64.X12, ARM64.X10)  // X12 = dest + 8 + len
                         ARM64.MOVZ (ARM64.X15, 1us, 0)
                         ARM64.STR (ARM64.X15, ARM64.X12, 0s)  // [X12] = 1
-                    ])
+                    ] @ generateLeakCounterInc ctx)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.FloatImm _ | LIR.FloatRef _ ->
                 Error "Float in TailArgMoves not yet supported"
@@ -1884,7 +1930,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     ARM64.MOVZ (ARM64.X15, 1us, 0)                      // X15 = 1 (initial ref count)
                     ARM64.STR (ARM64.X15, ARM64.X28, int16 sizeBytes)   // store ref count after payload
                     ARM64.ADD_imm (ARM64.X28, ARM64.X28, uint16 totalSize) // bump pointer
-                ]
+                ] @ generateLeakCounterInc ctx
             else
                 // Full allocator with free list support
                 [
@@ -1903,7 +1949,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     ARM64.MOVZ (ARM64.X15, 1us, 0)                      // X15 = 1 (initial ref count)
                     ARM64.STR (ARM64.X15, ARM64.X28, int16 sizeBytes)   // store ref count after payload
                     ARM64.ADD_imm (ARM64.X28, ARM64.X28, uint16 totalSize) // bump pointer
-                ])
+                ] @ generateLeakCounterInc ctx)
 
     | LIR.HeapStore (addr, offset, src, valueType) ->
         // Store value at addr + offset (offset is in bytes)
@@ -1986,7 +2032,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.STR (ARM64.X15, ARM64.X14, 0s)  // refcount = 1
                         // Store heap string address to tuple slot
                         ARM64.STR (ARM64.X9, addrReg, int16 offset)
-                    ])
+                    ] @ generateLeakCounterInc ctx)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.FloatRef idx, _ ->
                 // Load float VALUE from pool into temp FP register, then store to heap
@@ -2031,7 +2077,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
         // - sizeClassOffset = payloadSize (for 8-aligned payloads)
         // - Freed blocks use first 8 bytes as next pointer
         //
-        // Code structure (8 instructions):
+        // Code structure (8 instructions, plus optional leak counter update):
         //   CBZ addr, +8                      ; If null, skip all 7 instructions
         //   LDR X15, [addr, payloadSize]      ; Load ref count
         //   SUB X15, X15, 1                   ; Decrement
@@ -2043,16 +2089,19 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
         //   (continue)
         lirRegToARM64Reg addr
         |> Result.map (fun addrReg ->
+            let leakDec = generateLeakCounterDec ctx
+            let cbzOffset = if List.isEmpty leakDec then 8 else 13
+            let cbnzOffset = if List.isEmpty leakDec then 4 else 9
             [
-                ARM64.CBZ_offset (addrReg, 8)                       // If null, skip 7 instructions
+                ARM64.CBZ_offset (addrReg, cbzOffset)                // If null, skip all instructions
                 ARM64.LDR (ARM64.X15, addrReg, int16 payloadSize)   // Load ref count
                 ARM64.SUB_imm (ARM64.X15, ARM64.X15, 1us)           // Decrement
                 ARM64.STR (ARM64.X15, addrReg, int16 payloadSize)   // Store back
-                ARM64.CBNZ_offset (ARM64.X15, 4)                    // If not zero, skip 4 instructions
+                ARM64.CBNZ_offset (ARM64.X15, cbnzOffset)           // If not zero, skip free list/leak counter
                 ARM64.LDR (ARM64.X14, ARM64.X27, int16 payloadSize) // Load free list head
                 ARM64.STR (ARM64.X14, addrReg, 0s)                  // Store as next pointer in freed block
                 ARM64.STR (addrReg, ARM64.X27, int16 payloadSize)   // Update free list head
-            ])
+            ] @ leakDec)
 
     | LIR.StringConcat (dest, left, right) ->
         // String concatenation:
@@ -2197,7 +2246,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     // Move result to dest
                     let moveResult = [ARM64.MOV_reg (destReg, ARM64.X14)]
 
-                    leftInstrs @ rightInstrs @ calcTotal @ allocate @ storeLen @ copyLeft @ copyRight @ recomputeTotal @ storeRefcount @ moveResult
+                    leftInstrs @ rightInstrs @ calcTotal @ allocate @ storeLen @ copyLeft @ copyRight @ recomputeTotal @ storeRefcount @ moveResult @ generateLeakCounterInc ctx
                 )))
 
     | LIR.PrintHeapString reg ->
@@ -2268,7 +2317,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X13, ARM64.X13, ARM64.X10)
                         ARM64.MOVZ (ARM64.X12, 1us, 0)
                         ARM64.STR (ARM64.X12, ARM64.X13, 0s)
-                    ] @ Runtime.generateFileReadText destReg ARM64.X15)
+                    ] @ generateLeakCounterInc ctx @ Runtime.generateFileReadText destReg ARM64.X15)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.StackSlot offset ->
                 loadStackSlot ARM64.X15 offset
@@ -2330,7 +2379,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X13, ARM64.X12, ARM64.X13)  // X13 = X15 + 8 + aligned(len)
                         ARM64.MOVZ (ARM64.X12, 1us, 0)
                         ARM64.STR (ARM64.X12, ARM64.X13, 0s)  // [X13] = 1
-                    ] @ Runtime.generateFileExists destReg ARM64.X15)
+                    ] @ generateLeakCounterInc ctx @ Runtime.generateFileExists destReg ARM64.X15)
                 | None -> Error $"String index {idx} not found in pool"
             | LIR.StackSlot offset ->
                 // Load heap string from stack slot
@@ -2384,7 +2433,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                             ARM64.ADD_reg (ARM64.X13, ARM64.X12, ARM64.X13)  // X13 = tempReg + 8 + aligned(len)
                             ARM64.MOVZ (ARM64.X12, 1us, 0)
                             ARM64.STR (ARM64.X12, ARM64.X13, 0s)
-                        ], tempReg)
+                        ] @ generateLeakCounterInc ctx, tempReg)
                     | None -> Error $"String index {idx} not found in pool"
                 | LIR.StackSlot offset ->
                     loadStackSlot tempReg offset |> Result.map (fun instrs -> (instrs, tempReg))
@@ -2440,7 +2489,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                             ARM64.ADD_reg (ARM64.X13, ARM64.X12, ARM64.X13)  // X13 = tempReg + 8 + aligned(len)
                             ARM64.MOVZ (ARM64.X12, 1us, 0)
                             ARM64.STR (ARM64.X12, ARM64.X13, 0s)
-                        ], tempReg)
+                        ] @ generateLeakCounterInc ctx, tempReg)
                     | None -> Error $"String index {idx} not found in pool"
                 | LIR.StackSlot offset ->
                     loadStackSlot tempReg offset |> Result.map (fun instrs -> (instrs, tempReg))
@@ -2506,7 +2555,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X13, ARM64.X12, ARM64.X13)  // X13 = X15 + 8 + aligned(len)
                         ARM64.MOVZ (ARM64.X12, 1us, 0)
                         ARM64.STR (ARM64.X12, ARM64.X13, 0s)  // [X13] = 1
-                    ] @ Runtime.generateFileDelete destReg ARM64.X15)
+                    ] @ generateLeakCounterInc ctx @ Runtime.generateFileDelete destReg ARM64.X15)
                 | None -> Error ("String index " + string idx + " not found in pool")
             | LIR.StackSlot offset ->
                 // Load heap string from stack slot
@@ -2556,7 +2605,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                         ARM64.ADD_reg (ARM64.X13, ARM64.X13, ARM64.X10)
                         ARM64.MOVZ (ARM64.X12, 1us, 0)
                         ARM64.STR (ARM64.X12, ARM64.X13, 0s)
-                    ] @ Runtime.generateFileSetExecutable destReg ARM64.X15)
+                    ] @ generateLeakCounterInc ctx @ Runtime.generateFileSetExecutable destReg ARM64.X15)
                 | None -> Error ("String index " + string idx + " not found in pool")
             | LIR.StackSlot offset ->
                 loadStackSlot ARM64.X15 offset
@@ -2608,7 +2657,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                                 ARM64.ADD_reg (ARM64.X13, ARM64.X13, ARM64.X10)
                                 ARM64.MOVZ (ARM64.X12, 1us, 0)
                                 ARM64.STR (ARM64.X12, ARM64.X13, 0s)
-                            ] @ Runtime.generateFileWriteFromPtr destReg ARM64.X15 ptrARM64 lengthARM64)
+                            ] @ generateLeakCounterInc ctx @ Runtime.generateFileWriteFromPtr destReg ARM64.X15 ptrARM64 lengthARM64)
                         | None -> Error ("String index " + string idx + " not found in pool")
                     | LIR.StackSlot offset ->
                         loadStackSlot ARM64.X15 offset
@@ -2921,6 +2970,21 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             // Heap or pool string - refcount is at [addr + 8 + aligned(length)]
             lirRegToARM64Reg reg
             |> Result.map (fun addrReg ->
+                let leakDec = generateLeakCounterDec ctx
+                let bcondOffset = if List.isEmpty leakDec then 3 else 9
+                let refcountUpdate =
+                    if List.isEmpty leakDec then
+                        [
+                            ARM64.SUB_imm (ARM64.X15, ARM64.X15, 1us)        // X15--
+                            ARM64.STR (ARM64.X15, ARM64.X14, 0s)             // store back
+                        ]
+                    else
+                        [
+                            ARM64.SUB_imm (ARM64.X15, ARM64.X15, 1us)        // X15--
+                            ARM64.STR (ARM64.X15, ARM64.X14, 0s)             // store back
+                            // If refcount hits 0, update leak counter (string freeing not implemented yet)
+                            ARM64.CBNZ_offset (ARM64.X15, 6)                 // If not zero, skip leak counter
+                        ] @ leakDec
                 [
                     // Save address to X12 in case addrReg is X13/X14/X15 which we clobber
                     ARM64.MOV_reg (ARM64.X12, addrReg)               // X12 = string address
@@ -2939,12 +3003,8 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     ARM64.MOVK (ARM64.X13, 0xFFFFus, 32)
                     ARM64.MOVK (ARM64.X13, 0x7FFFus, 48)
                     ARM64.CMP_reg (ARM64.X15, ARM64.X13)             // Compare with sentinel
-                    ARM64.B_cond (ARM64.EQ, 3)                       // If pool string, skip to end
-                    ARM64.SUB_imm (ARM64.X15, ARM64.X15, 1us)        // X15--
-                    ARM64.STR (ARM64.X15, ARM64.X14, 0s)             // store back
-                    // Note: When refcount hits 0, we should free the memory.
-                    // For now, we skip this as strings have variable size.
-                ])
+                    ARM64.B_cond (ARM64.EQ, bcondOffset)             // If pool string, skip to end
+                ] @ refcountUpdate)
         | _ -> Error "RefCountDecString requires StringRef or Reg operand"
 
     | LIR.RandomInt64 dest ->
@@ -2959,7 +3019,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg value
             |> Result.map (fun valueReg ->
-                Runtime.generateFloatToString destReg valueReg))
+                Runtime.generateFloatToString destReg valueReg @ generateLeakCounterInc ctx))
 
     | LIR.CoverageHit exprId ->
         // Increment coverage counter at _coverage_data[exprId * 8]
@@ -3252,9 +3312,10 @@ let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64.In
                     if ctx.Options.EnableCoverage then
                         Runtime.generateCoverageFlush ctx.Options.CoverageExprCount
                     else []
+                let leakCheckReport = generateLeakCheckReport ctx
                 generateEpilogue func.UsedCalleeSaved func.StackSize
                 |> List.filter (function ARM64.RET -> false | _ -> true)  // Remove RET
-                |> fun instrs -> instrs @ coverageFlush @ Runtime.generateExit ()
+                |> fun instrs -> instrs @ coverageFlush @ leakCheckReport @ Runtime.generateExit ()
             else
                 generateEpilogue func.UsedCalleeSaved func.StackSize
 

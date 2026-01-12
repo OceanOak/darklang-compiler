@@ -129,7 +129,7 @@ let createStringData (stringPool: MIR.StringPool) : byte array =
         |> Array.ofList
 
 /// Create an ELF executable with float and string data
-let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) : byte array =
+let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (enableLeakCheck: bool) : byte array =
     let codeBytes =
         machineCode
         |> List.collect (fun word ->
@@ -142,8 +142,15 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
     // Create string data
     let stringBytes = createStringData stringPool
 
-    // Combined constant data: floats then strings
-    let dataBytes = Array.append floatBytes stringBytes
+    let floatAndStringBytes = Array.append floatBytes stringBytes
+    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+    let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
+    let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
+    let dataBytes =
+        if enableLeakCheck then
+            Array.concat [floatAndStringBytes; leakPadding; leakBytes]
+        else
+            floatAndStringBytes
 
     let codeSize = uint64 codeBytes.Length
     let dataSize = uint64 dataBytes.Length
@@ -198,9 +205,14 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
     let segmentFileSize = codeFileOffset + codeSize + alignmentPadding + dataSize
     let segmentMemSize = segmentFileSize
 
+    let segmentFlags =
+        if enableLeakCheck then
+            Binary_ELF.PF_R ||| Binary_ELF.PF_W ||| Binary_ELF.PF_X
+        else
+            Binary_ELF.PF_R ||| Binary_ELF.PF_X
     let codeSegment : Binary_ELF.Elf64ProgramHeader = {
         Type = Binary_ELF.PT_LOAD
-        Flags = Binary_ELF.PF_R ||| Binary_ELF.PF_X  // Readable and executable
+        Flags = segmentFlags
         Offset = 0UL  // Load from beginning of file (includes headers)
         VAddr = baseVAddr  // Load at base address
         PAddr = baseVAddr  // Physical = virtual for user programs
@@ -220,17 +232,17 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
 
 /// Create an ELF executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: MIR.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool MIR.emptyFloatPool
+    createExecutableWithPools machineCode stringPool MIR.emptyFloatPool false
 
 /// Create a minimal ELF executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode MIR.emptyStringPool MIR.emptyFloatPool
+    createExecutableWithPools machineCode MIR.emptyStringPool MIR.emptyFloatPool false
 
 /// Create an ELF executable with coverage data section
 /// coverageExprCount: number of coverage expressions (each needs 8 bytes)
 /// The coverage data is placed after strings and initialized to zero
 /// Uses a single RWX segment for simplicity (code + data + coverage)
-let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (coverageExprCount: int) : byte array =
+let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (coverageExprCount: int) (enableLeakCheck: bool) : byte array =
     let codeBytes =
         machineCode
         |> List.collect (fun word ->
@@ -247,11 +259,18 @@ let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.Str
     let coverageSize = ((coverageExprCount * 8 + 7) / 8) * 8
     let coverageBytes = Array.create coverageSize 0uy
 
-    // Combined data: floats + strings + padding for alignment + coverage
     let floatAndStringBytes = Array.append floatBytes stringBytes
     let alignedCoverageStart = ((floatAndStringBytes.Length + 7) / 8) * 8
     let coveragePadding = Array.create (alignedCoverageStart - floatAndStringBytes.Length) 0uy
-    let dataBytes = Array.concat [floatAndStringBytes; coveragePadding; coverageBytes]
+    let afterCoverage = alignedCoverageStart + coverageBytes.Length
+    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+    let leakStart = ((afterCoverage + 7) / 8) * 8
+    let leakPadding = Array.create (leakStart - afterCoverage) 0uy
+    let dataBytes =
+        if enableLeakCheck then
+            Array.concat [floatAndStringBytes; coveragePadding; coverageBytes; leakPadding; leakBytes]
+        else
+            Array.concat [floatAndStringBytes; coveragePadding; coverageBytes]
 
     let codeSize = uint64 codeBytes.Length
     let dataSize = uint64 dataBytes.Length

@@ -96,6 +96,7 @@ let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestR
             DisableLIROpt = test.DisableLIROpt
             DisableDCE = test.DisableDCE
             EnableCoverage = false  // Coverage integration handled separately
+            EnableLeakCheck = not test.DisableLeakCheck
             DumpANF = false
             DumpMIR = false
             DumpLIR = false

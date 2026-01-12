@@ -26,6 +26,7 @@ let private makeE2ETest (name: string) (source: string) (preamble: string) (sour
         DisableMIROpt = false
         DisableLIROpt = false
         DisableDCE = false
+        DisableLeakCheck = false
         SourceFile = sourceFile
         FunctionLineMap = Map.empty
     }

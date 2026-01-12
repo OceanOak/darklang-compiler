@@ -291,7 +291,7 @@ let createStringData (stringPool: MIR.StringPool) : byte array * Map<string, int
         (Array.ofList allBytes, labelMap)
 
 /// Create a Mach-O executable with float and string data
-let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) : byte array =
+let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (enableLeakCheck: bool) : byte array =
     let codeBytes =
         machineCode
         |> List.collect (fun word ->
@@ -304,8 +304,15 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
     // Create string data
     let (stringBytes, _stringLabelMap) = createStringData stringPool
 
-    // Combined constant data: floats then strings
-    let dataBytes = Array.append floatBytes stringBytes
+    let floatAndStringBytes = Array.append floatBytes stringBytes
+    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+    let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
+    let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
+    let dataBytes =
+        if enableLeakCheck then
+            Array.concat [floatAndStringBytes; leakPadding; leakBytes]
+        else
+            floatAndStringBytes
     let hasData = dataBytes.Length > 0
 
     let codeSize = uint64 codeBytes.Length
@@ -392,6 +399,11 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
 
     let textSections = if hasData then [textSection; constSection] else [textSection]
 
+    let textSegmentProt =
+        if enableLeakCheck then
+            Binary.VM_PROT_READ ||| Binary.VM_PROT_WRITE ||| Binary.VM_PROT_EXECUTE
+        else
+            Binary.VM_PROT_READ ||| Binary.VM_PROT_EXECUTE
     let textSegmentCommand : Binary.SegmentCommand64 = {
         Command = Binary.LC_SEGMENT_64
         CommandSize = uint32 textSegmentCommandSize
@@ -400,8 +412,8 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
         VmSize = textSegmentSize
         FileOffset = 0UL
         FileSize = textSegmentSize
-        MaxProt = Binary.VM_PROT_READ ||| Binary.VM_PROT_EXECUTE
-        InitProt = Binary.VM_PROT_READ ||| Binary.VM_PROT_EXECUTE
+        MaxProt = textSegmentProt
+        InitProt = textSegmentProt
         NumSections = uint32 numTextSections
         Flags = 0u
         Sections = textSections
@@ -531,16 +543,16 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
 
 /// Create a Mach-O executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: MIR.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool MIR.emptyFloatPool
+    createExecutableWithPools machineCode stringPool MIR.emptyFloatPool false
 
 /// Create a minimal Mach-O executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode MIR.emptyStringPool MIR.emptyFloatPool
+    createExecutableWithPools machineCode MIR.emptyStringPool MIR.emptyFloatPool false
 
 /// Create a Mach-O executable with coverage data section
 /// For now, coverage data is included in the __const section
 /// TODO: Add proper __DATA segment for writable coverage data on macOS
-let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (coverageExprCount: int) : byte array =
+let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (coverageExprCount: int) (enableLeakCheck: bool) : byte array =
     // For now, just include the coverage as zeros in the data section
     // This won't actually work for writing on macOS (need __DATA segment)
     // but allows the binary to be generated
@@ -560,15 +572,22 @@ let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.Str
     let coverageSize = ((coverageExprCount * 8 + 7) / 8) * 8
     let coverageBytes = Array.create coverageSize 0uy
 
-    // Combine: floats + strings + padding + coverage
     let floatAndStringBytes = Array.append floatBytes stringBytes
     let alignedCoverageStart = ((floatAndStringBytes.Length + 7) / 8) * 8
     let coveragePadding = Array.create (alignedCoverageStart - floatAndStringBytes.Length) 0uy
-    let allDataBytes = Array.concat [floatAndStringBytes; coveragePadding; coverageBytes]
+    let afterCoverage = alignedCoverageStart + coverageBytes.Length
+    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+    let leakStart = ((afterCoverage + 7) / 8) * 8
+    let leakPadding = Array.create (leakStart - afterCoverage) 0uy
+    let allDataBytes =
+        if enableLeakCheck then
+            Array.concat [floatAndStringBytes; coveragePadding; coverageBytes; leakPadding; leakBytes]
+        else
+            Array.concat [floatAndStringBytes; coveragePadding; coverageBytes]
 
     // For now, use the existing creation logic but with extended data
     // This is a simplified approach - proper coverage on macOS needs __DATA segment
-    createExecutableWithPools machineCode stringPool floatPool
+    createExecutableWithPools machineCode stringPool floatPool enableLeakCheck
 
 /// Write bytes to file and sign it
 let writeToFile (path: string) (bytes: byte array) : Result<unit, string> =

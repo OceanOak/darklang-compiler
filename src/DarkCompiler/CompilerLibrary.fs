@@ -56,6 +56,8 @@ type CompilerOptions = {
     DisableDCE: bool
     /// Enable runtime expression coverage tracking
     EnableCoverage: bool
+    /// Enable leak checking (debug only)
+    EnableLeakCheck: bool
     /// Dump ANF representations to stdout
     DumpANF: bool
     /// Dump MIR representations to stdout
@@ -74,6 +76,7 @@ let defaultOptions : CompilerOptions = {
     DisableLIROpt = false
     DisableDCE = false
     EnableCoverage = false
+    EnableLeakCheck = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -108,7 +111,7 @@ let printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : uni
     println ""
 
 /// Compute the platform-specific code file offset for encoding
-let private computeCodeFileOffset (os: Platform.OS) (stringPool: MIR.StringPool) : int =
+let private computeCodeFileOffset (os: Platform.OS) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (enableLeakCheck: bool) : int =
     match os with
     | Platform.Linux ->
         // ELF: header (64) + 1 program header (56) = 120
@@ -118,7 +121,11 @@ let private computeCodeFileOffset (os: Platform.OS) (stringPool: MIR.StringPool)
         // Must match 8_Binary_Generation_MachO.fs calculation
         let headerSize = 32
         let pageZeroCommandSize = 72
-        let numTextSections = if stringPool.Strings.IsEmpty then 1 else 2
+        let hasData =
+            not stringPool.Strings.IsEmpty
+            || not floatPool.Floats.IsEmpty
+            || enableLeakCheck
+        let numTextSections = if hasData then 2 else 1
         let textSegmentCommandSize = 72 + (80 * numTextSections)
         let linkeditSegmentCommandSize = 72
         let dylinkerCommandSize = 32
@@ -307,6 +314,7 @@ let private generateBinary
         DisableFreeList = options.DisableFreeList
         EnableCoverage = options.EnableCoverage
         CoverageExprCount = coverageExprCount
+        EnableLeakCheck = options.EnableLeakCheck
     }
     let codegenResult = CodeGen.generateARM64WithOptions codegenOptions allocatedProgram
     match codegenResult with
@@ -328,9 +336,9 @@ let private generateBinary
             if verbosity >= 1 then println encodeLabel
             let encodeStart = sw.Elapsed.TotalMilliseconds
             let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
-            let codeFileOffset = computeCodeFileOffset os stringPool
+            let codeFileOffset = computeCodeFileOffset os stringPool floatPool options.EnableLeakCheck
             let machineCode =
-                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset
+                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset options.EnableLeakCheck
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - encodeStart, 1)
                 println $"        {t}ms"
@@ -348,8 +356,8 @@ let private generateBinary
             let binaryStart = sw.Elapsed.TotalMilliseconds
             let binary =
                 match os with
-                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool
-                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool
+                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
+                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - binaryStart, 1)
                 println $"        {t}ms"
@@ -409,7 +417,7 @@ let private tryGetCompiledFunction
 
 /// Cache for codegen output (ARM64 instruction lists) per function
 /// Key: (function name, disableFreeList flag)
-type CodegenCache = ConcurrentDictionary<LIR.Function * bool, Lazy<Result<ARM64.Instr list, string>>>
+type CodegenCache = ConcurrentDictionary<LIR.Function * bool * bool, Lazy<Result<ARM64.Instr list, string>>>
 
 /// Cache for ANF-level user functions - avoids re-converting same function across tests
 /// Key: (filename, line_number, function_name)
@@ -510,6 +518,7 @@ let private generateBinaryWithCodegenCache
         DisableFreeList = options.DisableFreeList
         EnableCoverage = options.EnableCoverage
         CoverageExprCount = coverageExprCount
+        EnableLeakCheck = options.EnableLeakCheck
     }
     let ctx : CodeGenContext = {
         Options = codegenOptions
@@ -531,7 +540,7 @@ let private generateBinaryWithCodegenCache
         | [] -> Ok (acc |> List.rev |> List.collect id |> CodeGen.peepholeOptimize)
         | func :: rest ->
             if func.Name <> "_start" && cacheableNames.Contains func.Name && not options.EnableCoverage then
-                let key = (func, options.DisableFreeList)
+                let key = (func, options.DisableFreeList, options.EnableLeakCheck)
                 let lazyResult =
                     codegenCache.GetOrAdd(
                         key,
@@ -570,9 +579,9 @@ let private generateBinaryWithCodegenCache
             if verbosity >= 1 then println encodeLabel
             let encodeStart = sw.Elapsed.TotalMilliseconds
             let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
-            let codeFileOffset = computeCodeFileOffset os stringPool
+            let codeFileOffset = computeCodeFileOffset os stringPool floatPool options.EnableLeakCheck
             let machineCode =
-                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset
+                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset options.EnableLeakCheck
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - encodeStart, 1)
                 println $"        {t}ms"
@@ -590,8 +599,8 @@ let private generateBinaryWithCodegenCache
             let binaryStart = sw.Elapsed.TotalMilliseconds
             let binary =
                 match os with
-                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool
-                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool
+                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
+                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - binaryStart, 1)
                 println $"        {t}ms"
