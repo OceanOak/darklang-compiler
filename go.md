@@ -4,9 +4,9 @@ Use Beads (bd) for planning and progress tracking. See WORKFLOW.md for how it wo
 
 ONLY WORK ON A SINGLE ISSUE.
 
-1. Decide which issue to work on next using `bd ready` / `bd list` / `bd show`. This should be the one YOU decide has the highest priority - not necessarily the first in the list.
+1. Decide which issue to work on next. If you've been told what to do, add it to `bd` and then do it. Otherwise select using `bd ready` / `bd list` / `bd show`, you it should be the one YOU decide has the highest priority - not necessarily the first in the list.
 
-2. Start a new git worktree, in which to do work.
+2. Start a new git worktree, in which to do work. (put the tree as sibling of compiler-for-dark dir)
 
 3. Update the issue to in_progress before starting work.
 
