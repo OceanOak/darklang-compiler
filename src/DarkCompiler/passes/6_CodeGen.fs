@@ -3182,7 +3182,7 @@ let convertCFG (ctx: CodeGenContext) (epilogueLabel: string) (cfg: LIR.CFG) : Re
     convertBlocks [] allBlocks
 
 /// Generate heap initialization code for _start function
-/// Uses mmap to allocate 64MB of heap space and initializes X27/X28
+/// Uses mmap to allocate 128MB of heap space and initializes X27/X28
 ///
 /// Memory layout:
 ///   X27 -> [free list heads: 256 bytes (32 entries × 8 bytes)]
@@ -3206,9 +3206,9 @@ let generateHeapInit () : ARM64.Instr list =
         | Platform.MacOS -> 0x1002us  // MAP_PRIVATE | MAP_ANON
         | Platform.Linux -> 0x22us    // MAP_PRIVATE | MAP_ANONYMOUS
     [
-        // mmap(NULL, 64MB, PROT_READ|PROT_WRITE, flags, -1, 0)
+        // mmap(NULL, 128MB, PROT_READ|PROT_WRITE, flags, -1, 0)
         ARM64.MOVZ (ARM64.X0, 0us, 0)              // addr = NULL
-        ARM64.MOVZ (ARM64.X1, 0x400us, 16)         // size = 0x4000000 (64MB, high 16 bits)
+        ARM64.MOVZ (ARM64.X1, 0x800us, 16)         // size = 0x8000000 (128MB, high 16 bits)
         ARM64.MOVZ (ARM64.X2, 3us, 0)              // PROT_READ | PROT_WRITE
         ARM64.MOVZ (ARM64.X3, mmapFlags, 0)        // flags
         ARM64.MOVZ (ARM64.X4, 0us, 0)              // X4 = 0

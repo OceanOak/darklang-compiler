@@ -607,6 +607,26 @@ let computeInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Set<int
     // in forward order (matching the original instruction order)
     livenessListReversed
 
+/// Compute float liveness at each instruction index within a block
+/// Returns a list of live FVirtual ID sets, one per instruction (same order as Instrs)
+let computeFloatInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Set<int>) : Set<int> list =
+    let mutable live = liveOut
+
+    let instrsReversed = List.rev block.Instrs
+    let mutable livenessListReversed = []
+
+    for instr in instrsReversed do
+        livenessListReversed <- live :: livenessListReversed
+
+        match getDefinedFVReg instr with
+        | Some def -> live <- Set.remove def live
+        | None -> ()
+
+        for used in getUsedFVRegs instr do
+            live <- Set.add used live
+
+    livenessListReversed
+
 // ============================================================================
 // Live Interval Construction
 // ============================================================================
@@ -1292,6 +1312,15 @@ let getLiveCallerSavedRegs (liveVRegs: Set<int>) (mapping: Map<int, Allocation>)
         | _ -> None)
     |> List.distinct
     |> List.sort  // Keep consistent order for deterministic output
+
+/// Get the caller-saved physical float registers that contain live values
+let getLiveCallerSavedFloatRegs (liveFVRegs: Set<int>) (floatAllocation: FAllocationResult) : LIR.PhysFPReg list =
+    liveFVRegs
+    |> Set.toList
+    |> List.choose (fun vregId -> Map.tryFind vregId floatAllocation.FMapping)
+    |> List.filter (fun reg -> List.contains reg floatCallerSavedRegs)
+    |> List.distinct
+    |> List.sort
 
 /// Align to 16-byte boundary
 let alignTo16 (size: int) : int =
@@ -2216,28 +2245,36 @@ let applyToTerminator (mapping: Map<int, Allocation>) (term: LIRSymbolic.Termina
 /// Apply allocation to a basic block with liveness-aware SaveRegs/RestoreRegs population
 let applyToBlockWithLiveness
     (mapping: Map<int, Allocation>)
+    (floatAllocation: FAllocationResult)
     (liveOut: Set<int>)
+    (floatLiveOut: Set<int>)
     (block: LIRSymbolic.BasicBlock)
     : LIRSymbolic.BasicBlock =
 
     // Compute liveness at each instruction point
     let instrLiveness = computeInstructionLiveness block liveOut
+    let floatInstrLiveness = computeFloatInstructionLiveness block floatLiveOut
 
     // Process each instruction with its corresponding liveness
     // Debug: check lengths match
     let instrCount = List.length block.Instrs
     let livenessCount = List.length instrLiveness
-    if instrCount <> livenessCount then
-        failwithf "Instruction count (%d) doesn't match liveness count (%d)" instrCount livenessCount
+    let floatLivenessCount = List.length floatInstrLiveness
+    if instrCount <> livenessCount || instrCount <> floatLivenessCount then
+        failwithf
+            "Instruction count (%d) doesn't match liveness count (%d) or float liveness count (%d)"
+            instrCount
+            livenessCount
+            floatLivenessCount
 
     // First pass: find SaveRegs/RestoreRegs pairs and compute the registers to save
     // For each SaveRegs, look ahead to find the matching RestoreRegs and use its liveness
     // This ensures SaveRegs and RestoreRegs have matching register lists
-    let mutable savedRegsStack : LIR.PhysReg list list = []
+    let mutable savedRegsStack : (LIR.PhysReg list * LIR.PhysFPReg list) list = []
 
     let allocatedInstrs =
-        List.zip block.Instrs instrLiveness
-        |> List.collect (fun (instr, liveAfter) ->
+        List.zip3 block.Instrs instrLiveness floatInstrLiveness
+        |> List.collect (fun (instr, liveAfter, floatLiveAfter) ->
             match instr with
             | LIRSymbolic.SaveRegs ([], []) ->
                 // At SaveRegs, we need to save registers that are:
@@ -2245,19 +2282,20 @@ let applyToBlockWithLiveness
                 // 2. Needed after the call
                 // The liveAfter here includes both categories, so we use it
                 let liveCallerSaved = getLiveCallerSavedRegs liveAfter mapping
+                let liveCallerSavedFloat = getLiveCallerSavedFloatRegs floatLiveAfter floatAllocation
                 // Push onto stack for matching RestoreRegs
-                savedRegsStack <- liveCallerSaved :: savedRegsStack
-                applyToInstr mapping (LIRSymbolic.SaveRegs (liveCallerSaved, []))
+                savedRegsStack <- (liveCallerSaved, liveCallerSavedFloat) :: savedRegsStack
+                applyToInstr mapping (LIRSymbolic.SaveRegs (liveCallerSaved, liveCallerSavedFloat))
             | LIRSymbolic.RestoreRegs ([], []) ->
                 // Pop the matching SaveRegs registers
-                let liveCallerSaved =
+                let (liveCallerSaved, liveCallerSavedFloat) =
                     match savedRegsStack with
-                    | head :: tail ->
+                    | (intRegs, floatRegs) :: tail ->
                         savedRegsStack <- tail
-                        head
+                        (intRegs, floatRegs)
                     | [] ->
                         failwith "Unmatched RestoreRegs: SaveRegs stack is empty"
-                applyToInstr mapping (LIRSymbolic.RestoreRegs (liveCallerSaved, []))
+                applyToInstr mapping (LIRSymbolic.RestoreRegs (liveCallerSaved, liveCallerSavedFloat))
             | _ ->
                 applyToInstr mapping instr)
 
@@ -2277,15 +2315,21 @@ let applyToBlock (mapping: Map<int, Allocation>) (block: LIRSymbolic.BasicBlock)
 /// Apply allocation to CFG with liveness info
 let applyToCFGWithLiveness
     (mapping: Map<int, Allocation>)
+    (floatAllocation: FAllocationResult)
     (cfg: LIRSymbolic.CFG)
     (liveness: Map<LIR.Label, BlockLiveness>)
+    (floatLiveness: Map<LIR.Label, BlockLiveness>)
     : LIRSymbolic.CFG =
     { Entry = cfg.Entry
       Blocks =
         cfg.Blocks
         |> Map.map (fun label block ->
             let blockLiveness = Map.find label liveness
-            applyToBlockWithLiveness mapping blockLiveness.LiveOut block) }
+            let floatBlockLiveness =
+                match Map.tryFind label floatLiveness with
+                | Some fl -> fl
+                | None -> { LiveIn = Set.empty; LiveOut = Set.empty }
+            applyToBlockWithLiveness mapping floatAllocation blockLiveness.LiveOut floatBlockLiveness.LiveOut block) }
 
 /// Apply allocation to CFG (legacy - no liveness info)
 let applyToCFG (mapping: Map<int, Allocation>) (cfg: LIRSymbolic.CFG) : LIRSymbolic.CFG =
@@ -2756,7 +2800,8 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
     let cfgWithPhiResolved = resolvePhiNodes func.CFG result.Mapping floatAllocation
 
     // Step 8: Apply allocation to CFG with liveness info for SaveRegs/RestoreRegs population
-    let allocatedCFG = applyToCFGWithLiveness result.Mapping cfgWithPhiResolved liveness
+    let floatLiveness = computeFloatLiveness func.CFG
+    let allocatedCFG = applyToCFGWithLiveness result.Mapping floatAllocation cfgWithPhiResolved liveness floatLiveness
 
     // Step 8b: Apply float allocation to CFG - convert FVirtual to FPhysical
     let allocatedCFG = applyFloatAllocationToCFG floatAllocation allocatedCFG

@@ -669,7 +669,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
             |> List.mapi (fun i cap -> LIRSymbolic.HeapStore (lirDest, (i + 1) * 8, convertOperand cap, None))
         Ok (allocInstr :: storeFuncInstr :: storeInstrs)
 
-    | MIR.ClosureCall (dest, closure, args, argTypes) ->
+    | MIR.ClosureCall (dest, closure, args, argTypes, returnType) ->
         // Call through closure: extract func_ptr from closure[0], call with (closure, args...)
         let lirDest = vregToLIRReg dest
         let intRegs = [LIR.X0; LIR.X1; LIR.X2; LIR.X3; LIR.X4; LIR.X5; LIR.X6; LIR.X7]
@@ -736,13 +736,22 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
         // Empty placeholder - register allocator will fill in the actual registers to restore
         let restoreInstrs = [LIRSymbolic.RestoreRegs ([], [])]
 
-        // Move return value from X0 to destination
-        let moveResult =
-            match lirDest with
-            | LIR.Physical LIR.X0 -> []
-            | _ -> [LIRSymbolic.Mov (lirDest, LIRSymbolic.Reg (LIR.Physical LIR.X0))]
+        // Move return value from X0 or D0 to destination based on return type
+        // For float returns, save D0 to D8 before RestoreRegs, then copy to dest after.
+        let (moveBeforeRestore, moveAfterRestore) =
+            if returnType = AST.TFloat64 then
+                let destFReg = vregToLIRFReg dest
+                let saveToD8 = [LIRSymbolic.FMov (LIR.FPhysical LIR.D8, LIR.FPhysical LIR.D0)]
+                let copyToFinal = [LIRSymbolic.FMov (destFReg, LIR.FPhysical LIR.D8)]
+                (saveToD8, copyToFinal)
+            else
+                let moveResult =
+                    match lirDest with
+                    | LIR.Physical LIR.X0 -> []
+                    | _ -> [LIRSymbolic.Mov (lirDest, LIRSymbolic.Reg (LIR.Physical LIR.X0))]
+                ([], moveResult)
 
-        Ok (saveInstrs @ [loadClosureInstr] @ intArgMoves @ floatArgMoves @ [loadFuncPtrInstr] @ [callInstr] @ restoreInstrs @ moveResult)
+        Ok (saveInstrs @ [loadClosureInstr] @ intArgMoves @ floatArgMoves @ [loadFuncPtrInstr] @ [callInstr] @ moveBeforeRestore @ restoreInstrs @ moveAfterRestore)
 
     | MIR.ClosureTailCall (closure, args, argTypes) ->
         // Closure tail call: skip SaveRegs/RestoreRegs, use BR

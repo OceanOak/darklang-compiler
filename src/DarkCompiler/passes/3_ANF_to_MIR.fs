@@ -312,6 +312,7 @@ type CFGBuilder = {
     FuncName: string  // For generating unique labels per function
     ParamRegs: MIR.VReg list  // Parameter VRegs for self-recursive tail call loop optimization
     FloatRegs: Set<int>  // VReg IDs that hold float values
+    ClosureFuncs: Map<ANF.TempId, string>  // Closure temp -> function name for return type lookup
     // Coverage support
     EnableCoverage: bool
     ExprIdGen: ANF.ExprIdGen
@@ -666,13 +667,29 @@ let rec convertExpr
                 | ANF.ClosureCall (closure, args) ->
                     // Call through closure: extract func_ptr, call with (closure, args...)
                     let argTypes = args |> List.map (atomType builder)
+                    let returnType =
+                        let fallback () =
+                            match Map.tryFind tempId builder.TypeMap with
+                            | Some (AST.TFunction (_, retType)) -> retType
+                            | Some t -> t
+                            | None -> failwith $"ClosureCall: Return type not found for {tempId}"
+                        match closure with
+                        | ANF.Var closureId ->
+                            match Map.tryFind closureId builder.ClosureFuncs with
+                            | Some funcName ->
+                                match Map.tryFind funcName builder.ReturnTypeReg with
+                                | Some t -> t
+                                | None -> fallback ()
+                            | None -> fallback ()
+                        | _ -> fallback ()
+                    destType := returnType
                     atomToOperand builder closure
                     |> Result.bind (fun closureOp ->
                         args
                         |> List.map (atomToOperand builder)
                         |> sequenceResults
                         |> Result.map (fun argOperands ->
-                            [MIR.ClosureCall (destReg, closureOp, argOperands, argTypes)]))
+                            [MIR.ClosureCall (destReg, closureOp, argOperands, argTypes, returnType)]))
                 | ANF.TailCall (funcName, args) ->
                     // Non-self-recursive tail call (self-recursive handled specially above)
                     // Emits TailCall instruction with full epilogue + branch
@@ -888,14 +905,19 @@ let rec convertExpr
             | Ok instrs ->
                 // Add coverage instrumentation if enabled
                 let (coverageInstrs, builderWithCoverage) = withCoverage builder cexpr
+                let builderWithClosure =
+                    match cexpr with
+                    | ANF.ClosureAlloc (funcName, _) ->
+                        { builderWithCoverage with ClosureFuncs = Map.add tempId funcName builderWithCoverage.ClosureFuncs }
+                    | _ -> builderWithCoverage
                 let newInstrs = currentInstrs @ coverageInstrs @ instrs
                 // Update FloatRegs if this dest is a float
                 let (MIR.VReg destId) = destReg
                 let builder' =
                     if !destType = AST.TFloat64 then
-                        { builderWithCoverage with FloatRegs = Set.add destId builderWithCoverage.FloatRegs }
+                        { builderWithClosure with FloatRegs = Set.add destId builderWithClosure.FloatRegs }
                     else
-                        builderWithCoverage
+                        builderWithClosure
                 convertExpr rest currentLabel newInstrs builder'
 
     | ANF.If (condAtom, thenBranch, elseBranch) ->
@@ -1233,13 +1255,29 @@ and convertExprToOperand
                 | ANF.ClosureCall (closure, args) ->
                     // Call through closure: extract func_ptr, call with (closure, args...)
                     let argTypes = args |> List.map (atomType builder)
+                    let returnType =
+                        let fallback () =
+                            match Map.tryFind tempId builder.TypeMap with
+                            | Some (AST.TFunction (_, retType)) -> retType
+                            | Some t -> t
+                            | None -> failwith $"ClosureCall: Return type not found for {tempId}"
+                        match closure with
+                        | ANF.Var closureId ->
+                            match Map.tryFind closureId builder.ClosureFuncs with
+                            | Some funcName ->
+                                match Map.tryFind funcName builder.ReturnTypeReg with
+                                | Some t -> t
+                                | None -> fallback ()
+                            | None -> fallback ()
+                        | _ -> fallback ()
+                    destType := returnType
                     atomToOperand builder closure
                     |> Result.bind (fun closureOp ->
                         args
                         |> List.map (atomToOperand builder)
                         |> sequenceResults
                         |> Result.map (fun argOperands ->
-                            [MIR.ClosureCall (destReg, closureOp, argOperands, argTypes)]))
+                            [MIR.ClosureCall (destReg, closureOp, argOperands, argTypes, returnType)]))
                 | ANF.TailCall (funcName, args) ->
                     // Non-self-recursive tail call (self-recursive handled specially above)
                     // Emits TailCall instruction with full epilogue + branch
@@ -1454,13 +1492,18 @@ and convertExprToOperand
             match instrsResult with
             | Error err -> Error err
             | Ok instrs ->
+                let builderWithClosure =
+                    match cexpr with
+                    | ANF.ClosureAlloc (funcName, _) ->
+                        { builder with ClosureFuncs = Map.add tempId funcName builder.ClosureFuncs }
+                    | _ -> builder
                 // Update FloatRegs if this dest is a float
                 let (MIR.VReg destId) = destReg
                 let builder' =
                     if !destType = AST.TFloat64 then
-                        { builder with FloatRegs = Set.add destId builder.FloatRegs }
+                        { builderWithClosure with FloatRegs = Set.add destId builderWithClosure.FloatRegs }
                     else
-                        builder
+                        builderWithClosure
                 convertExprToOperand rest startLabel (startInstrs @ instrs) builder'
 
     | ANF.If (condAtom, thenBranch, elseBranch) ->
@@ -1608,6 +1651,7 @@ let convertANFFunction (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typeReg: 
         FuncName = anfFunc.Name
         ParamRegs = paramVRegs  // For self-recursive tail call loop optimization
         FloatRegs = floatParamIds
+        ClosureFuncs = Map.empty
         EnableCoverage = enableCoverage
         ExprIdGen = ANF.initialExprIdGen
         CoverageMapping = ANF.emptyCoverageMapping
@@ -1726,6 +1770,7 @@ let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (s
         FuncName = "_start"
         ParamRegs = []  // _start has no params
         FloatRegs = Set.empty
+        ClosureFuncs = Map.empty
         EnableCoverage = enableCoverage
         ExprIdGen = ANF.initialExprIdGen
         CoverageMapping = ANF.emptyCoverageMapping

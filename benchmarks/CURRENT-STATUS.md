@@ -67,7 +67,6 @@ These benchmarks have implementations but are limited by stack depth or bugs.
 | nsieve     | Stack overflow     | Uses n=1000 (n=100000 causes stack overflow) - outputs 168     |
 | fannkuch   | Stack overflow     | Uses n=6 (n=9 causes stack overflow) - outputs 10              |
 | edigits    | Stack overflow     | Uses 50 digits, 1 iteration (full: 1000 digits, 10 iterations) |
-| fasta      | Stack overflow     | Uses n=100 (n=100000 causes stack overflow)                    |
 
 ---
 
@@ -86,7 +85,7 @@ These benchmarks are in the suite for other languages but don't have Dark implem
 | Feature                    | Benchmarks Blocked                                                           |
 | -------------------------- | ---------------------------------------------------------------------------- |
 | **Closure variable capture** | quicksort                                                                  |
-| Stack depth / TCO          | pisum (full), nsieve (full), fannkuch (full), edigits (full), fasta (full)  |
+| Stack depth / TCO          | pisum (full), nsieve (full), fannkuch (full), edigits (full)               |
 
 ---
 

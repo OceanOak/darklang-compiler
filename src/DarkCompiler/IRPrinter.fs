@@ -249,7 +249,7 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
     | MIR.ClosureAlloc (dest, funcName, captures) ->
         let capsStr = captures |> List.map prettyPrintMIROperand |> String.concat ", "
         $"{prettyPrintMIRVReg dest} <- ClosureAlloc({funcName}, [{capsStr}])"
-    | MIR.ClosureCall (dest, closure, args, _) ->
+    | MIR.ClosureCall (dest, closure, args, _, _) ->
         let argStr = args |> List.map prettyPrintMIROperand |> String.concat ", "
         $"{prettyPrintMIRVReg dest} <- ClosureCall({prettyPrintMIROperand closure}, [{argStr}])"
     | MIR.ClosureTailCall (closure, args, _) ->

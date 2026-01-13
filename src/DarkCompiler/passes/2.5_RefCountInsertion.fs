@@ -60,6 +60,24 @@ let tryGetClosureFunc (ctx: TypeContext) (atom: Atom) : string option =
 let tryGetType (ctx: TypeContext) (tempId: TempId) : AST.Type option =
     Map.tryFind tempId ctx.TempTypes
 
+/// Try to get a function's return type from the function registry
+let tryGetFuncReturnTypeFromReg (ctx: TypeContext) (funcName: string) : AST.Type option =
+    match Map.tryFind funcName ctx.FuncReg with
+    | Some (AST.TFunction (_, retType)) -> Some retType
+    | Some otherType -> Some otherType
+    | None -> None
+
+/// Infer the type of an atom (best-effort)
+let inferAtomType (ctx: TypeContext) (atom: Atom) : AST.Type option =
+    match atom with
+    | UnitLiteral -> Some AST.TUnit
+    | IntLiteral _ -> Some AST.TInt64
+    | BoolLiteral _ -> Some AST.TBool
+    | StringLiteral _ -> Some AST.TString
+    | FloatLiteral _ -> Some AST.TFloat64
+    | Var tid -> tryGetType ctx tid
+    | FuncRef funcName -> Map.tryFind funcName ctx.FuncReg
+
 /// Infer the type of a CExpr in the given context
 let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     match cexpr with
@@ -71,16 +89,39 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | Atom (Var tid) -> tryGetType ctx tid
     | Atom (FuncRef funcName) -> Map.tryFind funcName ctx.FuncReg
     | TypedAtom (_, typ) -> Some typ  // Use the explicit type annotation
-    | Prim (op, _, _) ->
+    | Prim (op, left, right) ->
         // Binary ops return int or bool depending on op
         match op with
-        | Add | Sub | Mul | Div | Mod | Shl | Shr | BitAnd | BitOr | BitXor -> Some AST.TInt64
+        | Add | Sub | Mul | Div ->
+            let leftType = inferAtomType ctx left
+            let rightType = inferAtomType ctx right
+            match leftType, rightType with
+            | Some AST.TFloat64, _ -> Some AST.TFloat64
+            | _, Some AST.TFloat64 -> Some AST.TFloat64
+            | Some _, _ -> Some AST.TInt64
+            | _, Some _ -> Some AST.TInt64
+            | None, None -> None
+        | Mod | Shl | Shr | BitAnd | BitOr | BitXor -> Some AST.TInt64
         | Eq | Neq | Lt | Gt | Lte | Gte | And | Or -> Some AST.TBool
-    | UnaryPrim (op, _) ->
+    | UnaryPrim (op, atom) ->
         match op with
-        | Neg -> Some AST.TInt64
+        | Neg ->
+            match inferAtomType ctx atom with
+            | Some AST.TFloat64 -> Some AST.TFloat64
+            | Some _ -> Some AST.TInt64
+            | None -> None
         | Not -> Some AST.TBool
         | BitNot -> Some AST.TInt64
+    // Float intrinsics
+    | FloatSqrt _ -> Some AST.TFloat64
+    | FloatAbs _ -> Some AST.TFloat64
+    | FloatNeg _ -> Some AST.TFloat64
+    | IntToFloat _ -> Some AST.TFloat64
+    | FloatToInt _ -> Some AST.TInt64
+    | FloatToString _ -> Some AST.TString
+    | RandomInt64 -> Some AST.TInt64
+    | StringHash _ -> Some AST.TInt64
+    | StringEq _ -> Some AST.TBool
     | IfValue (_, thenAtom, _) ->
         // Type is the type of the branches (should be the same)
         match thenAtom with
@@ -91,9 +132,49 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
         | StringLiteral _ -> Some AST.TString
         | FloatLiteral _ -> Some AST.TFloat64
         | FuncRef funcName -> Map.tryFind funcName ctx.FuncReg
-    | Call (funcName, _) ->
-        // Return type from function registry
-        Map.tryFind funcName ctx.FuncReg
+    | Call (funcName, args) ->
+        // Return type from function registry (with special-case inference for stdlib list/tuple helpers)
+        match funcName, args with
+        | name, [listAtom; _] when name.StartsWith("Stdlib.List.getAt") || name.StartsWith("Stdlib.FingerTree.getAt") ->
+            match tryGetFuncReturnTypeFromReg ctx funcName with
+            | Some retType -> Some retType
+            | None ->
+                match inferAtomType ctx listAtom with
+                | Some (AST.TList elemType) ->
+                    Some (AST.TSum ("Stdlib.Option.Option", [elemType]))
+                | _ -> None
+        | name, [listAtom] when name.StartsWith("Stdlib.List.head") || name.StartsWith("Stdlib.FingerTree.head") ->
+            match tryGetFuncReturnTypeFromReg ctx funcName with
+            | Some retType -> Some retType
+            | None ->
+                match inferAtomType ctx listAtom with
+                | Some (AST.TList elemType) ->
+                    Some (AST.TSum ("Stdlib.Option.Option", [elemType]))
+                | _ -> None
+        | name, [listAtom] when name.StartsWith("Stdlib.List.tail") ->
+            match tryGetFuncReturnTypeFromReg ctx funcName with
+            | Some retType -> Some retType
+            | None ->
+                match inferAtomType ctx listAtom with
+                | Some (AST.TList elemType) ->
+                    Some (AST.TSum ("Stdlib.Option.Option", [AST.TList elemType]))
+                | _ -> None
+        | name, [tupleAtom] when name.StartsWith("Stdlib.Tuple2.first") ->
+            match tryGetFuncReturnTypeFromReg ctx funcName with
+            | Some retType -> Some retType
+            | None ->
+                match inferAtomType ctx tupleAtom with
+                | Some (AST.TTuple (firstType :: _)) -> Some firstType
+                | _ -> None
+        | name, [tupleAtom] when name.StartsWith("Stdlib.Tuple2.second") ->
+            match tryGetFuncReturnTypeFromReg ctx funcName with
+            | Some retType -> Some retType
+            | None ->
+                match inferAtomType ctx tupleAtom with
+                | Some (AST.TTuple (_ :: secondType :: _)) -> Some secondType
+                | _ -> None
+        | _ ->
+            Map.tryFind funcName ctx.FuncReg
     | TailCall (funcName, _) ->
         // Tail calls have same return type as regular calls
         Map.tryFind funcName ctx.FuncReg
@@ -216,17 +297,6 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | RawGetByte _ -> Some AST.TInt64  // Returns 1-byte value (zero-extended)
     | RawSet _ -> Some AST.TUnit  // Returns unit
     | RawSetByte _ -> Some AST.TUnit  // Returns unit
-    | RandomInt64 -> Some AST.TInt64  // Returns random Int64
-    // Float intrinsics
-    | FloatSqrt _ -> Some AST.TFloat64
-    | FloatAbs _ -> Some AST.TFloat64
-    | FloatNeg _ -> Some AST.TFloat64
-    | IntToFloat _ -> Some AST.TFloat64
-    | FloatToInt _ -> Some AST.TInt64
-    | FloatToString _ -> Some AST.TString  // Returns heap String
-    // String intrinsics
-    | StringHash _ -> Some AST.TInt64  // Returns hash as Int64
-    | StringEq _ -> Some AST.TBool  // Returns Bool
     // String refcount intrinsics
     | RefCountIncString _ -> Some AST.TUnit  // Returns unit
     | RefCountDecString _ -> Some AST.TUnit  // Returns unit
