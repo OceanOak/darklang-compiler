@@ -27,17 +27,18 @@ Write in F#, with the intention to translate to Darklang later. Thus:
 
 - Use only functional constructs, no imperative ones
 - Use `Option`s and `Result`s - don't use success flags or imperative patterns
-- Don't use exceptions or `failwith` (or similar) or `exit`. (Use `crash` for impossible conditions`)
+- Don't use exceptions or `exit`
 - Don't use `find` methods which throw exceptions
 - Use the principle "Impossible states should be unrepresentable"
 - Don't use dotnet libraries unless you can't avoid them.
 - Completely avoid all mutable values, ESPECIALLY global variables"
 - Use string interpolation instead of printf-style calls
 - If a function we need throws exceptions, create a wrapper that returns `Result`
+- NEVER EVER assume a default value, type, etc, when we don't know something. Instead, use `failwith` to crash and document the error.
 
 ## Result Handling
 
-The codebase uses standard F# Result extensively. See `docs/result-patterns.md` for comprehensive examples.
+The codebase uses standard F# Result extensively. See `docs/result-patterns.md` for how to handle this.
 
 ## Benchmarking
 
@@ -87,11 +88,12 @@ Examples:
 
 Focus largely on end-to-end language tests in `src/Tests/e2e/`.
 
-**Things to never do:**
+**Never:**
 
-- NEVER disable failing tests
-- NEVER change test cases to avoid hitting bugs
-- NEVER implement features without a test demonstrating them first
+- Disable failing tests
+- Change test cases to avoid hitting bugs
+- Use workarounds to allow failing tests to pass without fixing the issue.
+- Implement features without a test demonstrating them first
 
 **Running tests:**
 
@@ -107,7 +109,6 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 
 - Keep README.md, TODO.md, and docs/ files updated
 - Always fix dotnet compiler or runtime warnings/errors before committing
-- For dumb warnings, ask the developer if you want to disable them
 - Never make assumptions, fall-backs, or potentially incorrect defaults - use `TODO()` instead
 
 ## Critical Conventions
