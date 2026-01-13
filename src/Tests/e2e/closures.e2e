@@ -161,6 +161,9 @@ let a = 1.5 in let b = 2.5 in ((x: Float) => a + b + x)(1.0) = 5.00
 // Capture float, use in multiplication
 let scale = 2.0 in ((x: Float) => x * scale)(3.5) = 7.00
 
+// Capture float computed by arithmetic (force closure through extra binding)
+let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0) = 4.50
+
 // =====================================================
 // Closures Capturing String Values
 // =====================================================

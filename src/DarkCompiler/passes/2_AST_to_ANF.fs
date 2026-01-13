@@ -915,6 +915,12 @@ let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
 /// Simple type inference for lambda lifting - infers types of simple expressions
 /// This allows let-bound variables to be captured in nested lambdas
 let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcReturnTypes: Map<string, AST.Type>) (genericFuncDefs: Map<string, string list * AST.Type>) : AST.Type option =
+    let isIntType (typ: AST.Type) : bool =
+        match typ with
+        | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+        | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 -> true
+        | _ -> false
+
     match expr with
     | AST.IntLiteral _ -> Some AST.TInt64
     | AST.Int8Literal _ -> Some AST.TInt8
@@ -943,10 +949,18 @@ let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcR
     | AST.Constructor (typeName, _, _) ->
         // Sum type constructor has the sum type
         Some (AST.TSum (typeName, []))
-    | AST.BinOp (op, _, _) ->
+    | AST.BinOp (op, left, right) ->
+        let leftType = simpleInferType left typeEnv funcReturnTypes genericFuncDefs
+        let rightType = simpleInferType right typeEnv funcReturnTypes genericFuncDefs
         match op with
-        | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod
-        | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor -> Some AST.TInt64
+        | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod ->
+            match leftType, rightType with
+            | Some lt, Some rt when lt = rt && (isIntType lt || lt = AST.TFloat64) -> Some lt
+            | _ -> None
+        | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor ->
+            match leftType, rightType with
+            | Some lt, Some rt when lt = rt && isIntType lt -> Some lt
+            | _ -> None
         | AST.Eq | AST.Neq | AST.Lt | AST.Gt | AST.Lte | AST.Gte | AST.And | AST.Or -> Some AST.TBool
         | AST.StringConcat -> Some AST.TString
     | AST.Call (funcName, _) ->
@@ -2035,11 +2049,40 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
     | AST.If (_, thenExpr, _) ->
         // Both branches should have same type, just infer from then branch
         inferType thenExpr typeEnv typeReg variantLookup funcReg moduleRegistry
-    | AST.BinOp (op, _, _) ->
+    | AST.BinOp (op, left, right) ->
+        let ensureSameType () =
+            inferType left typeEnv typeReg variantLookup funcReg moduleRegistry
+            |> Result.bind (fun leftType ->
+                inferType right typeEnv typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun rightType ->
+                    if leftType = rightType then Ok leftType
+                    else Error $"Binary operator operands must match: left={leftType}, right={rightType}"))
         match op with
-        | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod
-        | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor -> Ok AST.TInt64
-        | AST.Eq | AST.Neq | AST.Lt | AST.Gt | AST.Lte | AST.Gte | AST.And | AST.Or -> Ok AST.TBool
+        | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod ->
+            ensureSameType ()
+            |> Result.bind (fun operandType ->
+                match operandType with
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+                | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
+                | AST.TFloat64 -> Ok operandType
+                | _ -> Error $"Arithmetic operator requires numeric operands, got {operandType}")
+        | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor ->
+            ensureSameType ()
+            |> Result.bind (fun operandType ->
+                match operandType with
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+                | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 -> Ok operandType
+                | _ -> Error $"Bitwise operator requires integer operands, got {operandType}")
+        | AST.Eq | AST.Neq -> Ok AST.TBool
+        | AST.Lt | AST.Gt | AST.Lte | AST.Gte ->
+            ensureSameType ()
+            |> Result.bind (fun operandType ->
+                match operandType with
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+                | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
+                | AST.TFloat64 -> Ok AST.TBool
+                | _ -> Error $"Comparison operator requires numeric operands, got {operandType}")
+        | AST.And | AST.Or -> Ok AST.TBool
         | AST.StringConcat -> Ok AST.TString
     | AST.UnaryOp (op, _) ->
         match op with
