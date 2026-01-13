@@ -20,7 +20,7 @@ Use this process.
 
 7. If the failing tests are incorrect and should be failing, continue and tell the developer.
 
-8. When all tests pass, run all Dark benchmarks.
+8. After all tests pass, run all Dark benchmarks.
 
 9. After all this, report to the developer what assumption was removed and what context, what test was added, and what changes had to be made to the compiler to address the issue. If there are any benchmark changes, SHOW ALL CHANGES.
 
