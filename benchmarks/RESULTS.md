@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-14 21:46:17
-**Commit:** `0bac6320` - Remove TInt64 default for empty list inference
+**Last Updated:** 2026-01-14 21:28:48
+**Commit:** `50e25704` - bd sync: 2026-01-14 20:32:06
 
 | Benchmark     |           Dark (4.96x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

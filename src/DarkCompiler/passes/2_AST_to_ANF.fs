@@ -3300,30 +3300,37 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         let (payloadVar, vg1) = ANF.freshVar vg
                         let payloadExpr = ANF.TupleGet (scrutAtom, 1)
                         // Get payload type from variant lookup if available
-                        let payloadType =
+                        let payloadTypeResult =
                             match Map.tryFind constructorName variantLookup with
                             | Some (_, typeParams, _, Some payloadTypeTemplate) ->
                                 // Apply type substitution if scrutType has type args
-                                match scrutType with
-                                | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
-                                    let subst = List.zip typeParams typeArgs |> Map.ofList
-                                    let rec substitute t =
-                                        match t with
-                                        | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue t
-                                        | AST.TTuple elems -> AST.TTuple (List.map substitute elems)
-                                        | AST.TList elem -> AST.TList (substitute elem)
-                                        | AST.TDict (k, v) -> AST.TDict (substitute k, substitute v)
-                                        | AST.TSum (name, args) -> AST.TSum (name, List.map substitute args)
-                                        | AST.TFunction (args, ret) -> AST.TFunction (List.map substitute args, substitute ret)
-                                        | _ -> t
-                                    substitute payloadTypeTemplate
-                                | _ -> payloadTypeTemplate
-                            | _ -> AST.TInt64  // Fallback
+                                let payloadType =
+                                    match scrutType with
+                                    | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
+                                        let subst = List.zip typeParams typeArgs |> Map.ofList
+                                        let rec substitute t =
+                                            match t with
+                                            | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue t
+                                            | AST.TTuple elems -> AST.TTuple (List.map substitute elems)
+                                            | AST.TList elem -> AST.TList (substitute elem)
+                                            | AST.TDict (k, v) -> AST.TDict (substitute k, substitute v)
+                                            | AST.TSum (name, args) -> AST.TSum (name, List.map substitute args)
+                                            | AST.TFunction (args, ret) -> AST.TFunction (List.map substitute args, substitute ret)
+                                            | _ -> t
+                                        substitute payloadTypeTemplate
+                                    | _ -> payloadTypeTemplate
+                                Ok payloadType
+                            | Some (_, _, _, None) ->
+                                Error $"Constructor '{constructorName}' has no payload type in variant lookup"
+                            | None ->
+                                Error $"Constructor '{constructorName}' not found in variant lookup"
                         // Now compile the inner pattern with the payload
-                        extractAndCompileBody innerPattern body (ANF.Var payloadVar) payloadType currentEnv vg1
-                        |> Result.map (fun (innerExpr, vg2) ->
-                            let expr = ANF.Let (payloadVar, payloadExpr, innerExpr)
-                            (expr, vg2))
+                        payloadTypeResult
+                        |> Result.bind (fun payloadType ->
+                            extractAndCompileBody innerPattern body (ANF.Var payloadVar) payloadType currentEnv vg1
+                            |> Result.map (fun (innerExpr, vg2) ->
+                                let expr = ANF.Let (payloadVar, payloadExpr, innerExpr)
+                                (expr, vg2)))
                 | AST.PTuple patterns ->
                     // Recursively collect all variable bindings from a pattern
                     // Returns: updated env, list of bindings, updated vargen

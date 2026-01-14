@@ -796,6 +796,7 @@ let main args =
         { Name = "SSA Liveness Tests"; Tests = SSALivenessTests.tests }
         { Name = "Phi Resolution Tests"; Tests = PhiResolutionTests.tests }
         { Name = "Chordal Graph Tests"; Tests = ChordalGraphTests.tests }
+        { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
     |]
