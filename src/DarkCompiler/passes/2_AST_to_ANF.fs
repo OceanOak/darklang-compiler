@@ -2288,11 +2288,22 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 | _ -> Error $"Comparison operator requires numeric operands, got {operandType}")
         | AST.And | AST.Or -> Ok AST.TBool
         | AST.StringConcat -> Ok AST.TString
-    | AST.UnaryOp (op, _) ->
-        match op with
-        | AST.Neg -> Ok AST.TInt64
-        | AST.Not -> Ok AST.TBool
-        | AST.BitNot -> Ok AST.TInt64
+    | AST.UnaryOp (op, inner) ->
+        inferType inner typeEnv typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun innerType ->
+            match op with
+            | AST.Neg ->
+                match innerType with
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64 | AST.TFloat64 -> Ok innerType
+                | _ -> Error $"Negation requires numeric operand, got {innerType}"
+            | AST.Not ->
+                match innerType with
+                | AST.TBool -> Ok AST.TBool
+                | _ -> Error $"Logical not requires Bool operand, got {innerType}"
+            | AST.BitNot ->
+                match innerType with
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64 -> Ok innerType
+                | _ -> Error $"Bitwise not requires integer operand, got {innerType}")
     | AST.Match (scrutinee, cases) ->
         // Infer from first case body, but first extend environment with pattern variables
         // Infer scrutinee type to help with pattern variable typing
@@ -2600,18 +2611,44 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         (transformReturns valueExpr, varGen3))))
 
     | AST.UnaryOp (AST.Neg, innerExpr) ->
-        // Unary negation: handle differently based on operand type
-        match innerExpr with
-        | AST.IntLiteral n when n = System.Int64.MinValue ->
-            // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
-            // When negated, it should remain INT64_MIN (mathematically correct)
-            Ok (ANF.Return (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue)), varGen)
-        | AST.FloatLiteral f ->
-            // Constant-fold negative float literals at compile time
-            Ok (ANF.Return (ANF.FloatLiteral (-f)), varGen)
-        | _ ->
-            // Integer negation: convert to 0 - expr
-            toANF (AST.BinOp (AST.Sub, AST.IntLiteral 0L, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+        // Unary negation: use operand type to select float vs integer path
+        let typeEnv = typeEnvFromVarEnv env
+        inferType innerExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun innerType ->
+            match innerType with
+            | AST.TFloat64 ->
+                match innerExpr with
+                | AST.FloatLiteral f ->
+                    // Constant-fold negative float literals at compile time
+                    Ok (ANF.Return (ANF.FloatLiteral (-f)), varGen)
+                | _ ->
+                    toAtom innerExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                    |> Result.map (fun (innerAtom, innerBindings, varGen1) ->
+                        let (tempVar, varGen2) = ANF.freshVar varGen1
+                        let cexpr = ANF.FloatNeg innerAtom
+                        let finalExpr = ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar))
+                        let exprWithBindings = wrapBindings innerBindings finalExpr
+                        (exprWithBindings, varGen2))
+            | AST.TInt64 ->
+                match innerExpr with
+                | AST.IntLiteral n when n = System.Int64.MinValue ->
+                    // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
+                    // When negated, it should remain INT64_MIN (mathematically correct)
+                    Ok (ANF.Return (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue)), varGen)
+                | _ ->
+                    let zeroExpr = AST.IntLiteral 0L
+                    toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt32 ->
+                let zeroExpr = AST.Int32Literal 0l
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt16 ->
+                let zeroExpr = AST.Int16Literal 0s
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt8 ->
+                let zeroExpr = AST.Int8Literal 0y
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | _ ->
+                Error $"Negation requires numeric operand, got {innerType}")
 
     | AST.UnaryOp (AST.Not, innerExpr) ->
         // Boolean not: convert operand to atom and apply Not
@@ -5098,18 +5135,43 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     (bodyAtom, allBindings, varGen3))))
 
     | AST.UnaryOp (AST.Neg, innerExpr) ->
-        // Unary negation: handle differently based on operand type
-        match innerExpr with
-        | AST.IntLiteral n when n = System.Int64.MinValue ->
-            // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
-            // When negated, it should remain INT64_MIN (mathematically correct)
-            Ok (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue), [], varGen)
-        | AST.FloatLiteral f ->
-            // Constant-fold negative float literals at compile time
-            Ok (ANF.FloatLiteral (-f), [], varGen)
-        | _ ->
-            // Integer negation: convert to 0 - expr
-            toAtom (AST.BinOp (AST.Sub, AST.IntLiteral 0L, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+        // Unary negation: use operand type to select float vs integer path
+        let typeEnv = typeEnvFromVarEnv env
+        inferType innerExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun innerType ->
+            match innerType with
+            | AST.TFloat64 ->
+                match innerExpr with
+                | AST.FloatLiteral f ->
+                    // Constant-fold negative float literals at compile time
+                    Ok (ANF.FloatLiteral (-f), [], varGen)
+                | _ ->
+                    toAtom innerExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                    |> Result.map (fun (innerAtom, innerBindings, varGen1) ->
+                        let (tempVar, varGen2) = ANF.freshVar varGen1
+                        let cexpr = ANF.FloatNeg innerAtom
+                        let allBindings = innerBindings @ [(tempVar, cexpr)]
+                        (ANF.Var tempVar, allBindings, varGen2))
+            | AST.TInt64 ->
+                match innerExpr with
+                | AST.IntLiteral n when n = System.Int64.MinValue ->
+                    // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
+                    // When negated, it should remain INT64_MIN (mathematically correct)
+                    Ok (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue), [], varGen)
+                | _ ->
+                    let zeroExpr = AST.IntLiteral 0L
+                    toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt32 ->
+                let zeroExpr = AST.Int32Literal 0l
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt16 ->
+                let zeroExpr = AST.Int16Literal 0s
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TInt8 ->
+                let zeroExpr = AST.Int8Literal 0y
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | _ ->
+                Error $"Negation requires numeric operand, got {innerType}")
 
     | AST.UnaryOp (AST.Not, innerExpr) ->
         // Boolean not: convert operand to atom, create binding
