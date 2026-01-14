@@ -3368,16 +3368,43 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     |> Result.bind (fun (env', bindings', vg') ->
                                         collectFromTuple rest [] (idx + 1) env' bindings' vg')
                             collectFromTuple innerPatterns elemTypes 0 env bindings vg
-                        | AST.PConstructor (_, payloadPattern) ->
+                        | AST.PConstructor (constructorName, payloadPattern) ->
+                            let rec substituteType (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
+                                match typ with
+                                | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue typ
+                                | AST.TTuple elems -> AST.TTuple (List.map (substituteType subst) elems)
+                                | AST.TRecord (name, args) -> AST.TRecord (name, List.map (substituteType subst) args)
+                                | AST.TList elem -> AST.TList (substituteType subst elem)
+                                | AST.TDict (k, v) -> AST.TDict (substituteType subst k, substituteType subst v)
+                                | AST.TSum (name, args) -> AST.TSum (name, List.map (substituteType subst) args)
+                                | AST.TFunction (args, ret) -> AST.TFunction (List.map (substituteType subst) args, substituteType subst ret)
+                                | _ -> typ
+
+                            let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type, string> =
+                                match Map.tryFind constructorName variantLookup with
+                                | Some (_, typeParams, _, Some payloadTypeTemplate) ->
+                                    let payloadType =
+                                        match scrutineeType with
+                                        | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
+                                            let subst = List.zip typeParams typeArgs |> Map.ofList
+                                            substituteType subst payloadTypeTemplate
+                                        | _ -> payloadTypeTemplate
+                                    Ok payloadType
+                                | Some (_, _, _, None) ->
+                                    Error $"Constructor '{constructorName}' has no payload type"
+                                | None ->
+                                    Error $"Unknown constructor '{constructorName}' in pattern"
+
                             match payloadPattern with
                             | None -> Ok (env, bindings, vg)
                             | Some innerPat ->
                                 // Extract payload (at index 1) and recursively collect
-                                // For constructors, fallback to TInt64 as payload type extraction is complex
                                 let (payloadVar, vg1) = ANF.freshVar vg
                                 let payloadExpr = ANF.TupleGet (sourceAtom, 1)
                                 let payloadBinding = (payloadVar, payloadExpr)
-                                collectPatternBindings innerPat (ANF.Var payloadVar) AST.TInt64 env (payloadBinding :: bindings) vg1
+                                resolvePayloadType constructorName sourceType
+                                |> Result.bind (fun payloadType ->
+                                    collectPatternBindings innerPat (ANF.Var payloadVar) payloadType env (payloadBinding :: bindings) vg1)
                         | AST.PRecord (_, fieldPatterns) ->
                             // Extract field types from record type (look up in type registry)
                             let fieldTypes =

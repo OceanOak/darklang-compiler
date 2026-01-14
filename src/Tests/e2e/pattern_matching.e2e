@@ -167,6 +167,10 @@ match (1, 2, 3) with | (_, _, _) -> 42 = 42
 // Mix of binding and wildcard
 match (1, 2, 3, 4, 5) with | (a, _, c, _, e) -> a + c + e = 9
 
+// Tuple pattern with constructor payload typing (structural equality)
+type PairOption = PairNone | PairSome of (Int64, Int64)
+match (PairSome((1, 2)), PairSome((1, 2))) with | (PairSome(x), PairSome(y)) -> x == y | _ -> false = true
+
 // === Record Patterns ===
 
 type Point = { x: Int64, y: Int64 }
@@ -371,4 +375,3 @@ match Some(false) with | Some(true) -> 100 | _ -> 0 = 0
 
 // Variable binding in Some still works
 match Some(true) with | Some(x) -> match x with | true -> 42 | false -> 0 | None -> -1 = 42
-
