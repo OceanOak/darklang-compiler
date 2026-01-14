@@ -300,6 +300,21 @@ let buildReturnTypeReg (functions: ANF.Function list) (typeMap: ANF.TypeMap) (ty
             else fixpoint newReg (iterations + 1)
     fixpoint externalReturnTypes 0
 
+/// Return type for monomorphized intrinsics not tracked in the return type registry
+let tryGetIntrinsicReturnType (funcName: string) : AST.Type option =
+    if funcName.StartsWith("__raw_get_") then Some AST.TInt64
+    elif funcName.StartsWith("__raw_set_") then Some AST.TUnit
+    elif funcName.StartsWith("__empty_dict_") then Some AST.TInt64
+    elif funcName.StartsWith("__dict_is_null_") then Some AST.TBool
+    elif funcName.StartsWith("__dict_get_tag_") then Some AST.TInt64
+    elif funcName.StartsWith("__dict_to_rawptr_") then Some AST.TInt64
+    elif funcName.StartsWith("__rawptr_to_dict_") then Some AST.TInt64
+    elif funcName.StartsWith("__list_is_null_") then Some AST.TBool
+    elif funcName.StartsWith("__list_get_tag_") then Some AST.TInt64
+    elif funcName.StartsWith("__list_to_rawptr_") then Some AST.TInt64
+    elif funcName.StartsWith("__rawptr_to_list_") then Some AST.TInt64
+    else None
+
 /// CFG builder state - includes lookups to avoid mutable module-level state
 /// which would cause race conditions in parallel test execution
 type CFGBuilder = {
@@ -627,7 +642,10 @@ let rec convertExpr
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with
                         | Some t -> t
-                        | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                        | None ->
+                            match tryGetIntrinsicReturnType funcName with
+                            | Some t -> t
+                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
                     destType := returnType  // Track call result type for FloatRegs update
                     args
                     |> List.map (atomToOperand builder)
@@ -697,7 +715,10 @@ let rec convertExpr
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with
                         | Some t -> t
-                        | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                        | None ->
+                            match tryGetIntrinsicReturnType funcName with
+                            | Some t -> t
+                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
                     args
                     |> List.map (atomToOperand builder)
                     |> sequenceResults
@@ -1215,7 +1236,10 @@ and convertExprToOperand
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with
                         | Some t -> t
-                        | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                        | None ->
+                            match tryGetIntrinsicReturnType funcName with
+                            | Some t -> t
+                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
                     destType := returnType  // Track call result type for FloatRegs update
                     args
                     |> List.map (atomToOperand builder)
@@ -1285,7 +1309,10 @@ and convertExprToOperand
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with
                         | Some t -> t
-                        | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                        | None ->
+                            match tryGetIntrinsicReturnType funcName with
+                            | Some t -> t
+                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
                     args
                     |> List.map (atomToOperand builder)
                     |> sequenceResults

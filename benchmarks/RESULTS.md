@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-13 15:38:07
-**Commit:** `63bffff7` - Speed up compiler caching test
+**Last Updated:** 2026-01-14 07:34:02
+**Commit:** `a34937b3` - Try int64 fix loop
 
 | Benchmark     |           Dark (4.96x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

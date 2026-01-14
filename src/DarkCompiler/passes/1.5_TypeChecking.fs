@@ -648,7 +648,7 @@ let inferTypeArgs (typeParams: string list) (paramTypes: Type list) (argTypes: T
             | _, Error e -> Error e) (Ok [])
         |> Result.bind consolidateBindings
         |> Result.bind (fun bindingMap ->
-            // Extract type arguments in order of type parameters
+            // Extract type arguments in order of type parameters, preserving unresolved type vars.
             typeParams
             |> List.fold (fun acc paramName ->
                 acc |> Result.bind (fun args ->
