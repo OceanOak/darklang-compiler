@@ -236,6 +236,7 @@ let main args =
         "SSA Liveness Tests"
         "Phi Resolution Tests"
         "Chordal Graph Tests"
+        "Lambda Lifting Tests"
     |]
 
     let hasE2ETests = e2eTestFiles.Length > 0
@@ -796,6 +797,7 @@ let main args =
         { Name = "Phi Resolution Tests"; Tests = PhiResolutionTests.tests }
         { Name = "Chordal Graph Tests"; Tests = ChordalGraphTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
+        { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
     |]
     let unitTests = allUnitTests |> Array.filter (fun suite -> matchesFilter filter suite.Name)
 

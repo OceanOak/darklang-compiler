@@ -48,6 +48,7 @@
     <Compile Include="PhiResolutionTests.fs" />
     <Compile Include="ChordalGraphTests.fs" />
     <Compile Include="MonomorphizationTests.fs" />
+    <Compile Include="LambdaLiftingTests.fs" />
 
     <!-- Test Runner (must be last) -->
     <Compile Include="TestRunner.fs" />

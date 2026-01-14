@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-14 18:43:34
-**Commit:** `95eff45d` - Update process
+**Last Updated:** 2026-01-14 19:27:09
+**Commit:** `7f3658f6` - bd sync: 2026-01-14 14:16:23
 
 | Benchmark     |           Dark (4.96x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
