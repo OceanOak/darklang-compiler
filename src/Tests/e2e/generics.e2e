@@ -113,6 +113,9 @@ def fst2<a, b>(a: a, b: b) : a = a fst2(40, true) + 2 = 42
 // Multiple params in let binding
 def getfst<a, b>(a: a, b: b) : a = a let x = getfst(21, false) in x * 2 = 42
 
+// Missing type argument inference (unused type parameter)
+def phantom<a, b>(x: a) : a = x phantom(1) = 1
+
 // =====================================================
 // Generic Type Unification in If Expressions
 // =====================================================

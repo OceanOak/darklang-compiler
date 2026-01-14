@@ -137,6 +137,8 @@ Error:  Type mismatch: expected Int64, got String in binary operator
 - **Handle desugaring**: Convert high-level constructs to primitives
 - **Monomorphization**: Generate specialized versions of generic functions
 - **Lambda lifting**: Convert lambdas to top-level functions with closures
+  - Unresolved type variables are preserved; if hashing/equality intrinsics are needed, the compiler emits `__hash_unknown`/`__key_eq_unknown` that crash if executed.
+  - Optimizations like `Dict.fromList([])` → `Dict.empty` only apply when type arguments are concrete.
 
 ### Key Algorithms
 - **Fresh variable generation**: VarGen creates unique temporaries

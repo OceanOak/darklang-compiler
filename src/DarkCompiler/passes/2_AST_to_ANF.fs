@@ -215,6 +215,9 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     // __hash<Bool> - Bool is 0 or 1, valid hash value
     | "__hash_bool", [keyAtom] ->
         Some (ANF.Atom keyAtom)
+    // __hash<unknown> should never execute; crash if it does
+    | "__hash_unknown", [_] ->
+        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
     // __key_eq<Int64> uses integer equality
     | "__key_eq_i64", [leftAtom; rightAtom] ->
         Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
@@ -224,6 +227,9 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     // __key_eq<Bool> uses integer equality (0 or 1)
     | "__key_eq_bool", [leftAtom; rightAtom] ->
         Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
+    // __key_eq<unknown> should never execute; crash if it does
+    | "__key_eq_unknown", [_; _] ->
+        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
 
     | _ -> None
 
@@ -373,16 +379,16 @@ let rec isConcrete (ty: AST.Type) : bool =
     | AST.TDict (keyType, valueType) -> isConcrete keyType && isConcrete valueType
     | _ -> true
 
-/// Default unresolved type variables to Int64
-let rec defaultTypeVars (ty: AST.Type) : AST.Type =
+/// Preserve unresolved type variables during monomorphization
+let rec preserveTypeVars (ty: AST.Type) : AST.Type =
     match ty with
-    | AST.TVar _ -> AST.TInt64  // Default to Int64
+    | AST.TVar _ -> ty
     | AST.TFunction (paramTypes, retType) ->
-        AST.TFunction (List.map defaultTypeVars paramTypes, defaultTypeVars retType)
-    | AST.TTuple elemTypes -> AST.TTuple (List.map defaultTypeVars elemTypes)
-    | AST.TSum (name, typeArgs) -> AST.TSum (name, List.map defaultTypeVars typeArgs)
-    | AST.TList elemType -> AST.TList (defaultTypeVars elemType)
-    | AST.TDict (keyType, valueType) -> AST.TDict (defaultTypeVars keyType, defaultTypeVars valueType)
+        AST.TFunction (List.map preserveTypeVars paramTypes, preserveTypeVars retType)
+    | AST.TTuple elemTypes -> AST.TTuple (List.map preserveTypeVars elemTypes)
+    | AST.TSum (name, typeArgs) -> AST.TSum (name, List.map preserveTypeVars typeArgs)
+    | AST.TList elemType -> AST.TList (preserveTypeVars elemType)
+    | AST.TDict (keyType, valueType) -> AST.TDict (preserveTypeVars keyType, preserveTypeVars valueType)
     | _ -> ty
 
 /// Generate a specialized function name
@@ -519,10 +525,20 @@ let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
         args |> List.map collectTypeApps |> List.fold Set.union Set.empty
     | AST.TypeApp (funcName, typeArgs, args) ->
         // This is a generic call - collect this specialization plus any in args
-        // Default any unresolved type variables to Int64 so we can specialize
-        let concreteTypeArgs = typeArgs |> List.map defaultTypeVars
+        let concreteTypeArgs = typeArgs |> List.map preserveTypeVars
         let argSpecs = args |> List.map collectTypeApps |> List.fold Set.union Set.empty
-        Set.add (funcName, concreteTypeArgs) argSpecs
+        let hasTypeVars = concreteTypeArgs |> List.exists (fun ty -> not (isConcrete ty))
+        match funcName, args with
+        | "__hash", _ when hasTypeVars ->
+            Set.add ("__hash_unknown", []) argSpecs
+        | "__key_eq", _ when hasTypeVars ->
+            Set.add ("__key_eq_unknown", []) argSpecs
+        | "Stdlib.Dict.fromList", [AST.ListLiteral []]
+        | "Dict.fromList", [AST.ListLiteral []] when not hasTypeVars ->
+            // Optimization: empty list avoids hashing/equality when type args are concrete.
+            Set.add ("Stdlib.Dict.empty", concreteTypeArgs) argSpecs
+        | _ ->
+            Set.add (funcName, concreteTypeArgs) argSpecs
     | AST.TupleLiteral elements ->
         elements |> List.map collectTypeApps |> List.fold Set.union Set.empty
     | AST.TupleAccess (tuple, _) ->
@@ -584,10 +600,21 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
         AST.Call (funcName, List.map replaceTypeApps args)
     | AST.TypeApp (funcName, typeArgs, args) ->
         // Replace with a regular Call to the specialized name
-        // Default any unresolved type variables to Int64
-        let concreteTypeArgs = typeArgs |> List.map defaultTypeVars
-        let specializedName = specName funcName concreteTypeArgs
-        AST.Call (specializedName, List.map replaceTypeApps args)
+        let concreteTypeArgs = typeArgs |> List.map preserveTypeVars
+        let hasTypeVars = concreteTypeArgs |> List.exists (fun ty -> not (isConcrete ty))
+        match funcName, args with
+        | "__hash", _ when hasTypeVars ->
+            AST.Call ("__hash_unknown", List.map replaceTypeApps args)
+        | "__key_eq", _ when hasTypeVars ->
+            AST.Call ("__key_eq_unknown", List.map replaceTypeApps args)
+        | "Stdlib.Dict.fromList", [AST.ListLiteral []]
+        | "Dict.fromList", [AST.ListLiteral []] when not hasTypeVars ->
+            // Optimization: avoid building a Dict from an empty list when types are concrete.
+            let specializedName = specName "Stdlib.Dict.empty" concreteTypeArgs
+            AST.Call (specializedName, [])
+        | _ ->
+            let specializedName = specName funcName concreteTypeArgs
+            AST.Call (specializedName, List.map replaceTypeApps args)
     | AST.TupleLiteral elements ->
         AST.TupleLiteral (List.map replaceTypeApps elements)
     | AST.TupleAccess (tuple, index) ->
