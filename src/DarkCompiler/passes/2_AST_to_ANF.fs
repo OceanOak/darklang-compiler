@@ -227,7 +227,9 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     // __key_eq<Bool> uses integer equality (0 or 1)
     | "__key_eq_bool", [leftAtom; rightAtom] ->
         Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
-    // __key_eq<unknown> should never execute; crash if it does
+    // __hash_unknown/__key_eq_unknown crash at runtime when type args are unresolved
+    | "__hash_unknown", [_] ->
+        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
     | "__key_eq_unknown", [_; _] ->
         Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
 
@@ -367,34 +369,27 @@ let rec typeToMangledName (t: AST.Type) : string =
     | AST.TVar name -> name  // Should not appear after monomorphization
     | AST.TRawPtr -> "rawptr"  // Internal raw pointer type
 
-/// Check if a type is concrete (no type variables)
-let rec isConcrete (ty: AST.Type) : bool =
-    match ty with
-    | AST.TVar _ -> false
+/// Check if a type contains any type variables
+let rec containsTypeVar (t: AST.Type) : bool =
+    match t with
+    | AST.TVar _ -> true
     | AST.TFunction (paramTypes, retType) ->
-        List.forall isConcrete paramTypes && isConcrete retType
-    | AST.TTuple elemTypes -> List.forall isConcrete elemTypes
-    | AST.TSum (_, typeArgs) -> List.forall isConcrete typeArgs
-    | AST.TList elemType -> isConcrete elemType
-    | AST.TDict (keyType, valueType) -> isConcrete keyType && isConcrete valueType
-    | _ -> true
-
-/// Preserve unresolved type variables during monomorphization
-let rec preserveTypeVars (ty: AST.Type) : AST.Type =
-    match ty with
-    | AST.TVar _ -> ty
-    | AST.TFunction (paramTypes, retType) ->
-        AST.TFunction (List.map preserveTypeVars paramTypes, preserveTypeVars retType)
-    | AST.TTuple elemTypes -> AST.TTuple (List.map preserveTypeVars elemTypes)
-    | AST.TSum (name, typeArgs) -> AST.TSum (name, List.map preserveTypeVars typeArgs)
-    | AST.TList elemType -> AST.TList (preserveTypeVars elemType)
-    | AST.TDict (keyType, valueType) -> AST.TDict (preserveTypeVars keyType, preserveTypeVars valueType)
-    | _ -> ty
+        List.exists containsTypeVar paramTypes || containsTypeVar retType
+    | AST.TTuple elemTypes -> List.exists containsTypeVar elemTypes
+    | AST.TRecord (_, typeArgs) -> List.exists containsTypeVar typeArgs
+    | AST.TSum (_, typeArgs) -> List.exists containsTypeVar typeArgs
+    | AST.TList elemType -> containsTypeVar elemType
+    | AST.TDict (keyType, valueType) -> containsTypeVar keyType || containsTypeVar valueType
+    | _ -> false
 
 /// Generate a specialized function name
 let specName (funcName: string) (typeArgs: AST.Type list) : string =
     if List.isEmpty typeArgs then
         funcName
+    elif funcName = "__hash" && List.exists containsTypeVar typeArgs then
+        "__hash_unknown"
+    elif funcName = "__key_eq" && List.exists containsTypeVar typeArgs then
+        "__key_eq_unknown"
     else
         let typeStr = typeArgs |> List.map typeToMangledName |> String.concat "_"
         $"{funcName}_{typeStr}"
@@ -525,20 +520,17 @@ let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
         args |> List.map collectTypeApps |> List.fold Set.union Set.empty
     | AST.TypeApp (funcName, typeArgs, args) ->
         // This is a generic call - collect this specialization plus any in args
-        let concreteTypeArgs = typeArgs |> List.map preserveTypeVars
         let argSpecs = args |> List.map collectTypeApps |> List.fold Set.union Set.empty
-        let hasTypeVars = concreteTypeArgs |> List.exists (fun ty -> not (isConcrete ty))
-        match funcName, args with
-        | "__hash", _ when hasTypeVars ->
-            Set.add ("__hash_unknown", []) argSpecs
-        | "__key_eq", _ when hasTypeVars ->
-            Set.add ("__key_eq_unknown", []) argSpecs
-        | "Stdlib.Dict.fromList", [AST.ListLiteral []]
-        | "Dict.fromList", [AST.ListLiteral []] when not hasTypeVars ->
-            // Optimization: empty list avoids hashing/equality when type args are concrete.
-            Set.add ("Stdlib.Dict.empty", concreteTypeArgs) argSpecs
-        | _ ->
-            Set.add (funcName, concreteTypeArgs) argSpecs
+        let hasTypeVars = List.exists containsTypeVar typeArgs
+        if hasTypeVars && (funcName = "__hash" || funcName = "__key_eq") then
+            argSpecs
+        elif (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
+             && args = [AST.ListLiteral []]
+             && not hasTypeVars then
+            // Optimization: avoid building a Dict from an empty list when types are concrete.
+            Set.add ("Stdlib.Dict.empty", typeArgs) argSpecs
+        else
+            Set.add (funcName, typeArgs) argSpecs
     | AST.TupleLiteral elements ->
         elements |> List.map collectTypeApps |> List.fold Set.union Set.empty
     | AST.TupleAccess (tuple, _) ->
@@ -600,20 +592,15 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
         AST.Call (funcName, List.map replaceTypeApps args)
     | AST.TypeApp (funcName, typeArgs, args) ->
         // Replace with a regular Call to the specialized name
-        let concreteTypeArgs = typeArgs |> List.map preserveTypeVars
-        let hasTypeVars = concreteTypeArgs |> List.exists (fun ty -> not (isConcrete ty))
-        match funcName, args with
-        | "__hash", _ when hasTypeVars ->
-            AST.Call ("__hash_unknown", List.map replaceTypeApps args)
-        | "__key_eq", _ when hasTypeVars ->
-            AST.Call ("__key_eq_unknown", List.map replaceTypeApps args)
-        | "Stdlib.Dict.fromList", [AST.ListLiteral []]
-        | "Dict.fromList", [AST.ListLiteral []] when not hasTypeVars ->
+        let hasTypeVars = List.exists containsTypeVar typeArgs
+        if (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
+           && args = [AST.ListLiteral []]
+           && not hasTypeVars then
             // Optimization: avoid building a Dict from an empty list when types are concrete.
-            let specializedName = specName "Stdlib.Dict.empty" concreteTypeArgs
+            let specializedName = specName "Stdlib.Dict.empty" typeArgs
             AST.Call (specializedName, [])
-        | _ ->
-            let specializedName = specName funcName concreteTypeArgs
+        else
+            let specializedName = specName funcName typeArgs
             AST.Call (specializedName, List.map replaceTypeApps args)
     | AST.TupleLiteral elements ->
         AST.TupleLiteral (List.map replaceTypeApps elements)

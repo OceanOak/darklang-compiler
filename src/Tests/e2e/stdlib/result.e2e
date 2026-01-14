@@ -3,14 +3,14 @@
 //
 // Tests for Result module functions
 // NOTE: Result<T, E> has two type parameters. Unresolved type variables are
-//       defaulted to Int64 during monomorphization, so explicit type params
-//       are not always needed.
+//       preserved during monomorphization, so explicit type params are not
+//       always needed.
 
 // ===================================================================
 // Result.isOk - Returns true if the result is Ok
 // ===================================================================
 
-// Unresolved type variables are defaulted to Int64 during monomorphization
+// Unresolved type variables are preserved during monomorphization
 Result.isOk(Result.Ok(5)) = true
 Result.isOk(Result.Error(99)) = false
 
@@ -18,7 +18,7 @@ Result.isOk(Result.Error(99)) = false
 // Result.isError - Returns true if the result is Error
 // ===================================================================
 
-// Unresolved type variables are defaulted to Int64 during monomorphization
+// Unresolved type variables are preserved during monomorphization
 Result.isError(Result.Ok(5)) = false
 Result.isError(Result.Error(99)) = true
 
@@ -34,7 +34,7 @@ Result.withDefault(Result.Error(99), 42) = 42
 // Result.map - Apply a function to the Ok value
 // ===================================================================
 
-// Unresolved type variables are defaulted to Int64 during monomorphization
+// Unresolved type variables are preserved during monomorphization
 Result.withDefault(Result.map(Result.Ok(5), (x: Int64) => x + 1), 0) = 6
 Result.isError(Result.map(Result.Error(99), (x: Int64) => x + 1)) = true
 
@@ -50,17 +50,17 @@ Result.isError(Result.map(Result.Error(99), (x: Int64) => x + 1)) = true
 // Result.andThen - Chain Result computations
 // ===================================================================
 
-// Unresolved type variables are defaulted to Int64 during monomorphization
+// Unresolved type variables are preserved during monomorphization
 Result.withDefault(Result.andThen(Result.Ok(5), (x: Int64) => Result.Ok(x * 2)), 0) = 10
 Result.isError(Result.andThen(Result.Error(99), (x: Int64) => Result.Ok(x * 2))) = true
-// When lambda returns Error, unresolved ok type is defaulted to Int64
+// When lambda returns Error, unresolved ok type is preserved
 Result.isError(Result.andThen(Result.Ok(5), (x: Int64) => Result.Error(99))) = true
 
 // ===================================================================
 // Pipe operator with Result functions
 // ===================================================================
 
-// Unresolved type variables are defaulted to Int64 during monomorphization
+// Unresolved type variables are preserved during monomorphization
 Result.Ok(42) |> Result.isOk() = true
 Result.Error(99) |> Result.isError() = true
 Result.Ok(10) |> Result.map((x: Int64) => x * 2) |> Result.withDefault(0) = 20
@@ -71,4 +71,3 @@ Result.Ok(10) |> Result.map((x: Int64) => x * 2) |> Result.withDefault(0) = 20
 
 // Type is inferred from withDefault's second argument
 let x = Result.Error(99) in Result.withDefault(x, 42) = 42
-

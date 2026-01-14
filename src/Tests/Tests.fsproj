@@ -47,6 +47,7 @@
     <Compile Include="SSALivenessTests.fs" />
     <Compile Include="PhiResolutionTests.fs" />
     <Compile Include="ChordalGraphTests.fs" />
+    <Compile Include="MonomorphizationTests.fs" />
 
     <!-- Test Runner (must be last) -->
     <Compile Include="TestRunner.fs" />

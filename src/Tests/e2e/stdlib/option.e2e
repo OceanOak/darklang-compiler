@@ -8,7 +8,7 @@
 // ===================================================================
 
 Option.isSome(Option.Some(5)) = true
-// Unresolved type variable is defaulted to Int64 during monomorphization
+// Unresolved type variable is preserved during monomorphization
 Option.isSome(Option.None) = false
 
 // ===================================================================
@@ -16,7 +16,7 @@ Option.isSome(Option.None) = false
 // ===================================================================
 
 Option.isNone(Option.Some(5)) = false
-// Unresolved type variable is defaulted to Int64 during monomorphization
+// Unresolved type variable is preserved during monomorphization
 Option.isNone(Option.None) = true
 
 // ===================================================================
@@ -115,4 +115,3 @@ let x = Option.None in Option.isSome(Option.withDefault(x, Option.Some(42))) = t
 
 // Result
 let x = Option.None in Result.isOk(Option.withDefault(x, Result.Ok(42))) = true
-
