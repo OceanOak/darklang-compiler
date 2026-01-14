@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-14 07:34:02
-**Commit:** `a34937b3` - Try int64 fix loop
+**Last Updated:** 2026-01-14 08:24:50
+**Commit:** `0dc6b479` - Remove TInt64 default for missing type args
 
 | Benchmark     |           Dark (4.96x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

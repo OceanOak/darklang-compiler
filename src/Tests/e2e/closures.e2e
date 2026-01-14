@@ -50,6 +50,9 @@ let outer = 10 in let inner = 20 in ((x: Int64) => outer + inner + x)(12) = 42
 // Capture computed value
 let base = 20 in let bonus = base * 2 in ((x: Int64) => x + bonus)(2) = 42
 
+// Capture inferred string from conditional
+let flag = true in let word = if flag then "hi" else "bye" in ((x: Int64) => word ++ "!")(0) = "hi!"  // capture conditional string
+
 // =====================================================
 // Lambda with Booleans
 // =====================================================

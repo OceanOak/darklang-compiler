@@ -962,6 +962,16 @@ let rec simpleInferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (funcR
         | _ ->
             // Fall back to funcReturnTypes for non-generic or arity mismatch
             Map.tryFind funcName funcReturnTypes
+    | AST.If (_, thenExpr, elseExpr) ->
+        match simpleInferType thenExpr typeEnv funcReturnTypes genericFuncDefs,
+              simpleInferType elseExpr typeEnv funcReturnTypes genericFuncDefs with
+        | Some thenType, Some elseType when thenType = elseType -> Some thenType
+        | _ -> None
+    | AST.Lambda (parameters, body) ->
+        let paramTypes = parameters |> List.map snd
+        match simpleInferType body typeEnv funcReturnTypes genericFuncDefs with
+        | Some returnType -> Some (AST.TFunction (paramTypes, returnType))
+        | None -> None
     | _ -> None  // Complex expressions require full type inference
 
 /// Lift lambdas in an expression, returning (transformed expr, new state)
@@ -1057,46 +1067,53 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
             let captures = freeVarsInBody |> Set.filter (fun name -> Map.containsKey name state.TypeEnv) |> Set.toList
 
             // Get actual types of captured variables from type environment
-            let captureTypes = captures |> List.map (fun name ->
-                Map.tryFind name state.TypeEnv |> Option.defaultValue AST.TInt64)
+            let rec collectCaptureTypes remaining acc =
+                match remaining with
+                | [] -> Ok (List.rev acc)
+                | name :: rest ->
+                    match Map.tryFind name state.TypeEnv with
+                    | Some t -> collectCaptureTypes rest (t :: acc)
+                    | None -> Error $"Missing type for captured variable: {name}"
 
-            // Create lifted function
-            let funcName = $"__closure_{state1.Counter}"
-            // First element is function pointer (Int64), rest are captures with their actual types
-            let closureTupleTypes = AST.TInt64 :: captureTypes
-            let closureParam = ("__closure", AST.TTuple closureTupleTypes)
+            collectCaptureTypes captures []
+            |> Result.bind (fun captureTypes ->
+                // Create lifted function
+                let funcName = $"__closure_{state1.Counter}"
+                // First element is function pointer (Int64), rest are captures with their actual types
+                let closureTupleTypes = AST.TInt64 :: captureTypes
+                let closureParam = ("__closure", AST.TTuple closureTupleTypes)
 
-            // Build body that extracts captures from closure tuple
-            let bodyWithExtractions =
-                if List.isEmpty captures then
-                    body'
-                else
-                    captures
-                    |> List.mapi (fun i capName ->
-                        (capName, AST.TupleAccess (AST.Var "__closure", i + 1)))
-                    |> List.foldBack (fun (capName, accessor) acc ->
-                        AST.Let (capName, accessor, acc)) <| body'
+                // Build body that extracts captures from closure tuple
+                let bodyWithExtractions =
+                    if List.isEmpty captures then
+                        body'
+                    else
+                        captures
+                        |> List.mapi (fun i capName ->
+                            (capName, AST.TupleAccess (AST.Var "__closure", i + 1)))
+                        |> List.foldBack (fun (capName, accessor) acc ->
+                            AST.Let (capName, accessor, acc)) <| body'
 
-            // Infer return type from body expression
-            let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes stateWithLambdaParams.GenericFuncDefs |> Option.defaultValue AST.TInt64
+                // Infer return type from body expression
+                let returnType = simpleInferType body' stateWithLambdaParams.TypeEnv stateWithLambdaParams.FuncReturnTypes stateWithLambdaParams.GenericFuncDefs |> Option.defaultValue AST.TInt64
 
-            let funcDef : AST.FunctionDef = {
-                Name = funcName
-                TypeParams = []
-                Params = closureParam :: parameters
-                ReturnType = returnType
-                Body = bodyWithExtractions
-            }
-            let state' = {
-                Counter = state1.Counter + 1
-                LiftedFunctions = funcDef :: state1.LiftedFunctions
-                TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
-                FuncReturnTypes = state1.FuncReturnTypes
-                GenericFuncDefs = state1.GenericFuncDefs
-            }
-            // Replace lambda with Closure
-            let captureExprs = captures |> List.map AST.Var
-            Ok (AST.Closure (funcName, captureExprs), state'))
+                let funcDef : AST.FunctionDef = {
+                    Name = funcName
+                    TypeParams = []
+                    Params = closureParam :: parameters
+                    ReturnType = returnType
+                    Body = bodyWithExtractions
+                }
+                let state' = {
+                    Counter = state1.Counter + 1
+                    LiftedFunctions = funcDef :: state1.LiftedFunctions
+                    TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
+                    FuncReturnTypes = state1.FuncReturnTypes
+                    GenericFuncDefs = state1.GenericFuncDefs
+                }
+                // Replace lambda with Closure
+                let captureExprs = captures |> List.map AST.Var
+                Ok (AST.Closure (funcName, captureExprs), state')))
     | AST.Apply (func, args) ->
         liftLambdasInExpr func state
         |> Result.bind (fun (func', state1) ->
