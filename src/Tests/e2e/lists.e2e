@@ -8,6 +8,9 @@ match [] with | [] -> 1 | _ -> 0 = 1
 // Empty list fallback
 match [] with | [x] -> x | [] -> 99 = 99
 
+// Empty list should not default to Int64 element type
+match [] with | [] -> true | [x] -> x | _ -> false = true
+
 // === Single Element List ===
 
 // Single element list

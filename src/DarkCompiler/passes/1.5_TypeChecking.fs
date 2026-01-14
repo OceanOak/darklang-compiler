@@ -1525,15 +1525,27 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
     | TupleLiteral elements ->
         // Type-check each element and build tuple type
-        let rec checkElements elems accTypes accExprs =
-            match elems with
-            | [] -> Ok (List.rev accTypes, List.rev accExprs)
-            | e :: rest ->
+        let expectedElemTypes =
+            match expectedType with
+            | Some expected ->
+                match resolveType aliasReg expected with
+                | TTuple elems when List.length elems = List.length elements -> Some elems
+                | _ -> None
+            | None -> None
+
+        let rec checkElements elems expectedElems accTypes accExprs =
+            match elems, expectedElems with
+            | [], _ -> Ok (List.rev accTypes, List.rev accExprs)
+            | e :: rest, Some (expectedHead :: expectedTail) ->
+                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedHead)
+                |> Result.bind (fun (elemType, e') ->
+                    checkElements rest (Some expectedTail) (elemType :: accTypes) (e' :: accExprs))
+            | e :: rest, _ ->
                 checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
                 |> Result.bind (fun (elemType, e') ->
-                    checkElements rest (elemType :: accTypes) (e' :: accExprs))
+                    checkElements rest expectedElems (elemType :: accTypes) (e' :: accExprs))
 
-        checkElements elements [] []
+        checkElements elements expectedElemTypes [] []
         |> Result.bind (fun (elemTypes, elements') ->
             let tupleType = TTuple elemTypes
             match expectedType with
@@ -1949,11 +1961,11 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         // Type-check elements and infer element type from first element
         match elements with
         | [] ->
-            // Empty list: use expected type or default to List<int> for backward compatibility
+            // Empty list: use expected list type or keep a type variable
             match expectedType with
             | Some (TList elemType) -> Ok (TList elemType, ListLiteral [])
-            | Some other -> Error (TypeMismatch (other, TList TInt64, "empty list"))
-            | None -> Ok (TList TInt64, ListLiteral [])  // Default to List<int>
+            | Some other -> Error (TypeMismatch (other, TList (TVar "t"), "empty list"))
+            | None -> Ok (TList (TVar "t"), ListLiteral [])
         | first :: rest ->
             // Infer element type from first element
             checkExpr first env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
