@@ -6,7 +6,7 @@ You are going to resolve EXACTLY ONE type checking issue.
 
 Use this process.
 
-1. Start a new git worktree, in which to do work. (put the tree as sibling of compiler-for-dark dir)
+1. Start a new git worktree, in which to do work. (put the tree as sibling of compiler-for-dark dir). DO NOT USE MAIN FOR YOUR WORK.
 
 2. Find a place in the compiler where the compiler has chosen TInt64 as a default type, even though it is incorrect. Choose at random, do not pick deterministically, including by difficult.
 
@@ -20,11 +20,11 @@ Use this process.
 
 7. If the failing tests are incorrect and should be failing, continue and tell the developer.
 
-8. After all tests pass, run all Dark benchmarks.
+8. After all tests pass, run all Dark benchmarks. Ignore and don't mention the quicksort failure - it's a known issue.
 
-9. After all this, report to the developer what assumption was removed and what context, what test was added and how the test tickles the problem, and what changes had to be made to the compiler to address the issue. If there are any changes to the benchmark results, SHOW THEM!
+9. After all this, report to the developer what assumption was removed and what context, what test was added (show it!) and how the test tickles the problem, and what changes had to be made to the compiler to address the issue. If there are any changes to the benchmark results, SHOW THEM!
 
-10. Wait for the developer to say "APPROVED". Do nothing if he does not say this. Commit the code, tests, and new benchmark results, including in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off the main branch (NOT origin/main). Do a fast-forward merge onto the main branch (NOT origin/main) after running tests again using `./run-tests`. Then clean up the branch and worktree.
+10. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code, new tests, and new benchmark results, and include in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off the main branch (NOT origin/main). Do a fast-forward merge onto the main branch (NOT origin/main) after running tests again using `./run-tests`. Then clean up the branch and worktree.
 
 ## Policies for handling removed type defaults
 
