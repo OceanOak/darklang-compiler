@@ -215,9 +215,6 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     // __hash<Bool> - Bool is 0 or 1, valid hash value
     | "__hash_bool", [keyAtom] ->
         Some (ANF.Atom keyAtom)
-    // __hash<unknown> should never execute; crash if it does
-    | "__hash_unknown", [_] ->
-        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
     // __key_eq<Int64> uses integer equality
     | "__key_eq_i64", [leftAtom; rightAtom] ->
         Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
