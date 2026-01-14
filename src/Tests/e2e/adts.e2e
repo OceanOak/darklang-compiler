@@ -73,6 +73,15 @@ type Triple = NoTriple | MkTriple of (Int64, Int64, Int64)
 match MkTriple((1, 2, 3)) with | MkTriple(t) -> t.0 + t.1 + t.2 | NoTriple -> 0 = 6
 
 // ===================================================================
+// Sum Types with Record Payloads
+// ===================================================================
+
+// Match payload returned as record, then access field
+type Point = { x: Int64 }
+type WrappedPoint = WrapPoint of Point | NoPoint
+let p = match WrapPoint(Point { x = 5 }) with | WrapPoint(p) -> p | NoPoint -> Point { x = 0 } in p.x = 5
+
+// ===================================================================
 // Multiple Payload Variants
 // ===================================================================
 
@@ -93,4 +102,3 @@ match IntOk(42) with | IntOk(n) -> n | IntErr(s) -> 0 = 42
 type StrResult = StrOk of String | StrErr of String
 match StrOk("success") with | StrOk(s) -> s | StrErr(e) -> e = success
 match StrErr("failed") with | StrOk(s) -> s | StrErr(e) -> e = failed
-

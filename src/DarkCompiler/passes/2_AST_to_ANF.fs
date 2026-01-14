@@ -2078,6 +2078,17 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         // Infer scrutinee type to help with pattern variable typing
         let scrutineeTypeResult = inferType scrutinee typeEnv typeReg variantLookup funcReg moduleRegistry
 
+        let rec substituteType (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
+            match typ with
+            | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue typ
+            | AST.TTuple elems -> AST.TTuple (List.map (substituteType subst) elems)
+            | AST.TRecord (name, args) -> AST.TRecord (name, List.map (substituteType subst) args)
+            | AST.TList elem -> AST.TList (substituteType subst elem)
+            | AST.TDict (k, v) -> AST.TDict (substituteType subst k, substituteType subst v)
+            | AST.TSum (name, args) -> AST.TSum (name, List.map (substituteType subst) args)
+            | AST.TFunction (args, ret) -> AST.TFunction (List.map (substituteType subst) args, substituteType subst ret)
+            | _ -> typ
+
         // Helper to extract pattern variable names and infer their types
         let rec extractPatternBindings (pattern: AST.Pattern) (scrutType: AST.Type) : Map<string, AST.Type> =
             match pattern with
@@ -2092,8 +2103,23 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 | _ -> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat AST.TInt64)) Map.empty innerPats
             | AST.PRecord (_, fieldPats) ->
                 fieldPats |> List.fold (fun acc (_, pat) -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat AST.TInt64)) Map.empty
-            | AST.PConstructor (_, payloadPat) ->
-                payloadPat |> Option.map (fun p -> extractPatternBindings p AST.TInt64) |> Option.defaultValue Map.empty
+            | AST.PConstructor (variantName, payloadPat) ->
+                match payloadPat with
+                | None -> Map.empty
+                | Some payloadPattern ->
+                    let payloadType =
+                        match Map.tryFind variantName variantLookup with
+                        | Some (_, typeParams, _, Some payloadTypeTemplate) ->
+                            match scrutType with
+                            | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
+                                let subst = List.zip typeParams typeArgs |> Map.ofList
+                                substituteType subst payloadTypeTemplate
+                            | _ -> payloadTypeTemplate
+                        | Some (_, _, _, None) ->
+                            failwith $"Constructor '{variantName}' has no payload type"
+                        | None ->
+                            failwith $"Unknown constructor '{variantName}' in pattern"
+                    extractPatternBindings payloadPattern payloadType
             | AST.PList innerPats ->
                 let elemType =
                     match scrutType with
