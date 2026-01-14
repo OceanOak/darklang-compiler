@@ -830,6 +830,7 @@ type LiftState = {
     Counter: int
     LiftedFunctions: AST.FunctionDef list
     TypeEnv: Map<string, AST.Type>  // Variable name -> Type (for tracking types of captured variables)
+    FuncParams: Map<string, (string * AST.Type) list>  // Function name -> params (for inferring function value types)
     FuncReturnTypes: Map<string, AST.Type>  // Function name -> Return type (for inferring call result types)
     GenericFuncDefs: Map<string, string list * AST.Type>  // Function name -> (TypeParams, ReturnType) for TypeApp substitution
     TypeReg: TypeRegistry
@@ -903,6 +904,7 @@ let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
 let rec simpleInferType
     (expr: AST.Expr)
     (typeEnv: Map<string, AST.Type>)
+    (funcParams: Map<string, (string * AST.Type) list>)
     (funcReturnTypes: Map<string, AST.Type>)
     (genericFuncDefs: Map<string, string list * AST.Type>)
     (typeReg: TypeRegistry)
@@ -978,23 +980,30 @@ let rec simpleInferType
     | AST.CharLiteral _ -> Some AST.TChar
     | AST.FloatLiteral _ -> Some AST.TFloat64
     | AST.UnitLiteral -> Some AST.TUnit
-    | AST.Var name -> Map.tryFind name typeEnv
+    | AST.Var name ->
+        match Map.tryFind name typeEnv with
+        | Some typ -> Some typ
+        | None ->
+            match Map.tryFind name funcParams, Map.tryFind name funcReturnTypes with
+            | Some parameters, Some returnType ->
+                Some (AST.TFunction (parameters |> List.map snd, returnType))
+            | _ -> None
     | AST.Let (name, value, body) ->
-        let valueType = simpleInferType value typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup
+        let valueType = simpleInferType value typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup
         let typeEnv' =
             match valueType with
             | Some typ -> Map.add name typ typeEnv
             | None -> typeEnv
-        simpleInferType body typeEnv' funcReturnTypes genericFuncDefs typeReg variantLookup
+        simpleInferType body typeEnv' funcParams funcReturnTypes genericFuncDefs typeReg variantLookup
     | AST.TupleLiteral elements ->
         // Recursively infer types of tuple elements
-        let elemTypes = elements |> List.map (fun e -> simpleInferType e typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup)
+        let elemTypes = elements |> List.map (fun e -> simpleInferType e typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup)
         if List.forall Option.isSome elemTypes then
             Some (AST.TTuple (elemTypes |> List.map Option.get))
         else
             None
     | AST.TupleAccess (tupleExpr, index) ->
-        match simpleInferType tupleExpr typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup with
+        match simpleInferType tupleExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some (AST.TTuple elemTypes) when index >= 0 && index < List.length elemTypes ->
             Some (List.item index elemTypes)
         | _ -> None
@@ -1002,7 +1011,7 @@ let rec simpleInferType
         // Record literal has the record's type
         Some (AST.TRecord (typeName, []))
     | AST.RecordAccess (recordExpr, fieldName) ->
-        match simpleInferType recordExpr typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup with
+        match simpleInferType recordExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some (AST.TRecord (typeName, _)) ->
             match Map.tryFind typeName typeReg with
             | Some fields -> fields |> List.tryFind (fun (name, _) -> name = fieldName) |> Option.map snd
@@ -1024,8 +1033,8 @@ let rec simpleInferType
             else
                 Some (AST.TSum (typeName, []))
     | AST.BinOp (op, left, right) ->
-        let leftType = simpleInferType left typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup
-        let rightType = simpleInferType right typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup
+        let leftType = simpleInferType left typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup
+        let rightType = simpleInferType right typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup
         match op with
         | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod ->
             match leftType, rightType with
@@ -1062,12 +1071,12 @@ let rec simpleInferType
             // Fall back to funcReturnTypes for non-generic or arity mismatch
             Map.tryFind funcName funcReturnTypes
     | AST.If (_, thenExpr, elseExpr) ->
-        match simpleInferType thenExpr typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup,
-              simpleInferType elseExpr typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup with
+        match simpleInferType thenExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup,
+              simpleInferType elseExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some thenType, Some elseType when thenType = elseType -> Some thenType
         | _ -> None
     | AST.Match (scrutinee, cases) ->
-        let scrutineeType = simpleInferType scrutinee typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup
+        let scrutineeType = simpleInferType scrutinee typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup
         let caseTypes =
             cases
             |> List.map (fun mc ->
@@ -1079,7 +1088,7 @@ let rec simpleInferType
                         |> List.map (fun pat -> extractPatternBindings pat scrutType)
                         |> List.fold mergeBindings typeEnv
                     | None -> typeEnv
-                simpleInferType mc.Body caseEnv funcReturnTypes genericFuncDefs typeReg variantLookup)
+                simpleInferType mc.Body caseEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup)
         if List.forall Option.isSome caseTypes then
             let types = caseTypes |> List.choose id
             match types with
@@ -1091,11 +1100,11 @@ let rec simpleInferType
         let paramTypes = parameters |> List.map snd
         let lambdaParamTypes = parameters |> Map.ofList
         let typeEnv' = Map.fold (fun acc k v -> Map.add k v acc) typeEnv lambdaParamTypes
-        match simpleInferType body typeEnv' funcReturnTypes genericFuncDefs typeReg variantLookup with
+        match simpleInferType body typeEnv' funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some returnType -> Some (AST.TFunction (paramTypes, returnType))
         | None -> None
     | AST.Apply (funcExpr, args) ->
-        match simpleInferType funcExpr typeEnv funcReturnTypes genericFuncDefs typeReg variantLookup with
+        match simpleInferType funcExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some (AST.TFunction (paramTypes, returnType)) ->
             let argCount = List.length args
             let paramCount = List.length paramTypes
@@ -1109,7 +1118,7 @@ let rec simpleInferType
     | _ -> None  // Complex expressions require full type inference
 
 let inferLambdaReturnType (body: AST.Expr) (state: LiftState) : Result<AST.Type, string> =
-    match simpleInferType body state.TypeEnv state.FuncReturnTypes state.GenericFuncDefs state.TypeReg state.VariantLookup with
+    match simpleInferType body state.TypeEnv state.FuncParams state.FuncReturnTypes state.GenericFuncDefs state.TypeReg state.VariantLookup with
     | Some returnType -> Ok returnType
     | None -> Error "Lambda lifting could not infer return type for lambda body"
 
@@ -1132,7 +1141,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
         liftLambdasInExpr value state
         |> Result.bind (fun (value', state1) ->
             // Try to infer the type of the value for capturing in nested lambdas
-            let valueType = simpleInferType value state1.TypeEnv state1.FuncReturnTypes state1.GenericFuncDefs state1.TypeReg state1.VariantLookup
+            let valueType = simpleInferType value state1.TypeEnv state1.FuncParams state1.FuncReturnTypes state1.GenericFuncDefs state1.TypeReg state1.VariantLookup
             let state1' = match valueType with
                           | Some t -> { state1 with TypeEnv = Map.add name t state1.TypeEnv }
                           | None -> state1
@@ -1235,6 +1244,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
 
                 let stateForReturnType = {
                     stateWithLambdaParams with
+                        FuncParams = state1.FuncParams
                         FuncReturnTypes = state1.FuncReturnTypes
                         GenericFuncDefs = state1.GenericFuncDefs
                 }
@@ -1252,6 +1262,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
                         Counter = state1.Counter + 1
                         LiftedFunctions = funcDef :: state1.LiftedFunctions
                         TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
+                        FuncParams = state1.FuncParams
                         FuncReturnTypes = state1.FuncReturnTypes
                         GenericFuncDefs = state1.GenericFuncDefs
                         TypeReg = state1.TypeReg
@@ -1301,56 +1312,67 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                     let captures = freeVarsInBody |> Set.filter (fun name -> Map.containsKey name state.TypeEnv) |> Set.toList
 
                     // Get actual types of captured variables from type environment
-                    let captureTypes = captures |> List.map (fun name ->
-                        Map.tryFind name state.TypeEnv |> Option.defaultValue AST.TInt64)
+                    let rec collectCaptureTypes remaining acc =
+                        match remaining with
+                        | [] -> Ok (List.rev acc)
+                        | name :: rest ->
+                            match Map.tryFind name state.TypeEnv with
+                            | Some t -> collectCaptureTypes rest (t :: acc)
+                            | None -> Error $"Missing type for captured variable: {name}"
 
-                    // All lambdas become closures (even non-capturing ones) for uniform calling convention
-                    // The lifted function takes closure as first param, then original params
-                    let funcName = $"__closure_{state1.Counter}"
-                    // First element is function pointer (Int64), rest are captures with their actual types
-                    let closureTupleTypes = AST.TInt64 :: captureTypes
-                    let closureParam = ("__closure", AST.TTuple closureTupleTypes)
+                    let buildLiftedFunc captureTypes =
+                        // All lambdas become closures (even non-capturing ones) for uniform calling convention
+                        // The lifted function takes closure as first param, then original params
+                        let funcName = $"__closure_{state1.Counter}"
+                        // First element is function pointer (Int64), rest are captures with their actual types
+                        let closureTupleTypes = AST.TInt64 :: captureTypes
+                        let closureParam = ("__closure", AST.TTuple closureTupleTypes)
 
-                    // Build body that extracts captures from closure tuple:
-                    // let cap1 = __closure.1 in let cap2 = __closure.2 in ... original_body
-                    let bodyWithExtractions =
-                        if List.isEmpty captures then
-                            body'  // No captures to extract
-                        else
-                            captures
-                            |> List.mapi (fun i capName ->
-                                // Capture at index i+1 (index 0 is the function pointer)
-                                (capName, AST.TupleAccess (AST.Var "__closure", i + 1)))
-                            |> List.foldBack (fun (capName, accessor) acc ->
-                                AST.Let (capName, accessor, acc)) <| body'
+                        // Build body that extracts captures from closure tuple:
+                        // let cap1 = __closure.1 in let cap2 = __closure.2 in ... original_body
+                        let bodyWithExtractions =
+                            if List.isEmpty captures then
+                                body'  // No captures to extract
+                            else
+                                captures
+                                |> List.mapi (fun i capName ->
+                                    // Capture at index i+1 (index 0 is the function pointer)
+                                    (capName, AST.TupleAccess (AST.Var "__closure", i + 1)))
+                                |> List.foldBack (fun (capName, accessor) acc ->
+                                    AST.Let (capName, accessor, acc)) <| body'
 
-                    let stateForReturnType = {
-                        stateWithLambdaParams with
-                            FuncReturnTypes = state1.FuncReturnTypes
-                            GenericFuncDefs = state1.GenericFuncDefs
-                    }
-
-                    inferLambdaReturnType body stateForReturnType
-                    |> Result.bind (fun returnType ->
-                        let funcDef : AST.FunctionDef = {
-                            Name = funcName
-                            TypeParams = []
-                            Params = closureParam :: parameters  // Closure is always first param
-                            ReturnType = returnType
-                            Body = bodyWithExtractions
+                        let stateForReturnType = {
+                            stateWithLambdaParams with
+                                FuncParams = state1.FuncParams
+                                FuncReturnTypes = state1.FuncReturnTypes
+                                GenericFuncDefs = state1.GenericFuncDefs
                         }
-                        let state' = {
-                            Counter = state1.Counter + 1
-                            LiftedFunctions = funcDef :: state1.LiftedFunctions
-                            TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
-                            FuncReturnTypes = state1.FuncReturnTypes
-                            GenericFuncDefs = state1.GenericFuncDefs
-                            TypeReg = state1.TypeReg
-                            VariantLookup = state1.VariantLookup
-                        }
-                        // Replace lambda with Closure (captures may be empty for non-capturing lambdas)
-                        let captureExprs = captures |> List.map AST.Var
-                        loop rest state' (AST.Closure (funcName, captureExprs) :: acc)))
+
+                        inferLambdaReturnType body stateForReturnType
+                        |> Result.bind (fun returnType ->
+                            let funcDef : AST.FunctionDef = {
+                                Name = funcName
+                                TypeParams = []
+                                Params = closureParam :: parameters  // Closure is always first param
+                                ReturnType = returnType
+                                Body = bodyWithExtractions
+                            }
+                            let state' = {
+                                Counter = state1.Counter + 1
+                                LiftedFunctions = funcDef :: state1.LiftedFunctions
+                                TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
+                                FuncParams = state1.FuncParams
+                                FuncReturnTypes = state1.FuncReturnTypes
+                                GenericFuncDefs = state1.GenericFuncDefs
+                                TypeReg = state1.TypeReg
+                                VariantLookup = state1.VariantLookup
+                            }
+                            // Replace lambda with Closure (captures may be empty for non-capturing lambdas)
+                            let captureExprs = captures |> List.map AST.Var
+                            loop rest state' (AST.Closure (funcName, captureExprs) :: acc))
+
+                    collectCaptureTypes captures []
+                    |> Result.bind buildLiftedFunc)
 
             | AST.FuncRef origFuncName ->
                 // Named function used as value - wrap in a closure for uniform calling convention
@@ -1371,6 +1393,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                     Counter = state.Counter + 1
                     LiftedFunctions = wrapperDef :: state.LiftedFunctions
                     TypeEnv = state.TypeEnv
+                    FuncParams = state.FuncParams
                     FuncReturnTypes = state.FuncReturnTypes
                     GenericFuncDefs = state.GenericFuncDefs
                     TypeReg = state.TypeReg
@@ -1569,6 +1592,7 @@ let rec liftLambdasInProgram (baseTypeReg: TypeRegistry) (baseVariantLookup: Var
         Counter = 0
         LiftedFunctions = []
         TypeEnv = Map.empty
+        FuncParams = funcParams
         FuncReturnTypes = funcReturnTypes
         GenericFuncDefs = genericFuncDefs
         TypeReg = mergedTypeReg

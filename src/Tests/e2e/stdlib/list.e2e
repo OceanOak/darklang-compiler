@@ -61,6 +61,7 @@ match List.pushBack([1, 2], 3) with | [a, b, c] -> c | _ -> 0 = 3
 
 match List.map([1, 2, 3], (x: Int64) => x + 1) with | [a, b, c] -> a + b + c | _ -> 0 = 9
 List.length(List.map([1, 2, 3, 4], (x: Int64) => x * 2)) = 4
+let add = Stdlib.Int64.add in match List.map([1, 2, 3], (x: Int64) => add(x, 1)) with | [a, b, c] -> a + b + c | _ -> 0 = 9
 
 // ===================================================================
 // List.filter - Keep elements that match predicate
@@ -217,4 +218,3 @@ List.all([1, 2, 3], (x: Int64) => x > 2) = false
 // ===================================================================
 
 // List.zip - disabled due to tuple recursion bug
-

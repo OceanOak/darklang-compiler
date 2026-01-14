@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-14 21:28:48
-**Commit:** `50e25704` - bd sync: 2026-01-14 20:32:06
+**Last Updated:** 2026-01-14 23:08:39
+**Commit:** `cdddc7ca` - Remove TInt64 fallback for constructor payload types
 
 | Benchmark     |           Dark (4.96x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
