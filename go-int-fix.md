@@ -22,7 +22,7 @@ Use this process.
 
 8. After all tests pass, run all Dark benchmarks.
 
-9. After all this, report to the developer what assumption was removed and what context, what test was added, and what changes had to be made to the compiler to address the issue. If there are any changes to the benchmark results, SHOW THEM!
+9. After all this, report to the developer what assumption was removed and what context, what test was added and how the test tickles the problem, and what changes had to be made to the compiler to address the issue. If there are any changes to the benchmark results, SHOW THEM!
 
 10. Wait for the developer to say "APPROVED". Do nothing if he does not say this. Commit the code, tests, and new benchmark results, including in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off the main branch (NOT origin/main). Do a fast-forward merge onto the main branch (NOT origin/main) after running tests again using `./run-tests`. Then clean up the branch and worktree.
 
