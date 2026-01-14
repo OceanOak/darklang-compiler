@@ -20,9 +20,11 @@ Use this process. (Ignore WORKFLOW.md)
 
 7. After all tests pass, run all Dark benchmarks. Ignore and don't mention the quicksort failure - it's a known issue. If RESULT.md has changed, show the results.
 
-8. After all this, write a short report to the developer about this issue. Include what assumption was removed along with some context, what test was added (show it!). Explain what the test does before and after the change, and how the was fixed by the compiler changes, and what changes had to be made to the compiler to address the issue. If there is any change to the benchmark result in RESULTS.md, SHOW THE CHANGE!
+8. If there is any valuable documentation to create or information to capture, create a doc or add it to an existing doc.
 
-9. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code, new tests, and new benchmark results, and include in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off the main branch (NOT origin/main). Do a fast-forward merge onto the main branch (NOT origin/main) after running tests again using `./run-tests`. Then clean up the branch and worktree used for this work.
+9. After all this, write a short report to the developer about this issue. Include what assumption was removed along with some context, what test was added (show it!). Explain what the test does before and after the change, and how the was fixed by the compiler changes, and what changes had to be made to the compiler to address the issue. If there is any change to the benchmark result in RESULTS.md, SHOW THE CHANGE!
+
+10. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code, new tests, and new benchmark results, and include in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off the main branch (NOT origin/main). Do a fast-forward merge onto the main branch (NOT origin/main) after running tests again using `./run-tests`. Then clean up the branch and worktree used for this work.
 
 ## Policies for handling removed type defaults
 
