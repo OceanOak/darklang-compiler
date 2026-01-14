@@ -968,7 +968,12 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
     | Let (name, value, body) ->
         // Let binding: check value, extend environment, check body
-        checkExpr value env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        let valueExpectedType =
+            match value with
+            | ListLiteral [] -> Some (TList (TVar "t"))
+            | _ -> None
+
+        checkExpr value env typeReg variantLookup genericFuncReg moduleRegistry aliasReg valueExpectedType
         |> Result.bind (fun (valueType, value') ->
             let env' = Map.add name valueType env
             checkExpr body env' typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
@@ -1018,8 +1023,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             Error (TypeMismatch (thenType, elseType, "if branches must have same type"))
                         | Some reconciledType ->
                             match expectedType with
-                            | Some expected when expected <> reconciledType ->
-                                Error (TypeMismatch (expected, reconciledType, "if expression"))
+                            | Some expected ->
+                                match reconcileTypes (Some aliasReg) expected reconciledType with
+                                | Some reconciledExpected -> Ok (reconciledExpected, If (cond', then', else'))
+                                | None -> Error (TypeMismatch (expected, reconciledType, "if expression"))
                             | _ -> Ok (reconciledType, If (cond', then', else')))))
 
     | Call (funcName, args) ->
@@ -1529,22 +1536,19 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             match expectedType with
             | Some expected ->
                 match resolveType aliasReg expected with
-                | TTuple elems when List.length elems = List.length elements -> Some elems
-                | _ -> None
-            | None -> None
+                | TTuple elemTypes when List.length elemTypes = List.length elements ->
+                    elemTypes |> List.map Some
+                | _ -> List.replicate (List.length elements) None
+            | None -> List.replicate (List.length elements) None
 
         let rec checkElements elems expectedElems accTypes accExprs =
             match elems, expectedElems with
-            | [], _ -> Ok (List.rev accTypes, List.rev accExprs)
-            | e :: rest, Some (expectedHead :: expectedTail) ->
-                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedHead)
+            | [], [] -> Ok (List.rev accTypes, List.rev accExprs)
+            | e :: rest, expectedElem :: expectedRest ->
+                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedElem
                 |> Result.bind (fun (elemType, e') ->
-                    checkElements rest (Some expectedTail) (elemType :: accTypes) (e' :: accExprs))
-            | e :: rest, _ ->
-                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-                |> Result.bind (fun (elemType, e') ->
-                    checkElements rest expectedElems (elemType :: accTypes) (e' :: accExprs))
-
+                    checkElements rest expectedRest (elemType :: accTypes) (e' :: accExprs))
+            | _ -> Ok (List.rev accTypes, List.rev accExprs)
         checkElements elements expectedElemTypes [] []
         |> Result.bind (fun (elemTypes, elements') ->
             let tupleType = TTuple elemTypes
@@ -1799,8 +1803,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | None -> Ok (sumType, Constructor (constrTypeName, variantName, Some payloadExpr')))
 
     | Match (scrutinee, cases) ->
+        let scrutineeExpectedType =
+            match scrutinee with
+            | ListLiteral [] -> Some (TList (TVar "t"))
+            | _ -> None
+
         // Type check the scrutinee first
-        checkExpr scrutinee env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr scrutinee env typeReg variantLookup genericFuncReg moduleRegistry aliasReg scrutineeExpectedType
         |> Result.bind (fun (scrutineeType, scrutinee') ->
             // Extract bindings from a pattern based on scrutinee type
             let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
