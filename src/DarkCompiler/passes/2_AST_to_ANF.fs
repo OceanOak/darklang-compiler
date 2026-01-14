@@ -2214,7 +2214,7 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         | None -> Error $"Unknown constructor: {variantName}"
     | AST.ListLiteral elements ->
         match elements with
-        | [] -> Ok (AST.TList AST.TInt64)  // Default empty list to List<int>
+        | [] -> Ok (AST.TList (AST.TVar "t"))  // Preserve unknown element type for empty lists
         | first :: _ ->
             inferType first typeEnv typeReg variantLookup funcReg moduleRegistry
             |> Result.map (fun elemType -> AST.TList elemType)

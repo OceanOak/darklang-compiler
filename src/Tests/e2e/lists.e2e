@@ -14,6 +14,9 @@ match [] with | [x] -> x | [] -> 99 = 99
 // Empty list should not default to Int64 element type
 match [] with | [] -> true | [x] -> x | _ -> false = true
 
+// Empty list should not erase element types when cons'ing tuples
+let xs = [] in let ys = [("hi", "there"), ...xs] in match ys with | [(a, b)] -> a ++ b | [] -> "" = "hithere"
+
 // === Single Element List ===
 
 // Single element list
