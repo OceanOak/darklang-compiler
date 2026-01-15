@@ -36,7 +36,7 @@ let private makeTest (name: string) (source: string) (preamble: string) (sourceF
         DisableMIRCSE = false
         DisableMIRCopyProp = false
         DisableMIRDCE = false
-        DisableMIRCFGSimplify = true
+        DisableMIRCFGSimplify = false
         DisableMIRLICM = false
         DisableLIROpt = false
         DisableLIRPeephole = false

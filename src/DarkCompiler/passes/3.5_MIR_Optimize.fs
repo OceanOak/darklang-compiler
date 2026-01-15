@@ -30,7 +30,7 @@ let defaultOptimizeOptions = {
     EnableCSE = true
     EnableCopyProp = true
     EnableDCE = true
-    EnableCFGSimplify = false
+    EnableCFGSimplify = true
     EnableLICM = true
 }
 
@@ -618,9 +618,16 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
     if Map.isEmpty emptyBlocks then
         (cfg, false)
     else
-        // Redirect jumps through empty blocks
+        // Redirect jumps through empty blocks (follow chains)
         let redirectLabel label =
-            Map.tryFind label emptyBlocks |> Option.defaultValue label
+            let rec follow visited current =
+                if Set.contains current visited then
+                    current
+                else
+                    match Map.tryFind current emptyBlocks with
+                    | None -> current
+                    | Some next -> follow (Set.add current visited) next
+            follow Set.empty label
 
         let blocks' =
             cfg.Blocks

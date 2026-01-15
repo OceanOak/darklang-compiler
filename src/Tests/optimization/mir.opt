@@ -16,8 +16,6 @@ Function loop:
   loop_entry:
     v10015 <- StringHash(str[hello])
     jump loop_body
-  loop_L0:
-    jump loop_L2
   loop_L1:
     v10016 <- v10013 - 1 : TInt64
     v10017 <- v10012 + v10015 : TInt64
@@ -30,7 +28,7 @@ Function loop:
     v10012 <- Phi([(v1, loop_entry), (v10019, loop_L1)]) : TInt64
     v10013 <- Phi([(v0, loop_entry), (v10018, loop_L1)]) : TInt64
     v10014 <- v10013 < 1 : TInt64
-    branch v10014 ? loop_L0 : loop_L1
+    branch v10014 ? loop_L2 : loop_L1
 Function _start:
   _start_body:
     v10008 <- Call(loop, [3, 0])
@@ -49,8 +47,6 @@ loop(2)
 Function loop:
   loop_entry:
     jump loop_body
-  loop_L0:
-    jump loop_L2
   loop_L1:
     v10006 <- 1 : TInt64
     jump loop_body
@@ -59,7 +55,7 @@ Function loop:
   loop_body:
     v10004 <- Phi([(v0, loop_entry), (v10006, loop_L1)]) : TInt64
     v10005 <- v10004 < 1 : TInt64
-    branch v10005 ? loop_L0 : loop_L1
+    branch v10005 ? loop_L2 : loop_L1
 Function _start:
   _start_body:
     v10003 <- Call(loop, [2])
