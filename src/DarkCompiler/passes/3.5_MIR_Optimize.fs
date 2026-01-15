@@ -30,7 +30,7 @@ let defaultOptimizeOptions = {
     EnableCSE = true
     EnableCopyProp = true
     EnableDCE = true
-    EnableCFGSimplify = true
+    EnableCFGSimplify = false
     EnableLICM = true
 }
 

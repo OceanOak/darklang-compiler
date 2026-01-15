@@ -33,7 +33,7 @@ let private makeE2ETest (name: string) (source: string) (preamble: string) (sour
         DisableMIRCSE = false
         DisableMIRCopyProp = false
         DisableMIRDCE = false
-        DisableMIRCFGSimplify = false
+        DisableMIRCFGSimplify = true
         DisableMIRLICM = false
         DisableLIROpt = false
         DisableLIRPeephole = false
