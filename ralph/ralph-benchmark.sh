@@ -88,8 +88,9 @@ If all checks pass, output: <promise>OPTIMIZATION_COMPLETE</promise>
   echo "$result"
 
   if [[ "$result" == *"<promise>OPTIMIZATION_COMPLETE</promise>"* ]]; then
-    echo "Benchmark optimization complete, exiting."
-    exit 0
+    echo "Iteration $i complete."
+  else
+    echo "Iteration $i did not complete successfully."
   fi
 done
 
