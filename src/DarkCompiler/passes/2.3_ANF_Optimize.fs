@@ -3,8 +3,9 @@
 // Performs optimizations on ANF before reference counting:
 // - Constant folding: evaluate constant expressions at compile time
 // - Constant propagation: replace variable uses with constant definitions
+// - Copy propagation: eliminate trivial bindings
 // - Dead code elimination: remove unused bindings
-// - Beta reduction: eliminate trivial bindings (copy propagation)
+// - Strength reduction: replace pow2 mul/div/mod with shifts/bitwise ops
 //
 // These optimizations run in a loop until no more changes occur.
 
@@ -14,6 +15,23 @@ open ANF
 
 /// Environment mapping TempIds to their constant values (for propagation)
 type ConstEnv = Map<TempId, Atom>
+
+/// Optimization toggles for ANF optimization passes
+type OptimizeOptions = {
+    EnableConstFolding: bool
+    EnableConstProp: bool
+    EnableCopyProp: bool
+    EnableDCE: bool
+    EnableStrengthReduction: bool
+}
+
+let defaultOptimizeOptions = {
+    EnableConstFolding = true
+    EnableConstProp = true
+    EnableCopyProp = true
+    EnableDCE = true
+    EnableStrengthReduction = true
+}
 
 /// Check if n is a power of 2, and if so return its log2
 /// Returns None if n is not a power of 2 or is <= 0
@@ -89,33 +107,6 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Mul, _, IntLiteral (Int64 0L) -> Some (Atom (IntLiteral (Int64 0L)))
     | Div, x, IntLiteral (Int64 1L) -> Some (Atom x)
 
-    // Strength reduction: multiply by power of 2 → left shift
-    | Mul, x, IntLiteral (Int64 n) ->
-        match tryLog2 n with
-        | Some shift -> Some (Prim (Shl, x, IntLiteral (Int64 shift)))
-        | None -> None
-    | Mul, IntLiteral (Int64 n), x ->
-        match tryLog2 n with
-        | Some shift -> Some (Prim (Shl, x, IntLiteral (Int64 shift)))
-        | None -> None
-
-    // Strength reduction: modulo by power of 2 → bitwise AND
-    // Note: For signed integers, x % n gives result with sign of x,
-    // but x & (n-1) is always non-negative. This is correct for evenness
-    // checks (% 2 == 0) but may differ for other uses with negative values.
-    | Mod, x, IntLiteral (Int64 n) when n > 0L ->
-        match tryLog2 n with
-        | Some _ -> Some (Prim (BitAnd, x, IntLiteral (Int64 (n - 1L))))
-        | None -> None
-
-    // Strength reduction: unsigned-style division by power of 2 → right shift
-    // Note: For signed integers, this uses logical shift which doesn't
-    // round toward zero for negative numbers. Safe for non-negative values.
-    | Div, x, IntLiteral (Int64 n) when n > 0L ->
-        match tryLog2 n with
-        | Some shift -> Some (Prim (Shr, x, IntLiteral (Int64 shift)))
-        | None -> None
-
     // Short-circuit boolean
     | And, BoolLiteral false, _ -> Some (Atom (BoolLiteral false))
     | And, _, BoolLiteral false -> Some (Atom (BoolLiteral false))
@@ -126,6 +117,26 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Or, BoolLiteral false, x -> Some (Atom x)
     | Or, x, BoolLiteral false -> Some (Atom x)
 
+    | _ -> None
+
+let tryStrengthReduce (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
+    match op, left, right with
+    | Mul, x, IntLiteral (Int64 n) ->
+        match tryLog2 n with
+        | Some shift -> Some (Prim (Shl, x, IntLiteral (Int64 shift)))
+        | None -> None
+    | Mul, IntLiteral (Int64 n), x ->
+        match tryLog2 n with
+        | Some shift -> Some (Prim (Shl, x, IntLiteral (Int64 shift)))
+        | None -> None
+    | Mod, x, IntLiteral (Int64 n) when n > 0L ->
+        match tryLog2 n with
+        | Some _ -> Some (Prim (BitAnd, x, IntLiteral (Int64 (n - 1L))))
+        | None -> None
+    | Div, x, IntLiteral (Int64 n) when n > 0L ->
+        match tryLog2 n with
+        | Some shift -> Some (Prim (Shr, x, IntLiteral (Int64 shift)))
+        | None -> None
     | _ -> None
 
 /// Fold a unary operation on constants
@@ -306,29 +317,39 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | FloatToString atom -> FloatToString (s atom)
 
 /// Optimize a CExpr with constant folding
-let optimizeCExpr (env: ConstEnv) (cexpr: CExpr) : CExpr * bool =
+let optimizeCExpr (options: OptimizeOptions) (env: ConstEnv) (cexpr: CExpr) : CExpr * bool =
     // First, substitute known constants
     let cexpr' = substCExpr env cexpr
 
-    // Then try to fold
-    match cexpr' with
-    | Prim (op, left, right) ->
-        match foldBinOp op left right with
-        | Some folded -> (folded, true)
-        | None -> (cexpr', cexpr' <> cexpr)
+    let tryConstFold () =
+        if options.EnableConstFolding then
+            match cexpr' with
+            | Prim (op, left, right) ->
+                match foldBinOp op left right with
+                | Some folded -> Some folded
+                | None -> None
+            | UnaryPrim (op, src) -> foldUnaryOp op src
+            | IfValue (BoolLiteral true, thenVal, _) -> Some (Atom thenVal)
+            | IfValue (BoolLiteral false, _, elseVal) -> Some (Atom elseVal)
+            | _ -> None
+        else
+            None
 
-    | UnaryPrim (op, src) ->
-        match foldUnaryOp op src with
-        | Some folded -> (folded, true)
-        | None -> (cexpr', cexpr' <> cexpr)
-
-    | IfValue (BoolLiteral true, thenVal, _) -> (Atom thenVal, true)
-    | IfValue (BoolLiteral false, _, elseVal) -> (Atom elseVal, true)
-
-    | _ -> (cexpr', cexpr' <> cexpr)
+    match tryConstFold () with
+    | Some folded -> (folded, true)
+    | None ->
+        if options.EnableStrengthReduction then
+            match cexpr' with
+            | Prim (op, left, right) ->
+                match tryStrengthReduce op left right with
+                | Some reduced -> (reduced, true)
+                | None -> (cexpr', cexpr' <> cexpr)
+            | _ -> (cexpr', cexpr' <> cexpr)
+        else
+            (cexpr', cexpr' <> cexpr)
 
 /// Optimize an AExpr
-let rec optimizeAExpr (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
+let rec optimizeAExpr (options: OptimizeOptions) (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
     match aexpr with
     | Return atom ->
         let atom' = substAtom env atom
@@ -336,29 +357,30 @@ let rec optimizeAExpr (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
 
     | Let (tid, cexpr, body) ->
         // Optimize the CExpr
-        let (cexpr', cexprChanged) = optimizeCExpr env cexpr
+        let (cexpr', cexprChanged) = optimizeCExpr options env cexpr
 
-        // Check for beta reduction: if cexpr is just an Atom, substitute it
+        // Check for copy propagation: if cexpr is just an Atom, substitute it
         let (env', cexpr'', skipBinding) =
             match cexpr' with
-            | Atom a when not (hasSideEffects cexpr') ->
-                // Beta reduction: don't emit binding, just substitute
+            | Atom a when options.EnableCopyProp && not (hasSideEffects cexpr') ->
+                // Copy propagation: don't emit binding, just substitute
                 (Map.add tid a env, cexpr', true)
-            | Atom (IntLiteral _ | BoolLiteral _ | FloatLiteral _ | StringLiteral _ | UnitLiteral as constAtom) ->
+            | Atom (IntLiteral _ | BoolLiteral _ | FloatLiteral _ | StringLiteral _ | UnitLiteral as constAtom)
+                when options.EnableConstProp ->
                 // Constant propagation
                 (Map.add tid constAtom env, cexpr', false)
             | _ ->
                 (env, cexpr', false)
 
         // Optimize the body
-        let (body', bodyChanged) = optimizeAExpr env' body
+        let (body', bodyChanged) = optimizeAExpr options env' body
 
         // Dead code elimination: if tid is not used in body and cexpr has no side effects
         let usesInBody = collectAExprUses body'
-        let isDead = not (Set.contains tid usesInBody) && not (hasSideEffects cexpr')
+        let isDead = options.EnableDCE && not (Set.contains tid usesInBody) && not (hasSideEffects cexpr')
 
         if skipBinding then
-            // Beta reduction: skip this binding entirely
+            // Copy propagation: skip this binding entirely
             (body', true)
         elif isDead then
             // Dead code elimination
@@ -371,44 +393,98 @@ let rec optimizeAExpr (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
 
         // Fold constant conditions
         match cond' with
-        | BoolLiteral true ->
-            let (thenBranch', _) = optimizeAExpr env thenBranch
+        | BoolLiteral true when options.EnableConstFolding ->
+            let (thenBranch', _) = optimizeAExpr options env thenBranch
             (thenBranch', true)
-        | BoolLiteral false ->
-            let (elseBranch', _) = optimizeAExpr env elseBranch
+        | BoolLiteral false when options.EnableConstFolding ->
+            let (elseBranch', _) = optimizeAExpr options env elseBranch
             (elseBranch', true)
         | _ ->
-            let (thenBranch', thenChanged) = optimizeAExpr env thenBranch
-            let (elseBranch', elseChanged) = optimizeAExpr env elseBranch
+            let (thenBranch', thenChanged) = optimizeAExpr options env thenBranch
+            let (elseBranch', elseChanged) = optimizeAExpr options env elseBranch
             (If (cond', thenBranch', elseBranch'), cond' <> cond || thenChanged || elseChanged)
 
 /// Optimize a function
-let optimizeFunction (func: Function) : Function * bool =
+let optimizeFunction (options: OptimizeOptions) (func: Function) : Function * bool =
     // Initialize env with function parameters (they're not constants)
     let env = Map.empty
-    let (body', changed) = optimizeAExpr env func.Body
+    let (body', changed) = optimizeAExpr options env func.Body
     ({ func with Body = body' }, changed)
 
 /// Optimize until fixed point
-let rec optimizeToFixedPoint (func: Function) (maxIterations: int) : Function =
+let rec optimizeToFixedPoint (options: OptimizeOptions) (func: Function) (maxIterations: int) : Function =
     if maxIterations <= 0 then func
     else
-        let (func', changed) = optimizeFunction func
+        let (func', changed) = optimizeFunction options func
         if changed then
-            optimizeToFixedPoint func' (maxIterations - 1)
+            optimizeToFixedPoint options func' (maxIterations - 1)
         else
             func'
 
-/// Optimize a program
-let optimizeProgram (program: Program) : Program =
+/// Optimize a program with explicit options
+let optimizeProgramWithOptions (options: OptimizeOptions) (program: Program) : Program =
     let (Program (functions, mainExpr)) = program
 
     // Optimize all functions
-    let functions' = functions |> List.map (fun f -> optimizeToFixedPoint f 10)
+    let functions' = functions |> List.map (fun f -> optimizeToFixedPoint options f 10)
 
     // Optimize main expression
-    let (mainExpr', _) = optimizeAExpr Map.empty mainExpr
+    let (mainExpr', _) = optimizeAExpr options Map.empty mainExpr
     let mainFunc = { Name = "__main__"; TypedParams = []; ReturnType = AST.TUnit; Body = mainExpr' }
-    let mainOptimized = optimizeToFixedPoint mainFunc 10
+    let mainOptimized = optimizeToFixedPoint options mainFunc 10
 
     Program (functions', mainOptimized.Body)
+
+/// Optimize a program with default options
+let optimizeProgram (program: Program) : Program =
+    optimizeProgramWithOptions defaultOptimizeOptions program
+
+let optimizeConstFolding (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = true
+            EnableConstProp = false
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableStrengthReduction = false }
+        program
+
+let optimizeConstProp (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableConstProp = true
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableStrengthReduction = false }
+        program
+
+let optimizeCopyProp (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableConstProp = false
+            EnableCopyProp = true
+            EnableDCE = false
+            EnableStrengthReduction = false }
+        program
+
+let optimizeDCE (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableConstProp = false
+            EnableCopyProp = false
+            EnableDCE = true
+            EnableStrengthReduction = false }
+        program
+
+let optimizeStrengthReduction (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableConstProp = false
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableStrengthReduction = true }
+        program

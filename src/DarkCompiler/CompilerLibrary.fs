@@ -44,16 +44,40 @@ type CompilerOptions = {
     DisableFreeList: bool
     /// Disable ANF-level optimizations (constant folding, propagation, etc.)
     DisableANFOpt: bool
+    /// Disable ANF constant folding (includes algebraic identities and constant branches)
+    DisableANFConstFolding: bool
+    /// Disable ANF constant propagation
+    DisableANFConstProp: bool
+    /// Disable ANF copy propagation
+    DisableANFCopyProp: bool
+    /// Disable ANF dead code elimination
+    DisableANFDCE: bool
+    /// Disable ANF strength reduction (pow2 mul/div/mod)
+    DisableANFStrengthReduction: bool
     /// Disable ANF function inlining
     DisableInlining: bool
     /// Disable tail call optimization
     DisableTCO: bool
     /// Disable MIR-level optimizations (DCE, copy/constant propagation on SSA)
     DisableMIROpt: bool
+    /// Disable MIR constant folding
+    DisableMIRConstFolding: bool
+    /// Disable MIR common subexpression elimination
+    DisableMIRCSE: bool
+    /// Disable MIR copy propagation
+    DisableMIRCopyProp: bool
+    /// Disable MIR dead code elimination
+    DisableMIRDCE: bool
+    /// Disable MIR CFG simplification
+    DisableMIRCFGSimplify: bool
+    /// Disable MIR loop-invariant code motion
+    DisableMIRLICM: bool
     /// Disable LIR-level optimizations (peephole optimizations)
     DisableLIROpt: bool
-    /// Disable dead code elimination (tree shaking of unused stdlib)
-    DisableDCE: bool
+    /// Disable LIR peephole optimizations
+    DisableLIRPeephole: bool
+    /// Disable function tree shaking (pruning unused stdlib/user functions)
+    DisableFunctionTreeShaking: bool
     /// Enable runtime expression coverage tracking
     EnableCoverage: bool
     /// Enable leak checking (debug only)
@@ -70,11 +94,23 @@ type CompilerOptions = {
 let defaultOptions : CompilerOptions = {
     DisableFreeList = false
     DisableANFOpt = false
+    DisableANFConstFolding = false
+    DisableANFConstProp = false
+    DisableANFCopyProp = false
+    DisableANFDCE = false
+    DisableANFStrengthReduction = false
     DisableInlining = false
     DisableTCO = false
     DisableMIROpt = false
+    DisableMIRConstFolding = false
+    DisableMIRCSE = false
+    DisableMIRCopyProp = false
+    DisableMIRDCE = false
+    DisableMIRCFGSimplify = false
+    DisableMIRLICM = false
     DisableLIROpt = false
-    DisableDCE = false
+    DisableLIRPeephole = false
+    DisableFunctionTreeShaking = false
     EnableCoverage = false
     EnableLeakCheck = false
     DumpANF = false
@@ -85,6 +121,51 @@ let defaultOptions : CompilerOptions = {
 /// Determine whether to dump a specific IR, based on verbosity or explicit option
 let shouldDumpIR (verbosity: int) (enabled: bool) : bool =
     verbosity >= 3 || enabled
+
+let private buildANFOptimizeOptions (options: CompilerOptions) : ANF_Optimize.OptimizeOptions =
+    let enabled = not options.DisableANFOpt
+    {
+        EnableConstFolding = enabled && not options.DisableANFConstFolding
+        EnableConstProp = enabled && not options.DisableANFConstProp
+        EnableCopyProp = enabled && not options.DisableANFCopyProp
+        EnableDCE = enabled && not options.DisableANFDCE
+        EnableStrengthReduction = enabled && not options.DisableANFStrengthReduction
+    }
+
+let private shouldRunANFOptimize (anfOptions: ANF_Optimize.OptimizeOptions) : bool =
+    anfOptions.EnableConstFolding
+    || anfOptions.EnableConstProp
+    || anfOptions.EnableCopyProp
+    || anfOptions.EnableDCE
+    || anfOptions.EnableStrengthReduction
+
+let private buildMIROptimizeOptions (options: CompilerOptions) : MIR_Optimize.OptimizeOptions =
+    let enabled = not options.DisableMIROpt
+    {
+        EnableConstFolding = enabled && not options.DisableMIRConstFolding
+        EnableCSE = enabled && not options.DisableMIRCSE
+        EnableCopyProp = enabled && not options.DisableMIRCopyProp
+        EnableDCE = enabled && not options.DisableMIRDCE
+        EnableCFGSimplify = enabled && not options.DisableMIRCFGSimplify
+        EnableLICM = enabled && not options.DisableMIRLICM
+    }
+
+let private shouldRunMIROptimize (mirOptions: MIR_Optimize.OptimizeOptions) : bool =
+    mirOptions.EnableConstFolding
+    || mirOptions.EnableCSE
+    || mirOptions.EnableCopyProp
+    || mirOptions.EnableDCE
+    || mirOptions.EnableCFGSimplify
+    || mirOptions.EnableLICM
+
+let private formatPassGroup (label: string) (passes: (string * bool) list) : string =
+    let enabled =
+        passes
+        |> List.choose (fun (name, isEnabled) -> if isEnabled then Some name else None)
+    let enabledNames = String.concat ", " enabled
+    match enabled with
+    | [] -> $"{label} (disabled)"
+    | _ -> $"{label} ({enabledNames})"
 
 /// Print ANF program in a consistent, human-readable format
 let printANFProgram (title: string) (program: ANF.Program) : unit =
@@ -181,11 +262,25 @@ let private compileAnfToLir
             let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - ssaStart, 1)
             println $"        {t}ms"
 
-        if verbosity >= 1 then println $"  [3.5/8] MIR Optimizations{suffix}..."
+        let mirOptions = buildMIROptimizeOptions options
+        let mirPassLabel =
+            formatPassGroup
+                "MIR Optimizations"
+                [
+                    ("const_folding", mirOptions.EnableConstFolding)
+                    ("cse", mirOptions.EnableCSE)
+                    ("copy_prop", mirOptions.EnableCopyProp)
+                    ("dce", mirOptions.EnableDCE)
+                    ("cfg_simplify", mirOptions.EnableCFGSimplify)
+                    ("licm", mirOptions.EnableLICM)
+                ]
+        if verbosity >= 1 then println $"  [3.5/8] {mirPassLabel}{suffix}..."
         let mirOptStart = sw.Elapsed.TotalMilliseconds
         let optimizedProgram =
-            if options.DisableMIROpt then ssaProgram
-            else MIR_Optimize.optimizeProgram ssaProgram
+            if shouldRunMIROptimize mirOptions then
+                MIR_Optimize.optimizeProgramWithOptions mirOptions ssaProgram
+            else
+                ssaProgram
         if verbosity >= 2 then
             let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirOptStart, 1)
             println $"        {t}ms"
@@ -202,11 +297,15 @@ let private compileAnfToLir
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - lirStart, 1)
                 println $"        {t}ms"
 
-            if verbosity >= 1 then println $"  [4.5/8] LIR Optimizations{suffix}..."
+            let lirPassLabel =
+                formatPassGroup
+                    "LIR Peephole"
+                    [("peephole", not options.DisableLIROpt && not options.DisableLIRPeephole)]
+            if verbosity >= 1 then println $"  [4.5/8] {lirPassLabel}{suffix}..."
             let lirOptStart = sw.Elapsed.TotalMilliseconds
             let optimizedLir =
-                if options.DisableLIROpt then lirProgram
-                else LIR_Optimize.optimizeProgram lirProgram
+                if options.DisableLIROpt || options.DisableLIRPeephole then lirProgram
+                else LIR_Peephole.optimizeProgram lirProgram
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - lirOptStart, 1)
                 println $"        {t}ms"
@@ -225,14 +324,27 @@ let private buildAnfProgram
     (extraTypeMap: ANF.TypeMap)
     : Result<ANF.Program * ANF.TypeMap * AST_to_ANF.ConversionResult, string> =
 
-    if verbosity >= 1 then println "  [2.3/8] ANF Optimization..."
+    let anfOptions = buildANFOptimizeOptions options
+    let anfPassLabel =
+        formatPassGroup
+            "ANF Optimizations"
+            [
+                ("const_folding", anfOptions.EnableConstFolding)
+                ("const_prop", anfOptions.EnableConstProp)
+                ("copy_prop", anfOptions.EnableCopyProp)
+                ("dce", anfOptions.EnableDCE)
+                ("strength_reduction", anfOptions.EnableStrengthReduction)
+            ]
+    if verbosity >= 1 then println $"  [2.3/8] {anfPassLabel}..."
     let anfProgram = ANF.Program (userFunctions, mainExpr)
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (before optimization) ===" anfProgram
     let anfOptStart = sw.Elapsed.TotalMilliseconds
     let anfOptimized =
-        if options.DisableANFOpt then anfProgram
-        else ANF_Optimize.optimizeProgram anfProgram
+        if shouldRunANFOptimize anfOptions then
+            ANF_Optimize.optimizeProgramWithOptions anfOptions anfProgram
+        else
+            anfProgram
     if verbosity >= 2 then
         let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - anfOptStart, 1)
         println $"        {t}ms"
@@ -624,7 +736,7 @@ type LazyStdlibResult = {
     ANFResult: AST_to_ANF.ConversionResult
     /// Stdlib ANF functions after RC insertion, indexed by name for lazy compilation
     StdlibANFFunctions: Map<string, ANF.Function>
-    /// Call graph at ANF level for early DCE
+    /// Call graph at ANF level for early tree shaking
     StdlibANFCallGraph: Map<string, Set<string>>
     /// TypeMap from RC insertion - needed for MIR conversion (tail call arg types, etc.)
     StdlibTypeMap: ANF.TypeMap
@@ -840,7 +952,7 @@ let compileStdlib () : Result<StdlibResult, string> =
                         | Ok lirProgram ->
                             let optimizedLir =
                                 let (LIRSymbolic.Program functions) = lirProgram
-                                let functions' = ParallelUtils.mapListParallel functions LIR_Optimize.optimizeFunction
+                                let functions' = ParallelUtils.mapListParallel functions LIR_Peephole.optimizeFunction
                                 LIRSymbolic.Program functions'
                             // Pre-allocate stdlib functions (cached for reuse)
                             let (LIRSymbolic.Program lirFuncs) = optimizedLir
@@ -909,7 +1021,7 @@ let private prepareStdlibForLazyCompile () : Result<LazyStdlibResult, string> =
                         stdlibFuncs
                         |> List.map (fun f -> f.Name, f)
                         |> Map.ofList
-                    // Build call graph at ANF level for early DCE
+                    // Build call graph at ANF level for early tree shaking
                     let stdlibCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
 
                     // Convert ALL stdlib to MIR (LIR conversion is deferred until needed)
@@ -1021,7 +1133,7 @@ let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: strin
                             match MIR_to_LIR.toLIR optimizedProgram with
                             | Error err -> Error $"Preamble LIR conversion error: {err}"
                             | Ok lirProgram ->
-                                let optimizedLir = LIR_Optimize.optimizeProgram lirProgram
+                                let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                                 let (LIRSymbolic.Program lirFuncs) = optimizedLir
                                 let isStdlibSpecialized (name: string) : bool =
                                     name.StartsWith("Stdlib.") || name.StartsWith("__")
@@ -1300,30 +1412,23 @@ let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib:
                                               Success = false
                                               ErrorMessage = Some $"LIR pool resolution error: {err}" }
                                         | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
+                                            if verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
                                             // Prune unused user functions (keeps `_start` and anything reachable from it).
                                             let reachableUserFuncs =
-                                                if options.DisableDCE then allUserFuncs
-                                                else
-                                                    let roots =
-                                                        if allUserFuncs |> List.exists (fun f -> f.Name = "_start") then
-                                                            Set.ofList ["_start"]
-                                                        else
-                                                            allUserFuncs |> List.map (fun f -> f.Name) |> Set.ofList
-                                                    let userCallGraph = DeadCodeElimination.buildCallGraph allUserFuncs
-                                                    let reachableNames = DeadCodeElimination.findReachable userCallGraph roots
-                                                    allUserFuncs |> List.filter (fun f -> Set.contains f.Name reachableNames)
+                                                if options.DisableFunctionTreeShaking then allUserFuncs
+                                                else FunctionTreeShaking.filterUserFunctions allUserFuncs
 
                                             if verbosity >= 3 then
                                                 println $"  [COMBINED] cached: {cachedSymbolicFuncs.Length}, fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
                                                 for f in allUserFuncs do
                                                     println $"    - {f.Name}"
-                                                println $"  [DCE] user funcs: {reachableUserFuncs.Length}"
+                                                println $"  [TreeShaking] user funcs: {reachableUserFuncs.Length}"
 
                                             // Filter stdlib functions to only include reachable ones (dead code elimination)
                                             let reachableStdlib =
-                                                if options.DisableDCE then stdlib.AllocatedFunctions
+                                                if options.DisableFunctionTreeShaking then stdlib.AllocatedFunctions
                                                 else
-                                                    DeadCodeElimination.filterFunctions
+                                                    FunctionTreeShaking.filterStdlibFunctions
                                                         stdlib.StdlibCallGraph
                                                         reachableUserFuncs
                                                         stdlib.AllocatedFunctions
@@ -1403,7 +1508,7 @@ let private compileMIRToLIR (_stdlib: LazyStdlibResult) (mirFunc: MIR.Function) 
     | Error _ -> None  // Conversion failed
     | Ok lirProgram ->
         // LIR Optimizations
-        let optimizedLir = LIR_Optimize.optimizeProgram lirProgram
+        let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
         let (LIRSymbolic.Program lirFuncs) = optimizedLir
 
         // Register allocation
@@ -1506,19 +1611,18 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                           Success = false
                           ErrorMessage = Some err }
                     | Ok (userAnfProgram, typeMap, userConvResult) ->
-                        // Early DCE: Determine which stdlib functions are actually needed
+                        // Early tree shaking: Determine which stdlib functions are actually needed
                         // Lazily compile needed functions from MIR to LIR (cached for future use)
                         let allocatedStdlibFuncs =
-                            if options.DisableDCE then
+                            if options.DisableFunctionTreeShaking then
                                 let allNames = stdlib.StdlibMIRFunctions |> Map.keys |> List.ofSeq
                                 let allFuncs = getStdlibLIRFunctions stdlib allNames
                                 allFuncs
                             else
-                                let (ANF.Program (userFuncsForDCE, userMainForDCE)) = userAnfProgram
-                                let userANFFuncs = { ANF.Name = "_start"; ANF.TypedParams = []; ANF.ReturnType = AST.TUnit; ANF.Body = userMainForDCE } :: userFuncsForDCE
-                                let reachableStdlibNames = ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph userANFFuncs
+                                let reachableStdlibNames =
+                                    FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
                                 if verbosity >= 2 then
-                                    println $"        DCE: {reachableStdlibNames.Count} stdlib functions needed"
+                                    println $"        TreeShaking: {reachableStdlibNames.Count} stdlib functions needed"
                                 let reachableFuncs = getStdlibLIRFunctions stdlib (Set.toList reachableStdlibNames)
                                 reachableFuncs
 
@@ -1815,10 +1919,9 @@ let getReachableStdlibFunctions (stdlib: LazyStdlibResult) (source: string) : Re
                     // Print insertion
                     let (ANF.Program (userFunctions, userMainExpr)) = userAnfAfterTCO
                     let userAnfProgram = PrintInsertion.insertPrint userFunctions userMainExpr programType
-                    // Extract reachable stdlib functions using DCE infrastructure
-                    let (ANF.Program (userFuncsForDCE, userMainForDCE)) = userAnfProgram
-                    let userANFFuncs = { ANF.Name = "_start"; ANF.TypedParams = []; ANF.ReturnType = AST.TUnit; ANF.Body = userMainForDCE } :: userFuncsForDCE
-                    let reachableStdlibNames = ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph userANFFuncs
+                    // Extract reachable stdlib functions using tree-shaking infrastructure
+                    let reachableStdlibNames =
+                        FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
                     Ok reachableStdlibNames
 
 /// Get all stdlib function names from the lazy stdlib
@@ -1862,8 +1965,7 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
                     // Print insertion
                     let (ANF.Program (userFunctions, userMainExpr)) = userAnfAfterTCO
                     let userAnfProgram = PrintInsertion.insertPrint userFunctions userMainExpr programType
-                    // Extract reachable stdlib functions using DCE infrastructure
-                    let (ANF.Program (userFuncsForDCE, userMainForDCE)) = userAnfProgram
-                    let userANFFuncs = { ANF.Name = "_start"; ANF.TypedParams = []; ANF.ReturnType = AST.TUnit; ANF.Body = userMainForDCE } :: userFuncsForDCE
-                    let reachableStdlibNames = ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph userANFFuncs
+                    // Extract reachable stdlib functions using tree-shaking infrastructure
+                    let reachableStdlibNames =
+                        FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
                     Ok reachableStdlibNames

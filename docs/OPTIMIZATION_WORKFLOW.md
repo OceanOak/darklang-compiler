@@ -39,7 +39,7 @@ Example test patterns for optimizations:
 
 Implement the optimization in the appropriate pass:
 - MIR optimizations: `src/DarkCompiler/passes/3.5_MIR_Optimize.fs`
-- LIR optimizations: `src/DarkCompiler/passes/4.5_LIR_Optimize.fs`
+- LIR optimizations: `src/DarkCompiler/passes/4.5_LIR_Peephole.fs`
 
 Guidelines:
 - Make the optimization conservative (correctness over performance)
@@ -98,7 +98,7 @@ src/DarkCompiler/passes/
 ├── 3.1_SSA_Construction.fs   # SSA form conversion
 ├── 3.5_MIR_Optimize.fs       # MIR optimizations (DCE, const fold, etc.)
 ├── 3.9_SSA_Destruction.fs    # SSA to conventional form
-├── 4.5_LIR_Optimize.fs       # LIR optimizations (peephole)
+├── 4.5_LIR_Peephole.fs       # LIR optimizations (peephole)
 └── ...
 ```
 

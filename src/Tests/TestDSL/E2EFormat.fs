@@ -30,11 +30,23 @@ type E2ETest = {
     /// Compiler options for disabling optimizations
     DisableFreeList: bool
     DisableANFOpt: bool
+    DisableANFConstFolding: bool
+    DisableANFConstProp: bool
+    DisableANFCopyProp: bool
+    DisableANFDCE: bool
+    DisableANFStrengthReduction: bool
     DisableInlining: bool
     DisableTCO: bool
     DisableMIROpt: bool
+    DisableMIRConstFolding: bool
+    DisableMIRCSE: bool
+    DisableMIRCopyProp: bool
+    DisableMIRDCE: bool
+    DisableMIRCFGSimplify: bool
+    DisableMIRLICM: bool
     DisableLIROpt: bool
-    DisableDCE: bool
+    DisableLIRPeephole: bool
+    DisableFunctionTreeShaking: bool
     DisableLeakCheck: bool
     /// Source file this test came from (for grouping in output)
     SourceFile: string
@@ -47,22 +59,46 @@ type E2ETest = {
 type private OptFlags = {
     DisableFreeList: bool
     DisableANFOpt: bool
+    DisableANFConstFolding: bool
+    DisableANFConstProp: bool
+    DisableANFCopyProp: bool
+    DisableANFDCE: bool
+    DisableANFStrengthReduction: bool
     DisableInlining: bool
     DisableTCO: bool
     DisableMIROpt: bool
+    DisableMIRConstFolding: bool
+    DisableMIRCSE: bool
+    DisableMIRCopyProp: bool
+    DisableMIRDCE: bool
+    DisableMIRCFGSimplify: bool
+    DisableMIRLICM: bool
     DisableLIROpt: bool
-    DisableDCE: bool
+    DisableLIRPeephole: bool
+    DisableFunctionTreeShaking: bool
     DisableLeakCheck: bool
 }
 
 let private defaultOptFlags = {
     DisableFreeList = false
     DisableANFOpt = false
+    DisableANFConstFolding = false
+    DisableANFConstProp = false
+    DisableANFCopyProp = false
+    DisableANFDCE = false
+    DisableANFStrengthReduction = false
     DisableInlining = false
     DisableTCO = false
     DisableMIROpt = false
+    DisableMIRConstFolding = false
+    DisableMIRCSE = false
+    DisableMIRCopyProp = false
+    DisableMIRDCE = false
+    DisableMIRCFGSimplify = false
+    DisableMIRLICM = false
     DisableLIROpt = false
-    DisableDCE = false
+    DisableLIRPeephole = false
+    DisableFunctionTreeShaking = false
     DisableLeakCheck = false
 }
 
@@ -173,11 +209,24 @@ let private isAttributeKey (key: string) : bool =
     | "disable_leak_check"
     | "disable_opt_freelist"
     | "disable_opt_anf"
+    | "disable_opt_anf_const_folding"
+    | "disable_opt_anf_const_prop"
+    | "disable_opt_anf_copy_prop"
+    | "disable_opt_anf_dce"
+    | "disable_opt_anf_strength_reduction"
     | "disable_opt_inline"
     | "disable_opt_tco"
     | "disable_opt_mir"
+    | "disable_opt_mir_const_folding"
+    | "disable_opt_mir_cse"
+    | "disable_opt_mir_copy_prop"
+    | "disable_opt_mir_dce"
+    | "disable_opt_mir_cfg_simplify"
+    | "disable_opt_mir_licm"
     | "disable_opt_lir"
-    | "disable_opt_dce" -> true
+    | "disable_opt_lir_peephole"
+    | "disable_opt_dce"
+    | "disable_opt_function_tree_shaking" -> true
     | _ -> false
 
 let private parseSimpleStdout (valueText: string) : Result<string, string> =
@@ -380,6 +429,26 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                                 match parseBool value "disable_opt_anf" with
                                 | Some b -> optFlags <- { optFlags with DisableANFOpt = b }
                                 | None -> ()
+                            | "disable_opt_anf_const_folding" ->
+                                match parseBool value "disable_opt_anf_const_folding" with
+                                | Some b -> optFlags <- { optFlags with DisableANFConstFolding = b }
+                                | None -> ()
+                            | "disable_opt_anf_const_prop" ->
+                                match parseBool value "disable_opt_anf_const_prop" with
+                                | Some b -> optFlags <- { optFlags with DisableANFConstProp = b }
+                                | None -> ()
+                            | "disable_opt_anf_copy_prop" ->
+                                match parseBool value "disable_opt_anf_copy_prop" with
+                                | Some b -> optFlags <- { optFlags with DisableANFCopyProp = b }
+                                | None -> ()
+                            | "disable_opt_anf_dce" ->
+                                match parseBool value "disable_opt_anf_dce" with
+                                | Some b -> optFlags <- { optFlags with DisableANFDCE = b }
+                                | None -> ()
+                            | "disable_opt_anf_strength_reduction" ->
+                                match parseBool value "disable_opt_anf_strength_reduction" with
+                                | Some b -> optFlags <- { optFlags with DisableANFStrengthReduction = b }
+                                | None -> ()
                             | "disable_opt_inline" ->
                                 match parseBool value "disable_opt_inline" with
                                 | Some b -> optFlags <- { optFlags with DisableInlining = b }
@@ -392,13 +461,45 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                                 match parseBool value "disable_opt_mir" with
                                 | Some b -> optFlags <- { optFlags with DisableMIROpt = b }
                                 | None -> ()
+                            | "disable_opt_mir_const_folding" ->
+                                match parseBool value "disable_opt_mir_const_folding" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRConstFolding = b }
+                                | None -> ()
+                            | "disable_opt_mir_cse" ->
+                                match parseBool value "disable_opt_mir_cse" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRCSE = b }
+                                | None -> ()
+                            | "disable_opt_mir_copy_prop" ->
+                                match parseBool value "disable_opt_mir_copy_prop" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRCopyProp = b }
+                                | None -> ()
+                            | "disable_opt_mir_dce" ->
+                                match parseBool value "disable_opt_mir_dce" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRDCE = b }
+                                | None -> ()
+                            | "disable_opt_mir_cfg_simplify" ->
+                                match parseBool value "disable_opt_mir_cfg_simplify" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRCFGSimplify = b }
+                                | None -> ()
+                            | "disable_opt_mir_licm" ->
+                                match parseBool value "disable_opt_mir_licm" with
+                                | Some b -> optFlags <- { optFlags with DisableMIRLICM = b }
+                                | None -> ()
                             | "disable_opt_lir" ->
                                 match parseBool value "disable_opt_lir" with
                                 | Some b -> optFlags <- { optFlags with DisableLIROpt = b }
                                 | None -> ()
+                            | "disable_opt_lir_peephole" ->
+                                match parseBool value "disable_opt_lir_peephole" with
+                                | Some b -> optFlags <- { optFlags with DisableLIRPeephole = b }
+                                | None -> ()
                             | "disable_opt_dce" ->
                                 match parseBool value "disable_opt_dce" with
-                                | Some b -> optFlags <- { optFlags with DisableDCE = b }
+                                | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
+                                | None -> ()
+                            | "disable_opt_function_tree_shaking" ->
+                                match parseBool value "disable_opt_function_tree_shaking" with
+                                | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
                                 | None -> ()
                             | "disable_leak_check" ->
                                 match parseBool value "disable_leak_check" with
@@ -436,11 +537,23 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                 ExpectedErrorMessage = errorMessage
                 DisableFreeList = optFlags.DisableFreeList
                 DisableANFOpt = optFlags.DisableANFOpt
+                DisableANFConstFolding = optFlags.DisableANFConstFolding
+                DisableANFConstProp = optFlags.DisableANFConstProp
+                DisableANFCopyProp = optFlags.DisableANFCopyProp
+                DisableANFDCE = optFlags.DisableANFDCE
+                DisableANFStrengthReduction = optFlags.DisableANFStrengthReduction
                 DisableInlining = optFlags.DisableInlining
                 DisableTCO = optFlags.DisableTCO
                 DisableMIROpt = optFlags.DisableMIROpt
+                DisableMIRConstFolding = optFlags.DisableMIRConstFolding
+                DisableMIRCSE = optFlags.DisableMIRCSE
+                DisableMIRCopyProp = optFlags.DisableMIRCopyProp
+                DisableMIRDCE = optFlags.DisableMIRDCE
+                DisableMIRCFGSimplify = optFlags.DisableMIRCFGSimplify
+                DisableMIRLICM = optFlags.DisableMIRLICM
                 DisableLIROpt = optFlags.DisableLIROpt
-                DisableDCE = optFlags.DisableDCE
+                DisableLIRPeephole = optFlags.DisableLIRPeephole
+                DisableFunctionTreeShaking = optFlags.DisableFunctionTreeShaking
                 DisableLeakCheck = optFlags.DisableLeakCheck
                 SourceFile = filePath
                 FunctionLineMap = funcLineMap

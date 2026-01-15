@@ -127,7 +127,7 @@ let getOptimizedLIR (source: string) : Result<string, string> =
                         | Error e -> Error $"LIR conversion error: {e}"
                         | Ok lirProgram ->
                             // LIR optimization
-                            let optimizedLir = LIR_Optimize.optimizeProgram lirProgram
+                            let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                             match LIRSymbolic.toLIR optimizedLir with
                             | Error err -> Error $"LIR pool resolution error: {err}"
                             | Ok resolved ->

@@ -1,10 +1,12 @@
 // 3.5_MIR_Optimize.fs - MIR/SSA Optimization Pass
 //
 // Performs optimizations on MIR in SSA form:
-// - Dead Code Elimination (DCE): remove unused instructions
-// - Copy Propagation: eliminate trivial moves and phis
-// - Constant Propagation: propagate known constant values
-// - CFG Simplification: remove empty blocks, merge blocks
+// - Constant folding: evaluate constant operations
+// - Common subexpression elimination (CSE): reuse identical computations
+// - Copy propagation: eliminate trivial moves and phis
+// - Dead code elimination (DCE): remove unused instructions
+// - CFG simplification: remove empty blocks, merge blocks
+// - Loop-invariant code motion (LICM): hoist loop-invariant expressions
 //
 // These optimizations leverage SSA form where each variable is defined exactly once.
 
@@ -13,6 +15,24 @@ module MIR_Optimize
 open MIR
 open Output
 open SSA_Construction
+
+type OptimizeOptions = {
+    EnableConstFolding: bool
+    EnableCSE: bool
+    EnableCopyProp: bool
+    EnableDCE: bool
+    EnableCFGSimplify: bool
+    EnableLICM: bool
+}
+
+let defaultOptimizeOptions = {
+    EnableConstFolding = true
+    EnableCSE = true
+    EnableCopyProp = true
+    EnableDCE = true
+    EnableCFGSimplify = true
+    EnableLICM = true
+}
 
 /// Check if an instruction has side effects (must be preserved even if unused)
 let hasSideEffects (instr: Instr) : bool =
@@ -827,25 +847,109 @@ let applyConstantFolding (cfg: CFG) : CFG * bool =
     ({ cfg with Blocks = blocks' }, changed)
 
 /// Run all optimizations until fixed point
-let optimizeCFG (cfg: CFG) : CFG =
-    let (cfg1, _) = applyConstantFolding cfg
-    let (cfg2, _) = applyCSE cfg1
-    let (cfg3, _) = applyCopyPropagation cfg2
+let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
+    let (cfg1, _) =
+        if options.EnableConstFolding then applyConstantFolding cfg else (cfg, false)
+    let (cfg2, _) =
+        if options.EnableCSE then applyCSE cfg1 else (cfg1, false)
+    let (cfg3, _) =
+        if options.EnableCopyProp then applyCopyPropagation cfg2 else (cfg2, false)
     // Run constant folding again after copy propagation
     // This catches cases like: v1 = -127; v2 = v1 - 2
     // After copy prop: v2 = IntConst(-127) - IntConst(2) -> can fold
-    let (cfg4, _) = applyConstantFolding cfg3
-    let (cfg5, _) = applyLoopInvariantCodeMotion cfg4
-    let (cfg6, _) = eliminateDeadCode cfg5
-    cfg6
+    let (cfg4, _) =
+        if options.EnableConstFolding then applyConstantFolding cfg3 else (cfg3, false)
+    let (cfg5, _) =
+        if options.EnableLICM then applyLoopInvariantCodeMotion cfg4 else (cfg4, false)
+    let (cfg6, _) =
+        if options.EnableDCE then eliminateDeadCode cfg5 else (cfg5, false)
+    let (cfg7, _) =
+        if options.EnableCFGSimplify then simplifyEmptyBlocks cfg6 else (cfg6, false)
+    cfg7
+
+let optimizeCFG (cfg: CFG) : CFG =
+    optimizeCFGWithOptions defaultOptimizeOptions cfg
 
 /// Optimize a function
+let optimizeFunctionWithOptions (options: OptimizeOptions) (func: Function) : Function =
+    let cfg' = optimizeCFGWithOptions options func.CFG
+    { func with CFG = cfg' }
+
 let optimizeFunction (func: Function) : Function =
     let cfg' = optimizeCFG func.CFG
     { func with CFG = cfg' }
 
 /// Optimize a program
-let optimizeProgram (program: Program) : Program =
+let optimizeProgramWithOptions (options: OptimizeOptions) (program: Program) : Program =
     let (Program (functions, variants, records)) = program
-    let functions' = functions |> List.map optimizeFunction
+    let functions' = functions |> List.map (optimizeFunctionWithOptions options)
     Program (functions', variants, records)
+
+let optimizeProgram (program: Program) : Program =
+    optimizeProgramWithOptions defaultOptimizeOptions program
+
+let optimizeConstFolding (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = true
+            EnableCSE = false
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableCFGSimplify = false
+            EnableLICM = false }
+        program
+
+let optimizeCSE (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableCSE = true
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableCFGSimplify = false
+            EnableLICM = false }
+        program
+
+let optimizeCopyProp (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableCSE = false
+            EnableCopyProp = true
+            EnableDCE = false
+            EnableCFGSimplify = false
+            EnableLICM = false }
+        program
+
+let optimizeDCE (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableCSE = false
+            EnableCopyProp = false
+            EnableDCE = true
+            EnableCFGSimplify = false
+            EnableLICM = false }
+        program
+
+let optimizeCFGSimplify (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableCSE = false
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableCFGSimplify = true
+            EnableLICM = false }
+        program
+
+let optimizeLICM (program: Program) : Program =
+    optimizeProgramWithOptions
+        { defaultOptimizeOptions with
+            EnableConstFolding = false
+            EnableCSE = false
+            EnableCopyProp = false
+            EnableDCE = false
+            EnableCFGSimplify = false
+            EnableLICM = true }
+        program

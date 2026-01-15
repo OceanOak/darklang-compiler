@@ -60,11 +60,23 @@ type CliOptions = {
     // Optimization flags
     DisableFreeList: bool
     DisableANFOpt: bool
+    DisableANFConstFolding: bool
+    DisableANFConstProp: bool
+    DisableANFCopyProp: bool
+    DisableANFDCE: bool
+    DisableANFStrengthReduction: bool
     DisableInlining: bool
     DisableTCO: bool
     DisableMIROpt: bool
+    DisableMIRConstFolding: bool
+    DisableMIRCSE: bool
+    DisableMIRCopyProp: bool
+    DisableMIRDCE: bool
+    DisableMIRCFGSimplify: bool
+    DisableMIRLICM: bool
     DisableLIROpt: bool
-    DisableDCE: bool
+    DisableLIRPeephole: bool
+    DisableFunctionTreeShaking: bool
     // IR dump flags
     DumpANF: bool
     DumpMIR: bool
@@ -83,11 +95,23 @@ let defaultOptions = {
     LeakCheck = false
     DisableFreeList = false
     DisableANFOpt = false
+    DisableANFConstFolding = false
+    DisableANFConstProp = false
+    DisableANFCopyProp = false
+    DisableANFDCE = false
+    DisableANFStrengthReduction = false
     DisableInlining = false
     DisableTCO = false
     DisableMIROpt = false
+    DisableMIRConstFolding = false
+    DisableMIRCSE = false
+    DisableMIRCopyProp = false
+    DisableMIRDCE = false
+    DisableMIRCFGSimplify = false
+    DisableMIRLICM = false
     DisableLIROpt = false
-    DisableDCE = false
+    DisableLIRPeephole = false
+    DisableFunctionTreeShaking = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -97,11 +121,23 @@ let defaultOptions = {
 let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions = {
     DisableFreeList = cliOpts.DisableFreeList
     DisableANFOpt = cliOpts.DisableANFOpt
+    DisableANFConstFolding = cliOpts.DisableANFConstFolding
+    DisableANFConstProp = cliOpts.DisableANFConstProp
+    DisableANFCopyProp = cliOpts.DisableANFCopyProp
+    DisableANFDCE = cliOpts.DisableANFDCE
+    DisableANFStrengthReduction = cliOpts.DisableANFStrengthReduction
     DisableInlining = cliOpts.DisableInlining
     DisableTCO = cliOpts.DisableTCO
     DisableMIROpt = cliOpts.DisableMIROpt
+    DisableMIRConstFolding = cliOpts.DisableMIRConstFolding
+    DisableMIRCSE = cliOpts.DisableMIRCSE
+    DisableMIRCopyProp = cliOpts.DisableMIRCopyProp
+    DisableMIRDCE = cliOpts.DisableMIRDCE
+    DisableMIRCFGSimplify = cliOpts.DisableMIRCFGSimplify
+    DisableMIRLICM = cliOpts.DisableMIRLICM
     DisableLIROpt = cliOpts.DisableLIROpt
-    DisableDCE = cliOpts.DisableDCE
+    DisableLIRPeephole = cliOpts.DisableLIRPeephole
+    DisableFunctionTreeShaking = cliOpts.DisableFunctionTreeShaking
     EnableCoverage = false
     EnableLeakCheck = cliOpts.LeakCheck
     DumpANF = cliOpts.DumpANF
@@ -189,6 +225,21 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
         | "--disable-opt-anf" :: rest ->
             parseFlags rest { opts with DisableANFOpt = true } lastVerbosity
 
+        | "--disable-opt-anf-const-folding" :: rest ->
+            parseFlags rest { opts with DisableANFConstFolding = true } lastVerbosity
+
+        | "--disable-opt-anf-const-prop" :: rest ->
+            parseFlags rest { opts with DisableANFConstProp = true } lastVerbosity
+
+        | "--disable-opt-anf-copy-prop" :: rest ->
+            parseFlags rest { opts with DisableANFCopyProp = true } lastVerbosity
+
+        | "--disable-opt-anf-dce" :: rest ->
+            parseFlags rest { opts with DisableANFDCE = true } lastVerbosity
+
+        | "--disable-opt-anf-strength-reduction" :: rest ->
+            parseFlags rest { opts with DisableANFStrengthReduction = true } lastVerbosity
+
         | "--disable-opt-inline" :: rest ->
             parseFlags rest { opts with DisableInlining = true } lastVerbosity
 
@@ -198,11 +249,35 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
         | "--disable-opt-mir" :: rest ->
             parseFlags rest { opts with DisableMIROpt = true } lastVerbosity
 
+        | "--disable-opt-mir-const-folding" :: rest ->
+            parseFlags rest { opts with DisableMIRConstFolding = true } lastVerbosity
+
+        | "--disable-opt-mir-cse" :: rest ->
+            parseFlags rest { opts with DisableMIRCSE = true } lastVerbosity
+
+        | "--disable-opt-mir-copy-prop" :: rest ->
+            parseFlags rest { opts with DisableMIRCopyProp = true } lastVerbosity
+
+        | "--disable-opt-mir-dce" :: rest ->
+            parseFlags rest { opts with DisableMIRDCE = true } lastVerbosity
+
+        | "--disable-opt-mir-cfg-simplify" :: rest ->
+            parseFlags rest { opts with DisableMIRCFGSimplify = true } lastVerbosity
+
+        | "--disable-opt-mir-licm" :: rest ->
+            parseFlags rest { opts with DisableMIRLICM = true } lastVerbosity
+
         | "--disable-opt-lir" :: rest ->
             parseFlags rest { opts with DisableLIROpt = true } lastVerbosity
 
+        | "--disable-opt-lir-peephole" :: rest ->
+            parseFlags rest { opts with DisableLIRPeephole = true } lastVerbosity
+
+        | "--disable-opt-function-tree-shaking" :: rest ->
+            parseFlags rest { opts with DisableFunctionTreeShaking = true } lastVerbosity
+
         | "--disable-opt-dce" :: rest ->
-            parseFlags rest { opts with DisableDCE = true } lastVerbosity
+            parseFlags rest { opts with DisableFunctionTreeShaking = true } lastVerbosity
 
         | "-" :: rest ->
             // Special case: "-" means stdin

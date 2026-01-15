@@ -1,4 +1,4 @@
-// 4.5_LIR_Optimize.fs - LIR Peephole Optimizations
+// 4.5_LIR_Peephole.fs - LIR Peephole Optimizations
 //
 // Performs low-level optimizations on LIR:
 // - Remove identity operations (add x, y, 0 → mov x, y)
@@ -8,7 +8,7 @@
 //
 // These optimizations work on individual instructions or small sequences.
 
-module LIR_Optimize
+module LIR_Peephole
 
 open LIRSymbolic
 

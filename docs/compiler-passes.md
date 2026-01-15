@@ -28,9 +28,33 @@ Source Code
     │
     ▼
 ┌─────────────────────────────────────┐
+│ Pass 2.3: ANF Optimizations         │
+│ (2.3_ANF_Optimize.fs)               │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 2.4: ANF Inlining              │
+│ (2.4_ANF_Inlining.fs)               │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
 │ Pass 2.5: Ref Count Insertion       │
 │ (2.5_RefCountInsertion.fs)          │
 │ ANF → ANF with memory ops           │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 2.6: Print Insertion           │
+│ (2.6_PrintInsertion.fs)             │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 2.7: Tail Call Optimization    │
+│ (2.7_TailCallDetection.fs)          │
 └─────────────────────────────────────┘
     │
     ▼
@@ -41,8 +65,26 @@ Source Code
     │
     ▼
 ┌─────────────────────────────────────┐
+│ Pass 3.1: SSA Construction          │
+│ (3.1_SSA_Construction.fs)           │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 3.5: MIR Optimizations         │
+│ (3.5_MIR_Optimize.fs)               │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
 │ Pass 4: MIR to LIR (4_MIR_to_LIR.fs)│
 │ MIR → Low-level IR (virtual regs)   │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 4.5: LIR Peephole              │
+│ (4.5_LIR_Peephole.fs)               │
 └─────────────────────────────────────┘
     │
     ▼
@@ -50,6 +92,12 @@ Source Code
 │ Pass 5: Register Allocation         │
 │ (5_RegisterAllocation.fs)           │
 │ LIR (virtual) → LIR (physical)      │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Pass 5.5: Function Tree Shaking     │
+│ (5.5_FunctionTreeShaking.fs)        │
 └─────────────────────────────────────┘
     │
     ▼
@@ -159,6 +207,34 @@ Output: let t0 = 2 * 3 in
 
 ---
 
+## Pass 2.3: ANF Optimizations (`2.3_ANF_Optimize.fs`)
+
+**Input**: ANF
+**Output**: Optimized ANF
+
+### Responsibilities
+- **Constant folding**: Fold literals and algebraic identities
+- **Constant propagation**: Substitute known literals
+- **Copy propagation**: Remove trivial `let` bindings
+- **Dead code elimination**: Drop unused bindings without side effects
+- **Strength reduction**: `mul/div/mod` by powers of 2 → shifts/bitwise ops
+
+### Sub-passes (grouped)
+- `const_folding`, `const_prop`, `copy_prop`, `dce`, `strength_reduction`
+
+---
+
+## Pass 2.4: ANF Inlining (`2.4_ANF_Inlining.fs`)
+
+**Input**: ANF
+**Output**: ANF with selected calls inlined
+
+### Responsibilities
+- **Inline small functions**: Reduce call overhead when safe
+- **Preserve semantics**: Respect evaluation order and side effects
+
+---
+
 ## Pass 2.5: Reference Count Insertion (`2.5_RefCountInsertion.fs`)
 
 **Input**: ANF
@@ -171,6 +247,28 @@ Output: let t0 = 2 * 3 in
 ### Key Algorithms
 - **Borrowed calling convention**: Callers retain ownership, no inc on call
 - **Scope-based release**: Dec when value goes out of scope
+
+---
+
+## Pass 2.6: Print Insertion (`2.6_PrintInsertion.fs`)
+
+**Input**: ANF
+**Output**: ANF with explicit print operations
+
+### Responsibilities
+- **Ensure observable output**: Insert print calls for program results
+- **Preserve types**: Use type information to select correct printers
+
+---
+
+## Pass 2.7: Tail Call Optimization (`2.7_TailCallDetection.fs`)
+
+**Input**: ANF with refcounting
+**Output**: ANF annotated for tail calls / self-recursion loops
+
+### Responsibilities
+- **Detect tail positions**: Identify safe tail calls
+- **Self-recursion loop conversion**: Turn tail-recursive calls into jumps
 
 ---
 
@@ -207,6 +305,35 @@ Output: block0:
 
 ---
 
+## Pass 3.1: SSA Construction (`3.1_SSA_Construction.fs`)
+
+**Input**: MIR CFG
+**Output**: MIR CFG in SSA form
+
+### Responsibilities
+- **SSA form**: Insert phi nodes and rename variables
+- **Dominance tracking**: Build dominators for SSA placement
+
+---
+
+## Pass 3.5: MIR Optimizations (`3.5_MIR_Optimize.fs`)
+
+**Input**: MIR CFG in SSA
+**Output**: Optimized MIR CFG
+
+### Responsibilities
+- **Constant folding**: Fold literal computations
+- **CSE**: Eliminate duplicate pure expressions
+- **Copy propagation**: Simplify moves and trivial phis
+- **DCE**: Remove unused instructions
+- **CFG simplification**: Remove empty blocks / redirect edges
+- **LICM**: Hoist loop-invariant expressions
+
+### Sub-passes (grouped)
+- `const_folding`, `cse`, `copy_prop`, `dce`, `cfg_simplify`, `licm`
+
+---
+
 ## Pass 4: MIR to LIR (`4_MIR_to_LIR.fs`)
 
 **Input**: MIR (platform-independent)
@@ -235,6 +362,17 @@ stdlib, preamble, and user functions.
 
 ---
 
+## Pass 4.5: LIR Peephole (`4.5_LIR_Peephole.fs`)
+
+**Input**: LIR (virtual regs)
+**Output**: Optimized LIR (virtual regs)
+
+### Responsibilities
+- **Peephole rewrites**: Local instruction simplifications
+- **Branch fusion**: Combine compare/set/branch sequences when safe
+
+---
+
 ## Pass 5: Register Allocation (`5_RegisterAllocation.fs`)
 
 **Input**: LIR with virtual registers
@@ -254,6 +392,17 @@ stdlib, preamble, and user functions.
 - **Caller-saved (preferred)**: X1-X10, X14-X15
 - **Callee-saved**: X19-X26 (used under high pressure)
 - **Reserved**: X0 (return), X11-X13 (spill temps), X27-X28 (memory), X29-X30 (ABI)
+
+---
+
+## Pass 5.5: Function Tree Shaking (`5.5_FunctionTreeShaking.fs`)
+
+**Input**: LIR (physical regs)
+**Output**: LIR with only reachable functions
+
+### Responsibilities
+- **Prune unused functions**: Keep `_start` roots and reachable callees
+- **Stdlib filtering**: Include only stdlib functions called by user code
 
 ---
 
