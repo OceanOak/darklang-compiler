@@ -111,3 +111,40 @@ branchReturn(false) = 101
 // Chain of propagations where final return uses propagated value
 // Tests that multiple optimization passes work correctly
 let a = 1 in let b = a + 1 in let c = b + 1 in let d = c + 1 in let e = d + 1 in e = 5
+
+// ===================================================================
+// If Statement Condition Optimization
+// ===================================================================
+// These tests verify that the optimizer correctly tracks changes when
+// substituting conditions in If statements. This exercises the
+// optimizeAExpr If case at line 383 (cond' <> cond comparison).
+
+// If with aliased condition that gets substituted to a literal
+// The condition alias gets substituted with true, which then folds the if
+let flag = true in let alias = flag in if alias then 42 else 0 = 42
+let flag = false in let alias = flag in if alias then 0 else 99 = 99
+
+// Nested if with aliased conditions
+// Tests change tracking propagation through nested if statements
+let outer = true in let inner = outer in if outer then (if inner then 1 else 2) else 3 = 1
+
+// If with aliased condition and complex branch values
+// Tests that branch optimization is tracked correctly alongside condition substitution
+let cond = true in let alias = cond in if alias then (let x = 5 in x + 1) else (let y = 10 in y + 2) = 6
+
+// Multiple levels of aliasing before if condition
+// Each alias adds to the substitution environment
+let a = true in let b = a in let c = b in if c then 100 else 200 = 100
+
+// If condition aliased from function parameter
+// Tests aliasing with runtime values (not compile-time constants)
+def testCondAlias(flag: Bool) : Int64 = let alias = flag in if alias then 10 else 20
+testCondAlias(true) = 10
+testCondAlias(false) = 20
+
+// Nested if with different aliased conditions from parameters
+def testNestedCondAlias(outer: Bool, inner: Bool) : Int64 = let outerAlias = outer in let innerAlias = inner in if outerAlias then (if innerAlias then 1 else 2) else 3
+testNestedCondAlias(true, true) = 1
+testNestedCondAlias(true, false) = 2
+testNestedCondAlias(false, true) = 3
+testNestedCondAlias(false, false) = 3
