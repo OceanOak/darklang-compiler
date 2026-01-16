@@ -273,3 +273,16 @@ def ifWithClosureInThen(flag: Bool, val: Int64): Int64 = if flag then let f = (n
 // Closure in else-branch only
 def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 else let g = (n: Int64) => n * val in g(4) ifWithClosureInElse(true, 7) = 21
 def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 else let g = (n: Int64) => n * val in g(4) ifWithClosureInElse(false, 7) = 28
+
+// =====================================================
+// Lambda Lifting Counter Increment (Mutation #49)
+// =====================================================
+// Tests that the lambda counter properly increments to generate unique names.
+// With the mutation (+ -> -), lambdas in expression position would decrement
+// the counter while lambdas as function arguments would increment it,
+// potentially causing name collisions.
+
+// Combine lambda in expression position with lambda as function argument
+// The interleaving of different lambda lifting paths should use unique names
+def applyLambda(f: (Int64) -> Int64, x: Int64): Int64 = f(x)
+let exprLambda1 = (x: Int64) => x + 1 in let argResult = applyLambda((y: Int64) => y * 2, 10) in let exprLambda2 = (z: Int64) => z + 3 in exprLambda1(5) + argResult + exprLambda2(2) = 31
