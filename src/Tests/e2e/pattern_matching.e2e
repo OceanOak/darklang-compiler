@@ -92,6 +92,10 @@ type Either = Left of Int64 | Right of Int64
 match Left(5) with | Left(x) -> x | Right(y) -> y = 5
 match Right(7) with | Left(x) -> x | Right(y) -> y = 7
 
+// Guard should use payload type for string equality
+type GuardWrap = GuardWrap of String | GuardEmpty
+match GuardWrap("a" ++ "b") with | GuardWrap(s) when s == ("a" ++ "b") -> 1 | _ -> 0 = 1
+
 // === Integer Literal Patterns ===
 
 // Match on integer literal - first case
