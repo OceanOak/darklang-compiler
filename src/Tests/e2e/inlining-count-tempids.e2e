@@ -177,3 +177,60 @@ complexNested(false, true, true) = 230
 complexNested(false, true, false) = 230
 complexNested(false, false, true) = 240
 complexNested(false, false, false) = 240
+
+// ===================================================================
+// Inlining Change Flag in If Expression (Mutation #43)
+// ===================================================================
+// Tests for the change flag propagation in inlineInExpr's If case (line 403).
+// The mutation changes || to && when combining changed1 and changed2.
+//
+// With ||: changed = changed1 || changed2 (either branch having inlining is enough)
+// With &&: changed = changed1 && changed2 (WRONG - both branches must have inlining)
+//
+// Note: This is an "equivalent mutant" - the changed flag is currently unused
+// in the inlining pass (it's computed but discarded). These tests document
+// the behavior and ensure inlining works correctly when only one branch of
+// an If expression contains a function call that gets inlined.
+
+// Small helper function that will be inlined (size 1, well under MaxFunctionSize=20)
+def addTwo(x: Int64) : Int64 = x + 2
+
+// If expression where only the then-branch has a call that gets inlined
+// The else-branch is a simple expression with no function calls
+def ifWithInlineInThenOnly(flag: Bool, n: Int64) : Int64 =
+  if flag then
+    let result = addTwo(n) in  // This call will be inlined (changed1 = true)
+    result
+  else
+    n * 3                      // No call to inline (changed2 = false)
+
+ifWithInlineInThenOnly(true, 10) = 12
+ifWithInlineInThenOnly(false, 10) = 30
+
+// If expression where only the else-branch has a call that gets inlined
+// The then-branch is a simple expression with no function calls
+def ifWithInlineInElseOnly(flag: Bool, n: Int64) : Int64 =
+  if flag then
+    n * 4                      // No call to inline (changed1 = false)
+  else
+    let result = addTwo(n) in  // This call will be inlined (changed2 = true)
+    result
+
+ifWithInlineInElseOnly(true, 5) = 20
+ifWithInlineInElseOnly(false, 5) = 7
+
+// Nested If where inner If has inlining only in one branch
+// This tests change flag propagation through nested structures
+def nestedIfWithPartialInline(outer: Bool, inner: Bool, n: Int64) : Int64 =
+  if outer then
+    if inner then
+      addTwo(n)    // Inlined (changed = true for inner If)
+    else
+      n + 100      // Not a call (changed = false for inner If's else)
+  else
+    n * 5          // No calls in outer else branch
+
+nestedIfWithPartialInline(true, true, 10) = 12
+nestedIfWithPartialInline(true, false, 10) = 110
+nestedIfWithPartialInline(false, true, 10) = 50
+nestedIfWithPartialInline(false, false, 10) = 50
