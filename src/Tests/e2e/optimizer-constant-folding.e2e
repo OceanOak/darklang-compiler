@@ -188,3 +188,88 @@ def testInterleavedChangeFlags(x: Int64, y: Int64) : Int64 =
   let d = 4 + 5 in      // Folds to 9, beta-reduced
   c + d                 // c + 9
 testInterleavedChangeFlags(10, 20) = 40
+
+// ===================================================================
+// If Change Flag Propagation (|| vs &&)
+// ===================================================================
+// These tests verify that the optimizer correctly uses || (not &&) when
+// combining change flags from the condition and branches of an If expression.
+// Line 383: (If (cond', thenBranch', elseBranch'), cond' <> cond || thenChanged || elseChanged)
+//
+// The key is to create an If where:
+// 1. The condition doesn't change (cond' = cond) - so that part is false
+// 2. Only ONE branch changes (the other doesn't)
+// 3. The overall changed flag should be true (with ||), but would be false (with &&)
+// 4. This incorrect false would stop multi-pass optimization early
+
+// Test where only thenBranch has changes
+// The condition is a runtime parameter (won't change)
+// The then-branch has constant folding (1+2 -> 3)
+// The else-branch is a simple literal (no change)
+// With ||: changed = false || true || false = true (correct)
+// With &&: changed = false && true && false = false (WRONG - stops optimization early)
+def testIfChangeFlagThenOnly(flag: Bool) : Int64 =
+  if flag then
+    let x = 1 + 2 in
+    let y = x + 3 in
+    y
+  else
+    100
+testIfChangeFlagThenOnly(true) = 6
+testIfChangeFlagThenOnly(false) = 100
+
+// Test where only elseBranch has changes
+// Same principle but changes are in the else branch
+def testIfChangeFlagElseOnly(flag: Bool) : Int64 =
+  if flag then
+    200
+  else
+    let x = 5 + 5 in
+    let y = x + 10 in
+    y
+testIfChangeFlagElseOnly(true) = 200
+testIfChangeFlagElseOnly(false) = 20
+
+// Multi-pass optimization through If with single-branch changes
+// This tests that the change flag correctly triggers additional passes
+// The If is nested inside a Let binding, so the If's change flag must
+// propagate up correctly to trigger subsequent optimization passes.
+//
+// Structure after parsing (simplified):
+//   let result = (if flag then (let a = 2+3 in let b = a+1 in b) else 99) in result + 0
+//
+// Pass 1:
+//   - If condition: flag (no change, cond' = cond)
+//   - Then branch: let a=2+3 → a=5 (beta-reduced), let b=5+1 → b=6 (beta-reduced), Return 6
+//   - Else branch: 99 (no change)
+//   - With ||: changed = false || true || false = true
+//   - With &&: changed = false && true && false = false (WRONG!)
+//
+// The outer Let sees bodyChanged from the If.
+// If If reports false, the function reports changed=false, stopping early.
+// This test verifies correct behavior when nested inside Let.
+def testIfMultiPassSingleBranch(flag: Bool) : Int64 =
+  if flag then
+    let a = 2 + 3 in
+    let b = a + 1 in
+    b
+  else
+    99
+testIfMultiPassSingleBranch(true) = 6
+testIfMultiPassSingleBranch(false) = 99
+
+// Nested If where outer depends on inner change flag
+// The inner If has changes only in one branch
+// The outer Let uses the If result
+// Tests that change propagates: inner If → outer Let → function → more passes
+def testNestedIfChangeFlag(outer: Bool, inner: Bool) : Int64 =
+  let x = (if inner then
+             let a = 3 + 4 in  // folds to 7, beta-reduced
+             a
+           else
+             50) in
+  if outer then x + 1 else x + 2
+testNestedIfChangeFlag(true, true) = 8
+testNestedIfChangeFlag(true, false) = 51
+testNestedIfChangeFlag(false, true) = 9
+testNestedIfChangeFlag(false, false) = 52
