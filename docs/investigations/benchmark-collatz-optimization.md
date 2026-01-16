@@ -218,6 +218,13 @@ These moves could be eliminated if the LSR/ADD instructions wrote directly to x3
 **Files to Modify:**
 - `src/DarkCompiler/passes/4.5_LIR_Optimize.fs` (LICM pass)
 
+**Status (2026-01-16): Implemented.** Added LIR peephole LICM to hoist loop-invariant
+`Mov(Imm ...)` into single-block preheaders in `src/DarkCompiler/passes/4.5_LIR_Peephole.fs`.
+This hoists the constant `3` out of `collatzSteps`' odd-path loop body. The pass
+now skips loops containing calls or non-arithmetic instructions to avoid extending
+live ranges in complex blocks.
+Test: `src/Tests/optimization/lir.opt` (`licm_hoist_loop_constant`).
+
 ---
 
 ## Comparative Summary

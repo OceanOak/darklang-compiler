@@ -1,0 +1,168 @@
+// LIR Optimization Tests
+// Tests LIR peephole optimizations and loop-invariant code motion.
+
+---NAME---
+licm_hoist_loop_constant
+---INPUT---
+def collatzSteps(n: Int64, steps: Int64) : Int64 =
+    if n == 1 then steps
+    else if n % 2 == 0 then collatzSteps(n / 2, steps + 1)
+    else collatzSteps(3 * n + 1, steps + 1)
+
+collatzSteps(7, 0)
+---EXPECTED---
+collatzSteps:
+  Label "collatzSteps_L0":
+    v10034 <- Mov(Reg v10020)
+    Jump(Label "collatzSteps_L2")
+  Label "collatzSteps_L1":
+    BranchBitZero(v10021, #0, Label "collatzSteps_L3", Label "collatzSteps_L4")
+  Label "collatzSteps_L2":
+    v10035 <- Phi([(Reg v12, collatzSteps_L5), (Reg v10034, collatzSteps_L0)])
+    X0 <- Mov(Reg v10035)
+    Ret
+  Label "collatzSteps_L3":
+    v10030 <- Lsr_imm(v10021, #1)
+    v10031 <- Add(v10020, Imm 1)
+    v10032 <- Mov(Reg v10030)
+    v10033 <- Mov(Reg v10031)
+    Jump(Label "collatzSteps_body")
+  Label "collatzSteps_L4":
+    v10025 <- Mul(v1000, Reg v10021)
+    v10026 <- Add(v10025, Imm 1)
+    v10027 <- Add(v10020, Imm 1)
+    v10028 <- Mov(Reg v10026)
+    v10029 <- Mov(Reg v10027)
+    Jump(Label "collatzSteps_body")
+  Label "collatzSteps_L5":
+    v12 <- Mov(Reg v13)
+    Jump(Label "collatzSteps_L2")
+  Label "collatzSteps_body":
+    v10012 <- Phi([(Reg v10, collatzSteps_entry), (Reg v10027, collatzSteps_L4), (Reg v10012, collatzSteps_L3)])
+    v10013 <- Phi([(Reg v9, collatzSteps_entry), (Reg v10026, collatzSteps_L4), (Reg v10013, collatzSteps_L3)])
+    v10014 <- Phi([(Reg v8, collatzSteps_entry), (Reg v10025, collatzSteps_L4), (Reg v10014, collatzSteps_L3)])
+    v10015 <- Phi([(Reg v6, collatzSteps_entry), (Reg v10015, collatzSteps_L4), (Reg v10031, collatzSteps_L3)])
+    v10016 <- Phi([(Reg v5, collatzSteps_entry), (Reg v10016, collatzSteps_L4), (Reg v10030, collatzSteps_L3)])
+    v10020 <- Phi([(Reg v1, collatzSteps_entry), (Reg v10029, collatzSteps_L4), (Reg v10033, collatzSteps_L3)])
+    v10021 <- Phi([(Reg v0, collatzSteps_entry), (Reg v10028, collatzSteps_L4), (Reg v10032, collatzSteps_L3)])
+    Cmp(v10021, Imm 1)
+    CondBranch(EQ, Label "collatzSteps_L0", Label "collatzSteps_L1")
+  Label "collatzSteps_entry":
+    v1000 <- Mov(Imm 3)
+    Jump(Label "collatzSteps_body")
+
+_start:
+  Label "_start_body":
+    SaveRegs([], [])
+    ArgMoves(X0 <- Imm 7, X1 <- Imm 0)
+    v10012 <- Call(collatzSteps, [Imm 7, Imm 0])
+    RestoreRegs([], [])
+    v10012 <- Mov(Reg X0)
+    X0 <- Mov(Reg v10012)
+    PrintInt(X0)
+    X0 <- Mov(Reg v10012)
+    Ret
+
+---NAME---
+licm_skip_loop_with_call
+---INPUT---
+def helper(x: Int64) : Int64 =
+    let a0 = x + 1 in
+    let a1 = a0 + 1 in
+    let a2 = a1 + 1 in
+    let a3 = a2 + 1 in
+    let a4 = a3 + 1 in
+    let a5 = a4 + 1 in
+    let a6 = a5 + 1 in
+    let a7 = a6 + 1 in
+    let a8 = a7 + 1 in
+    let a9 = a8 + 1 in
+    let a10 = a9 + 1 in
+    let a11 = a10 + 1 in
+    let a12 = a11 + 1 in
+    let a13 = a12 + 1 in
+    let a14 = a13 + 1 in
+    let a15 = a14 + 1 in
+    let a16 = a15 + 1 in
+    let a17 = a16 + 1 in
+    let a18 = a17 + 1 in
+    let a19 = a18 + 1 in
+    let a20 = a19 + 1 in
+    let a21 = a20 + 1 in
+    let a22 = a21 + 1 in
+    let a23 = a22 + 1 in
+    let a24 = a23 + 1 in
+    a24
+
+def loop(n: Int64, acc: Int64) : Int64 =
+    if n == 0 then acc
+    else loop(n - 1, helper(3 * acc))
+
+loop(2, 0)
+---EXPECTED---
+helper:
+  Label "helper_body":
+    v10049 <- Add(v0, Imm 1)
+    v10050 <- Add(v10049, Imm 1)
+    v10051 <- Add(v10050, Imm 1)
+    v10052 <- Add(v10051, Imm 1)
+    v10053 <- Add(v10052, Imm 1)
+    v10054 <- Add(v10053, Imm 1)
+    v10055 <- Add(v10054, Imm 1)
+    v10056 <- Add(v10055, Imm 1)
+    v10057 <- Add(v10056, Imm 1)
+    v10058 <- Add(v10057, Imm 1)
+    v10059 <- Add(v10058, Imm 1)
+    v10060 <- Add(v10059, Imm 1)
+    v10061 <- Add(v10060, Imm 1)
+    v10062 <- Add(v10061, Imm 1)
+    v10063 <- Add(v10062, Imm 1)
+    v10064 <- Add(v10063, Imm 1)
+    v10065 <- Add(v10064, Imm 1)
+    v10066 <- Add(v10065, Imm 1)
+    v10067 <- Add(v10066, Imm 1)
+    v10068 <- Add(v10067, Imm 1)
+    v10069 <- Add(v10068, Imm 1)
+    v10070 <- Add(v10069, Imm 1)
+    v10071 <- Add(v10070, Imm 1)
+    v10072 <- Add(v10071, Imm 1)
+    v10073 <- Add(v10072, Imm 1)
+    X0 <- Mov(Reg v10073)
+    Ret
+  Label "helper_entry":
+    Jump(Label "helper_body")
+
+loop:
+  Label "loop_L1":
+    v10065 <- Sub(v10063, Imm 1)
+    v1000 <- Mov(Imm 3)
+    v10066 <- Mul(v1000, Reg v10062)
+    SaveRegs([], [])
+    ArgMoves(X0 <- Reg v10066)
+    v10067 <- Call(helper, [Reg v10066])
+    RestoreRegs([], [])
+    v10067 <- Mov(Reg X0)
+    v10068 <- Mov(Reg v10065)
+    v10069 <- Mov(Reg v10067)
+    Jump(Label "loop_body")
+  Label "loop_L2":
+    X0 <- Mov(Reg v10062)
+    Ret
+  Label "loop_body":
+    v10062 <- Phi([(Reg v52, loop_entry), (Reg v10069, loop_L1)])
+    v10063 <- Phi([(Reg v51, loop_entry), (Reg v10068, loop_L1)])
+    BranchZero(v10063, Label "loop_L2", Label "loop_L1")
+  Label "loop_entry":
+    Jump(Label "loop_body")
+
+_start:
+  Label "_start_body":
+    SaveRegs([], [])
+    ArgMoves(X0 <- Imm 2, X1 <- Imm 0)
+    v10058 <- Call(loop, [Imm 2, Imm 0])
+    RestoreRegs([], [])
+    v10058 <- Mov(Reg X0)
+    X0 <- Mov(Reg v10058)
+    PrintInt(X0)
+    X0 <- Mov(Reg v10058)
+    Ret

@@ -12,6 +12,12 @@ module LIR_Peephole
 
 open LIRSymbolic
 
+(* Plan:
+   1) Mirror MIR's loop discovery in LIR: build predecessor/successor maps and dominators.
+   2) Identify natural loops with a single preheader that jumps to the header.
+   3) Hoist loop-invariant Mov(Imm ...) for virtual regs into the preheader and remove from loop blocks.
+   4) Run LICM alongside existing peephole passes in optimizeCFGOnce. *)
+
 /// Check if an operand is an immediate with value 0
 let isZero (op: Operand) : bool =
     match op with
@@ -30,6 +36,276 @@ let sameReg (r1: Reg) (r2: Reg) : bool =
     | LIR.Physical p1, LIR.Physical p2 -> p1 = p2
     | LIR.Virtual v1, LIR.Virtual v2 -> v1 = v2
     | _ -> false
+
+/// Get successor labels from a terminator
+let getSuccessors (term: Terminator) : Label list =
+    match term with
+    | Ret -> []
+    | Jump label -> [label]
+    | Branch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
+    | BranchZero (_, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
+    | BranchBitZero (_, _, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
+    | BranchBitNonZero (_, _, nonZeroLabel, zeroLabel) -> [nonZeroLabel; zeroLabel]
+    | CondBranch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
+
+/// Build predecessor map for the CFG
+let buildPredecessors (cfg: CFG) : Map<Label, Label list> =
+    let emptyPreds =
+        cfg.Blocks
+        |> Map.toList
+        |> List.map (fun (label, _) -> (label, []))
+        |> Map.ofList
+
+    cfg.Blocks
+    |> Map.fold (fun preds label block ->
+        getSuccessors block.Terminator
+        |> List.fold (fun acc succ ->
+            let existing = Map.tryFind succ acc |> Option.defaultValue []
+            Map.add succ (label :: existing) acc
+        ) preds
+    ) emptyPreds
+
+/// Build successor map for the CFG
+let buildSuccessors (cfg: CFG) : Map<Label, Label list> =
+    cfg.Blocks |> Map.map (fun _ block -> getSuccessors block.Terminator)
+
+/// Compute dominator sets for each block
+let computeDominators (cfg: CFG) (preds: Map<Label, Label list>) : Map<Label, Set<Label>> =
+    let labels = cfg.Blocks |> Map.toList |> List.map fst |> Set.ofList
+    let entry = cfg.Entry
+
+    let initial =
+        labels
+        |> Set.fold (fun acc label ->
+            let doms =
+                if label = entry then Set.singleton label
+                else labels
+            Map.add label doms acc
+        ) Map.empty
+
+    let rec loop doms =
+        let updated =
+            labels
+            |> Set.fold (fun acc label ->
+                if label = entry then
+                    Map.add label (Set.singleton label) acc
+                else
+                    let predSets =
+                        Map.tryFind label preds
+                        |> Option.defaultValue []
+                        |> List.choose (fun pred -> Map.tryFind pred doms)
+                    let intersect =
+                        match predSets with
+                        | [] -> Set.singleton label
+                        | first :: rest -> rest |> List.fold Set.intersect first |> Set.add label
+                    Map.add label intersect acc
+            ) Map.empty
+        if updated = doms then updated else loop updated
+    loop initial
+
+/// Identify natural loops via backedges (header dominates source)
+let findNaturalLoops (cfg: CFG) : Map<Label, Set<Label>> =
+    let preds = buildPredecessors cfg
+    let doms = computeDominators cfg preds
+    let succs = buildSuccessors cfg
+
+    let dominates (dominator: Label) (node: Label) : bool =
+        Map.tryFind node doms
+        |> Option.map (Set.contains dominator)
+        |> Option.defaultValue false
+
+    let backedges =
+        succs
+        |> Map.fold (fun acc from successors ->
+            successors
+            |> List.fold (fun acc' succ ->
+                if dominates succ from then
+                    let existing = Map.tryFind succ acc' |> Option.defaultValue []
+                    Map.add succ (from :: existing) acc'
+                else
+                    acc'
+            ) acc
+        ) Map.empty
+
+    backedges
+    |> Map.fold (fun loops header sources ->
+        let loopBlocks =
+            sources
+            |> List.fold (fun acc source ->
+                let initial = Set.ofList [header; source]
+                let rec grow work loopSet =
+                    match work with
+                    | [] -> loopSet
+                    | node :: rest ->
+                        let nodePreds = Map.tryFind node preds |> Option.defaultValue []
+                        let (loopSet', work') =
+                            nodePreds
+                            |> List.fold (fun (setAcc, workAcc) pred ->
+                                if Set.contains pred setAcc then
+                                    (setAcc, workAcc)
+                                elif dominates header pred then
+                                    (Set.add pred setAcc, pred :: workAcc)
+                                else
+                                    (setAcc, workAcc)
+                            ) (loopSet, rest)
+                        grow work' loopSet'
+                Set.union acc (grow [source] initial)
+            ) Set.empty
+        if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
+    ) Map.empty
+
+/// Check whether an instruction is a hoistable constant move
+let isHoistableConstMove (instr: Instr) : Reg option =
+    match instr with
+    | Mov (dest, Imm _) ->
+        match dest with
+        | LIR.Virtual _ -> Some dest
+        | _ -> None
+    | _ -> None
+
+/// Check whether an instruction represents a call (affects register saving)
+let isCallInstr (instr: Instr) : bool =
+    match instr with
+    | Call _
+    | TailCall _
+    | IndirectCall _
+    | IndirectTailCall _
+    | ClosureCall _
+    | ClosureTailCall _ -> true
+    | _ -> false
+
+/// Check whether an instruction is pure arithmetic/logic for LICM safety
+let isPureLoopInstr (instr: Instr) : bool =
+    match instr with
+    | Mov _
+    | Phi _
+    | FPhi _
+    | Add _
+    | Sub _
+    | Mul _
+    | Sdiv _
+    | Msub _
+    | Madd _
+    | Cmp _
+    | Cset _
+    | And _
+    | And_imm _
+    | Orr _
+    | Eor _
+    | Lsl _
+    | Lsr _
+    | Lsl_imm _
+    | Lsr_imm _
+    | Mvn _
+    | Sxtb _
+    | Sxth _
+    | Sxtw _
+    | Uxtb _
+    | Uxth _
+    | Uxtw _
+    | FMov _
+    | FLoad _
+    | FAdd _
+    | FSub _
+    | FMul _
+    | FDiv _
+    | FNeg _
+    | FAbs _
+    | FSqrt _
+    | FCmp _
+    | IntToFloat _
+    | FloatToInt _
+    | GpToFp _
+    | FpToGp _ -> true
+    | _ -> false
+
+/// Hoist loop-invariant Mov(Imm ...) into simple preheaders
+let applyLoopInvariantConstHoist (cfg: CFG) : CFG * bool =
+    let loops = findNaturalLoops cfg
+    let preds = buildPredecessors cfg
+    let labelName (LIR.Label name) = name
+
+    loops
+    |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
+        let outsidePreds =
+            Map.tryFind header preds
+            |> Option.defaultValue []
+            |> List.filter (fun pred -> not (Set.contains pred loopBlocks))
+
+        let tryGetPreheader =
+            match outsidePreds with
+            | [preheader] ->
+                match Map.tryFind preheader cfgAcc.Blocks with
+                | Some block ->
+                    match block.Terminator with
+                    | Jump target when target = header -> Some preheader
+                    | _ -> None
+                | None -> None
+            | _ -> None
+
+        match tryGetPreheader with
+        | None -> (cfgAcc, changedAcc)
+        | Some preheader ->
+            let loopHasCall =
+                loopBlocks
+                |> Set.exists (fun label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> false
+                    | Some block -> block.Instrs |> List.exists isCallInstr
+                )
+
+            let loopIsPure =
+                loopBlocks
+                |> Set.forall (fun label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> true
+                    | Some block -> block.Instrs |> List.forall isPureLoopInstr
+                )
+
+            if loopHasCall || not loopIsPure then
+                (cfgAcc, changedAcc)
+            else
+            let blockOrder =
+                header :: (loopBlocks |> Set.remove header |> Set.toList |> List.sortBy labelName)
+
+            let (hoistedRev, hoistedDests) =
+                blockOrder
+                |> List.fold (fun (moves, dests) label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> (moves, dests)
+                    | Some block ->
+                        block.Instrs
+                        |> List.fold (fun (movesAcc, destsAcc) instr ->
+                            match isHoistableConstMove instr with
+                            | Some dest when not (Set.contains dest destsAcc) ->
+                                (instr :: movesAcc, Set.add dest destsAcc)
+                            | _ -> (movesAcc, destsAcc)
+                        ) (moves, dests)
+                ) ([], Set.empty)
+
+            let hoistedMoves = List.rev hoistedRev
+            if List.isEmpty hoistedMoves then
+                (cfgAcc, changedAcc)
+            else
+                let blocks' =
+                    cfgAcc.Blocks
+                    |> Map.map (fun label block ->
+                        if label = preheader then
+                            { block with Instrs = block.Instrs @ hoistedMoves }
+                        elif Set.contains label loopBlocks then
+                            let instrs' =
+                                block.Instrs
+                                |> List.filter (fun instr ->
+                                    match isHoistableConstMove instr with
+                                    | Some dest -> not (Set.contains dest hoistedDests)
+                                    | None -> true
+                                )
+                            { block with Instrs = instrs' }
+                        else
+                            block
+                    )
+                ({ cfgAcc with Blocks = blocks' }, true)
+    ) (cfg, false)
 
 /// Optimize a single instruction (returns None to remove, Some to replace)
 let optimizeInstr (instr: Instr) : Instr option =
@@ -230,7 +506,9 @@ let optimizeCFGOnce (cfg: CFG) : CFG * bool =
             let (block', blockChanged) = optimizeBlock block
             (Map.add label block' acc, ch || blockChanged)
         ) (Map.empty, false)
-    ({ cfg with Blocks = blocks' }, changed)
+    let cfg' = { cfg with Blocks = blocks' }
+    let (cfg'', hoisted) = applyLoopInvariantConstHoist cfg'
+    (cfg'', changed || hoisted)
 
 /// Optimize a CFG until fixed point
 let optimizeCFG (cfg: CFG) : CFG =
