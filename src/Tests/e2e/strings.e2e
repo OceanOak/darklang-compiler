@@ -139,6 +139,10 @@ $"Say: {"hi"}" = "Say: hi"
 // Expression with operators (string concat inside interpolation)
 $"{"a" ++ "b"}" = ab
 
+// Nested braces in interpolation - record literal inside expression
+// Tests depth tracking for matching braces (catches mutation in collectExprChars)
+type NestedBraceRec = { val: String } $"{NestedBraceRec { val = "ok" }.val}" = ok
+
 // NOTE: Multiple interpolations like $"{x} and {y}" trigger a pre-existing bug
 // in chained string concatenation code generation - to be fixed separately
 
