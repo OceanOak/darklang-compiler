@@ -113,6 +113,14 @@ def fstPair(p: Pair<Int64>): Int64 =
 match makePair(5) with | (a, b) -> a + b = 11
 fstPair((10, 20)) = 10
 
+// Alias for tuple without type parameters
+type FloatPair = (Float, Float)
+
+def sumFloatPair(p: FloatPair): Float =
+    match p with | (a, b) -> a + b
+
+sumFloatPair((1.5, 2.5)) = 4.00
+
 // ===================================================================
 // NestedAlias module
 // NOTE: Commented out - requires type aliases, String, pipe operator, and Stdlib

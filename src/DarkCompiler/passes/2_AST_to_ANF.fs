@@ -276,6 +276,37 @@ let expandTypeRegWithAliases (typeReg: TypeRegistry) (aliasReg: AliasRegistry) :
         | _ -> accReg  // Not a record alias, skip
     ) typeReg
 
+/// Resolve non-generic type aliases to their target types
+let rec resolveAliasType (aliasReg: AliasRegistry) (typ: AST.Type) : AST.Type =
+    match typ with
+    | AST.TRecord (name, []) ->
+        match Map.tryFind name aliasReg with
+        | Some targetType -> resolveAliasType aliasReg targetType
+        | None -> typ
+    | AST.TSum (name, []) ->
+        match Map.tryFind name aliasReg with
+        | Some targetType -> resolveAliasType aliasReg targetType
+        | None -> typ
+    | AST.TRecord (name, args) ->
+        AST.TRecord (name, List.map (resolveAliasType aliasReg) args)
+    | AST.TSum (name, args) ->
+        AST.TSum (name, List.map (resolveAliasType aliasReg) args)
+    | AST.TTuple elems ->
+        AST.TTuple (List.map (resolveAliasType aliasReg) elems)
+    | AST.TList elem ->
+        AST.TList (resolveAliasType aliasReg elem)
+    | AST.TDict (k, v) ->
+        AST.TDict (resolveAliasType aliasReg k, resolveAliasType aliasReg v)
+    | AST.TFunction (args, ret) ->
+        AST.TFunction (List.map (resolveAliasType aliasReg) args, resolveAliasType aliasReg ret)
+    | _ -> typ
+
+/// Resolve non-generic type aliases within function signatures
+let resolveAliasesInFunction (aliasReg: AliasRegistry) (funcDef: AST.FunctionDef) : AST.FunctionDef =
+    let resolvedParams = funcDef.Params |> List.map (fun (name, typ) -> (name, resolveAliasType aliasReg typ))
+    let resolvedReturnType = resolveAliasType aliasReg funcDef.ReturnType
+    { funcDef with Params = resolvedParams; ReturnType = resolvedReturnType }
+
 /// Variable environment - maps variable names to their TempIds and types
 /// The type information is used for type-directed field lookup in record access
 type VarEnv = Map<string, ANF.TempId * AST.Type>
@@ -3410,11 +3441,10 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let newEnv = Map.add name (tempId, sourceType) env
                             Ok (newEnv, binding :: bindings, vg1)
                         | AST.PTuple innerPatterns ->
-                            // Extract element types from the tuple type
-                            let elemTypes =
-                                match sourceType with
-                                | AST.TTuple types -> types
-                                | _ -> List.replicate (List.length innerPatterns) AST.TInt64
+                            let unknownElemTypes =
+                                innerPatterns
+                                |> List.mapi (fun idx _ -> AST.TVar $"__tuple_elem_{idx}")
+
                             // Extract each element and recursively collect bindings
                             let rec collectFromTuple (pats: AST.Pattern list) (types: AST.Type list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) =
                                 match pats, types with
@@ -3427,14 +3457,14 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     collectPatternBindings p (ANF.Var elemVar) t env (elemBinding :: bindings) vg1
                                     |> Result.bind (fun (env', bindings', vg') ->
                                         collectFromTuple rest restTypes (idx + 1) env' bindings' vg')
-                                | p :: rest, [] ->
-                                    // Fallback if types list is shorter (shouldn't happen)
-                                    let (elemVar, vg1) = ANF.freshVar vg
-                                    let elemExpr = ANF.TupleGet (sourceAtom, idx)
-                                    let elemBinding = (elemVar, elemExpr)
-                                    collectPatternBindings p (ANF.Var elemVar) AST.TInt64 env (elemBinding :: bindings) vg1
-                                    |> Result.bind (fun (env', bindings', vg') ->
-                                        collectFromTuple rest [] (idx + 1) env' bindings' vg')
+                                | _ ->
+                                    Error "Tuple pattern element/type mismatch"
+
+                            let elemTypes =
+                                match sourceType with
+                                | AST.TTuple types when List.length types = List.length innerPatterns -> types
+                                | _ -> unknownElemTypes
+
                             collectFromTuple innerPatterns elemTypes 0 env bindings vg
                         | AST.PConstructor (constructorName, payloadPattern) ->
                             let rec substituteType (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
@@ -5994,7 +6024,10 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
     let typeReg = expandTypeRegWithAliases typeReg aliasReg
 
     // Separate functions and expressions
-    let functions = topLevels |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+        |> List.map (resolveAliasesInFunction aliasReg)
     let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
 
     // Build function registry - maps function names to their FULL function types
@@ -6108,7 +6141,10 @@ let convertUserWithStdlib
     // Expand userTypeReg with alias entries so "Vec" can be looked up when it aliases "Point"
     let userTypeReg = expandTypeRegWithAliases userTypeRegBase userAliasReg
 
-    let functions = topLevels |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+        |> List.map (resolveAliasesInFunction userAliasReg)
     let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
 
     let userFuncReg : FunctionRegistry =
@@ -6222,7 +6258,10 @@ let convertUserOnly
     // Expand userTypeReg with alias entries so "Vec" can be looked up when it aliases "Point"
     let userTypeReg = expandTypeRegWithAliases userTypeRegBase userAliasReg
 
-    let functions = topLevels |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+        |> List.map (resolveAliasesInFunction userAliasReg)
     let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
 
     let userFuncReg : FunctionRegistry =
@@ -6342,7 +6381,10 @@ let convertUserOnlyCached
     // Expand userTypeReg with alias entries so "Vec" can be looked up when it aliases "Point"
     let userTypeReg = expandTypeRegWithAliases userTypeRegBase userAliasReg
 
-    let functions = topLevels |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+        |> List.map (resolveAliasesInFunction userAliasReg)
     let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
 
     let userFuncReg : FunctionRegistry =
@@ -6481,7 +6523,10 @@ let convertProgram (program: AST.Program) : Result<ANF.Program, string> =
     let typeReg = expandTypeRegWithAliases typeReg aliasReg
 
     // Separate functions and expressions
-    let functions = topLevels |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+        |> List.map (resolveAliasesInFunction aliasReg)
     let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
 
     // Build function registry - maps function names to their FULL function types

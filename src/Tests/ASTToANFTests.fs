@@ -1,6 +1,6 @@
 // ASTToANFTests.fs - Unit tests for AST to ANF conversion error handling
 //
-// Ensures missing variant payload type info does not silently default to TInt64.
+// Ensures missing variant payload type info is surfaced as an error.
 
 module ASTToANFTests
 
