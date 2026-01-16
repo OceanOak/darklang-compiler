@@ -4,9 +4,7 @@ The compiler has many documented optimization opportunities in `docs/investigati
 
 You are going to implement EXACTLY ONE optimization.
 
-Use this process. (Ignore WORKFLOW.md)
-
-1. START A NEW GIT WORKTREE, in which to do work. Put the worktree as a sibling of the compiler-for-dark dir. DO NOT USE MAIN FOR YOUR WORK. DO NOT WRITE ANYTHING TO MAIN UNTIL THE END, when you merge.
+1. Use this process. (Ignore WORKFLOW.md)
 
 2. Read all investigation files in `docs/investigations/benchmark-*.md`. Create a list of all optimization opportunities that have "Low" complexity. From this list, choose ONE optimization at random (do not pick deterministically or by perceived easiness).
 
