@@ -61,9 +61,8 @@ benchmarks/
 
   infrastructure/
     build_all.sh             # Compile Dark and Rust implementations
-    validate_all.sh          # Verify correctness before benchmarking
+    cachegrind_runner.sh     # Run cachegrind + output validation
     hyperfine_runner.sh      # Run hyperfine timing benchmarks
-    cachegrind_runner.sh     # Run Cachegrind instruction counts
     result_processor.py      # Generate timing summary
     cachegrind_processor.py  # Generate instruction count summary
     history_updater.py       # Append results to HISTORY.md
@@ -117,5 +116,5 @@ After running benchmarks, you'll see output like:
 
 - **Single-threaded**: All implementations must be single-threaded for fair comparison
 - **Same algorithm**: Use equivalent algorithms across languages
-- **Output validation**: All implementations must produce identical output
+- **Output validation**: Cachegrind runs verify output matches `expected_output.txt` (with Dark-specific override if present)
 - **Sufficient runtime**: Benchmarks should run for at least 100ms to minimize startup overhead

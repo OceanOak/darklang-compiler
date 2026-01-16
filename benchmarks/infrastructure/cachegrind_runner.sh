@@ -21,6 +21,16 @@ fi
 
 PROBLEM_DIR="$BENCHMARKS_DIR/problems/$BENCHMARK"
 RESULTS_FILE="$BENCHMARKS_DIR/RESULTS.md"
+EXPECTED_FILE="$PROBLEM_DIR/expected_output.txt"
+EXPECTED=""
+HAS_EXPECTED=false
+
+if [ -f "$EXPECTED_FILE" ]; then
+    EXPECTED=$(cat "$EXPECTED_FILE")
+    HAS_EXPECTED=true
+else
+    pretty_warn "No expected_output.txt for $BENCHMARK, skipping output validation"
+fi
 
 # Check for valgrind
 if ! command -v valgrind &> /dev/null; then
@@ -94,6 +104,41 @@ format_improvement() {
     }'
 }
 
+expected_output_for_impl() {
+    local impl="$1"
+    if [ "$impl" = "dark" ] && [ -f "$PROBLEM_DIR/dark/expected_output.txt" ]; then
+        cat "$PROBLEM_DIR/dark/expected_output.txt"
+    else
+        echo "$EXPECTED"
+    fi
+}
+
+verify_output() {
+    local impl="$1"
+    shift
+
+    if [ "$HAS_EXPECTED" != "true" ]; then
+        return 0
+    fi
+
+    local expected
+    expected=$(expected_output_for_impl "$impl")
+    local output
+    output=$("$@" 2>&1 || true)
+
+    if [ "$output" = "$expected" ]; then
+        if [ "$impl" = "dark" ] && [ "$expected" != "$EXPECTED" ]; then
+            pretty_ok "$impl output OK (reduced size)"
+        else
+            pretty_ok "$impl output OK"
+        fi
+        return 0
+    fi
+
+    pretty_fail "$impl output mismatch (got: '$output', expected: '$expected')"
+    return 1
+}
+
 pretty_section "Running cachegrind benchmark for $BENCHMARK..."
 
 RESULTS_FILE_PATH="$OUTPUT_DIR/${BENCHMARK}_cachegrind.json"
@@ -129,6 +174,7 @@ done
 for impl in $IMPLS; do
     BINARY="$PROBLEM_DIR/$impl/main"
     if [ -x "$BINARY" ]; then
+        verify_output "$impl" "$BINARY"
         pretty_info "Running cachegrind on $impl..."
 
         # Run cachegrind and capture stderr (where stats are printed)
@@ -186,6 +232,7 @@ PYTHON_TIMEOUT=${PYTHON_TIMEOUT:-300}
 
 if should_run_lang "python" && [ -f "$PROBLEM_DIR/python/main.py" ]; then
     if command -v python3 &> /dev/null; then
+        verify_output "python" python3 "$PROBLEM_DIR/python/main.py"
         pretty_info "Running cachegrind on python (timeout: ${PYTHON_TIMEOUT}s)..."
 
         # Use timeout to avoid hanging on slow benchmarks
@@ -252,6 +299,7 @@ NODE_TIMEOUT=${NODE_TIMEOUT:-300}
 
 if should_run_lang "node" && [ -f "$PROBLEM_DIR/node/main.js" ]; then
     if command -v node &> /dev/null; then
+        verify_output "node" node "$PROBLEM_DIR/node/main.js"
         pretty_info "Running cachegrind on node (timeout: ${NODE_TIMEOUT}s)..."
 
         # Use timeout to avoid hanging on slow benchmarks

@@ -126,8 +126,17 @@ def generate_summary(results: dict, output_dir: Path):
 
         baseline_instrs = baseline.get("instructions", 1)
 
-        lines.append("| Language | Instructions | vs Rust | Data Refs | L1 Miss | LL Miss | Branches | Mispred |")
-        lines.append("|----------|-------------|---------|-----------|---------|---------|----------|---------|")
+        headers = [
+            "Language",
+            "Instructions",
+            "vs Rust",
+            "Data Refs",
+            "L1 Miss",
+            "LL Miss",
+            "Branches",
+            "Mispred",
+        ]
+        rows = []
 
         for r in sorted_results:
             lang = r.get("language", "unknown").capitalize()
@@ -141,12 +150,33 @@ def generate_summary(results: dict, output_dir: Path):
             ratio = instrs / baseline_instrs if baseline_instrs > 0 else 0
             mispred_rate = (mispreds / branches * 100) if branches > 0 else 0
 
-            lines.append(
-                f"| {lang} | {format_number(instrs)} | "
-                f"{format_ratio(ratio)} | {format_number(data_refs)} | "
-                f"{format_number(d1_misses)} | {format_number(ll_misses)} | "
-                f"{format_number(branches)} | {mispred_rate:.1f}% |"
+            rows.append(
+                [
+                    lang,
+                    format_number(instrs),
+                    format_ratio(ratio),
+                    format_number(data_refs),
+                    format_number(d1_misses),
+                    format_number(ll_misses),
+                    format_number(branches),
+                    f"{mispred_rate:.1f}%",
+                ]
             )
+
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for idx, cell in enumerate(row):
+                if len(cell) > widths[idx]:
+                    widths[idx] = len(cell)
+
+        def format_row(cells):
+            padded = [cell.ljust(widths[idx]) for idx, cell in enumerate(cells)]
+            return "| " + " | ".join(padded) + " |"
+
+        lines.append(format_row(headers))
+        lines.append("| " + " | ".join("-" * w for w in widths) + " |")
+        for row in rows:
+            lines.append(format_row(row))
 
         lines.append("")
 

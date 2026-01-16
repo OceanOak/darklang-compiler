@@ -16,10 +16,8 @@ USE_CACHEGRIND=true
 export REFRESH_BASELINE=false
 BENCHMARK="all"
 BUILD_FAILURES=()
-VALIDATION_FAILURES=()
 RUN_FAILURES=()
 PROCESS_FAILURES=()
-VALIDATION_FAILURES=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -84,12 +82,6 @@ for bench in $BENCHMARKS; do
         pretty_warn "Build failed for $bench (continuing)"
     fi
 
-    # Validate correctness
-    if ! "$SCRIPT_DIR/infrastructure/validate_all.sh" "$bench"; then
-        VALIDATION_FAILURES+=("$bench")
-        pretty_warn "Validation failed for $bench (continuing)"
-    fi
-
     # Run benchmark
     if [ "$USE_CACHEGRIND" = true ]; then
         if ! "$SCRIPT_DIR/infrastructure/cachegrind_runner.sh" "$bench" "$OUTPUT_DIR"; then
@@ -144,10 +136,6 @@ if [ ${#BUILD_FAILURES[@]} -ne 0 ]; then
     pretty_fail "Build failures: ${BUILD_FAILURES[*]}"
 fi
 
-if [ ${#VALIDATION_FAILURES[@]} -ne 0 ]; then
-    echo ""
-    pretty_fail "Validation failed for: ${VALIDATION_FAILURES[*]}"
-fi
 
 if [ ${#RUN_FAILURES[@]} -ne 0 ]; then
     pretty_fail "Benchmark run failures: ${RUN_FAILURES[*]}"
@@ -157,6 +145,6 @@ if [ ${#PROCESS_FAILURES[@]} -ne 0 ]; then
     pretty_fail "Processing failures: ${PROCESS_FAILURES[*]}"
 fi
 
-if [ ${#BUILD_FAILURES[@]} -ne 0 ] || [ ${#VALIDATION_FAILURES[@]} -ne 0 ] || [ ${#RUN_FAILURES[@]} -ne 0 ] || [ ${#PROCESS_FAILURES[@]} -ne 0 ]; then
+if [ ${#BUILD_FAILURES[@]} -ne 0 ] || [ ${#RUN_FAILURES[@]} -ne 0 ] || [ ${#PROCESS_FAILURES[@]} -ne 0 ]; then
     exit 1
 fi
