@@ -77,3 +77,14 @@ def apply(f: (Int64) -> Int64, x: Int64): Int64 = f(x) def wrapper(k: (Int64) ->
 
 // Pass two different named functions as values - each needs unique wrapper
 def apply(f: (Int64) -> Int64, x: Int64): Int64 = f(x) def inc(n: Int64): Int64 = n + 1 def dec(n: Int64): Int64 = n - 1 apply(inc, 10) + apply(dec, 10) = 20
+
+// =====================================================
+// Multiple FuncRefs Counter Test (Mutation #53)
+// =====================================================
+// Tests that the wrapper counter increments correctly in generateFuncWrapper.
+// With mutation (+ -> -), the counter decrements instead of incrementing when
+// generating wrappers for named functions used as values.
+// This tests 3+ named functions to ensure all wrappers get unique names.
+
+// Three named functions used as values - each should get unique wrapper
+def applyF(f: (Int64) -> Int64, x: Int64): Int64 = f(x) def add1(n: Int64): Int64 = n + 1 def add2(n: Int64): Int64 = n + 2 def add3(n: Int64): Int64 = n + 3 applyF(add1, 10) + applyF(add2, 10) + applyF(add3, 10) = 36
