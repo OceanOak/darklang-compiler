@@ -88,3 +88,26 @@ let a = 2 in let b = a + 1 in let c = b + 2 in let d = c + 3 in d = 8
 // Modulo by power of 2 with negative dividend (tests tryLog2 boundary check)
 // Without optimization: -7 % 2 = -1, but with optimization: -7 & 1 = 1
 def mod2(x: Int64) : Int64 = x % 2 mod2(-7) = 1
+
+// ===================================================================
+// Return Statement Constant Propagation
+// ===================================================================
+// These tests verify that the optimizer correctly tracks changes when
+// constant propagation occurs in Return statements. This exercises the
+// optimizeAExpr Return case at line 335 (atom' <> atom comparison).
+
+// Simple return with propagated constant
+// The optimizer should propagate x=42 into the Return(x) -> Return(42)
+let x = 42 in x = 42
+
+// Return propagation through if-else branches (tests changed flag propagation)
+// Both branches have Return statements that need constant propagation
+def branchReturn(cond: Bool) : Int64 =
+  let x = 100 in
+    if cond then x else x + 1
+branchReturn(true) = 100
+branchReturn(false) = 101
+
+// Chain of propagations where final return uses propagated value
+// Tests that multiple optimization passes work correctly
+let a = 1 in let b = a + 1 in let c = b + 1 in let d = c + 1 in let e = d + 1 in e = 5
