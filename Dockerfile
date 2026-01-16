@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y \
     hyperfine \
     valgrind \
     gcc \
+    # OCaml tools for benchmarking
+    ocaml \
+    opam \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Codex CLI + Claude Code
@@ -39,6 +42,12 @@ ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
 # Install Rust for benchmarking
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Initialize opam and install ocamlfind for benchmarking
+RUN opam init --disable-sandboxing --auto-setup --yes && \
+    eval $(opam env) && \
+    opam install ocamlfind --yes && \
+    echo 'eval $(opam env)' >> ~/.bashrc
 
 # Install beads (bd) issue tracking with bash completion
 RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash && \
