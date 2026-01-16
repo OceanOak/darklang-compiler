@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-16 20:17:50
-**Commit:** `5e250daf` - Move benchmark validation into cachegrind
+**Last Updated:** 2026-01-16 20:27:22
+**Commit:** `bfde68be` - Typecheck bitwise ops with sized ints
 
 | Benchmark     |           Dark (4.47x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
