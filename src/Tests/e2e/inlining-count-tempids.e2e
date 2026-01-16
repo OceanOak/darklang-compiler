@@ -1,0 +1,179 @@
+// Inlining TempId Counting Tests
+//
+// These tests exercise the countTempIds function in the ANF inlining pass,
+// specifically the case where If expressions have Let bindings in both branches.
+// The count should be: countTempIds(thenBranch) + countTempIds(elseBranch)
+//
+// The inlining pass uses function body size (counted in TempIds) to decide
+// whether to inline. The default MaxFunctionSize is 20.
+
+// ===================================================================
+// Basic If with Let bindings in both branches
+// ===================================================================
+// Tests that Let bindings in both branches are counted correctly
+
+// Simple case: one Let in each branch
+def ifWithLets(flag: Bool) : Int64 =
+  if flag then
+    let x = 10 in x
+  else
+    let y = 20 in y
+ifWithLets(true) = 10
+ifWithLets(false) = 20
+
+// Multiple Lets in each branch (should sum both counts)
+def ifWithMultipleLets(flag: Bool) : Int64 =
+  if flag then
+    let a = 1 in
+    let b = 2 in
+    let c = 3 in
+    a + b + c
+  else
+    let x = 10 in
+    let y = 20 in
+    x + y
+ifWithMultipleLets(true) = 6
+ifWithMultipleLets(false) = 30
+
+// ===================================================================
+// Nested If expressions
+// ===================================================================
+// Tests counting in nested If structures
+
+def nestedIf(outer: Bool, inner: Bool) : Int64 =
+  if outer then
+    if inner then
+      let a = 1 in
+      let b = 2 in
+      a + b
+    else
+      let c = 3 in c
+  else
+    let d = 4 in
+    let e = 5 in
+    d + e
+nestedIf(true, true) = 3
+nestedIf(true, false) = 3
+nestedIf(false, true) = 9
+nestedIf(false, false) = 9
+
+// ===================================================================
+// Functions with large If bodies (near inlining threshold)
+// ===================================================================
+// The default MaxFunctionSize is 20 TempIds.
+// These functions are designed to have many Let bindings in If branches.
+
+// Function with 10 Lets in then-branch and 10 in else-branch
+// Total should be 20, right at the threshold
+def largeIfFunction(flag: Bool) : Int64 =
+  if flag then
+    let a1 = 1 in
+    let a2 = 2 in
+    let a3 = 3 in
+    let a4 = 4 in
+    let a5 = 5 in
+    let a6 = 6 in
+    let a7 = 7 in
+    let a8 = 8 in
+    let a9 = 9 in
+    let a10 = 10 in
+    a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10
+  else
+    let b1 = 10 in
+    let b2 = 20 in
+    let b3 = 30 in
+    let b4 = 40 in
+    let b5 = 50 in
+    let b6 = 60 in
+    let b7 = 70 in
+    let b8 = 80 in
+    let b9 = 90 in
+    let b10 = 100 in
+    b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10
+
+largeIfFunction(true) = 55
+largeIfFunction(false) = 550
+
+// Function with asymmetric branches (to test + vs - in counting)
+// then-branch: 15 Lets, else-branch: 5 Lets
+// With +: 20 (at threshold)
+// With -: 10 (well below threshold, would be inlined)
+def asymmetricIfFunction(flag: Bool) : Int64 =
+  if flag then
+    let a1 = 1 in
+    let a2 = 2 in
+    let a3 = 3 in
+    let a4 = 4 in
+    let a5 = 5 in
+    let a6 = 6 in
+    let a7 = 7 in
+    let a8 = 8 in
+    let a9 = 9 in
+    let a10 = 10 in
+    let a11 = 11 in
+    let a12 = 12 in
+    let a13 = 13 in
+    let a14 = 14 in
+    let a15 = 15 in
+    a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15
+  else
+    let b1 = 100 in
+    let b2 = 200 in
+    let b3 = 300 in
+    let b4 = 400 in
+    let b5 = 500 in
+    b1 + b2 + b3 + b4 + b5
+
+asymmetricIfFunction(true) = 120
+asymmetricIfFunction(false) = 1500
+
+// ===================================================================
+// Function calling another function with If and Lets
+// ===================================================================
+// Tests that inlining decisions cascade correctly
+
+def helperWithIf(x: Int64) : Int64 =
+  if x > 0 then
+    let pos = x * 2 in pos
+  else
+    let neg = x * -1 in neg
+
+def callerOfHelper(n: Int64) : Int64 =
+  let a = helperWithIf(n) in
+  let b = helperWithIf(-n) in
+  a + b
+
+callerOfHelper(5) = 15
+callerOfHelper(-3) = 9
+
+// ===================================================================
+// Complex nested structure
+// ===================================================================
+// Multiple levels of nesting with Let bindings at each level
+
+def complexNested(a: Bool, b: Bool, c: Bool) : Int64 =
+  if a then
+    let x1 = 100 in
+    if b then
+      let x2 = x1 + 10 in
+      if c then
+        let x3 = x2 + 1 in x3
+      else
+        let x4 = x2 + 2 in x4
+    else
+      let x5 = x1 + 20 in x5
+  else
+    let y1 = 200 in
+    if b then
+      let y2 = y1 + 30 in y2
+    else
+      let y3 = y1 + 40 in y3
+
+complexNested(true, true, true) = 111
+complexNested(true, true, false) = 112
+complexNested(true, false, true) = 120
+complexNested(true, false, false) = 120
+complexNested(false, true, true) = 230
+complexNested(false, true, false) = 230
+complexNested(false, false, true) = 240
+complexNested(false, false, false) = 240
