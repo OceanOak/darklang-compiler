@@ -170,3 +170,7 @@ def gen_inner<t>(x: t) : t = x let outer = 10 in ((x: Int64) => gen_inner<Int64>
 
 // 3-element tuple type as generic type argument - tests parseTypeArgType tuple validation
 def tuple3_id<t>(x: t) : t = x tuple3_id<(Int64, Int64, Int64)>((1, 2, 3)).0 + tuple3_id<(Int64, Int64, Int64)>((1, 2, 3)).1 + tuple3_id<(Int64, Int64, Int64)>((1, 2, 3)).2 = 6
+
+// Match scrutinee from explicit TypeApp preserves payload type (string equality)
+def gen_match_string<t>(x: t) : t = x
+match gen_match_string<String>("hello") with | s -> if s == ("he" ++ "llo") then 1 else 0 = 1

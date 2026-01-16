@@ -26,6 +26,17 @@ let p = AliasedPoint { x = 10, y = 20 } in p.y = 20
 AliasedPoint { x = 3 * 2, y = 4 + 1 }.x = 6
 AliasedPoint { x = 3 * 2, y = 4 + 1 }.y = 5
 
+// Record pattern matching with alias-typed parameters
+type PersonBase = { name: String, active: Bool }
+type Person = PersonBase
+
+def matchesPerson(p: Person): Int64 =
+    match p with
+    | Person { name = n, active = _ } ->
+        if n == (n ++ "") then 1 else 0
+
+matchesPerson(Person { name = Stdlib.Int64.toString(123), active = true }) = 1
+
 // Aliased records are structurally equal to base type
 PointBase { x = 5, y = 6 } == AliasedPoint { x = 5, y = 6 } = true
 AliasedPoint { x = 5, y = 6 } == PointBase { x = 5, y = 6 } = true

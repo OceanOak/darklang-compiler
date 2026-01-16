@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-16 21:01:30
-**Commit:** `145be729` - Update benchmark results
+**Last Updated:** 2026-01-16 21:26:57
+**Commit:** `04877bf1` - Add E2E test for mutation #58
 
 | Benchmark     |           Dark (4.45x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
