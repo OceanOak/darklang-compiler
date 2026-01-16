@@ -148,3 +148,43 @@ testNestedCondAlias(true, true) = 1
 testNestedCondAlias(true, false) = 2
 testNestedCondAlias(false, true) = 3
 testNestedCondAlias(false, false) = 3
+
+// ===================================================================
+// Let Change Flag Propagation
+// ===================================================================
+// These tests verify that the optimizer correctly propagates change flags
+// through Let bindings at line 367 (cexprChanged || bodyChanged).
+// The key is to create Let bindings that are:
+// 1. NOT beta-reduced (cexpr must not be a simple Atom)
+// 2. NOT dead code eliminated (the variable must be used)
+// 3. Have changes in either cexpr OR body (but potentially not both)
+
+// Let with unchanging cexpr (runtime Prim) but changing body
+// a = x + y cannot fold at compile time (x, y are parameters)
+// b = 1 + 2 folds to 3, then is beta-reduced since it becomes Atom(3)
+// The outer Let (a = x + y) has cexprChanged=false, bodyChanged=true
+// Correct: returns (Let(a, x+y, a+3), true)
+// Mutation (|| -> &&): would return (Let(a, x+y, a+3), false) - wrong!
+def testLetChangeFlag(x: Int64, y: Int64) : Int64 =
+  let a = x + y in
+  let b = 1 + 2 in
+  a + b
+testLetChangeFlag(10, 20) = 33
+
+// Chain where outer binding can't fold but inner bindings fold
+// This tests change flag propagation through nested Let nodes
+def testNestedLetChangeFlag(x: Int64) : Int64 =
+  let a = x * 2 in      // Can't fold (x is param), but result is used
+  let b = 3 + 4 in      // Folds to 7, beta-reduced
+  let c = b + 5 in      // After b→7, becomes 7+5=12, beta-reduced
+  a + c
+testNestedLetChangeFlag(5) = 22
+
+// Multiple non-foldable bindings with foldable ones interleaved
+def testInterleavedChangeFlags(x: Int64, y: Int64) : Int64 =
+  let a = x + 1 in      // Can't fully fold (x is param), a = x + 1
+  let b = 2 + 3 in      // Folds to 5, beta-reduced
+  let c = y + a in      // Can't fold (y, a are runtime), uses a
+  let d = 4 + 5 in      // Folds to 9, beta-reduced
+  c + d                 // c + 9
+testInterleavedChangeFlags(10, 20) = 40
