@@ -286,3 +286,18 @@ def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 el
 // The interleaving of different lambda lifting paths should use unique names
 def applyLambda(f: (Int64) -> Int64, x: Int64): Int64 = f(x)
 let exprLambda1 = (x: Int64) => x + 1 in let argResult = applyLambda((y: Int64) => y * 2, 10) in let exprLambda2 = (z: Int64) => z + 3 in exprLambda1(5) + argResult + exprLambda2(2) = 31
+
+// =====================================================
+// Multiple Lambdas as Function Arguments (Mutation #51)
+// =====================================================
+// Tests that the counter increments correctly in liftLambdasInArgs.
+// With mutation (+ -> -), multiple lambdas passed as function arguments
+// would get the same name, causing name collisions.
+
+// Two lambdas as consecutive function arguments - each should get unique name
+def applyTwo(f: (Int64) -> Int64, g: (Int64) -> Int64, x: Int64): Int64 = f(x) + g(x)
+applyTwo((a: Int64) => a + 1, (b: Int64) => b * 2, 10) = 31
+
+// Three lambdas as arguments - tests counter incrementing through multiple args
+def applyThree(f: (Int64) -> Int64, g: (Int64) -> Int64, h: (Int64) -> Int64, x: Int64): Int64 = f(x) + g(x) + h(x)
+applyThree((a: Int64) => a + 1, (b: Int64) => b * 2, (c: Int64) => c - 5, 10) = 36
