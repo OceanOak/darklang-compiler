@@ -4,9 +4,7 @@ The compiler is filled with places where a default TInt64 type is used. This lea
 
 You are going to resolve EXACTLY ONE type checking issue.
 
-Use this process. (Ignore WORKFLOW.md)
-
-1. START A NEW GIT WORKTREE, in which to do work. (put the tree as sibling of compiler-for-dark dir). DO NOT USE MAIN FOR YOUR WORK. DO NOT WRITE ANYTHING TO MAIN UNTIL THE END, when you merge.
+1. Use this process. (Ignore WORKFLOW.md)
 
 2. Find a place in the compiler where the compiler has chosen TInt64 as a default type, even though it is incorrect. Choose at random, do not pick deterministically, including by difficulty.
 
