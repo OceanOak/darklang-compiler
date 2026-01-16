@@ -14,3 +14,13 @@ type Unit2 = Unit2 match Unit2 with | Unit2 -> 42 = 42
 // TUInt64, not TRecord("UInt64", []), bypassing those guards entirely.
 def testU64(x: UInt64): UInt64 = x + 1UL
 testU64(41UL) = 42
+
+// Verify that Bool as a type alias target works correctly
+// type MyBool = Bool should create a type alias, not a sum type
+// This tests the primitive type guard for "Bool" in parseTypeDef (line 911)
+// Note: Like UInt64 above, Bool is parsed as TBool by parseTypeBase (line 506),
+// not TRecord("Bool", []), so the guard at line 911 is unreachable.
+type BoolAlias2 = Bool
+def useBoolAlias(b: Bool): Int64 = if b then 1 else 0
+useBoolAlias(true) = 1
+useBoolAlias(false) = 0
