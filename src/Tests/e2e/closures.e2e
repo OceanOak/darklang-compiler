@@ -254,3 +254,22 @@ let addTen = (x: Int64) => x + 10 in applyWithOffset(addTen, 4) = 15
 
 // Multiple closures with different captures
 let addFive = (x: Int64) => x + 5 in let addTwenty = (x: Int64) => x + 20 in applyWithOffset(addFive, 10) + applyWithOffset(addTwenty, 7) = 44
+
+// =====================================================
+// Closure in If Branch Edge Case (Mutation #42)
+// =====================================================
+// Tests for exprHasClosures with If expressions where only ONE branch
+// contains a closure. With || both branches are checked; with && both
+// would need closures for HasClosures to be true.
+//
+// Like mutation #41, this is likely an equivalent mutant - the HasClosures
+// check is a heuristic to avoid inlining complex functions, not a
+// correctness requirement. Closures work correctly when inlined.
+
+// Closure in then-branch only (single-line to avoid preamble caching issue)
+def ifWithClosureInThen(flag: Bool, val: Int64): Int64 = if flag then let f = (n: Int64) => n + val in f(10) else val * 2 ifWithClosureInThen(true, 5) = 15
+def ifWithClosureInThen(flag: Bool, val: Int64): Int64 = if flag then let f = (n: Int64) => n + val in f(10) else val * 2 ifWithClosureInThen(false, 5) = 10
+
+// Closure in else-branch only
+def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 else let g = (n: Int64) => n * val in g(4) ifWithClosureInElse(true, 7) = 21
+def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 else let g = (n: Int64) => n * val in g(4) ifWithClosureInElse(false, 7) = 28
