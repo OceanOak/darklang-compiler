@@ -234,3 +234,64 @@ nestedIfWithPartialInline(true, true, 10) = 12
 nestedIfWithPartialInline(true, false, 10) = 110
 nestedIfWithPartialInline(false, true, 10) = 50
 nestedIfWithPartialInline(false, false, 10) = 50
+
+// ===================================================================
+// Program-Level Inlining Change Flag (Mutation #44)
+// ===================================================================
+// Tests for the anyChanged flag accumulation in inlineProgram's fold (line 452).
+// The mutation changes || to && when combining anyChanged and changed.
+//
+// With ||: anyChanged becomes true if ANY function had inlining
+// With &&: anyChanged would only be true if ALL functions had inlining
+//
+// Note: This is an "equivalent mutant" - the anyChanged flag is computed
+// but discarded with _ on line 448. These tests document the behavior and
+// ensure that inlining works correctly across multiple functions, where
+// some functions have inlining opportunities and others don't.
+
+// Small helper that will be inlined (size 1)
+def tiny(x: Int64) : Int64 = x + 1
+
+// Function that calls tiny - the call will be inlined
+def callerWithInline(n: Int64) : Int64 =
+  let a = tiny(n) in
+  let b = tiny(a) in
+  b
+
+// Function with no inlining opportunities (no calls to inline-able functions)
+def noInline(n: Int64) : Int64 =
+  let x = n * 2 in
+  let y = x + 3 in
+  y
+
+// Test that both functions work correctly when processed together.
+// The fold processes functions in order. With the mutation:
+// - callerWithInline: changed=true (has inlining)
+// - noInline: changed=false (no calls to inline)
+// With ||: anyChanged = true || false = true (then true && false = false for 2nd)
+// Actually: fold goes: ([], varGen, false) -> callerWithInline -> (funcs, varGen', true)
+//                                           -> noInline -> (funcs', varGen'', true || false = true)
+// With &&: anyChanged = true && false = false
+// The actual inlining still happens regardless of the flag value.
+callerWithInline(5) = 7
+noInline(10) = 23
+
+// Multiple functions with varying inlining behavior
+def helper1(x: Int64) : Int64 = x * 3
+def helper2(x: Int64) : Int64 = x - 1
+
+// This function has inlining (calls helper1 and helper2)
+def mixedCaller(n: Int64) : Int64 =
+  let a = helper1(n) in
+  let b = helper2(a) in
+  b
+
+// This function has no inlining opportunities
+def pureComputation(n: Int64) : Int64 =
+  let squared = n * n in
+  let cubed = squared * n in
+  cubed - squared
+
+// Verify behavior when multiple functions process through the fold
+mixedCaller(4) = 11
+pureComputation(3) = 18
