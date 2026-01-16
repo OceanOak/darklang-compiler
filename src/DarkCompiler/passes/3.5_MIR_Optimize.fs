@@ -853,26 +853,40 @@ let applyConstantFolding (cfg: CFG) : CFG * bool =
 
     ({ cfg with Blocks = blocks' }, changed)
 
-/// Run all optimizations until fixed point
-let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
-    let (cfg1, _) =
+/// Run all optimizations in a single pass (returns whether anything changed)
+let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
+    let (cfg1, changed1) =
         if options.EnableConstFolding then applyConstantFolding cfg else (cfg, false)
-    let (cfg2, _) =
+    let (cfg2, changed2) =
         if options.EnableCSE then applyCSE cfg1 else (cfg1, false)
-    let (cfg3, _) =
+    let (cfg3, changed3) =
         if options.EnableCopyProp then applyCopyPropagation cfg2 else (cfg2, false)
     // Run constant folding again after copy propagation
     // This catches cases like: v1 = -127; v2 = v1 - 2
     // After copy prop: v2 = IntConst(-127) - IntConst(2) -> can fold
-    let (cfg4, _) =
+    let (cfg4, changed4) =
         if options.EnableConstFolding then applyConstantFolding cfg3 else (cfg3, false)
-    let (cfg5, _) =
+    let (cfg5, changed5) =
         if options.EnableLICM then applyLoopInvariantCodeMotion cfg4 else (cfg4, false)
-    let (cfg6, _) =
+    let (cfg6, changed6) =
         if options.EnableDCE then eliminateDeadCode cfg5 else (cfg5, false)
-    let (cfg7, _) =
+    let (cfg7, changed7) =
         if options.EnableCFGSimplify then simplifyEmptyBlocks cfg6 else (cfg6, false)
-    cfg7
+    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7
+    (cfg7, changed)
+
+/// Run all optimizations until fixed point
+let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
+    let rec loop current remaining =
+        if remaining <= 0 then
+            current
+        else
+            let (next, changed) = optimizeCFGOnce options current
+            if changed then
+                loop next (remaining - 1)
+            else
+                next
+    loop cfg 10
 
 let optimizeCFG (cfg: CFG) : CFG =
     optimizeCFGWithOptions defaultOptimizeOptions cfg

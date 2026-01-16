@@ -786,6 +786,7 @@ let main args =
         { Name = "Preamble Precompile Tests"; Tests = wrapStdlibTests "Preamble Precompile Tests" PreamblePrecompileTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
+        { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Parallel Utils Tests"; Tests = ParallelUtilsTests.tests }

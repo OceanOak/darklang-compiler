@@ -193,8 +193,8 @@ let applyAndBitBranchFusion (instrs: Instr list) (terminator: Terminator) : (Ins
     | Some (fusedInstrs, fusedTerminator) -> (fusedInstrs, fusedTerminator)
     | None -> (instrs, terminator)
 
-/// Optimize a basic block
-let optimizeBlock (block: BasicBlock) : BasicBlock =
+/// Optimize a basic block (returns whether anything changed)
+let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
     let instrs' = optimizeInstrs block.Instrs
     // Apply MUL + ADD → MADD fusion
     let instrs'' = tryFuseMulAdd instrs'
@@ -219,14 +219,31 @@ let optimizeBlock (block: BasicBlock) : BasicBlock =
 
     // Try to fuse AND_imm (power-of-2) + BranchZero/Branch → TBZ/TBNZ
     let (finalInstrs, finalTerminator) = applyAndBitBranchFusion instrs''' terminator'
-    { block with Instrs = finalInstrs; Terminator = finalTerminator }
+    let block' = { block with Instrs = finalInstrs; Terminator = finalTerminator }
+    (block', block' <> block)
 
-/// Optimize a CFG
-let optimizeCFG (cfg: CFG) : CFG =
-    let blocks' =
+/// Optimize a CFG in a single pass (returns whether anything changed)
+let optimizeCFGOnce (cfg: CFG) : CFG * bool =
+    let (blocks', changed) =
         cfg.Blocks
-        |> Map.map (fun _ block -> optimizeBlock block)
-    { cfg with Blocks = blocks' }
+        |> Map.fold (fun (acc, ch) label block ->
+            let (block', blockChanged) = optimizeBlock block
+            (Map.add label block' acc, ch || blockChanged)
+        ) (Map.empty, false)
+    ({ cfg with Blocks = blocks' }, changed)
+
+/// Optimize a CFG until fixed point
+let optimizeCFG (cfg: CFG) : CFG =
+    let rec loop current remaining =
+        if remaining <= 0 then
+            current
+        else
+            let (next, changed) = optimizeCFGOnce current
+            if changed then
+                loop next (remaining - 1)
+            else
+                next
+    loop cfg 10
 
 /// Optimize a function
 let optimizeFunction (func: Function) : Function =
