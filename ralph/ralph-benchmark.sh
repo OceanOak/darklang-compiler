@@ -1,54 +1,59 @@
 #!/bin/bash
 # ralph-benchmark.sh
-# Usage: ./ralph-benchmark.sh [iterations]
 #
 # Investigates benchmark performance gaps and creates optimization issues.
+# Continues until all benchmarks have been analyzed.
 
 set -e
 
-iterations="${1:-1}"
+while true; do
+  # Find benchmarks that don't have investigation docs yet
+  unanalyzed=()
+  for bench_dir in benchmarks/problems/*/dark/main.dark; do
+    bench=$(echo "$bench_dir" | xargs dirname | xargs dirname | xargs basename)
+    if [[ ! -f "docs/investigations/benchmark-${bench}-optimization.md" ]]; then
+      unanalyzed+=("$bench")
+    fi
+  done
 
-for ((i=1; i<=$iterations; i++)); do
-  echo "=== Benchmark Optimization Iteration $i/$iterations ==="
+  if [[ ${#unanalyzed[@]} -eq 0 ]]; then
+    echo "All benchmarks have been analyzed!"
+    exit 0
+  fi
+
+  # Pick a random unanalyzed benchmark
+  benchmark="${unanalyzed[$RANDOM % ${#unanalyzed[@]}]}"
+  echo "=== Analyzing benchmark: $benchmark (${#unanalyzed[@]} remaining) ==="
 
   result=$(claude --dangerously-skip-permissions -p \
 "BENCHMARK OPTIMIZATION INVESTIGATION
 
 ## Your Task
-Investigate why the Dark compiler performs worse than Rust and OCaml on benchmarks, and generate detailed optimization suggestions.
+Investigate why the Dark compiler performs worse than Rust and OCaml on the **${benchmark}** benchmark, and generate detailed optimization suggestions.
 
-## Phase 1: Select Random Benchmark
+## Phase 1: Gather All Compiler Output
 
-Pick a RANDOM benchmark by running:
+For the ${benchmark} benchmark, dump all intermediate representations:
+
+### 1a. Dark Compiler IRs
 \`\`\`bash
-ls benchmarks/problems/*/dark/main.dark | shuf -n 1 | xargs dirname | xargs dirname | xargs basename
+dark -vvv --dump-anf --dump-mir --dump-lir benchmarks/problems/${benchmark}/dark/main.dark -o /tmp/dark_bench 2>&1 | tee /tmp/dark_ir_dump.txt
 \`\`\`
 
-Use whatever benchmark is selected - do NOT cherry-pick.
-
-## Phase 2: Gather All Compiler Output
-
-For the selected benchmark, dump all intermediate representations:
-
-### 2a. Dark Compiler IRs
+### 1b. Rust Disassembly
 \`\`\`bash
-dark -vvv --dump-anf --dump-mir --dump-lir benchmarks/problems/{BENCHMARK}/dark/main.dark -o /tmp/dark_bench 2>&1 | tee /tmp/dark_ir_dump.txt
+cd benchmarks/problems/${benchmark}/rust && cargo build --release 2>/dev/null
+objdump -d target/release/${benchmark} > /tmp/rust_disasm.txt
 \`\`\`
 
-### 2b. Rust Disassembly
+### 1c. OCaml Disassembly
 \`\`\`bash
-cd benchmarks/problems/{BENCHMARK}/rust && cargo build --release 2>/dev/null
-objdump -d target/release/{BENCHMARK} > /tmp/rust_disasm.txt
-\`\`\`
-
-### 2c. OCaml Disassembly
-\`\`\`bash
-cd benchmarks/problems/{BENCHMARK}/ocaml
+cd benchmarks/problems/${benchmark}/ocaml
 ocamlfind ocamlopt -O3 -o bench main.ml 2>/dev/null
 objdump -d bench > /tmp/ocaml_disasm.txt
 \`\`\`
 
-## Phase 3: Analysis
+## Phase 2: Analysis
 
 Analyze the gathered data:
 - Compare instruction counts in hot loops
@@ -56,7 +61,7 @@ Analyze the gathered data:
 - Find inefficient patterns vs Rust/OCaml
 - Quantify potential improvements
 
-## Phase 4: Generate Optimization Suggestions
+## Phase 3: Generate Optimization Suggestions
 
 For each optimization opportunity, document:
 1. Title and impact estimate
@@ -64,34 +69,25 @@ For each optimization opportunity, document:
 3. Implementation approach
 4. Files to modify
 
-## Phase 5: Create Investigation Document
+## Phase 4: Create Investigation Document
 
-Write findings to: docs/investigations/benchmark-{BENCHMARK}-optimization.md
+Write findings to: docs/investigations/benchmark-${benchmark}-optimization.md
 
-## Phase 6: Create Beads Issues
+## Phase 5: Create Beads Issues
 
 For EACH optimization suggestion, create a bd issue:
 \`\`\`bash
 bd create --title=\"Optimization: {TITLE}\" --type=task --priority=2 --description=\"{DETAILED_DESCRIPTION_WITH_EVIDENCE}\"
 \`\`\`
 
-## Phase 7: Completion Check
+## Phase 6: Completion Check
 
 Verify:
 - [ ] Investigation document created
 - [ ] At least 2 optimization suggestions identified
 - [ ] Each suggestion has a bd issue with IR/asm evidence
-
-If all checks pass, output: <promise>OPTIMIZATION_COMPLETE</promise>
-")
+") || true
 
   echo "$result"
-
-  if [[ "$result" == *"<promise>OPTIMIZATION_COMPLETE</promise>"* ]]; then
-    echo "Iteration $i complete."
-  else
-    echo "Iteration $i did not complete successfully."
-  fi
+  echo "=== Finished analyzing: $benchmark ==="
 done
-
-echo "Completed $iterations iterations."
