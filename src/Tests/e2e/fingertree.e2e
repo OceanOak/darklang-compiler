@@ -125,3 +125,15 @@ let t = buildMixed(1, 100, Stdlib.FingerTree.empty<Int64>()) in let len = Stdlib
 
 // 10000 element test - verify length and spot checks
 let t = buildTree(1, 10000, Stdlib.FingerTree.empty<Int64>()) in let len = Stdlib.FingerTree.length(t) in let v0 = Stdlib.Option.withDefault(Stdlib.FingerTree.getAt(t, 0), -1) in let v4999 = Stdlib.Option.withDefault(Stdlib.FingerTree.getAt(t, 4999), -1) in let v9999 = Stdlib.Option.withDefault(Stdlib.FingerTree.getAt(t, 9999), -1) in (if len == 10000 then 1000 else 0) + (if v0 == 1 then 100 else 0) + (if v4999 == 5000 then 10 else 0) + (if v9999 == 10000 then 1 else 0) = 1111
+
+// ===================================================================
+// DEEP tree prefix offset test (mutation #58)
+// Tests that multiple prefix nodes are stored at correct offsets
+// With the mutation (offset - 8 instead of + 8), the second prefix
+// node would be written at offset 8 (prefixCount field) instead of 24
+// ===================================================================
+
+// List literal with 6 elements creates DEEP with 2 prefix nodes
+// Access specifically the second element (index 1) which comes from
+// the second prefix node - this is the one that gets corrupted by the mutation
+Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60], 1), -1) = 20
