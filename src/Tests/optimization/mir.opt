@@ -61,3 +61,23 @@ Function _start:
     v10003 <- Call(loop, [2])
     Print(v10003, type=TInt64)
     ret v10003
+
+---NAME---
+const_branch_elimination_bitand
+---INPUT---
+def pick(n: Int64) : Int64 =
+    let masked = n & 0 in
+    if masked == 0 then 1 else 2
+
+pick(42)
+---EXPECTED---
+Function pick:
+  pick_entry:
+    jump pick_L2
+  pick_L2:
+    ret 1
+Function _start:
+  _start_body:
+    v10004 <- Call(pick, [42])
+    Print(v10004, type=TInt64)
+    ret v10004

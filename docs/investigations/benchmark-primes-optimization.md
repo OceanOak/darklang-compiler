@@ -230,6 +230,11 @@ Label "countPrimes_L22":
 
 This generates unreachable code and unnecessary branch instructions.
 
+### Implementation Status
+Implemented in `src/DarkCompiler/passes/3.5_MIR_Optimize.fs` by:
+- Simplifying `Branch` with constant `true/false` to `Jump`
+- Pruning unreachable blocks and trimming phi sources in the MIR CFG
+
 ### Evidence
 Dark `countPrimes` function has 30 basic blocks after compilation:
 - `countPrimes_L0` through `countPrimes_L29`

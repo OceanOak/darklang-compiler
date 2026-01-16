@@ -12,14 +12,10 @@ def collatzSteps(n: Int64, steps: Int64) : Int64 =
 collatzSteps(7, 0)
 ---EXPECTED---
 collatzSteps:
-  Label "collatzSteps_L0":
-    v10034 <- Mov(Reg v10020)
-    Jump(Label "collatzSteps_L2")
   Label "collatzSteps_L1":
     BranchBitZero(v10021, #0, Label "collatzSteps_L3", Label "collatzSteps_L4")
   Label "collatzSteps_L2":
-    v10035 <- Phi([(Reg v12, collatzSteps_L5), (Reg v10034, collatzSteps_L0)])
-    X0 <- Mov(Reg v10035)
+    X0 <- Mov(Reg v10020)
     Ret
   Label "collatzSteps_L3":
     v10030 <- Lsr_imm(v10021, #1)
@@ -34,9 +30,6 @@ collatzSteps:
     v10028 <- Mov(Reg v10026)
     v10029 <- Mov(Reg v10027)
     Jump(Label "collatzSteps_body")
-  Label "collatzSteps_L5":
-    v12 <- Mov(Reg v13)
-    Jump(Label "collatzSteps_L2")
   Label "collatzSteps_body":
     v10012 <- Phi([(Reg v10, collatzSteps_entry), (Reg v10027, collatzSteps_L4), (Reg v10012, collatzSteps_L3)])
     v10013 <- Phi([(Reg v9, collatzSteps_entry), (Reg v10026, collatzSteps_L4), (Reg v10013, collatzSteps_L3)])
@@ -46,7 +39,7 @@ collatzSteps:
     v10020 <- Phi([(Reg v1, collatzSteps_entry), (Reg v10029, collatzSteps_L4), (Reg v10033, collatzSteps_L3)])
     v10021 <- Phi([(Reg v0, collatzSteps_entry), (Reg v10028, collatzSteps_L4), (Reg v10032, collatzSteps_L3)])
     Cmp(v10021, Imm 1)
-    CondBranch(EQ, Label "collatzSteps_L0", Label "collatzSteps_L1")
+    CondBranch(EQ, Label "collatzSteps_L2", Label "collatzSteps_L1")
   Label "collatzSteps_entry":
     v1000 <- Mov(Imm 3)
     Jump(Label "collatzSteps_body")

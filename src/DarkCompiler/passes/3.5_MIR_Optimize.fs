@@ -656,6 +656,64 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
 
         ({ cfg with Blocks = blocks' }, true)
 
+/// Simplify branches with constant boolean conditions
+let simplifyConstantBranches (cfg: CFG) : CFG * bool =
+    let (blocks', changed) =
+        cfg.Blocks
+        |> Map.fold (fun (acc, ch) label block ->
+            let term' =
+                match block.Terminator with
+                | Branch (BoolConst true, trueLabel, _) -> Jump trueLabel
+                | Branch (BoolConst false, _, falseLabel) -> Jump falseLabel
+                | other -> other
+            let changed' = ch || term' <> block.Terminator
+            (Map.add label { block with Terminator = term' } acc, changed')
+        ) (Map.empty, false)
+
+    ({ cfg with Blocks = blocks' }, changed)
+
+/// Remove unreachable blocks and trim phi sources from unreachable predecessors
+let eliminateUnreachableBlocks (cfg: CFG) : CFG * bool =
+    let succs = buildSuccessors cfg
+
+    let rec walk (work: Label list) (visited: Set<Label>) : Set<Label> =
+        match work with
+        | [] -> visited
+        | label :: rest ->
+            if Set.contains label visited then
+                walk rest visited
+            else
+                let next = Map.tryFind label succs |> Option.defaultValue []
+                walk (next @ rest) (Set.add label visited)
+
+    let reachable = walk [cfg.Entry] Set.empty
+
+    let reachableBlocks =
+        cfg.Blocks
+        |> Map.filter (fun label _ -> Set.contains label reachable)
+
+    let (blocks', phiChanged) =
+        reachableBlocks
+        |> Map.fold (fun (acc, ch) label block ->
+            let (instrs', instrChanged) =
+                block.Instrs
+                |> List.fold (fun (acc', ch') instr ->
+                    match instr with
+                    | Phi (dest, sources, valueType) ->
+                        let sources' = sources |> List.filter (fun (_, srcLabel) -> Set.contains srcLabel reachable)
+                        if List.isEmpty sources' then
+                            crash $"Phi in {label} has no reachable sources after CFG prune"
+                        let instr' = Phi (dest, sources', valueType)
+                        (acc' @ [instr'], ch' || sources' <> sources)
+                    | _ ->
+                        (acc' @ [instr], ch')
+                ) ([], false)
+            (Map.add label { block with Instrs = instrs' } acc, ch || instrChanged)
+        ) (Map.empty, false)
+
+    let removedBlocks = Map.count cfg.Blocks <> Map.count blocks'
+    ({ cfg with Blocks = blocks' }, removedBlocks || phiChanged)
+
 /// Truncate a 64-bit value to the appropriate integer type width
 /// This ensures proper overflow/wraparound behavior for smaller integer types
 let truncateToType (value: int64) (opType: AST.Type) : int64 =
@@ -871,9 +929,13 @@ let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
     let (cfg6, changed6) =
         if options.EnableDCE then eliminateDeadCode cfg5 else (cfg5, false)
     let (cfg7, changed7) =
-        if options.EnableCFGSimplify then simplifyEmptyBlocks cfg6 else (cfg6, false)
-    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7
-    (cfg7, changed)
+        if options.EnableCFGSimplify then simplifyConstantBranches cfg6 else (cfg6, false)
+    let (cfg8, changed8) =
+        if options.EnableCFGSimplify then eliminateUnreachableBlocks cfg7 else (cfg7, false)
+    let (cfg9, changed9) =
+        if options.EnableCFGSimplify then simplifyEmptyBlocks cfg8 else (cfg8, false)
+    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7 || changed8 || changed9
+    (cfg9, changed)
 
 /// Run all optimizations until fixed point
 let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
