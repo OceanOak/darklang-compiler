@@ -56,3 +56,16 @@ let a = 10 in let b = a + 5 in let c = b * 2 in c = 30
 
 // Negation + const prop + const fold
 let x = 5 in let y = -x in let z = y + 10 in z = 5
+
+// ===================================================================
+// Multi-pass Optimization (requires multiple optimizer iterations)
+// ===================================================================
+// These tests require the optimizer to run multiple passes to fully optimize.
+// Each pass enables further optimizations in subsequent passes.
+
+// Chain of propagation and folding requiring multiple passes
+// Pass 1: propagate a=2 into b=a+1, fold to b=3
+// Pass 2: propagate b=3 into c=b+2, fold to c=5
+// Pass 3: propagate c=5 into d=c+3, fold to d=8
+// Pass 4: propagate d=8 into result
+let a = 2 in let b = a + 1 in let c = b + 2 in let d = c + 3 in d = 8
