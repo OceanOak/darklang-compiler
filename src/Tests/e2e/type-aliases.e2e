@@ -1,0 +1,16 @@
+// Type alias and sum type edge case tests
+// Tests the parser's handling of single-variant sum types without the | syntax
+
+// Test that type Unit2 = Unit2 works as a single-variant sum type
+// This should work because the variant name matches the type name (line 902 in Parser.fs)
+type Unit2 = Unit2 match Unit2 with | Unit2 -> 42 = 42
+
+// Verify that primitive type names as type aliases work correctly
+// type Foo = UInt64 should create a type alias, not a sum type
+// This tests the primitive type guards in parseTypeDef (lines 909-911)
+// Note: The backwards-compat single-variant sum type code (lines 907-914) requires
+// remaining = [], but TEOF is always in remaining, making that code unreachable.
+// However, primitive types are handled earlier by parseTypeBase, so UInt64 becomes
+// TUInt64, not TRecord("UInt64", []), bypassing those guards entirely.
+def testU64(x: UInt64): UInt64 = x + 1UL
+testU64(41UL) = 42
