@@ -233,3 +233,24 @@ let i = 10 in let f = 2.5 in ((x: Int64) => Stdlib.Int64.toFloat(i + x) + f)(5) 
 
 // Capture bool and int
 let flag = true in let n = 42 in ((x: Int64) => if flag then n + x else 0)(8) = 50
+
+// =====================================================
+// Closure Inlining Edge Case (Mutation #41)
+// =====================================================
+// Note: This mutation (|| -> && in exprHasClosures) was analyzed and found
+// to be an "equivalent mutant" - it changes whether certain functions are
+// inlined but doesn't change the correctness of the output. The check for
+// closures is a heuristic to avoid inlining complex functions, not a
+// correctness requirement.
+//
+// These tests verify that closure-containing functions work correctly
+// regardless of whether they are inlined or not.
+
+// Function that takes a closure and calls it with a computed value
+def applyWithOffset(f: (Int64) -> Int64, base: Int64): Int64 = let y = base + 1 in f(y)
+
+// Basic closure test with applyWithOffset
+let addTen = (x: Int64) => x + 10 in applyWithOffset(addTen, 4) = 15
+
+// Multiple closures with different captures
+let addFive = (x: Int64) => x + 5 in let addTwenty = (x: Int64) => x + 20 in applyWithOffset(addFive, 10) + applyWithOffset(addTwenty, 7) = 44
