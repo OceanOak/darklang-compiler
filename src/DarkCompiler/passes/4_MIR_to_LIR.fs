@@ -122,10 +122,15 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
             | MIR.FloatSymbol value ->
                 // Load float constant
                 Ok [LIRSymbolic.FLoad (lirFDest, value)]
-            | MIR.Register vreg ->
-                // Move between float registers
-                let srcFReg = vregToLIRFReg vreg
-                Ok [LIRSymbolic.FMov (lirFDest, srcFReg)]
+            | MIR.Register ((MIR.VReg regId) as vreg) ->
+                if Set.contains regId floatRegs then
+                    // Move between float registers
+                    let srcFReg = vregToLIRFReg vreg
+                    Ok [LIRSymbolic.FMov (lirFDest, srcFReg)]
+                else
+                    // Reinterpret GP register bits as float (e.g., heap-loaded float payloads)
+                    let srcReg = vregToLIRReg vreg
+                    Ok [LIRSymbolic.GpToFp (lirFDest, srcReg)]
             | _ ->
                 Error "Internal error: non-float operand in float Mov"
         else

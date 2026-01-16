@@ -108,6 +108,11 @@ def get3<a, b, c>(a: a, b: b, c: c) : c = c get3(99, true, false) = false
 def both_int<a, b>(a: a, b: b) : a = a both_int(42, 99) = 42
 
 // Use result in expression
+// Sum payloads with multiple type parameters should preserve float results
+type Result2<t, e> = Ok2 of t | Err2 of e
+def doubleOk(r: Result2<Float, Int64>) : Float = match r with | Ok2(v) -> v + v | Err2(_) -> 0.0
+doubleOk(Ok2(2.5)) = 5.00
+
 def fst2<a, b>(a: a, b: b) : a = a fst2(40, true) + 2 = 42
 
 // Multiple params in let binding

@@ -3390,6 +3390,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         // Extract payload from heap-allocated variant
                         // Variant layout: [tag:8][payload:8], so payload is at index 1
                         let (payloadVar, vg1) = ANF.freshVar vg
+                        let (typedPayloadVar, vg2) = ANF.freshVar vg1
                         let payloadExpr = ANF.TupleGet (scrutAtom, 1)
                         // Get payload type from variant lookup if available
                         let payloadTypeResult =
@@ -3419,10 +3420,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         // Now compile the inner pattern with the payload
                         payloadTypeResult
                         |> Result.bind (fun payloadType ->
-                            extractAndCompileBody innerPattern body (ANF.Var payloadVar) payloadType currentEnv vg1
-                            |> Result.map (fun (innerExpr, vg2) ->
-                                let expr = ANF.Let (payloadVar, payloadExpr, innerExpr)
-                                (expr, vg2)))
+                            let typedPayloadExpr = ANF.TypedAtom (ANF.Var payloadVar, payloadType)
+                            extractAndCompileBody innerPattern body (ANF.Var typedPayloadVar) payloadType currentEnv vg2
+                            |> Result.map (fun (innerExpr, vg3) ->
+                                let expr = ANF.Let (payloadVar, payloadExpr, ANF.Let (typedPayloadVar, typedPayloadExpr, innerExpr))
+                                (expr, vg3)))
                 | AST.PTuple patterns ->
                     // Recursively collect all variable bindings from a pattern
                     // Returns: updated env, list of bindings, updated vargen

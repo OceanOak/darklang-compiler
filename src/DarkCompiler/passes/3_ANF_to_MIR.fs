@@ -551,6 +551,11 @@ let rec convertExpr
     | ANF.Let (tempId, cexpr, rest) ->
         // Let binding: handle based on cexpr type
         let destReg = tempToVReg tempId
+        let tupleGetAliasType =
+            match cexpr, rest with
+            | ANF.TupleGet _, ANF.Let (_, ANF.TypedAtom (ANF.Var sourceId, aliasType), _)
+                when sourceId = tempId -> Some aliasType
+            | _ -> None
 
         match cexpr with
         | ANF.IfValue (condAtom, thenAtom, elseAtom) ->
@@ -767,6 +772,12 @@ let rec convertExpr
                     match tupleAtom with
                     | ANF.Var tid ->
                         let tupleReg = tempToVReg tid
+                        match tupleGetAliasType with
+                        | Some AST.TFloat64 -> destType := AST.TFloat64
+                        | _ -> ()
+                        match Map.tryFind tempId builder.TypeMap with
+                        | Some AST.TFloat64 -> destType := AST.TFloat64
+                        | _ -> ()
                         // Look up the tuple's type to determine the element type at this index
                         // This is needed for Float elements to be properly tracked in FloatRegs
                         let tupleType = Map.tryFind tid builder.TypeMap
@@ -1153,6 +1164,11 @@ and convertExprToOperand
 
     | ANF.Let (tempId, cexpr, rest) ->
         let destReg = tempToVReg tempId
+        let tupleGetAliasType =
+            match cexpr, rest with
+            | ANF.TupleGet _, ANF.Let (_, ANF.TypedAtom (ANF.Var sourceId, aliasType), _)
+                when sourceId = tempId -> Some aliasType
+            | _ -> None
 
         match cexpr with
         | ANF.IfValue (condAtom, thenAtom, elseAtom) ->
@@ -1361,6 +1377,12 @@ and convertExprToOperand
                     match tupleAtom with
                     | ANF.Var tid ->
                         let tupleReg = tempToVReg tid
+                        match tupleGetAliasType with
+                        | Some AST.TFloat64 -> destType := AST.TFloat64
+                        | _ -> ()
+                        match Map.tryFind tempId builder.TypeMap with
+                        | Some AST.TFloat64 -> destType := AST.TFloat64
+                        | _ -> ()
                         // Look up the tuple's type to determine the element type at this index
                         // This is needed for Float elements to be properly tracked in FloatRegs
                         let tupleType = Map.tryFind tid builder.TypeMap

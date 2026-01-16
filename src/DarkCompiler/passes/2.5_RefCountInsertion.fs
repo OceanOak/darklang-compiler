@@ -275,7 +275,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
                     // the payload type is the first type argument
                     match typeArgs with
                     | [singleType] -> Some singleType
-                    | _ -> Some AST.TInt64  // Multiple type args - use Int64 as fallback
+                    | _ -> None
                 | _ -> None
             | Some (AST.TFunction _) ->
                 // Closures are typed as TFunction but laid out as tuples:
@@ -403,16 +403,30 @@ let rec insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * Var
     | Let (tempId, cexpr, body) ->
         // First, infer the type of this binding and add to context
         let maybeType = inferCExprType ctx cexpr
-        // Use TInt64 as fallback when inference fails - this handles complex cases
-        // like Dict operations with tuple types where full type tracking is incomplete
-        let inferredType = Option.defaultValue AST.TInt64 maybeType
+        // Use a TypedAtom alias in the body to preserve the intended payload type
+        // when TupleGet cannot infer it from a multi-parameter sum.
+        let inferredType =
+            match maybeType with
+            | Some t -> t
+            | None ->
+                match cexpr, body with
+                | TupleGet _, Let (aliasId, TypedAtom (Var sourceId, aliasType), _) when sourceId = tempId ->
+                    aliasType
+                | _ ->
+                    // Fallback for cases where inference is still incomplete.
+                    // TODO: remove this once all CExprs are fully typed.
+                    AST.TInt64
         let ctx' = addType ctx tempId inferredType
+        let ctxWithAliases =
+            match cexpr with
+            | TypedAtom (Var sourceId, aliasType) -> addType ctx' sourceId aliasType
+            | _ -> ctx'
 
         // Track closure function names for later ClosureCall type resolution
         let ctx'' =
             match cexpr with
-            | ClosureAlloc (funcName, _) -> addClosureFunc ctx' tempId funcName
-            | _ -> ctx'
+            | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithAliases tempId funcName
+            | _ -> ctxWithAliases
 
         // Process the body recursively
         let (body', varGen1, accTypes) = insertRC ctx'' body varGen
