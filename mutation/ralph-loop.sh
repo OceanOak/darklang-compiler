@@ -296,7 +296,7 @@ main() {
         # Parse mutation details
         IFS=',' read -r id type file line result <<< "$mutation"
 
-        ((processed++))
+        ((++processed))
         echo -e "${BLUE}--- Processing mutation $processed${MAX_COUNT:+ of $MAX_COUNT} ---${NC}"
         echo ""
 
