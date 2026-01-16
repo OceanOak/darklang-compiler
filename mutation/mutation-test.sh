@@ -11,8 +11,8 @@
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPILER_DIR="${SCRIPT_DIR}/src/DarkCompiler"
-RESULTS_DIR="${SCRIPT_DIR}/mutation-results"
+COMPILER_DIR="${SCRIPT_DIR}/../src/DarkCompiler"
+RESULTS_DIR="${SCRIPT_DIR}/results"
 CHECKPOINT_FILE="${RESULTS_DIR}/checkpoint.txt"
 SITES_FILE="${RESULTS_DIR}/mutation_sites.txt"
 RESULTS_CSV="${RESULTS_DIR}/results.csv"
@@ -217,14 +217,14 @@ restore_file() {
 # Run tests for a mutation
 run_mutation_test() {
     # Build
-    if ! timeout "$BUILD_TIMEOUT" dotnet build "${SCRIPT_DIR}/src/Tests/Tests.fsproj" \
+    if ! timeout "$BUILD_TIMEOUT" dotnet build "${SCRIPT_DIR}/../src/Tests/Tests.fsproj" \
         -c Release --nologo -v q > /dev/null 2>&1; then
         echo "BUILD_FAILURE"
         return
     fi
 
     # Find test executable (output goes to bin/ at project root, not src/Tests/bin/)
-    local test_exe="${SCRIPT_DIR}/bin/Tests/Release/net9.0/Tests"
+    local test_exe="${SCRIPT_DIR}/../bin/Tests/Release/net9.0/Tests"
     [[ ! -x "$test_exe" ]] && { echo "BUILD_FAILURE"; return; }
 
     # Run tests

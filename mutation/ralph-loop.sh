@@ -6,8 +6,9 @@
 set -euo pipefail
 
 # Configuration
-RESULTS_CSV="mutation-results/results.csv"
-ADDRESSED_FILE="mutation-results/addressed.txt"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RESULTS_CSV="${SCRIPT_DIR}/results/results.csv"
+ADDRESSED_FILE="${SCRIPT_DIR}/results/addressed.txt"
 
 # Colors for output
 RED='\033[0;31m'
@@ -190,7 +191,7 @@ Write an E2E test that would FAIL if this mutation were applied (i.e., the test 
 4. **Run** ./run-tests to verify your test passes with the original code
 5. **Commit** your changes with message: 'Add E2E test for mutation #$id'
    - Include the .e2e file you modified
-   - Include mutation-results/addressed.txt (add line: $id)
+   - Include mutation/results/addressed.txt (add line: $id)
 
 ### E2E Test Format
 E2E tests use the format: \`expression = expected_result\`
@@ -208,7 +209,7 @@ true && false = false
 - The test should pass normally but would fail if the operator were changed
 
 ### After Adding the Test
-Mark this mutation as addressed by adding "$id" to mutation-results/addressed.txt
+Mark this mutation as addressed by adding "$id" to mutation/results/addressed.txt
 EOF
 }
 
