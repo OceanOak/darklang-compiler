@@ -140,7 +140,8 @@ $"Say: {"hi"}" = "Say: hi"
 $"{"a" ++ "b"}" = ab
 
 // Nested braces in interpolation - record literal inside expression
-// Tests depth tracking for matching braces (catches mutation in collectExprChars)
+// Tests depth tracking for matching braces in collectExprChars
+// Catches mutations #1 (depth + 1 -> depth - 1) and #7 (depth - 1 -> depth + 1)
 type NestedBraceRec = { val: String } $"{NestedBraceRec { val = "ok" }.val}" = ok
 
 // NOTE: Multiple interpolations like $"{x} and {y}" trigger a pre-existing bug
