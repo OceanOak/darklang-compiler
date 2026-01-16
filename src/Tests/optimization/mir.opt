@@ -81,3 +81,43 @@ Function _start:
     v10004 <- Call(pick, [42])
     Print(v10004, type=TInt64)
     ret v10004
+
+---NAME---
+licm_hoist_tuple_load
+---INPUT---
+def loop(n: Int64, acc: Int64, t: (Int64, Int64)) : Int64 =
+    if n < 1 then acc
+    else
+        let v = t.0 in
+        loop(n - 1, acc + v, t)
+
+loop(3, 0, (10, 20))
+---EXPECTED---
+Function loop:
+  loop_entry:
+    v10023 <- HeapLoad(v2, 0)
+    jump loop_body
+  loop_L1:
+    v10024 <- v10021 - 1 : TInt64
+    v10025 <- v10020 + v10023 : TInt64
+    v10029 <- v10024 : TInt64
+    v10030 <- v10025 : TInt64
+    v10031 <- v10019 : TTuple [TInt64; TInt64]
+    jump loop_body
+  loop_L2:
+    ret v10020
+  loop_body:
+    v10019 <- Phi([(v2, loop_entry), (v10031, loop_L1)]) : TTuple [TInt64; TInt64]
+    v10020 <- Phi([(v1, loop_entry), (v10030, loop_L1)]) : TInt64
+    v10021 <- Phi([(v0, loop_entry), (v10029, loop_L1)]) : TInt64
+    v10022 <- v10021 < 1 : TInt64
+    branch v10022 ? loop_L2 : loop_L1
+Function _start:
+  _start_body:
+    v10010 <- HeapAlloc(16)
+    HeapStore(v10010, 0, 10)
+    HeapStore(v10010, 8, 20)
+    v10011 <- Call(loop, [3, 0, v10010])
+    RefCountDec(v10010, size=16)
+    Print(v10011, type=TInt64)
+    ret v10011

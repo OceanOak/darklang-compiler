@@ -274,6 +274,7 @@ let isHoistableInstr (instr: Instr) : bool =
     match instr with
     | BinOp _ -> true
     | UnaryOp _ -> true
+    | HeapLoad _ -> true
     | FloatSqrt _ -> true
     | FloatAbs _ -> true
     | FloatNeg _ -> true
@@ -288,9 +289,46 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
     let loops = findNaturalLoops cfg
     let preds = buildPredecessors cfg
     let labelName (Label name) = name
+    let buildCopyMapForLicm (cfg': CFG) : Map<VReg, VReg> =
+        let phiDests =
+            cfg'.Blocks
+            |> Map.fold (fun dests _ block ->
+                block.Instrs
+                |> List.fold (fun acc instr ->
+                    match instr with
+                    | Phi (dest, _, _) -> Set.add dest acc
+                    | _ -> acc
+                ) dests
+            ) Set.empty
+
+        cfg'.Blocks
+        |> Map.fold (fun acc _ block ->
+            block.Instrs
+            |> List.fold (fun mapAcc instr ->
+                match instr with
+                | Mov (dest, Register src, _) when dest <> src ->
+                    if Set.contains dest phiDests || Map.containsKey dest mapAcc then mapAcc
+                    else Map.add dest src mapAcc
+                | _ -> mapAcc
+            ) acc
+        ) Map.empty
+
+    let resolveCopyForLicm (copyMap: Map<VReg, VReg>) (op: Operand) : Operand =
+        let rec resolve visited op' =
+            match op' with
+            | Register vreg ->
+                if Set.contains vreg visited then
+                    op'
+                else
+                    match Map.tryFind vreg copyMap with
+                    | Some src -> resolve (Set.add vreg visited) (Register src)
+                    | None -> op'
+            | _ -> op'
+        resolve Set.empty op
 
     loops
     |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
+        let copyMap = buildCopyMapForLicm cfgAcc
         let outsidePreds =
             Map.tryFind header preds
             |> Option.defaultValue []
@@ -327,6 +365,90 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
             let blockOrder =
                 header :: (loopBlocks |> Set.remove header |> Set.toList |> List.sortBy labelName)
 
+            let resolveOp (op: Operand) : Operand =
+                resolveCopyForLicm copyMap op
+
+            let resolveInvariantOperand (invariantMap: Map<VReg, Operand>) (op: Operand) : Operand =
+                let rec resolve visited op' =
+                    match op' with
+                    | Register vreg ->
+                        if Set.contains vreg visited then
+                            op'
+                        else
+                            match Map.tryFind vreg invariantMap with
+                            | Some mapped -> resolve (Set.add vreg visited) mapped
+                            | None -> op'
+                    | _ -> op'
+                resolve Set.empty op
+
+            let rec findInvariantPhis (current: Map<VReg, Operand>) : Map<VReg, Operand> =
+                let next =
+                    loopBlocks
+                    |> Set.fold (fun acc label ->
+                        match Map.tryFind label cfgAcc.Blocks with
+                        | None -> acc
+                        | Some block ->
+                            block.Instrs
+                            |> List.fold (fun acc' instr ->
+                                match instr with
+                                | Phi (dest, sources, _) ->
+                                    let sources' =
+                                        sources
+                                        |> List.map (fun (op, lbl) ->
+                                            (resolveInvariantOperand acc' (resolveOp op), lbl))
+                                    let outsideSources =
+                                        sources'
+                                        |> List.filter (fun (_, lbl) -> not (Set.contains lbl loopBlocks))
+                                    let insideSources =
+                                        sources'
+                                        |> List.filter (fun (_, lbl) -> Set.contains lbl loopBlocks)
+                                    match outsideSources with
+                                    | [] -> acc'
+                                    | (outsideOp, _) :: rest ->
+                                        if rest |> List.forall (fun (op, _) -> op = outsideOp) then
+                                            let outsideInvariant =
+                                                match outsideOp with
+                                                | Register vreg ->
+                                                    not (Set.contains vreg loopDefs) || Map.containsKey vreg acc'
+                                                | _ -> true
+                                            let insideOk =
+                                                insideSources
+                                                |> List.forall (fun (op, _) ->
+                                                    match op with
+                                                    | Register vreg when vreg = dest -> true
+                                                    | _ -> op = outsideOp
+                                                )
+                                            if outsideInvariant && insideOk then Map.add dest outsideOp acc' else acc'
+                                        else
+                                            acc'
+                                | _ -> acc'
+                            ) acc
+                    ) current
+                if next = current then current else findInvariantPhis next
+
+            let invariantPhiMap = findInvariantPhis Map.empty
+            let invariantPhis = invariantPhiMap |> Map.toList |> List.map fst |> Set.ofList
+
+            let rewriteInvariantInstr (instr: Instr) : Instr =
+                let rewriteOperand op = resolveInvariantOperand invariantPhiMap op
+                match instr with
+                | BinOp (dest, op, left, right, operandType) ->
+                    BinOp (dest, op, rewriteOperand left, rewriteOperand right, operandType)
+                | UnaryOp (dest, op, src) ->
+                    UnaryOp (dest, op, rewriteOperand src)
+                | HeapLoad (dest, addr, offset, vt) ->
+                    match rewriteOperand (Register addr) with
+                    | Register addr' -> HeapLoad (dest, addr', offset, vt)
+                    | _ -> failwith "LICM: HeapLoad address should remain a register"
+                | FloatSqrt (dest, src) -> FloatSqrt (dest, rewriteOperand src)
+                | FloatAbs (dest, src) -> FloatAbs (dest, rewriteOperand src)
+                | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)
+                | IntToFloat (dest, src) -> IntToFloat (dest, rewriteOperand src)
+                | FloatToInt (dest, src) -> FloatToInt (dest, rewriteOperand src)
+                | StringHash (dest, str) -> StringHash (dest, rewriteOperand str)
+                | StringEq (dest, left, right) -> StringEq (dest, rewriteOperand left, rewriteOperand right)
+                | _ -> instr
+
             let rec findHoistable invariants hoistMap =
                 let (invariants', hoistMap', changed) =
                     blockOrder
@@ -362,13 +484,14 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
 
                 if changed then findHoistable invariants' hoistMap' else (invariants', hoistMap')
 
-            let (_, hoistMap) = findHoistable Set.empty Map.empty
+            let (_, hoistMap) = findHoistable invariantPhis Map.empty
             if Map.isEmpty hoistMap then
                 (cfgAcc, changedAcc)
             else
                 let hoistedInstrs =
                     blockOrder
                     |> List.collect (fun label -> Map.tryFind label hoistMap |> Option.defaultValue [])
+                    |> List.map rewriteInvariantInstr
 
                 let blocks' =
                     cfgAcc.Blocks
@@ -376,8 +499,17 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                         if label = preheader then
                             { block with Instrs = block.Instrs @ hoistedInstrs }
                         elif Set.contains label loopBlocks then
-                            let hoistedSet = Map.tryFind label hoistMap |> Option.defaultValue [] |> Set.ofList
-                            let instrs' = block.Instrs |> List.filter (fun instr -> not (Set.contains instr hoistedSet))
+                            let hoistedDests =
+                                Map.tryFind label hoistMap
+                                |> Option.defaultValue []
+                                |> List.choose getInstrDest
+                                |> Set.ofList
+                            let instrs' =
+                                block.Instrs
+                                |> List.filter (fun instr ->
+                                    match getInstrDest instr with
+                                    | Some dest -> not (Set.contains dest hoistedDests)
+                                    | None -> true)
                             { block with Instrs = instrs' }
                         else
                             block
