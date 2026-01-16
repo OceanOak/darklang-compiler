@@ -888,7 +888,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
                             | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))))
 
-        // Bitwise operators: Int64 -> Int64 -> Int64
+        // Bitwise operators: int -> int -> int
         | Shl | Shr | BitAnd | BitOr | BitXor ->
             let opName =
                 match op with
@@ -899,19 +899,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | BitXor -> "^"
                 | _ -> "?"
 
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TInt64)
+            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
             |> Result.bind (fun (leftType, left') ->
-                if leftType <> TInt64 then
-                    Error (InvalidOperation (opName, [leftType]))
-                else
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TInt64)
+                match leftType with
+                | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 ->
+                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
                     |> Result.bind (fun (rightType, right') ->
-                        if rightType <> TInt64 then
-                            Error (TypeMismatch (TInt64, rightType, $"right operand of {opName}"))
+                        if rightType <> leftType then
+                            Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
                         else
                             match expectedType with
-                            | Some TInt64 | None -> Ok (TInt64, BinOp (op, left', right'))
-                            | Some other -> Error (TypeMismatch (other, TInt64, $"result of {opName}"))))
+                            | Some expected when expected <> leftType ->
+                                Error (TypeMismatch (expected, leftType, $"result of {opName}"))
+                            | _ -> Ok (leftType, BinOp (op, left', right')))
+                | other ->
+                    Error (InvalidOperation (opName, [other])))
 
         // String concatenation: string -> string -> string
         | StringConcat ->
@@ -956,15 +958,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | Some other -> Error (TypeMismatch (other, TBool, "result of !")))
 
         | BitNot ->
-            // Bitwise NOT works on Int64 and returns Int64
-            checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TInt64)
+            // Bitwise NOT works on integers
+            checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
             |> Result.bind (fun (innerType, inner') ->
-                if innerType <> TInt64 then
-                    Error (TypeMismatch (TInt64, innerType, "operand of ~~~"))
-                else
+                match innerType with
+                | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 ->
                     match expectedType with
-                    | Some TInt64 | None -> Ok (TInt64, UnaryOp (op, inner'))
-                    | Some other -> Error (TypeMismatch (other, TInt64, "result of ~~~")))
+                    | Some expected when expected <> innerType ->
+                        Error (TypeMismatch (expected, innerType, "result of ~~~"))
+                    | _ -> Ok (innerType, UnaryOp (op, inner'))
+                | other ->
+                    Error (InvalidOperation ("~~~", [other])))
 
     | Let (name, value, body) ->
         // Let binding: check value, extend environment, check body
