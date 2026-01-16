@@ -22,6 +22,7 @@ FILE_PATTERN=""
 MUTATION_TYPE=""
 MUTATION_ID=""
 DRY_RUN=false
+MAX_COUNT=0  # 0 means unlimited
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -29,14 +30,17 @@ usage() {
     echo "Options:"
     echo "  --file=PATTERN   Only process mutations in files matching pattern"
     echo "  --type=TYPE      Only process mutation type (ARITH_ADD, CMP_LT, etc.)"
-    echo "  --id=N           Process only mutation #N"
+    echo "  --id=N           Process only mutation #N (no loop)"
+    echo "  --count=N        Process at most N mutations then stop"
     echo "  --dry-run        Show what would be sent to Claude without invoking"
     echo "  --help           Show this help message"
     echo ""
     echo "Examples:"
+    echo "  $0                             # Loop through all unaddressed mutations"
+    echo "  $0 --count=5                   # Process up to 5 mutations"
     echo "  $0 --dry-run --id=1           # Preview mutation #1"
-    echo "  $0 --id=1                      # Process mutation #1"
-    echo "  $0 --type=ARITH_ADD            # Process first unaddressed ARITH_ADD mutation"
+    echo "  $0 --id=1                      # Process only mutation #1"
+    echo "  $0 --type=ARITH_ADD            # Process all ARITH_ADD mutations"
     echo "  $0 --file=Parser               # Process mutations in Parser files"
     exit 1
 }
@@ -54,6 +58,9 @@ for arg in "$@"; do
             ;;
         --dry-run)
             DRY_RUN=true
+            ;;
+        --count=*)
+            MAX_COUNT="${arg#*=}"
             ;;
         --help)
             usage
@@ -213,30 +220,25 @@ Mark this mutation as addressed by adding "$id" to mutation/results/addressed.tx
 EOF
 }
 
-# Main execution
-main() {
-    echo -e "${BLUE}=== Ralph Loop: Mutation-to-E2E Test Workflow ===${NC}"
+# Show stats
+show_stats() {
+    total_survived=$(tail -n +2 "$RESULTS_CSV" | grep ',SURVIVED,' | wc -l)
+    addressed_count=$(get_addressed_ids | wc -l)
     echo ""
+    echo "Stats:"
+    echo "  Total SURVIVED mutations: $total_survived"
+    echo "  Already addressed: $addressed_count"
+    echo "  Remaining: $((total_survived - addressed_count))"
+}
 
-    # Find a mutation to process
-    mutation=$(find_mutation)
+# Process a single mutation
+process_mutation() {
+    local id="$1"
+    local type="$2"
+    local file="$3"
+    local line="$4"
+    local operator_change
 
-    if [[ -z "$mutation" ]]; then
-        echo -e "${GREEN}No unaddressed SURVIVED mutations found matching your criteria.${NC}"
-
-        # Show stats
-        total_survived=$(tail -n +2 "$RESULTS_CSV" | grep ',SURVIVED,' | wc -l)
-        addressed_count=$(get_addressed_ids | wc -l)
-        echo ""
-        echo "Stats:"
-        echo "  Total SURVIVED mutations: $total_survived"
-        echo "  Already addressed: $addressed_count"
-        echo "  Remaining: $((total_survived - addressed_count))"
-        exit 0
-    fi
-
-    # Parse mutation details
-    IFS=',' read -r id type file line result <<< "$mutation"
     operator_change=$(get_operator_change "$type")
 
     echo -e "${YELLOW}Selected Mutation #$id${NC}"
@@ -255,15 +257,69 @@ main() {
         echo ""
         echo -e "${YELLOW}=== End of prompt ===${NC}"
         echo ""
-        echo "To actually run this, remove --dry-run"
     else
         echo -e "${GREEN}Invoking Claude Code...${NC}"
         echo ""
 
         # Invoke Claude Code with the prompt
-        # This starts an interactive session with the prompt pre-loaded
         claude "$prompt"
+
+        echo ""
+        echo -e "${BLUE}Claude Code session ended for mutation #$id${NC}"
     fi
+}
+
+# Main execution
+main() {
+    echo -e "${BLUE}=== Ralph Loop: Mutation-to-E2E Test Workflow ===${NC}"
+    echo ""
+
+    local processed=0
+
+    while true; do
+        # Check count limit
+        if [[ $MAX_COUNT -gt 0 && $processed -ge $MAX_COUNT ]]; then
+            echo -e "${GREEN}Reached maximum count of $MAX_COUNT mutations.${NC}"
+            show_stats
+            exit 0
+        fi
+
+        # Find next mutation to process
+        mutation=$(find_mutation)
+
+        if [[ -z "$mutation" ]]; then
+            echo -e "${GREEN}No unaddressed SURVIVED mutations found matching your criteria.${NC}"
+            show_stats
+            exit 0
+        fi
+
+        # Parse mutation details
+        IFS=',' read -r id type file line result <<< "$mutation"
+
+        ((processed++))
+        echo -e "${BLUE}--- Processing mutation $processed${MAX_COUNT:+ of $MAX_COUNT} ---${NC}"
+        echo ""
+
+        process_mutation "$id" "$type" "$file" "$line"
+
+        # If specific ID requested, don't loop
+        if [[ -n "$MUTATION_ID" ]]; then
+            echo ""
+            echo -e "${GREEN}Finished processing mutation #$MUTATION_ID${NC}"
+            exit 0
+        fi
+
+        # If dry-run, only show one to avoid spam
+        if [[ "$DRY_RUN" == true ]]; then
+            echo "Dry-run mode: showing only first mutation. Remove --dry-run to process all."
+            show_stats
+            exit 0
+        fi
+
+        echo ""
+        echo -e "${BLUE}=== Continuing to next mutation ===${NC}"
+        echo ""
+    done
 }
 
 main
