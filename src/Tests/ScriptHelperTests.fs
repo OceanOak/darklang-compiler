@@ -40,6 +40,40 @@ let private requireNotContains (path: string) (needle: string) (text: string) : 
 let private scriptPath (name: string) : string =
     Path.Combine(repoRoot, name)
 
+let private compilerSourceFiles () : string array =
+    let compilerDir = Path.Combine(repoRoot, "src", "DarkCompiler")
+    Directory.GetFiles(compilerDir, "*.fs", SearchOption.AllDirectories)
+
+let private findFailwithUses () : Result<string list, string> =
+    let folder (state: Result<string list, string>) (path: string) =
+        match state with
+        | Error _ -> state
+        | Ok acc ->
+            match readFile path with
+            | Error msg -> Error msg
+            | Ok text ->
+                if text.Contains "failwith" then
+                    Ok (path :: acc)
+                else
+                    Ok acc
+    compilerSourceFiles ()
+    |> Array.fold folder (Ok [])
+    |> Result.map List.rev
+
+let testCompilerAvoidsFailwith () : TestResult =
+    match findFailwithUses () with
+    | Error msg -> Error msg
+    | Ok paths ->
+        let offenders =
+            paths
+            |> List.filter (fun path -> Path.GetFileName(path) <> "Crash.fs")
+            |> List.map (fun path -> Path.GetRelativePath(repoRoot, path))
+        match offenders with
+        | [] -> Ok ()
+        | _ ->
+            let details = String.concat ", " offenders
+            Error $"Unexpected failwith usage in compiler: {details}"
+
 let testRunTestsUsesCommonHelper () : TestResult =
     let path = scriptPath "run-tests"
     match readFile path with
@@ -90,6 +124,7 @@ let testTestsProjectDoesNotCopyTestData () : TestResult =
         requireNotContains path "CopyToOutputDirectory" text
 
 let tests = [
+    ("compiler avoids failwith", testCompilerAvoidsFailwith)
     ("run-tests uses test-common", testRunTestsUsesCommonHelper)
     ("run-verification-tests uses test-common", testRunVerificationUsesCommonHelper)
     ("run-verification-tests avoids env vars", testRunVerificationDoesNotUseEnvVar)

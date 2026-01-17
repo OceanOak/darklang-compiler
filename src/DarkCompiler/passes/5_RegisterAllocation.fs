@@ -1241,7 +1241,7 @@ let applyFloatAllocationToFReg (floatAllocation: FAllocationResult) (freg: LIR.F
     | LIR.FVirtual id ->
         match Map.tryFind id floatAllocation.FMapping with
         | Some physReg -> LIR.FPhysical physReg
-        | None -> failwith $"Float register allocation bug: FVirtual {id} not found in allocation"
+        | None -> Crash.crash $"Float register allocation bug: FVirtual {id} not found in allocation"
 
 /// Apply float allocation to an instruction
 let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIRSymbolic.Instr) : LIRSymbolic.Instr =
@@ -2261,11 +2261,9 @@ let applyToBlockWithLiveness
     let livenessCount = List.length instrLiveness
     let floatLivenessCount = List.length floatInstrLiveness
     if instrCount <> livenessCount || instrCount <> floatLivenessCount then
-        failwithf
-            "Instruction count (%d) doesn't match liveness count (%d) or float liveness count (%d)"
-            instrCount
-            livenessCount
-            floatLivenessCount
+        let message =
+            $"Instruction count ({instrCount}) doesn't match liveness count ({livenessCount}) or float liveness count ({floatLivenessCount})"
+        Crash.crash message
 
     // First pass: find SaveRegs/RestoreRegs pairs and compute the registers to save
     // For each SaveRegs, look ahead to find the matching RestoreRegs and use its liveness
@@ -2294,7 +2292,7 @@ let applyToBlockWithLiveness
                         savedRegsStack <- tail
                         (intRegs, floatRegs)
                     | [] ->
-                        failwith "Unmatched RestoreRegs: SaveRegs stack is empty"
+                        Crash.crash "Unmatched RestoreRegs: SaveRegs stack is empty"
                 applyToInstr mapping (LIRSymbolic.RestoreRegs (liveCallerSaved, liveCallerSavedFloat))
             | _ ->
                 applyToInstr mapping instr)
@@ -2481,7 +2479,7 @@ let resolvePhiNodes (cfg: LIRSymbolic.CFG) (allocation: Map<int, Allocation>) (f
         | LIR.Virtual id ->
             match Map.tryFind id allocation with
             | Some alloc -> alloc
-            | None -> failwith $"RegisterAllocation: Virtual register {id} not found in allocation"
+            | None -> Crash.crash $"RegisterAllocation: Virtual register {id} not found in allocation"
         | LIR.Physical p -> PhysReg p
 
     // Helper to convert a LIRSymbolic.Operand to allocated version

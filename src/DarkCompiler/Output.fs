@@ -20,11 +20,3 @@ let eprint (s: string) : unit =
 /// Print to stderr with newline
 let eprintln (s: string) : unit =
     eprintf "%s\n" s
-
-/// Crash the program with an error message.
-/// Used for internal invariant violations (unreachable code).
-///
-/// When the compiler is migrated to Darklang (self-hosting), this will
-/// be replaced with Darklang's error handling (Result types or similar).
-let crash (message: string) : 'a =
-    failwith message

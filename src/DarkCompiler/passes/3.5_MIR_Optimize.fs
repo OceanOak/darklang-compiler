@@ -439,7 +439,7 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 | HeapLoad (dest, addr, offset, vt) ->
                     match rewriteOperand (Register addr) with
                     | Register addr' -> HeapLoad (dest, addr', offset, vt)
-                    | _ -> failwith "LICM: HeapLoad address should remain a register"
+                    | _ -> Crash.crash "LICM: HeapLoad address should remain a register"
                 | FloatSqrt (dest, src) -> FloatSqrt (dest, rewriteOperand src)
                 | FloatAbs (dest, src) -> FloatAbs (dest, rewriteOperand src)
                 | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)
@@ -744,7 +744,7 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
         |> Map.map (fun _ block ->
             match block.Terminator with
             | Jump target -> target
-            | _ -> crash "Expected Jump"
+            | _ -> Crash.crash "Expected Jump"
         )
 
     if Map.isEmpty emptyBlocks then
@@ -834,7 +834,7 @@ let eliminateUnreachableBlocks (cfg: CFG) : CFG * bool =
                     | Phi (dest, sources, valueType) ->
                         let sources' = sources |> List.filter (fun (_, srcLabel) -> Set.contains srcLabel reachable)
                         if List.isEmpty sources' then
-                            crash $"Phi in {label} has no reachable sources after CFG prune"
+                            Crash.crash $"Phi in {label} has no reachable sources after CFG prune"
                         let instr' = Phi (dest, sources', valueType)
                         (acc' @ [instr'], ch' || sources' <> sources)
                     | _ ->

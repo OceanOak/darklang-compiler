@@ -213,7 +213,7 @@ let serializeMachO (binary: Binary.MachOBinary) : byte array =
     let codeOffset =
         match binary.TextSegmentCommand.Sections with
         | section :: _ -> int section.Offset
-        | [] -> failwith "MachO: TextSegmentCommand has no sections"
+        | [] -> Crash.crash "MachO: TextSegmentCommand has no sections"
 
     let paddingBeforeCode = codeOffset - dataStart
     let paddingBefore = Array.create paddingBeforeCode 0uy

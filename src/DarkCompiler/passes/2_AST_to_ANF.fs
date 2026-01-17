@@ -2162,7 +2162,7 @@ let rec generateStructuralEquality
                     // Chain ANDs: result = r0 && r1 && r2 ...
                     let rec chainAnds results accBindings vg =
                         match results with
-                        | [] -> crash "empty results in chainAnds"
+                        | [] -> Crash.crash "empty results in chainAnds"
                         | [last] -> (accBindings, last, vg)
                         | a :: b :: rest ->
                             let (andVar, vg') = ANF.freshVar vg
@@ -2213,7 +2213,7 @@ let rec generateStructuralEquality
                     | first :: rest ->
                         let rec chainAnds results accBindings vg =
                             match results with
-                            | [] -> crash "empty results in chainAnds"
+                            | [] -> Crash.crash "empty results in chainAnds"
                             | [last] -> (accBindings, last, vg)
                             | a :: b :: rest ->
                                 let (andVar, vg') = ANF.freshVar vg
@@ -2471,21 +2471,21 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                                 substituteType subst payloadTypeTemplate
                             | _ -> payloadTypeTemplate
                         | Some (_, _, _, None) ->
-                            failwith $"Constructor '{variantName}' has no payload type"
+                            Crash.crash $"Constructor '{variantName}' has no payload type"
                         | None ->
-                            failwith $"Unknown constructor '{variantName}' in pattern"
+                            Crash.crash $"Unknown constructor '{variantName}' in pattern"
                     extractPatternBindings payloadPattern payloadType
             | AST.PList innerPats ->
                 let elemType =
                     match scrutType with
                     | AST.TList t -> t
-                    | _ -> failwith $"PList pattern expects TList scrutinee, got {scrutType}"
+                    | _ -> Crash.crash $"PList pattern expects TList scrutinee, got {scrutType}"
                 innerPats |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
             | AST.PListCons (headPats, tailPat) ->
                 let elemType =
                     match scrutType with
                     | AST.TList t -> t
-                    | _ -> failwith $"PListCons pattern expects TList scrutinee, got {scrutType}"
+                    | _ -> Crash.crash $"PListCons pattern expects TList scrutinee, got {scrutType}"
                 let headBindings = headPats |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
                 let tailBindings = extractPatternBindings tailPat scrutType
                 Map.fold (fun m k v -> Map.add k v m) headBindings tailBindings
@@ -2495,7 +2495,7 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             let patternType =
                 match scrutineeTypeResult with
                 | Ok t -> t
-                | Error msg -> failwith $"Pattern match: Could not determine scrutinee type: {msg}"
+                | Error msg -> Crash.crash $"Pattern match: Could not determine scrutinee type: {msg}"
             // Get bindings from first pattern (cases can have multiple patterns, use first)
             let patBindings =
                 mc.Patterns
@@ -3046,7 +3046,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             else
                 match Map.tryFind typeName typeReg with
                 | Some typeFields -> typeFields |> List.map fst
-                | None -> failwith $"Record type '{typeName}' not found in typeReg"
+                | None -> Crash.crash $"Record type '{typeName}' not found in typeReg"
 
         // Reorder field values according to type definition order
         let fieldMap = Map.ofList fields

@@ -202,7 +202,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             let concreteTypes = captureTypes |> List.map Option.get
             Some (AST.TTuple (AST.TInt64 :: concreteTypes))
         else
-            Output.crash "RefCountInsertion: could not infer closure capture types"
+            Crash.crash "RefCountInsertion: could not infer closure capture types"
     | ClosureCall (closureAtom, _) ->
         // Try to find the closure's function name and look up return type
         match tryGetClosureFunc ctx closureAtom with
@@ -239,11 +239,11 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
                 | Var tid ->
                     match tryGetType ctx tid with
                     | Some t -> t
-                    | None -> failwith $"RefCountInsertion: Type not found for temp {tid} in TupleAlloc"
+                    | None -> Crash.crash $"RefCountInsertion: Type not found for temp {tid} in TupleAlloc"
                 | FuncRef funcName ->
                     match Map.tryFind funcName ctx.FuncReg with
                     | Some t -> t
-                    | None -> failwith $"RefCountInsertion: Type not found for function {funcName} in TupleAlloc")
+                    | None -> Crash.crash $"RefCountInsertion: Type not found for function {funcName} in TupleAlloc")
         Some (AST.TTuple elemTypes)
     | TupleGet (tupleAtom, index) ->
         // Get element type from tuple type
@@ -577,6 +577,6 @@ let insertRCInProgram (result: ConversionResult) : Result<ANF.Program * ANF.Type
     let missingTypes = verifyTypeMapCompleteness program' finalTypeMap
     if not (List.isEmpty missingTypes) then
         let missingStr = missingTypes |> List.map (fun (TempId n) -> $"t{n}") |> String.concat ", "
-        failwith $"RefCountInsertion: TypeMap incomplete - missing types for: {missingStr}"
+        Crash.crash $"RefCountInsertion: TypeMap incomplete - missing types for: {missingStr}"
 
     Ok (program', finalTypeMap)

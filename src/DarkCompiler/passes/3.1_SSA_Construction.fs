@@ -138,7 +138,7 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
                 match idom with
                 | Some d -> Map.add label d idoms
                 | None ->
-                    failwith $"SSA: Could not find immediate dominator for block {label} (malformed CFG)"
+                    Crash.crash $"SSA: Could not find immediate dominator for block {label} (malformed CFG)"
     ) Map.empty
 
 /// Dominance frontier: blocks where dominance ends

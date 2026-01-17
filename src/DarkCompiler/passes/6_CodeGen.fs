@@ -880,7 +880,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             let os =
                 match Platform.detectOS () with
                 | Ok platform -> platform
-                | Error msg -> failwith $"Platform detection failed: {msg}"
+                | Error msg -> Crash.crash $"Platform detection failed: {msg}"
             let syscalls = Platform.getSyscallNumbers os
 
             // Generate element print code based on type (uses X0 for value)
@@ -1055,7 +1055,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             let os =
                 match Platform.detectOS () with
                 | Ok platform -> platform
-                | Error msg -> failwith $"Platform detection failed: {msg}"
+                | Error msg -> Crash.crash $"Platform detection failed: {msg}"
             let syscalls = Platform.getSyscallNumbers os
 
             // Check if any variant has a payload
@@ -1118,7 +1118,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                                 | AST.TString ->
                                     [ARM64.LDR (ARM64.X10, ARM64.X0, 0s); ARM64.ADD_imm (ARM64.X9, ARM64.X0, 8us)] @
                                     Runtime.generatePrintStringNoNewline ()
-                                | t -> failwith $"Unsupported payload type in sum variant: {t}"
+                                | t -> Crash.crash $"Unsupported payload type in sum variant: {t}"
                             let printClose = printLiteral ")"
                             printOpen @ loadPayload @ printPayloadValue @ printClose
                     (printName, printPayload))
@@ -1175,7 +1175,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             let os =
                 match Platform.detectOS () with
                 | Ok platform -> platform
-                | Error msg -> failwith $"Platform detection failed: {msg}"
+                | Error msg -> Crash.crash $"Platform detection failed: {msg}"
             let syscalls = Platform.getSyscallNumbers os
 
             // Helper: generate code to print a string literal
@@ -1218,7 +1218,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                             // String is a pointer: load length, compute data ptr, print
                             [ARM64.LDR (ARM64.X10, ARM64.X0, 0s); ARM64.ADD_imm (ARM64.X9, ARM64.X0, 8us)] @
                             Runtime.generatePrintStringNoNewline ()
-                        | t -> failwith $"Unsupported field type in record: {t}"
+                        | t -> Crash.crash $"Unsupported field type in record: {t}"
                     let separator =
                         if i < List.length fields - 1 then printLiteral ", "
                         else []
@@ -1315,10 +1315,10 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                                 [ARM64.MOV_reg (ARM64.X15, srcReg); ARM64.STR (ARM64.X15, destReg, int16 offset)]
                             else
                                 [ARM64.STR (srcReg, destReg, int16 offset)]
-                        | Error msg -> failwith $"ClosureAlloc: lirRegToARM64Reg failed: {msg}"
+                        | Error msg -> Crash.crash $"ClosureAlloc: lirRegToARM64Reg failed: {msg}"
                     | LIR.FuncAddr fname ->
                         [ARM64.ADR (ARM64.X15, fname); ARM64.STR (ARM64.X15, destReg, int16 offset)]
-                    | other -> failwith $"ClosureAlloc: Unexpected capture operand type: {other}")
+                    | other -> Crash.crash $"ClosureAlloc: Unexpected capture operand type: {other}")
 
             Ok (allocInstrs @ generateLeakCounterInc ctx @ storeFuncAddr @ storeCaptures))
 
@@ -3199,7 +3199,7 @@ let generateHeapInit () : ARM64.Instr list =
     let os =
         match Platform.detectOS () with
         | Ok platform -> platform
-        | Error msg -> failwith $"Platform detection failed: {msg}"
+        | Error msg -> Crash.crash $"Platform detection failed: {msg}"
     let syscalls = Platform.getSyscallNumbers os
     let mmapFlags =
         match os with
@@ -3298,7 +3298,7 @@ let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64.In
                         []  // Already in the right place
                     else
                         [ARM64.MOV_reg (paramArm64, tempReg)]
-                | Error msg -> failwith $"ParamSetup: lirRegToARM64Reg failed: {msg}")
+                | Error msg -> Crash.crash $"ParamSetup: lirRegToARM64Reg failed: {msg}")
             |> List.concat
 
         let paramSetup = saveIntToTemps @ moveIntFromTemps

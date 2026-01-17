@@ -92,7 +92,7 @@ module NonEmptyList =
         | [] -> None
         | h :: t -> Some { Head = h; Tail = t }
     let fromList = function
-        | [] -> failwith "NonEmptyList.fromList: empty list"
+        | [] -> Crash.crash "NonEmptyList.fromList: empty list"
         | h :: t -> { Head = h; Tail = t }
 
 /// Pattern matching patterns

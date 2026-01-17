@@ -969,7 +969,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                             [LIRSymbolic.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
                              LIRSymbolic.PrintFloatNoNewline (LIR.FPhysical LIR.D0)]
                         | t ->
-                            failwith $"Unsupported tuple element type for printing: {t}"
+                            Crash.crash $"Unsupported tuple element type for printing: {t}"
                     sepInstrs @ [loadInstr] @ printInstrs)
                 |> List.concat
 
