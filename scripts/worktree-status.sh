@@ -133,6 +133,10 @@ is_interactive() {
 
 run_interactive() {
     local lines_printed=0
+    local clear_to_eol
+    local clear_to_eos
+    clear_to_eol=$(tput el 2>/dev/null) || clear_to_eol=""
+    clear_to_eos=$(tput ed 2>/dev/null) || clear_to_eos=""
 
     # Hide cursor
     tput civis 2>/dev/null || true
@@ -146,26 +150,33 @@ run_interactive() {
     trap cleanup EXIT INT TERM
 
     while true; do
+        # Build complete output first (double-buffering to prevent flicker)
+        local header
+        local status_output
+        local full_output
+        header="${BOLD}Worktree Status${NC} ${DIM}(updated $(date '+%H:%M:%S'), refresh: ${REFRESH_INTERVAL}s, Ctrl+C to exit)${NC}"
+        status_output=$(render_status)
+
         # Move cursor up to overwrite previous output
         if [ "$lines_printed" -gt 0 ]; then
             tput cuu "$lines_printed" 2>/dev/null || true
             tput cr 2>/dev/null || true
         fi
 
-        # Clear from cursor to end of screen
-        tput ed 2>/dev/null || true
-
-        # Print header with timestamp
-        echo -e "${BOLD}Worktree Status${NC} ${DIM}(updated $(date '+%H:%M:%S'), refresh: ${REFRESH_INTERVAL}s, Ctrl+C to exit)${NC}"
-        echo ""
-
-        # Render status and count lines
-        local output
-        output=$(render_status)
-        echo "$output"
+        # Print each line with clear-to-end-of-line to avoid flicker
+        # Header line
+        echo -e "${header}${clear_to_eol}"
+        # Blank line
+        echo -e "${clear_to_eol}"
+        # Status lines - print each with clear to end of line
+        while IFS= read -r line; do
+            echo -e "${line}${clear_to_eol}"
+        done <<< "$status_output"
+        # Clear any remaining lines from previous output
+        echo -ne "${clear_to_eos}"
 
         # Count lines printed (header + blank + status output)
-        lines_printed=$((2 + $(echo "$output" | wc -l)))
+        lines_printed=$((2 + $(echo "$status_output" | wc -l)))
 
         # Wait for refresh interval
         sleep "$REFRESH_INTERVAL"
