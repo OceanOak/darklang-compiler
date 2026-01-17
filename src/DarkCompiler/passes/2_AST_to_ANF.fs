@@ -3416,10 +3416,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
     | AST.Match (scrutinee, cases) ->
         // Infer scrutinee type to pass to pattern extraction for correct typing
         let typeEnv = typeEnvFromVarEnv env
-        let scrutType =
-            match inferType scrutinee typeEnv typeReg variantLookup funcReg moduleRegistry with
-            | Ok t -> t
-            | Error _ -> AST.TInt64  // Fallback if type inference fails
+        match inferType scrutinee typeEnv typeReg variantLookup funcReg moduleRegistry with
+        | Error msg -> Error $"Match scrutinee type inference failed: {msg}"
+        | Ok scrutType ->
         // Compile match to if-else chain
         // First convert scrutinee to atom
         toAtom scrutinee varGen env typeReg variantLookup funcReg moduleRegistry
