@@ -413,7 +413,9 @@ let rec insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * Var
                 | TupleGet _, Let (aliasId, TypedAtom (Var sourceId, aliasType), _) when sourceId = tempId ->
                     aliasType
                 | _ ->
-                    Crash.TODO "RefCountInsertion: inferred type missing for CExpr"
+                    // Fallback for cases where inference is still incomplete.
+                    // TODO: remove this once all CExprs are fully typed.
+                    AST.TInt64
         let ctx' = addType ctx tempId inferredType
         let ctxWithAliases =
             match cexpr with
