@@ -1,8 +1,15 @@
 # Known Issues
 
-No known issues at this time.
+1) Block non-stdlib access to internal identifiers.
+   - Enforce parser/typechecker rules to reject `__*` and `Stdlib.__HAMT`/`Stdlib.__FingerTree` in user code.
+   - Add e2e tests that assert these restrictions.
+   - Owner: compiler frontend.
 
 ## Recently Fixed
+
+### Stdlib Split + Internal Modules (Fixed)
+
+**Change**: stdlib is now split into per-module files and loaded by the compiler; internal HAMT/FingerTree implementation is isolated under `Stdlib.__HAMT` and `Stdlib.__FingerTree`.
 
 ### Register Spilling Segfault (Fixed)
 

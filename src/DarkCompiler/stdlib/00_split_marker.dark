@@ -1,0 +1,5 @@
+// 00_split_marker.dark - Stdlib split marker used by compiler tests
+//
+// This file ensures the stdlib loader supports multiple files.
+
+def Stdlib.__StdlibSplitMarker.ping() : Int64 = 1

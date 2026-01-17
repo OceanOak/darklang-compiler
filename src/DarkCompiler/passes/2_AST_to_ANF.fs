@@ -3380,7 +3380,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
     | AST.ListCons (headElements, tail) ->
         // Compile list cons: [a, b, ...tail] prepends elements to tail
-        // Use Stdlib.FingerTree.push to prepend each element
+        // Use Stdlib.__FingerTree.push to prepend each element
         toAtom tail varGen env typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun (tailAtom, tailBindings, varGen1) ->
             // Build list by prepending elements from right to left
@@ -3395,8 +3395,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         toAtom elem vg1 env typeReg variantLookup funcReg moduleRegistry
                         |> Result.map (fun (elemAtom, elemBindings, vg2) ->
                             let (pushVar, vg3) = ANF.freshVar vg2
-                            // Call Stdlib.FingerTree.push to prepend element
-                            let pushExpr = ANF.Call ("Stdlib.FingerTree.push_i64", [restList; elemAtom])
+                            // Call Stdlib.__FingerTree.push to prepend element
+                            let pushExpr = ANF.Call ("Stdlib.__FingerTree.push_i64", [restList; elemAtom])
                             let newBindings = restBindings @ elemBindings @ [(pushVar, pushExpr)]
                             (ANF.Var pushVar, newBindings, vg3)))
 
@@ -3643,7 +3643,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are FingerTrees - use headUnsafe/tail to extract
                                     let (headVar, vg1) = ANF.freshVar vg
-                                    let headExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [currentList])
+                                    let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
                                     let headBinding = (headVar, headExpr)
                                     collectPatternBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                     |> Result.bind (fun (env', bindings', vg') ->
@@ -3652,7 +3652,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         else
                                             // Get tail for next iteration
                                             let (tailVar, vg2) = ANF.freshVar vg'
-                                            let tailExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [currentList])
+                                            let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
                                             let tailBinding = (tailVar, tailExpr)
                                             collectFromList rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
                             collectFromList innerPatterns sourceAtom env bindings vg
@@ -3673,7 +3673,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are FingerTrees - use headUnsafe/tail to extract
                                     let (rawHeadVar, vg1) = ANF.freshVar vg
-                                    let rawHeadExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [currentList])
+                                    let rawHeadExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
                                     let rawHeadBinding = (rawHeadVar, rawHeadExpr)
                                     // Wrap with TypedAtom to preserve correct element type in TypeMap
                                     let (headVar, vg1') = ANF.freshVar vg1
@@ -3682,7 +3682,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     collectPatternBindings p (ANF.Var headVar) elemType env (rawHeadBinding :: headBinding :: bindings) vg1'
                                     |> Result.bind (fun (env', bindings', vg') ->
                                         let (rawTailVar, vg2) = ANF.freshVar vg'
-                                        let rawTailExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [currentList])
+                                        let rawTailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
                                         let rawTailBinding = (rawTailVar, rawTailExpr)
                                         // Wrap tail with TypedAtom to preserve list type
                                         let (tailVar, vg2') = ANF.freshVar vg2
@@ -3901,7 +3901,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Extract head using FingerTree.headUnsafe_i64
                             let (rawHeadVar, vg1) = ANF.freshVar vg
-                            let rawHeadExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [listAtom])
+                            let rawHeadExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [listAtom])
                             let rawHeadBinding = (rawHeadVar, rawHeadExpr)
                             // Wrap with TypedAtom to preserve correct element type in TypeMap
                             let (headVar, vg1') = ANF.freshVar vg1
@@ -3909,7 +3909,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let headBinding = (headVar, headExpr)
                             // Extract tail using FingerTree.tail_i64
                             let (rawTailVar, vg2) = ANF.freshVar vg1'
-                            let rawTailExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [listAtom])
+                            let rawTailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [listAtom])
                             let rawTailBinding = (rawTailVar, rawTailExpr)
                             // Wrap with TypedAtom to preserve list type for tail
                             let listType = AST.TList elemType
@@ -4097,7 +4097,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | p :: rest ->
                                 // Lists are FingerTrees - use headUnsafe/tail to extract
                                 let (headVar, vg1) = ANF.freshVar vg
-                                let headExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [currentList])
+                                let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
                                 let headBinding = (headVar, headExpr)
                                 collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                 |> Result.bind (fun (env', bindings', vg') ->
@@ -4106,7 +4106,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     else
                                         // Get tail for next iteration
                                         let (tailVar, vg2) = ANF.freshVar vg'
-                                        let tailExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [currentList])
+                                        let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
                                         let tailBinding = (tailVar, tailExpr)
                                         collectFromList rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
                         collectFromList innerPatterns sourceAtom env bindings vg
@@ -4126,12 +4126,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | p :: rest ->
                                 // Lists are FingerTrees - use headUnsafe/tail to extract
                                 let (headVar, vg1) = ANF.freshVar vg
-                                let headExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [currentList])
+                                let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
                                 let headBinding = (headVar, headExpr)
                                 collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                 |> Result.bind (fun (env', bindings', vg') ->
                                     let (tailVar, vg2) = ANF.freshVar vg'
-                                    let tailExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [currentList])
+                                    let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
                                     let tailBinding = (tailVar, tailExpr)
                                     collectHeads rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
                         collectHeads headPatterns sourceAtom env bindings vg
@@ -4305,9 +4305,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         Ok (Some (ANF.Var cmpVar, [(tagVar, tagExpr); (cmpVar, cmpExpr)], vg2))
                     else
                         // Multiple elements: check length == patternLen
-                        // Use Stdlib.FingerTree.length which handles EMPTY/SINGLE/DEEP safely
+                        // Use Stdlib.__FingerTree.length which handles EMPTY/SINGLE/DEEP safely
                         let (lengthVar, vg1) = ANF.freshVar vg
-                        let lengthExpr = ANF.Call ("Stdlib.FingerTree.length_i64", [scrutAtom])
+                        let lengthExpr = ANF.Call ("Stdlib.__FingerTree.length_i64", [scrutAtom])
                         let (cmpVar, vg2) = ANF.freshVar vg1
                         let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var lengthVar, ANF.IntLiteral (ANF.Int64 (int64 patternLen)))
                         Ok (Some (ANF.Var cmpVar, [(lengthVar, lengthExpr); (cmpVar, cmpExpr)], vg2))
@@ -4471,8 +4471,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let (lengthVar, vg1) = ANF.freshVar vg
                     let lengthName =
                         match elemType with
-                        | AST.TFloat64 -> "Stdlib.FingerTree.__lengthFloat"
-                        | _ -> "Stdlib.FingerTree.length_i64"
+                        | AST.TFloat64 -> "Stdlib.__FingerTree.__lengthFloat"
+                        | _ -> "Stdlib.__FingerTree.length_i64"
                     let lengthExpr = ANF.Call (lengthName, [listAtom])
                     let (checkVar, vg2) = ANF.freshVar vg1
                     let checkExpr = ANF.Prim (ANF.Eq, ANF.Var lengthVar, ANF.IntLiteral (ANF.Int64 (int64 patternLen)))
@@ -4745,7 +4745,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     (withGuard, vg6))))
 
                     // Compile the DEEP branch: node at offset 16 (prefix[0])
-                    // For tail, call Stdlib.FingerTree.tail to properly compute the tail
+                    // For tail, call Stdlib.__FingerTree.tail to properly compute the tail
                     let compileDeepBranch vg =
                         let (deepNodeVar, vg1) = ANF.freshVar vg
                         let deepNodeExpr = ANF.RawGet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 16L), None)
@@ -4757,9 +4757,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         let headBindingsWithType = headBindings @ [typedHeadBinding]
                         let typedHeadAtom = ANF.Var typedHeadVar
 
-                        // Call Stdlib.FingerTree.tail to get the tail
+                        // Call Stdlib.__FingerTree.tail to get the tail
                         let (tailResultVar, vg3) = ANF.freshVar vg2'
-                        let tailCallExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [listAtom])
+                        let tailCallExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [listAtom])
                         // Wrap with TypedAtom to preserve correct list type in TypeMap
                         let (typedTailVar, vg3') = ANF.freshVar vg3
                         let typedTailExpr = ANF.TypedAtom (ANF.Var tailResultVar, listType)
@@ -4831,8 +4831,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let (lengthVar, vg1) = ANF.freshVar vg
                     let lengthName =
                         match elemType with
-                        | AST.TFloat64 -> "Stdlib.FingerTree.__lengthFloat"
-                        | _ -> "Stdlib.FingerTree.length_i64"
+                        | AST.TFloat64 -> "Stdlib.__FingerTree.__lengthFloat"
+                        | _ -> "Stdlib.__FingerTree.length_i64"
                     let lengthExpr = ANF.Call (lengthName, [listAtom])
                     let (lengthCheckVar, vg2) = ANF.freshVar vg1
                     let lengthCheckExpr = ANF.Prim (ANF.Gte, ANF.Var lengthVar, ANF.IntLiteral (ANF.Int64 (int64 numHeads)))
@@ -4848,10 +4848,10 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Call head to get current element
                             let (headResultVar, vg1) = ANF.freshVar vg
-                            let headCallExpr = ANF.Call ("Stdlib.FingerTree.headUnsafe_i64", [ANF.Var currentListVar])
+                            let headCallExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [ANF.Var currentListVar])
                             // Call tail to get rest
                             let (tailResultVar, vg2) = ANF.freshVar vg1
-                            let tailCallExpr = ANF.Call ("Stdlib.FingerTree.tail_i64", [ANF.Var currentListVar])
+                            let tailCallExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [ANF.Var currentListVar])
                             let newBindings = bindings @ [(headResultVar, headCallExpr); (tailResultVar, tailCallExpr)]
 
                             match pat with
@@ -5868,7 +5868,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
 
     | AST.ListCons (headElements, tail) ->
         // Compile list cons in atom position: [a, b, ...tail] prepends elements to tail
-        // Use Stdlib.FingerTree.push to prepend each element
+        // Use Stdlib.__FingerTree.push to prepend each element
         toAtom tail varGen env typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun (tailAtom, tailBindings, varGen1) ->
             // Build list by prepending elements from right to left
@@ -5883,8 +5883,8 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         toAtom elem vg1 env typeReg variantLookup funcReg moduleRegistry
                         |> Result.map (fun (elemAtom, elemBindings, vg2) ->
                             let (pushVar, vg3) = ANF.freshVar vg2
-                            // Call Stdlib.FingerTree.push to prepend element
-                            let pushExpr = ANF.Call ("Stdlib.FingerTree.push_i64", [restList; elemAtom])
+                            // Call Stdlib.__FingerTree.push to prepend element
+                            let pushExpr = ANF.Call ("Stdlib.__FingerTree.push_i64", [restList; elemAtom])
                             let newBindings = restBindings @ elemBindings @ [(pushVar, pushExpr)]
                             (ANF.Var pushVar, newBindings, vg3)))
 

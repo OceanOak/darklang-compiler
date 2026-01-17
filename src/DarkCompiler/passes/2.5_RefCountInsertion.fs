@@ -135,7 +135,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | Call (funcName, args) ->
         // Return type from function registry (with special-case inference for stdlib list/tuple helpers)
         match funcName, args with
-        | name, [listAtom; _] when name.StartsWith("Stdlib.List.getAt") || name.StartsWith("Stdlib.FingerTree.getAt") ->
+        | name, [listAtom; _] when name.StartsWith("Stdlib.List.getAt") || name.StartsWith("Stdlib.__FingerTree.getAt") ->
             match tryGetFuncReturnTypeFromReg ctx funcName with
             | Some retType -> Some retType
             | None ->
@@ -143,7 +143,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
                 | Some (AST.TList elemType) ->
                     Some (AST.TSum ("Stdlib.Option.Option", [elemType]))
                 | _ -> None
-        | name, [listAtom] when name.StartsWith("Stdlib.List.head") || name.StartsWith("Stdlib.FingerTree.head") ->
+        | name, [listAtom] when name.StartsWith("Stdlib.List.head") || name.StartsWith("Stdlib.__FingerTree.head") ->
             match tryGetFuncReturnTypeFromReg ctx funcName with
             | Some retType -> Some retType
             | None ->
@@ -380,9 +380,9 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
     | TypedAtom (Var _, _) -> true // TypedAtom wrapping a variable - also borrowed
     | Call (funcName, _) ->
         // List element extraction functions return borrowed references
-        funcName = "Stdlib.FingerTree.headUnsafe_i64" ||
-        funcName = "Stdlib.FingerTree.head_i64" ||
-        funcName = "Stdlib.FingerTree.head"
+        funcName = "Stdlib.__FingerTree.headUnsafe_i64" ||
+        funcName = "Stdlib.__FingerTree.head_i64" ||
+        funcName = "Stdlib.__FingerTree.head"
     | _ -> false
 
 /// Insert reference counting operations into an AExpr

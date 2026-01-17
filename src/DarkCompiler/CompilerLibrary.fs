@@ -847,6 +847,17 @@ let tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     try Ok (Process.Start(info))
     with ex -> Error ex.Message
 
+/// Locate a .dark file from possible paths
+let tryFindDarkFile (filename: string) : string option =
+    let exePath = Assembly.GetExecutingAssembly().Location
+    let exeDir = Path.GetDirectoryName(exePath)
+    let possiblePaths = [
+        Path.Combine(exeDir, filename)
+        Path.Combine(exeDir, "..", "..", "..", "..", "src", "DarkCompiler", filename)
+        Path.Combine(Environment.CurrentDirectory, "src", "DarkCompiler", filename)
+    ]
+    possiblePaths |> List.tryFind File.Exists
+
 /// Load a .dark file from possible paths
 let loadDarkFile (filename: string) : Result<AST.Program, string> =
     let exePath = Assembly.GetExecutingAssembly().Location
@@ -856,9 +867,7 @@ let loadDarkFile (filename: string) : Result<AST.Program, string> =
         Path.Combine(exeDir, "..", "..", "..", "..", "src", "DarkCompiler", filename)
         Path.Combine(Environment.CurrentDirectory, "src", "DarkCompiler", filename)
     ]
-    let filePath =
-        possiblePaths
-        |> List.tryFind File.Exists
+    let filePath = possiblePaths |> List.tryFind File.Exists
     match filePath with
     | None ->
         let pathsStr = String.Join(", ", possiblePaths)
@@ -871,8 +880,44 @@ let loadDarkFile (filename: string) : Result<AST.Program, string> =
 /// Load the stdlib.dark and unicode_data.dark files
 /// Returns the merged stdlib AST or an error message
 let loadStdlib () : Result<AST.Program, string> =
-    // Load stdlib.dark first
-    match loadDarkFile "stdlib.dark" with
+    let splitMarker = "stdlib/00_split_marker.dark"
+    let stdlibFiles = [
+        splitMarker
+        "stdlib/Int64.dark"
+        "stdlib/Bool.dark"
+        "stdlib/Tuple2.dark"
+        "stdlib/Tuple3.dark"
+        "stdlib/Result.dark"
+        "stdlib/Option.dark"
+        "stdlib/List.dark"
+        "stdlib/Float64.dark"
+        "stdlib/Path.dark"
+        "stdlib/Platform.dark"
+        "stdlib/String.dark"
+        "stdlib/Dict.dark"
+        "stdlib/__HAMT.dark"
+        "stdlib/Uuid.dark"
+        "stdlib/Bytes.dark"
+        "stdlib/Char.dark"
+        "stdlib/Base64.dark"
+        "stdlib/Math.dark"
+        "stdlib/__FingerTree.dark"
+    ]
+    let loadStdlibFiles (filenames: string list) : Result<AST.Program, string> =
+        let mergeFile (acc: AST.TopLevel list) (filename: string) : Result<AST.TopLevel list, string> =
+            match loadDarkFile filename with
+            | Error err -> Error err
+            | Ok (AST.Program items) -> Ok (acc @ items)
+        match List.fold (fun acc filename -> Result.bind (fun items -> mergeFile items filename) acc) (Ok []) filenames with
+        | Error err -> Error err
+        | Ok items -> Ok (AST.Program items)
+
+    let stdlibResult =
+        match tryFindDarkFile splitMarker with
+        | Some _ -> loadStdlibFiles stdlibFiles
+        | None -> loadDarkFile "stdlib.dark"
+
+    match stdlibResult with
     | Error e -> Error e
     | Ok (AST.Program stdlibItems) ->
         // Try to load unicode_data.dark (optional, may not exist in all environments)
