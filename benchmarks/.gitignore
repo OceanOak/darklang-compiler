@@ -1,5 +1,6 @@
 # Compiled binaries
 problems/*/dark/main
+problems/*/dark/quick
 problems/*/rust/main
 problems/*/haskell/main
 problems/*/ocaml/main

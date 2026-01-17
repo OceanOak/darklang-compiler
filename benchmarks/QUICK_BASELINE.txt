@@ -1,0 +1,23 @@
+# Quick benchmark baseline - instruction counts
+# Generated: 2026-01-17T20:12:57+00:00
+# Compiler: 1db6c43
+ackermann=3695812
+binary_trees=250898
+collatz=590647
+edigits=7363111
+factorial=44603
+fannkuch=819161
+fasta=3381569
+fib=525458
+leibniz=1300160
+mandelbrot=1582185
+matmul=66878
+merkletrees=2569311
+nqueen=1494435
+nsieve=971150
+pisum=130504
+primes=245242
+quicksort=3014730
+spectral_norm=147
+sum_to_n=700366
+tak=1781112

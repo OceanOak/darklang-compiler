@@ -1,0 +1,14 @@
+// Binary Trees Benchmark - Quick check version
+
+def countTree(depth: Int64) : Int64 =
+    if depth <= 0 then 1
+    else 1 + countTree(depth - 1) + countTree(depth - 1)
+
+def stressTest(depth: Int64, iterations: Int64, acc: Int64) : Int64 =
+    if iterations <= 0 then acc
+    else
+        let count = countTree(depth) in
+        stressTest(depth, iterations - 1, acc + count)
+
+// Reduced: depth 10, 5 iterations instead of depth 15, 100 iterations
+stressTest(10, 5, 0)
