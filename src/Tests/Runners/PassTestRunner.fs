@@ -159,12 +159,16 @@ let prettyPrintARM64Instr = function
         $"ADD_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
     | ARM64.ADD_reg (dest, src1, src2) ->
         $"ADD_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
+    | ARM64.ADD_shifted (dest, src1, src2, shift) ->
+        $"ADD_shifted({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, LSL #{shift})"
     | ARM64.SUB_imm (dest, src, imm) ->
         $"SUB_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
     | ARM64.SUB_imm12 (dest, src, imm) ->
         $"SUB_imm12({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
     | ARM64.SUB_reg (dest, src1, src2) ->
         $"SUB_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
+    | ARM64.SUB_shifted (dest, src1, src2, shift) ->
+        $"SUB_shifted({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, LSL #{shift})"
     | ARM64.SUBS_imm (dest, src, imm) ->
         $"SUBS_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
     | ARM64.MUL (dest, src1, src2) ->

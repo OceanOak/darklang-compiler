@@ -3378,6 +3378,26 @@ let peepholeOptimize (instrs: ARM64.Instr list) : ARM64.Instr list =
         // Remove branch to next instruction
         | ARM64.B_label target :: ARM64.Label lbl :: rest when target = lbl ->
             optimize (ARM64.Label lbl :: acc) rest
+        // Fuse LSL_imm + ADD_reg into ADD_shifted: dest = src1 + (src2 << shift)
+        // Pattern: LSL_imm temp, x, shift; ADD_reg dest, x, temp → ADD_shifted dest, x, x, shift
+        | ARM64.LSL_imm (lslDest, lslSrc, shift) :: ARM64.ADD_reg (addDest, addSrc1, addSrc2) :: rest
+            when lslDest = addSrc2 && lslSrc = addSrc1 ->
+            optimize (ARM64.ADD_shifted (addDest, addSrc1, lslSrc, shift) :: acc) rest
+        // Fuse LSL_imm + ADD_reg (commutative): ADD_reg dest, temp, x → ADD_shifted dest, x, x, shift
+        | ARM64.LSL_imm (lslDest, lslSrc, shift) :: ARM64.ADD_reg (addDest, addSrc1, addSrc2) :: rest
+            when lslDest = addSrc1 && lslSrc = addSrc2 ->
+            optimize (ARM64.ADD_shifted (addDest, addSrc2, lslSrc, shift) :: acc) rest
+        // Fuse LSL_imm + SUB_reg into SUB_shifted: dest = shifted - src
+        // Pattern: LSL_imm temp, x, shift; SUB_reg dest, temp, x → SUB_shifted dest, temp, x, 0 then adjust
+        // Actually for n = 2^k - 1: x * n = (x << k) - x, so SUB dest, shifted, x
+        // We need: SUB_shifted dest, (x << shift), x, 0 but that's not quite right...
+        // For x * 7 = (x << 3) - x: LSL temp, x, 3; SUB dest, temp, x
+        // This becomes: dest = temp - x = (x << 3) - x
+        // ARM64 SUB_shifted is: dest = src1 - (src2 << shift)
+        // So we need: dest = (x << 3) - x which is dest = (x << 3) - (x << 0)
+        // That's not directly expressible with SUB_shifted... but we can use:
+        // SUB dest, temp, x where temp = x << 3, which is two instructions
+        // Actually let's skip SUB fusion for now since it doesn't map cleanly to SUB_shifted
         | instr :: rest ->
             optimize (instr :: acc) rest
     optimize [] instrs

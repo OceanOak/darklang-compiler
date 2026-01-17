@@ -356,6 +356,78 @@ let isRegUsedInInstrs (reg: Reg) (instrs: Instr list) : bool =
         | _ -> false  // Conservative: assume not used for other instructions
     )
 
+/// Check if a value is suitable for multiply-by-constant strength reduction
+/// Returns Some (shift, isAdd) where:
+///   isAdd=true: n = 2^shift + 1 (e.g., 3=2+1, 5=4+1, 9=8+1)
+///   isAdd=false: n = 2^shift - 1 (e.g., 7=8-1, 15=16-1, 31=32-1)
+let tryMulConstantPattern (n: int64) : (int * bool) option =
+    match n with
+    | 3L -> Some (1, true)    // 3 = 2 + 1 = (1 << 1) + 1
+    | 5L -> Some (2, true)    // 5 = 4 + 1 = (1 << 2) + 1
+    | 7L -> Some (3, false)   // 7 = 8 - 1 = (1 << 3) - 1
+    | 9L -> Some (3, true)    // 9 = 8 + 1 = (1 << 3) + 1
+    | 15L -> Some (4, false)  // 15 = 16 - 1 = (1 << 4) - 1
+    | 17L -> Some (4, true)   // 17 = 16 + 1 = (1 << 4) + 1
+    | 31L -> Some (5, false)  // 31 = 32 - 1 = (1 << 5) - 1
+    | 33L -> Some (5, true)   // 33 = 32 + 1 = (1 << 5) + 1
+    | 63L -> Some (6, false)  // 63 = 64 - 1 = (1 << 6) - 1
+    | 65L -> Some (6, true)   // 65 = 64 + 1 = (1 << 6) + 1
+    | _ -> None
+
+/// Try to optimize multiply-by-constant patterns
+/// Pattern: Mov temp, Imm n; Mul dest, x, temp → Lsl_imm temp, x, shift; Add/Sub dest, x, Reg temp
+/// This converts multiplication by constants like 3, 5, 7, 9 to shift+add/sub sequences
+/// which ARM64 can execute in a single ADD_shifted/SUB_shifted instruction
+let tryMulByConstant (instrs: Instr list) : Instr list =
+    let rec loop acc remaining =
+        match remaining with
+        | [] -> List.rev acc
+        | [single] -> List.rev (single :: acc)
+        // Pattern: Mov temp, Imm n; Mul dest, x, temp
+        | Mov (constReg, Imm n) :: Mul (mulDest, mulLeft, mulRight) :: rest
+            when sameReg constReg mulRight && not (sameReg constReg mulLeft) ->
+            match tryMulConstantPattern n with
+            | Some (shift, isAdd) ->
+                // Check that constReg is not used later (dead after the Mul)
+                if not (isRegUsedInInstrs constReg rest) then
+                    // x * n where n = 2^shift ± 1
+                    // Reuse constReg for the shifted value
+                    let shiftInstr = Lsl_imm (constReg, mulLeft, shift)
+                    let combineInstr =
+                        if isAdd then
+                            // n = 2^shift + 1: x * n = (x << shift) + x
+                            Add (mulDest, mulLeft, Reg constReg)
+                        else
+                            // n = 2^shift - 1: x * n = (x << shift) - x
+                            Sub (mulDest, constReg, Reg mulLeft)
+                    loop (combineInstr :: shiftInstr :: acc) rest
+                else
+                    // constReg is still needed, can't optimize
+                    loop (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
+            | None ->
+                // Not an optimizable constant
+                loop (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
+        // Pattern: Mov temp, Imm n; Mul dest, temp, x (commutative)
+        | Mov (constReg, Imm n) :: Mul (mulDest, mulLeft, mulRight) :: rest
+            when sameReg constReg mulLeft && not (sameReg constReg mulRight) ->
+            match tryMulConstantPattern n with
+            | Some (shift, isAdd) ->
+                if not (isRegUsedInInstrs constReg rest) then
+                    let shiftInstr = Lsl_imm (constReg, mulRight, shift)
+                    let combineInstr =
+                        if isAdd then
+                            Add (mulDest, mulRight, Reg constReg)
+                        else
+                            Sub (mulDest, constReg, Reg mulRight)
+                    loop (combineInstr :: shiftInstr :: acc) rest
+                else
+                    loop (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
+            | None ->
+                loop (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
+        | instr :: rest ->
+            loop (instr :: acc) rest
+    loop [] instrs
+
 /// Try to fuse MUL + ADD into MADD (multiply-add)
 /// Pattern: MUL temp, a, b; ADD dest, temp, Reg c → MADD dest, a, b, c
 /// Or:      MUL temp, a, b; ADD dest, Reg c, temp → MADD dest, a, b, c (commutative)
@@ -472,8 +544,10 @@ let applyAndBitBranchFusion (instrs: Instr list) (terminator: Terminator) : (Ins
 /// Optimize a basic block (returns whether anything changed)
 let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
     let instrs' = optimizeInstrs block.Instrs
+    // Apply multiply-by-constant strength reduction (Mov + Mul → Lsl + Add/Sub)
+    let instrs1 = tryMulByConstant instrs'
     // Apply MUL + ADD → MADD fusion
-    let instrs'' = tryFuseMulAdd instrs'
+    let instrs'' = tryFuseMulAdd instrs1
 
     // Try to fuse Cset + Branch into CondBranch
     let (instrs''', terminator') =

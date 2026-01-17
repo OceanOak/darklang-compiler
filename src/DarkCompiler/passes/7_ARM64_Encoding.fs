@@ -99,6 +99,17 @@ let encode (instr: ARM64.Instr) : ARM64.MachineCode list =
         let rd = encodeReg dest
         [sf ||| op ||| rm ||| rn ||| rd]
 
+    | ARM64.ADD_shifted (dest, src1, src2, shiftAmt) ->
+        // ADD shifted register: sf=1 0 0 01011 shift=00(LSL) 0 Rm(5) imm6(6) Rn(5) Rd(5)
+        // dest = src1 + (src2 << shiftAmt)
+        let sf = 1u <<< 31
+        let op = 0b01011u <<< 24
+        let rm = (encodeReg src2) <<< 16
+        let imm6 = (uint32 shiftAmt) <<< 10  // shift amount in bits 15-10
+        let rn = (encodeReg src1) <<< 5
+        let rd = encodeReg dest
+        [sf ||| op ||| rm ||| imm6 ||| rn ||| rd]
+
     | ARM64.SUB_imm (dest, src, imm) ->
         // SUB immediate: sf=1 op=1 S=0 10001 shift(2) imm12(12) Rn(5) Rd(5)
         let sf = 1u <<< 31          // 64-bit operation
@@ -136,6 +147,19 @@ let encode (instr: ARM64.Instr) : ARM64.MachineCode list =
         let rn = (encodeReg src1) <<< 5
         let rd = encodeReg dest
         [sf ||| op ||| s ||| opcode ||| shift ||| rm ||| rn ||| rd]
+
+    | ARM64.SUB_shifted (dest, src1, src2, shiftAmt) ->
+        // SUB shifted register: sf=1 op=1 S=0 01011 shift=00(LSL) 0 Rm(5) imm6(6) Rn(5) Rd(5)
+        // dest = src1 - (src2 << shiftAmt)
+        let sf = 1u <<< 31  // 64-bit
+        let op = 1u <<< 30  // Subtract (not add)
+        let s = 0u <<< 29   // Don't set flags
+        let opcode = 0b01011u <<< 24
+        let rm = (encodeReg src2) <<< 16
+        let imm6 = (uint32 shiftAmt) <<< 10  // shift amount in bits 15-10
+        let rn = (encodeReg src1) <<< 5
+        let rd = encodeReg dest
+        [sf ||| op ||| s ||| opcode ||| rm ||| imm6 ||| rn ||| rd]
 
     | ARM64.SUBS_imm (dest, src, imm) ->
         // SUBS immediate: like SUB but sets condition flags

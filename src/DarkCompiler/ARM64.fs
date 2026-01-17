@@ -60,9 +60,11 @@ type Instr =
     | MOVK of dest:Reg * imm:uint16 * shift:int  // Move with keep
     | ADD_imm of dest:Reg * src:Reg * imm:uint16
     | ADD_reg of dest:Reg * src1:Reg * src2:Reg
+    | ADD_shifted of dest:Reg * src1:Reg * src2:Reg * shift:int  // ADD with shifted register: dest = src1 + (src2 << shift)
     | SUB_imm of dest:Reg * src:Reg * imm:uint16
     | SUB_imm12 of dest:Reg * src:Reg * imm:uint16  // SUB with shift=12, value = imm * 4096
     | SUB_reg of dest:Reg * src1:Reg * src2:Reg
+    | SUB_shifted of dest:Reg * src1:Reg * src2:Reg * shift:int  // SUB with shifted register: dest = src1 - (src2 << shift)
     | SUBS_imm of dest:Reg * src:Reg * imm:uint16  // SUB and set flags (for fused SUB+CMP)
     | MUL of dest:Reg * src1:Reg * src2:Reg
     | SDIV of dest:Reg * src1:Reg * src2:Reg
