@@ -69,6 +69,9 @@ RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"
     echo 'short_path() { pwd | sed "s|/Users/paulbiggar/projects/compiler-for-dark|~/c4d|" | sed "s|$HOME|~|"; }' >> ~/.bashrc && \
     echo 'PS1="\[\033[1;32m\]\u@dark\[\033[0m\]:\[\033[1;34m\]\$(short_path)\[\033[0m\]\[\033[1;33m\]\$(parse_git_branch | sed \"s/.*/ (&)/\")\[\033[0m\]\$ "' >> ~/.bashrc
 
+# Enable bash completion for git and other installed tools
+RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
+
 # Set working directory to match host path
 WORKDIR /Users/paulbiggar/projects/compiler-for-dark
 
