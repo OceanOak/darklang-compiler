@@ -82,11 +82,7 @@ render_status() {
             sub(/^ /, "")
             subject = $0
             if (length(subject) > 62) subject = substr(subject, 1, 62)
-            if (subject != "") {
-                print hash " " subject
-            } else {
-                print hash
-            }
+            print hash "\t" subject
         }')
     fi
 
@@ -179,7 +175,14 @@ END {
             log_index++
             log_line = (log_index <= log_count) ? log_array[log_index] : ""
             if (log_line != "") {
-                log_display = dim log_line nc
+                split(log_line, log_parts, "\t")
+                log_hash = log_parts[1]
+                log_subject = log_parts[2]
+                if (log_subject != "") {
+                    log_display = dim log_hash nc " " log_subject
+                } else {
+                    log_display = dim log_hash nc
+                }
             } else {
                 log_display = ""
             }
@@ -199,7 +202,14 @@ END {
         log_index++
         log_line = (log_index <= log_count) ? log_array[log_index] : ""
         if (log_line != "") {
-            log_display = dim log_line nc
+            split(log_line, log_parts, "\t")
+            log_hash = log_parts[1]
+            log_subject = log_parts[2]
+            if (log_subject != "") {
+                log_display = dim log_hash nc " " log_subject
+            } else {
+                log_display = dim log_hash nc
+            }
         } else {
             log_display = ""
         }
