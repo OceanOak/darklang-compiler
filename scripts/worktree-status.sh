@@ -79,26 +79,49 @@ render_status() {
     term_cols=$(tput cols 2>/dev/null || echo 120)
 
     if [ -n "$repo_root" ]; then
-        log_lines=$(git -C "$repo_root" log -8 --pretty=format:'%h%x1f%s%x1f%b%x1e' 2>/dev/null | python3 -c '
+        log_lines=$(git -C "$repo_root" log -11 --pretty=format:'%ct%x1f%h%x1f%s%x1f%b%x1e' 2>/dev/null | python3 -c '
 import sys
+import time
+
+def format_age(seconds):
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 60 * 60:
+        return f"{int(seconds // 60)}m"
+    if seconds < 60 * 60 * 24:
+        return f"{int(seconds // (60 * 60))}h"
+    if seconds < 60 * 60 * 24 * 7:
+        return f"{int(seconds // (60 * 60 * 24))}d"
+    if seconds < 60 * 60 * 24 * 30:
+        return f"{int(seconds // (60 * 60 * 24 * 7))}w"
+    if seconds < 60 * 60 * 24 * 365:
+        return f"{int(seconds // (60 * 60 * 24 * 30))}mo"
+    return f"{int(seconds // (60 * 60 * 24 * 365))}y"
 
 data = sys.stdin.read()
 records = data.split("\x1e")
 lines = []
+now = time.time()
 
 for rec in records:
     if not rec:
         continue
     parts = rec.split("\x1f")
-    if len(parts) < 2:
+    if len(parts) < 3:
         continue
-    log_hash = parts[0].strip()
-    subject = parts[1].replace("\r", " ").replace("\n", " ").strip()
-    body = parts[2] if len(parts) > 2 else ""
+    log_age = parts[0].strip()
+    log_hash = parts[1].strip()
+    subject = parts[2].replace("\r", " ").replace("\n", " ").strip()
+    body = parts[3] if len(parts) > 3 else ""
     body = body.replace("\r", " ").replace("\n", " ").strip()
-    if log_hash == "" and subject == "" and body == "":
+    if log_age == "" and log_hash == "" and subject == "" and body == "":
         continue
-    lines.append(f"{log_hash}\t{subject}\t{body}")
+    try:
+        age_seconds = max(0, now - float(log_age))
+    except ValueError:
+        age_seconds = 0
+    age_display = format_age(age_seconds)
+    lines.append(f"{age_display}\t{log_hash}\t{subject}\t{body}")
 
 sys.stdout.write("\n".join(lines))
 ')
@@ -172,6 +195,40 @@ BEGIN {
     if (log_count > 0 && log_array[log_count] == "") {
         log_count--
     }
+    max_log_age = 0
+    for (i = 1; i <= log_count; i++) {
+        split(log_array[i], log_parts, "\t")
+        log_age = log_parts[1]
+        if (vislen(log_age) > max_log_age) max_log_age = vislen(log_age)
+    }
+}
+function build_log_display(log_line, max_branch, max_status, term_cols, max_log_age, dim, nc) {
+    if (log_line == "") {
+        return ""
+    }
+    split(log_line, log_parts, "\t")
+    log_age = log_parts[1]
+    log_hash = log_parts[2]
+    log_subject = log_parts[3]
+    log_body = log_parts[4]
+    if (log_subject != "") {
+        normal_len = 62
+        normal_subject = substr(log_subject, 1, normal_len)
+        prefix_len = max_branch + 3 + 3 + 2 + max_status + 2 + max_log_age + 1 + length(log_hash) + 1 + length(normal_subject)
+        available = term_cols - prefix_len - 1
+        if (available < 0) available = 0
+        if (length(log_body) > available) log_body = substr(log_body, 1, available)
+        age_pad = max_log_age - vislen(log_age)
+        if (age_pad < 0) age_pad = 0
+        if (log_body != "") {
+            return dim log_age nc sprintf("%*s", age_pad, "") " " dim log_hash nc " " normal_subject dim " " log_body nc
+        } else {
+            return dim log_age nc sprintf("%*s", age_pad, "") " " dim log_hash nc " " normal_subject
+        }
+    }
+    age_pad = max_log_age - vislen(log_age)
+    if (age_pad < 0) age_pad = 0
+    return dim log_age nc sprintf("%*s", age_pad, "") " " dim log_hash nc
 }
 {
     branches[NR] = $2
@@ -182,7 +239,7 @@ BEGIN {
     if (vislen($5) > max_status) max_status = vislen($5)
 }
 END {
-    max_rows = 8
+    max_rows = 11
     max_visible = (NR > (max_rows - 1)) ? (max_rows - 1) : NR
     rows = max_rows
     max_branch_limit = 8
@@ -192,29 +249,7 @@ END {
         if (i == max_visible + 1) {
             log_index++
             log_line = (log_index <= log_count) ? log_array[log_index] : ""
-            if (log_line != "") {
-                split(log_line, log_parts, "\t")
-                log_hash = log_parts[1]
-                log_subject = log_parts[2]
-                log_body = log_parts[3]
-                if (log_subject != "") {
-                    normal_len = 62
-                    normal_subject = substr(log_subject, 1, normal_len)
-                    prefix_len = max_branch + 3 + 3 + 2 + max_status + 2 + length(log_hash) + 1 + length(normal_subject)
-                    available = term_cols - prefix_len - 1
-                    if (available < 0) available = 0
-                    if (length(log_body) > available) log_body = substr(log_body, 1, available)
-                    if (log_body != "") {
-                        log_display = dim log_hash nc " " normal_subject dim " " log_body nc
-                    } else {
-                        log_display = dim log_hash nc " " normal_subject
-                    }
-                } else {
-                    log_display = dim log_hash nc
-                }
-            } else {
-                log_display = ""
-            }
+            log_display = build_log_display(log_line, max_branch, max_status, term_cols, max_log_age, dim, nc)
             pad_context = max_branch - vislen(context)
             if (pad_context < 0) pad_context = 0
             printf "%s%s%s%*s   %s  %*s  %s\n", dim, context, nc, pad_context, "", "   ", max_status, "", log_display
@@ -230,29 +265,7 @@ END {
         status = (data_index <= max_visible) ? statuses[data_index] : ""
         log_index++
         log_line = (log_index <= log_count) ? log_array[log_index] : ""
-        if (log_line != "") {
-            split(log_line, log_parts, "\t")
-            log_hash = log_parts[1]
-            log_subject = log_parts[2]
-            log_body = log_parts[3]
-            if (log_subject != "") {
-                normal_len = 62
-                normal_subject = substr(log_subject, 1, normal_len)
-                prefix_len = max_branch + 3 + 3 + 2 + max_status + 2 + length(log_hash) + 1 + length(normal_subject)
-                available = term_cols - prefix_len - 1
-                if (available < 0) available = 0
-                if (length(log_body) > available) log_body = substr(log_body, 1, available)
-                if (log_body != "") {
-                    log_display = dim log_hash nc " " normal_subject dim " " log_body nc
-                } else {
-                    log_display = dim log_hash nc " " normal_subject
-                }
-            } else {
-                log_display = dim log_hash nc
-            }
-        } else {
-            log_display = ""
-        }
+        log_display = build_log_display(log_line, max_branch, max_status, term_cols, max_log_age, dim, nc)
         pad_branch = max_branch - vislen(label)
         if (pad_branch < 0) pad_branch = 0
         pad_status = max_status - vislen(status)
