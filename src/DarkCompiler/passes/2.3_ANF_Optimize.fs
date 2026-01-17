@@ -145,6 +145,9 @@ let tryStrengthReduce (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
         match tryLog2 n with
         | Some shift -> Some (Prim (Shr, x, IntLiteral (Int64 shift)))
         | None -> None
+    // Float strength reduction: 2.0 * x -> x + x
+    | Mul, FloatLiteral 2.0, x -> Some (Prim (Add, x, x))
+    | Mul, x, FloatLiteral 2.0 -> Some (Prim (Add, x, x))
     | _ -> None
 
 /// Fold a unary operation on constants
