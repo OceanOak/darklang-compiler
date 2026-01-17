@@ -11,6 +11,7 @@
 - reimplement test suite in Darklang
 - complete Unicode string support
 - add optimizations
+- remove crashes
 
 # Short term
 
