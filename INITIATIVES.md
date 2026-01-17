@@ -12,6 +12,9 @@
 - complete Unicode string support
 - add optimizations
 - remove crashes
+- end-to-end SSA
+- SSA-based HIR (sub ANF?)
+- SCCP-based HIR, MIR, and LIR optimizations
 
 # Short term
 
