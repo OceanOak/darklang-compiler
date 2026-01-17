@@ -896,12 +896,10 @@ let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
         Parser.parseStringAllowInternal source
         |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
 
-/// Load the stdlib.dark and unicode_data.dark files
+/// Load the stdlib and unicode_data.dark files
 /// Returns the merged stdlib AST or an error message
 let loadStdlib () : Result<AST.Program, string> =
-    let splitMarker = "stdlib/00_split_marker.dark"
     let stdlibFiles = [
-        splitMarker
         "stdlib/Int64.dark"
         "stdlib/Bool.dark"
         "stdlib/Tuple2.dark"
@@ -931,10 +929,7 @@ let loadStdlib () : Result<AST.Program, string> =
         | Error err -> Error err
         | Ok items -> Ok (AST.Program items)
 
-    let stdlibResult =
-        match tryFindDarkFile splitMarker with
-        | Some _ -> loadStdlibFiles stdlibFiles
-        | None -> loadDarkFileAllowInternal "stdlib.dark"
+    let stdlibResult = loadStdlibFiles stdlibFiles
 
     match stdlibResult with
     | Error e -> Error e

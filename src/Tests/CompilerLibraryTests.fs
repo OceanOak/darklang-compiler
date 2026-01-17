@@ -29,15 +29,4 @@ let testNoCompileWithStdlibAst () : TestResult =
 
 let tests = [
     ("no compileWithStdlibAST", testNoCompileWithStdlibAst)
-    ("stdlib loads split files", fun () ->
-        match CompilerLibrary.loadStdlib () with
-        | Error err -> Error $"Stdlib load failed: {err}"
-        | Ok (Program items) ->
-            let hasMarker =
-                items
-                |> List.exists (function
-                    | FunctionDef def -> def.Name = "Stdlib.__StdlibSplitMarker.ping"
-                    | _ -> false)
-            if hasMarker then Ok ()
-            else Error "Stdlib split marker function not found in loaded stdlib AST.")
 ]

@@ -67,13 +67,13 @@ let fileModule : ModuleDef = {
 }
 
 /// Stdlib.Path module - path operations
-/// combine is defined in stdlib.dark, tempDir is constant-folded at compile time
+/// combine is defined in stdlib/Path.dark, tempDir is constant-folded at compile time
 let pathModule : ModuleDef = {
     Name = "Stdlib.Path"
     Functions = [
         // tempDir : () -> String - returns system temp directory
         { Name = "tempDir"; TypeParams = []; ParamTypes = []; ReturnType = TString }
-        // combine is defined in stdlib.dark
+        // combine is defined in stdlib/Path.dark
     ]
 }
 

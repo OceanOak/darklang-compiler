@@ -6185,7 +6185,7 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
         Error "Function name 'main' is reserved"
     else
 
-    // Stdlib functions are now loaded from stdlib.dark and included as regular functions
+    // Stdlib functions are now loaded from split stdlib files and included as regular functions
     convertFunctions functions varGen []
     |> Result.bind (fun (anfFuncs, varGen1) ->
         match expressions with
@@ -6665,7 +6665,7 @@ let convertProgram (program: AST.Program) : Result<ANF.Program, string> =
         Error "Function name 'main' is reserved"
     else
 
-    // Stdlib functions are now loaded from stdlib.dark and included as regular functions
+    // Stdlib functions are now loaded from split stdlib files and included as regular functions
     convertFunctions functions ANF.initialVarGen []
     |> Result.bind (fun (anfFuncs, vg) ->
         match expressions with
