@@ -25,15 +25,15 @@ worktree_status_flags() {
 
     if [ -n "$porcelain" ]; then
         if echo "$porcelain" | grep -q '^[MADRCU]'; then
-            staged="${YELLOW}s${NC}"
+            staged="${CYAN}s${NC}"
         fi
 
         if echo "$porcelain" | grep -q '^.[MADRCU]'; then
-            unstaged="${YELLOW}u${NC}"
+            unstaged="${CYAN}u${NC}"
         fi
 
         if echo "$porcelain" | grep -q '^\?\?'; then
-            untracked="${YELLOW}?${NC}"
+            untracked="${CYAN}?${NC}"
         fi
     fi
 
@@ -58,6 +58,16 @@ worktree_unpushed_count() {
     fi
 
     echo " ${RED}↑ ${count} unpushed${NC}"
+}
+
+format_count() {
+    local count="$1"
+
+    if [[ "$count" =~ ^[0-9]+$ ]]; then
+        printf "%02d" "$count"
+    else
+        printf "%s" "$count"
+    fi
 }
 
 render_status() {
@@ -94,12 +104,20 @@ render_status() {
             prunable=""
         fi
 
+        display_branch="$branch"
+        if [[ "$display_branch" == compiler-for-dark-* ]]; then
+            display_branch="${display_branch#compiler-for-dark-}"
+        elif [[ "$display_branch" == compiler-for-dark* ]]; then
+            display_branch="${display_branch#compiler-for-dark}"
+            display_branch="${display_branch#-}"
+        fi
+
         # Check if worktree path exists and is accessible
         if [ -d "$path" ] && git -C "$path" rev-parse HEAD &>/dev/null; then
             status_flags=$(worktree_status_flags "$path")
 
-            if [ "$branch" = "main" ]; then
-                unpushed=$(worktree_unpushed_count "$path")
+        if [ "$branch" = "main" ]; then
+            unpushed=$(worktree_unpushed_count "$path")
                 status="${GREEN}✓${NC}${unpushed}${prunable}"
                 echo -e "0\tmain\t${CYAN}main${NC}\t${status_flags}\t${status}"
                 continue
@@ -107,22 +125,24 @@ render_status() {
 
         ahead=$(git -C "$path" rev-list --count main..HEAD 2>/dev/null || echo "?")
         behind=$(git -C "$path" rev-list --count HEAD..main 2>/dev/null || echo "?")
+        ahead_fmt=$(format_count "$ahead")
+        behind_fmt=$(format_count "$behind")
 
         if [ "$ahead" = "0" ] && [ "$behind" = "0" ]; then
-            status="${GREEN}✓ merged${NC}${prunable}"
+            status="${GREEN}✓${NC}${prunable}"
         elif [ "$ahead" = "0" ]; then
-            status="${YELLOW}↓ ${behind} behind${NC}${prunable}"
+            status="${YELLOW}↓${behind_fmt}${NC}${prunable}"
         elif [ "$behind" = "0" ]; then
-            status="${RED}↑ ${ahead} ahead${NC}${prunable}"
+            status="${RED}↑${ahead_fmt}${NC}${prunable}"
         else
-            status="${RED}↑ ${ahead} ahead, ↓ ${behind} behind${NC}${prunable}"
+            status="${RED}↑${ahead_fmt} ↓${behind_fmt}${NC}${prunable}"
         fi
         else
             status="${DIM}(inaccessible)${NC}${prunable}"
             status_flags="   "
         fi
 
-        echo -e "1\t${branch}\t${branch}\t${status_flags}\t${status}"
+        echo -e "1\t${branch}\t${display_branch}\t${status_flags}\t${status}"
     done
     } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" -v log_lines="$log_lines" '
 function vislen(s, t) {
@@ -149,12 +169,35 @@ BEGIN {
 }
 END {
     max_rows = 8
-    rows = (NR > max_rows) ? NR : max_rows
+    max_visible = (NR > (max_rows - 1)) ? (max_rows - 1) : NR
+    rows = max_rows
+    max_branch_limit = 8
+    if (max_branch > max_branch_limit) max_branch = max_branch_limit
+    log_index = 0
     for (i = 1; i <= rows; i++) {
-        label = (i <= NR) ? labels[i] : ""
-        bit = (i <= NR) ? bits[i] : "   "
-        status = (i <= NR) ? statuses[i] : ""
-        log_line = (i <= log_count) ? log_array[i] : ""
+        if (i == max_visible + 1) {
+            log_index++
+            log_line = (log_index <= log_count) ? log_array[log_index] : ""
+            if (log_line != "") {
+                log_display = dim log_line nc
+            } else {
+                log_display = ""
+            }
+            pad_context = max_branch - vislen(context)
+            if (pad_context < 0) pad_context = 0
+            printf "%s%s%s%*s   %s  %*s  %s\n", dim, context, nc, pad_context, "", "   ", max_status, "", log_display
+            continue
+        }
+
+        data_index = (i > max_visible + 1) ? i - 1 : i
+        label = (data_index <= max_visible) ? labels[data_index] : ""
+        if (label !~ /\x1B/ && vislen(label) > max_branch) {
+            label = substr(label, 1, max_branch)
+        }
+        bit = (data_index <= max_visible) ? bits[data_index] : "   "
+        status = (data_index <= max_visible) ? statuses[data_index] : ""
+        log_index++
+        log_line = (log_index <= log_count) ? log_array[log_index] : ""
         if (log_line != "") {
             log_display = dim log_line nc
         } else {
@@ -164,13 +207,8 @@ END {
         if (pad_branch < 0) pad_branch = 0
         pad_status = max_status - vislen(status)
         if (pad_status < 0) pad_status = 0
-        printf "%s%*s  %s  %s%*s  %s\n", label, pad_branch, "", bit, status, pad_status, "", log_display
+        printf "%s%*s   %s  %s%*s  %s\n", label, pad_branch, "", bit, status, pad_status, "", log_display
     }
-    context_trim = context
-    if (vislen(context_trim) > max_branch) {
-        context_trim = substr(context_trim, 1, max_branch)
-    }
-    printf "%s%-*s%s\n", dim, max_branch, context_trim, nc
 }
 '
 }
@@ -185,7 +223,7 @@ tput smcup 2>/dev/null || true
 tput civis 2>/dev/null || true
 
 while true; do
-    context="updated $(date +'%H:%M:%S')"
+    context="$(date +'%H:%M:%S')"
     output="$(render_status)"
     printf "\033[H\033[J%s\n" "$output"
     if read -rs -n 1 -t 2 key; then
