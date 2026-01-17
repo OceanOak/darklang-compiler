@@ -8,6 +8,7 @@
 #   --parallel=N       Run with N parallel test workers
 #   --verification     Enable verification/stress tests
 #   --build-only       Only build, don't run tests
+#   --quiet            Quiet mode: print "success" or list failed tests
 #   -h, --help         Show this help message
 #
 # Examples:
@@ -23,6 +24,7 @@ set -e
 FILTER=""
 PARALLEL=""
 BUILD_ONLY=false
+QUIET=false
 HELP=false
 TEST_ARGS=()
 
@@ -44,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --build-only)
             BUILD_ONLY=true
+            shift
+            ;;
+        --quiet)
+            QUIET=true
             shift
             ;;
         -h|--help)
@@ -69,6 +75,7 @@ if [ "$HELP" = true ]; then
     echo "  --parallel=N       Run with N parallel test workers"
     echo "  --verification     Enable verification/stress tests"
     echo "  --build-only       Only build, don't run tests"
+    echo "  --quiet            Quiet mode: print 'success' or list failed tests"
     echo "  -h, --help         Show this help message"
     echo ""
     echo "Examples:"
@@ -93,12 +100,21 @@ cd "$SCRIPT_DIR"
 . "$SCRIPT_DIR/scripts/test-common.sh"
 
 # Build
-if ! build_tests "$SCRIPT_DIR" "$SCRIPT_DIR/NuGet.Config"; then
-    exit 1
+if [ "$QUIET" = true ]; then
+    if ! build_tests "$SCRIPT_DIR" "$SCRIPT_DIR/NuGet.Config" > /dev/null 2>&1; then
+        echo "build failed"
+        exit 1
+    fi
+else
+    if ! build_tests "$SCRIPT_DIR" "$SCRIPT_DIR/NuGet.Config"; then
+        exit 1
+    fi
 fi
 
 if [ "$BUILD_ONLY" = true ]; then
-    echo "Build-only mode, skipping tests."
+    if [ "$QUIET" != true ]; then
+        echo "Build-only mode, skipping tests."
+    fi
     exit 0
 fi
 
@@ -106,4 +122,23 @@ fi
 TEST_EXE="$(find_test_exe "$SCRIPT_DIR" "Try running the build first.")" || exit 1
 
 # Run tests
-run_tests "$TEST_EXE" "${TEST_ARGS[@]}"
+if [ "$QUIET" = true ]; then
+    EXIT_CODE=0
+    OUTPUT=$("$TEST_EXE" "${TEST_ARGS[@]}" 2>&1) || EXIT_CODE=$?
+    # Check for failures by looking for FAIL lines
+    FAILED=$(echo "$OUTPUT" | grep -E "^\s*FAIL\s+" || true)
+    if [ $EXIT_CODE -ne 0 ] || [ -n "$FAILED" ]; then
+        echo "failed tests:"
+        if [ -n "$FAILED" ]; then
+            echo "$FAILED"
+        else
+            echo "(test runner exited with code $EXIT_CODE)"
+        fi
+        exit 1
+    else
+        echo "success"
+        exit 0
+    fi
+else
+    run_tests "$TEST_EXE" "${TEST_ARGS[@]}"
+fi

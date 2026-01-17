@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quick benchmark check for regression detection
-# Usage: ./benchmarks/quick_check.sh [--fast] [--save-baseline] [--build]
+# Usage: ./benchmarks/quick_check.sh [--fast] [--save-baseline] [--build] [--quiet]
 #
 # Runs reduced-size benchmarks under cachegrind to detect instruction count regressions.
 # Deterministic instruction counts allow precise regression detection.
@@ -9,6 +9,7 @@
 #   --fast             Run only 5 key benchmarks (~5s instead of ~20s)
 #   --save-baseline    Save current counts as new baseline (run after intentional changes)
 #   --build            Force rebuild all benchmarks (otherwise only rebuilds if source changed)
+#   --quiet            Quiet mode: print "success" or list regressions
 
 set -e
 
@@ -20,6 +21,7 @@ BASELINE_FILE="$SCRIPT_DIR/QUICK_BASELINE.txt"
 SAVE_BASELINE=false
 FORCE_BUILD=false
 FAST_MODE=false
+QUIET_MODE=false
 REGRESSION_THRESHOLD=0  # Any increase is a regression (deterministic counts)
 
 # Key benchmarks for fast mode (diverse coverage: recursion, loops, floats, lists, bitops)
@@ -40,9 +42,13 @@ while [[ $# -gt 0 ]]; do
             FORCE_BUILD=true
             shift
             ;;
+        --quiet)
+            QUIET_MODE=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--fast] [--save-baseline] [--build]"
+            echo "Usage: $0 [--fast] [--save-baseline] [--build] [--quiet]"
             exit 1
             ;;
     esac
@@ -50,17 +56,23 @@ done
 
 # Check for valgrind
 if ! command -v valgrind &> /dev/null; then
-    pretty_fail "valgrind is not installed"
-    pretty_info "Install with: sudo apt-get install valgrind"
+    if [ "$QUIET_MODE" = true ]; then
+        echo "valgrind not installed"
+    else
+        pretty_fail "valgrind is not installed"
+        pretty_info "Install with: sudo apt-get install valgrind"
+    fi
     exit 1
 fi
 
-if [ "$FAST_MODE" = true ]; then
-    pretty_section "Quick benchmark check (fast mode - 5 benchmarks)"
-else
-    pretty_section "Quick benchmark check for regression detection"
+if [ "$QUIET_MODE" != true ]; then
+    if [ "$FAST_MODE" = true ]; then
+        pretty_section "Quick benchmark check (fast mode - 5 benchmarks)"
+    else
+        pretty_section "Quick benchmark check for regression detection"
+    fi
+    echo ""
 fi
-echo ""
 
 # Find all quick.dark files
 if [ "$FAST_MODE" = true ]; then
@@ -111,7 +123,9 @@ for bench in $BENCHMARKS; do
     if [ "$NEEDS_BUILD" = true ]; then
         if ! "$PROJECT_ROOT/dark" "$QUICK_DARK" -o "$QUICK_BIN" -q 2>/dev/null; then
             BUILD_FAILURES+=("$bench")
-            pretty_warn "$bench: build failed"
+            if [ "$QUIET_MODE" != true ]; then
+                pretty_warn "$bench: build failed"
+            fi
             continue
         fi
         chmod +x "$QUICK_BIN"
@@ -123,7 +137,9 @@ for bench in $BENCHMARKS; do
 
     if [ -z "$I_REFS" ]; then
         FAILURES+=("$bench: cachegrind failed")
-        pretty_warn "$bench: cachegrind failed"
+        if [ "$QUIET_MODE" != true ]; then
+            pretty_warn "$bench: cachegrind failed"
+        fi
         continue
     fi
 
@@ -136,23 +152,33 @@ for bench in $BENCHMARKS; do
         DIFF=$((I_REFS - BASELINE_COUNT))
         if [ "$DIFF" -gt "$REGRESSION_THRESHOLD" ]; then
             FAILURES+=("$bench: regression +$DIFF instructions ($BASELINE_COUNT -> $I_REFS)")
-            pretty_fail "$bench: $I_REFS (+$DIFF regression)"
+            if [ "$QUIET_MODE" != true ]; then
+                pretty_fail "$bench: $I_REFS (+$DIFF regression)"
+            fi
         elif [ "$DIFF" -lt 0 ]; then
-            pretty_ok "$bench: $I_REFS ($DIFF improvement)"
+            if [ "$QUIET_MODE" != true ]; then
+                pretty_ok "$bench: $I_REFS ($DIFF improvement)"
+            fi
         else
-            pretty_ok "$bench: $I_REFS (unchanged)"
+            if [ "$QUIET_MODE" != true ]; then
+                pretty_ok "$bench: $I_REFS (unchanged)"
+            fi
         fi
     else
-        pretty_info "$bench: $I_REFS (no baseline)"
+        if [ "$QUIET_MODE" != true ]; then
+            pretty_info "$bench: $I_REFS (no baseline)"
+        fi
     fi
 done
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 
-echo ""
-pretty_info "Total instructions: $TOTAL_INSTRUCTIONS"
-pretty_info "Elapsed time: ${ELAPSED}s"
+if [ "$QUIET_MODE" != true ]; then
+    echo ""
+    pretty_info "Total instructions: $TOTAL_INSTRUCTIONS"
+    pretty_info "Elapsed time: ${ELAPSED}s"
+fi
 
 # Save baseline if requested
 if [ "$SAVE_BASELINE" = true ]; then
@@ -164,23 +190,47 @@ if [ "$SAVE_BASELINE" = true ]; then
             echo "$bench=${RESULTS[$bench]}" >> "$BASELINE_FILE"
         fi
     done
-    pretty_ok "Baseline saved to $BASELINE_FILE"
+    if [ "$QUIET_MODE" != true ]; then
+        pretty_ok "Baseline saved to $BASELINE_FILE"
+    fi
 fi
 
 # Report failures
+HAS_FAILURES=false
+
 if [ ${#BUILD_FAILURES[@]} -ne 0 ]; then
-    echo ""
-    pretty_fail "Build failures: ${BUILD_FAILURES[*]}"
+    HAS_FAILURES=true
+    if [ "$QUIET_MODE" = true ]; then
+        echo "build failures: ${BUILD_FAILURES[*]}"
+    else
+        echo ""
+        pretty_fail "Build failures: ${BUILD_FAILURES[*]}"
+    fi
 fi
 
 if [ ${#FAILURES[@]} -ne 0 ]; then
-    echo ""
-    pretty_fail "Regressions detected:"
-    for failure in "${FAILURES[@]}"; do
-        echo "  - $failure"
-    done
+    HAS_FAILURES=true
+    if [ "$QUIET_MODE" = true ]; then
+        echo "regressions:"
+        for failure in "${FAILURES[@]}"; do
+            echo "  $failure"
+        done
+    else
+        echo ""
+        pretty_fail "Regressions detected:"
+        for failure in "${FAILURES[@]}"; do
+            echo "  - $failure"
+        done
+    fi
+fi
+
+if [ "$HAS_FAILURES" = true ]; then
     exit 1
 fi
 
-echo ""
-pretty_ok "No regressions detected"
+if [ "$QUIET_MODE" = true ]; then
+    echo "success"
+else
+    echo ""
+    pretty_ok "No regressions detected"
+fi
