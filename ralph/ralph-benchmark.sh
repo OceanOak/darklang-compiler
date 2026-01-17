@@ -73,19 +73,12 @@ For each optimization opportunity, document:
 
 Write findings to: docs/investigations/benchmark-${benchmark}-optimization.md
 
-## Phase 5: Create Beads Issues
-
-For EACH optimization suggestion, create a bd issue:
-\`\`\`bash
-bd create --title=\"Optimization: {TITLE}\" --type=task --priority=2 --description=\"{DETAILED_DESCRIPTION_WITH_EVIDENCE}\"
-\`\`\`
-
-## Phase 6: Completion Check
+## Phase 5: Completion Check
 
 Verify:
 - [ ] Investigation document created
 - [ ] At least 2 optimization suggestions identified
-- [ ] Each suggestion has a bd issue with IR/asm evidence
+- [ ] Each suggestion includes IR/asm evidence
 ") || true
 
   echo "$result"

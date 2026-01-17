@@ -49,10 +49,6 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
     opam install ocamlfind --yes && \
     echo 'eval $(opam env)' >> ~/.bashrc
 
-# Install beads (bd) issue tracking with bash completion
-RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash && \
-    echo 'source <(bd completion bash)' >> ~/.bashrc
-
 # Install darklang interpreter
 RUN mkdir -p ~/.local/bin && \
     curl -sSL https://github.com/darklang/dark/releases/download/v0.0.4/darklang-alpha-2c1adf536e-linux-arm64.gz | \

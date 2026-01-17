@@ -1,9 +1,5 @@
 # Dark Compiler - AI Agent Guidelines
 
-## Task tracking
-
-We use 'bd' for task tracking. See WORKFLOW.md.
-
 ## Quick Overview
 
 - **Language**: Pure functional F# (no mutable state, no exceptions)

@@ -9,13 +9,13 @@ iterations="${1:-1}"
 # This prompt is basic, we'll expand it later.
 for ((i=1; i<=$iterations; i++)); do
   result=$(codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-5.2-codex \
-"Use Beads for planning and progress tracking. \
-1. Decide which issue to work on next using bd ready/bd list/bd show. \
+"Use the project issue tracker for planning and progress tracking. \
+1. Decide which issue to work on next using the tracker or TODO.md. \
 This should be the one YOU decide has the highest priority, \
 - not necessarily the first in the list. \
 2. Update the issue to in_progress before starting work. \
 3. Check any feedback loops, such as types and tests. Verify code compiles, tests pass, and benchmarks are not slower. NEVER commit anything not hitting these quality thresholds. \
-4. Record progress with bd comments add <issue-id> \"...\" and close the issue with bd close when complete. \
+4. Record progress in the issue tracker and close the issue when complete. \
 5. Some tasks will involved many thousands of small-ish fixes, such as improving performance or test coverage. In the main task, only add the issues - they can be solved later. EXCEPTION: truly tiny fixes \
 6. Make a git commit of that feature. \
 ONLY WORK ON A SINGLE ISSUE. \
