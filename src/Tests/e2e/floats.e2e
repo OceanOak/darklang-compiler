@@ -124,3 +124,19 @@ def floatSumLoop(i: Int64, n: Int64, acc: Float) : Float = if i >= n then acc el
 
 // Leibniz pi approximation (uses float in recursive control flow)
 def leibnizLoop(i: Int64, n: Int64, sum: Float, sign: Float) : Float = if i >= n then sum * 4.0 else let term = sign / Stdlib.Int64.toFloat(2 * i + 1) in leibnizLoop(i + 1, n, sum + term, Stdlib.Float.negate(sign)) def leibnizPi(n: Int64) : Float = leibnizLoop(0, n, 0.0, 1.0) leibnizPi(10) = 3.04
+
+// =====================================================
+// Return type inference via temporary variables
+// Tests that computed values stored in let-bindings have
+// correct types tracked through the TypeMap. Regression
+// test for TInt64 fallback removal in getExprReturnType.
+// =====================================================
+
+// Float computed from two int-to-float conversions stored in a temp
+def floatViaTemp(a: Int64, b: Int64) : Float = let x = Stdlib.Int64.toFloat(a) in let y = Stdlib.Int64.toFloat(b) in let result = x + y in result floatViaTemp(3, 4) = 7.0
+
+// Float computed through nested let-bindings
+def nestedFloatLets(n: Int64) : Float = let a = Stdlib.Int64.toFloat(n) in let b = a * 2.0 in let c = b + 1.0 in c nestedFloatLets(5) = 11.0
+
+// Float returned from deeply nested computation
+def deepNestedFloat(x: Int64) : Float = let f1 = Stdlib.Int64.toFloat(x) in let f2 = f1 + f1 in let f3 = f2 * f2 in let f4 = f3 / 2.0 in f4 deepNestedFloat(3) = 18.0

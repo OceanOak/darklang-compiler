@@ -256,7 +256,7 @@ let rec getExprReturnType (floatRegs: Set<int>) (typeMap: ANF.TypeMap) (returnTy
             else
                 match Map.tryFind (ANF.TempId id) typeMap with
                 | Some t -> t
-                | None -> AST.TInt64
+                | None -> Crash.crash $"getExprReturnType: unknown type for TempId {id}"
         | ANF.FuncRef _ -> AST.TInt64
     | ANF.Let (ANF.TempId destId, cexpr, rest) ->
         // Update floatRegs if this binding produces a float
