@@ -6,8 +6,10 @@
 module TestDSL.OptimizationTestRunner
 
 open System
+open AST
 open TestDSL.OptimizationFormat
 open IRPrinter
+open StdlibTestHarness
 
 /// Result of running an optimization test
 type OptimizationTestResult = {
@@ -16,6 +18,28 @@ type OptimizationTestResult = {
     Expected: string option
     Actual: string option
 }
+
+let private externalReturnTypes : Map<string, AST.Type> =
+    Map.ofList [
+        ("__hash_i64", TInt64)
+        ("__hash_str", TInt64)
+        ("__hash_bool", TInt64)
+        ("__hash_unknown", TInt64)
+        ("__key_eq_i64", TBool)
+        ("__key_eq_str", TBool)
+        ("__key_eq_bool", TBool)
+        ("__key_eq_unknown", TBool)
+        ("__string_hash", TInt64)
+        ("__string_eq", TBool)
+    ]
+
+let private typeCheckWithStdlib (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
+    match getSharedStdlibResult () with
+    | Error err -> Error $"Stdlib compile error: {err}"
+    | Ok stdlib ->
+        match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv ast with
+        | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
+        | Ok (programType, typedAst, _env) -> Ok (programType, typedAst)
 
 /// Normalize IR output for comparison
 /// - Trim whitespace
@@ -34,8 +58,8 @@ let getOptimizedANF (source: string) : Result<string, string> =
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match TypeChecking.checkProgram ast with
-        | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
+        match typeCheckWithStdlib ast with
+        | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
             match AST_to_ANF.convertProgramWithTypes typedAst with
@@ -54,8 +78,8 @@ let getOptimizedMIR (source: string) : Result<string, string> =
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match TypeChecking.checkProgram ast with
-        | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
+        match typeCheckWithStdlib ast with
+        | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
             match AST_to_ANF.convertProgramWithTypes typedAst with
@@ -74,7 +98,7 @@ let getOptimizedMIR (source: string) : Result<string, string> =
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR
-                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false Map.empty with
+                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes with
                     | Error e -> Error $"MIR conversion error: {e}"
                     | Ok mirProgram ->
                         // SSA construction
@@ -94,8 +118,8 @@ let getOptimizedLIR (source: string) : Result<string, string> =
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match TypeChecking.checkProgram ast with
-        | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
+        match typeCheckWithStdlib ast with
+        | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
             match AST_to_ANF.convertProgramWithTypes typedAst with
@@ -114,7 +138,7 @@ let getOptimizedLIR (source: string) : Result<string, string> =
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR
-                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false Map.empty with
+                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes with
                     | Error e -> Error $"MIR conversion error: {e}"
                     | Ok mirProgram ->
                         // SSA construction and optimization

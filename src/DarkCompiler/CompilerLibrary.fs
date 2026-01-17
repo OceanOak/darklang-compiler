@@ -907,6 +907,7 @@ let loadStdlib () : Result<AST.Program, string> =
         "stdlib/Path.dark"
         "stdlib/Platform.dark"
         "stdlib/String.dark"
+        "stdlib/__Hash.dark"
         "stdlib/Dict.dark"
         "stdlib/__HAMT.dark"
         "stdlib/Uuid.dark"

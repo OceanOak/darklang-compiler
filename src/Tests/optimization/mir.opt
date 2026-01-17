@@ -14,9 +14,9 @@ loop(3, 0)
 ---EXPECTED---
 Function loop:
   loop_entry:
-    v10015 <- StringHash(str[hello])
     jump loop_body
   loop_L1:
+    v10015 <- Call(__hash_str, [str[hello]])
     v10016 <- v10013 - 1 : TInt64
     v10017 <- v10012 + v10015 : TInt64
     v10018 <- v10016 : TInt64

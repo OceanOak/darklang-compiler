@@ -7,3 +7,8 @@ Stdlib.String.__isLowercase(65) = false
 Stdlib.String.__isUppercase(65) = true
 Stdlib.String.__isUppercase(90) = true
 Stdlib.String.__isUppercase(97) = false
+
+__string_hash("") = -3750763034362895579
+__string_hash("hello") = -6615550055289275125
+__string_eq("hello", "hello") = true
+__string_eq("hello", "hella") = false

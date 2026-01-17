@@ -149,11 +149,6 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
         Some (ANF.Atom ptrAtom)
     | "__int64_to_rawptr", [intAtom] ->
         Some (ANF.Atom intAtom)
-    // String intrinsics for Dict with string keys
-    | "__string_hash", [strAtom] ->
-        Some (ANF.StringHash strAtom)
-    | "__string_eq", [leftAtom; rightAtom] ->
-        Some (ANF.StringEq (leftAtom, rightAtom))
     // String refcount intrinsics (for Dict with string keys)
     | "__refcount_inc_string", [strAtom] ->
         Some (ANF.RefCountIncString strAtom)
@@ -205,25 +200,6 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     | name, [] when name = "__list_empty" || name.StartsWith("__list_empty_") ->
         Some (ANF.Atom (ANF.IntLiteral (ANF.Int64 0L)))
 
-    // Key intrinsics - dispatch based on monomorphized type
-    // __hash<Int64> is identity (Int64 is its own hash)
-    | "__hash_i64", [keyAtom] ->
-        Some (ANF.Atom keyAtom)
-    // __hash<String> uses string hash
-    | "__hash_str", [keyAtom] ->
-        Some (ANF.StringHash keyAtom)
-    // __hash<Bool> - Bool is 0 or 1, valid hash value
-    | "__hash_bool", [keyAtom] ->
-        Some (ANF.Atom keyAtom)
-    // __key_eq<Int64> uses integer equality
-    | "__key_eq_i64", [leftAtom; rightAtom] ->
-        Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
-    // __key_eq<String> uses string equality
-    | "__key_eq_str", [leftAtom; rightAtom] ->
-        Some (ANF.StringEq (leftAtom, rightAtom))
-    // __key_eq<Bool> uses integer equality (0 or 1)
-    | "__key_eq_bool", [leftAtom; rightAtom] ->
-        Some (ANF.Prim (ANF.Eq, leftAtom, rightAtom))
     // __hash_unknown/__key_eq_unknown crash at runtime when type args are unresolved
     | "__hash_unknown", [_] ->
         Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))

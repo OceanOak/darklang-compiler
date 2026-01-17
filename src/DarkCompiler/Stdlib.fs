@@ -119,10 +119,6 @@ let rawMemoryIntrinsics : ModuleFunc list = [
     { Name = "__rawptr_to_int64"; TypeParams = []; ParamTypes = [TRawPtr]; ReturnType = TInt64 }
     // __int64_to_rawptr : (Int64) -> RawPtr - cast int to pointer (for memory ops)
     { Name = "__int64_to_rawptr"; TypeParams = []; ParamTypes = [TInt64]; ReturnType = TRawPtr }
-    // __string_hash : (String) -> Int64 - FNV-1a hash of string contents
-    { Name = "__string_hash"; TypeParams = []; ParamTypes = [TString]; ReturnType = TInt64 }
-    // __string_eq : (String, String) -> Bool - byte-wise string equality
-    { Name = "__string_eq"; TypeParams = []; ParamTypes = [TString; TString]; ReturnType = TBool }
     // __refcount_inc_string : (String) -> Unit - increment string refcount
     { Name = "__refcount_inc_string"; TypeParams = []; ParamTypes = [TString]; ReturnType = TUnit }
     // __refcount_dec_string : (String) -> Unit - decrement string refcount, free if 0
