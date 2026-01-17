@@ -16,16 +16,6 @@ open TestDSL.OptimizationTestRunner
 open TestRunnerScheduling
 open StdlibTestHarness
 
-// ANSI color codes
-module Colors =
-    let reset = "\x1b[0m"
-    let green = "\x1b[32m"
-    let red = "\x1b[31m"
-    let yellow = "\x1b[33m"
-    let cyan = "\x1b[36m"
-    let gray = "\x1b[90m"
-    let bold = "\x1b[1m"
-
 // Failed test info for summary at end
 type FailedTestInfo = {
     File: string
@@ -48,43 +38,6 @@ type FileSuiteSummary = {
     Failed: int
     FailedTests: FailedTestInfo list
 }
-
-// Progress bar for test execution
-module ProgressBar =
-    let private barWidth = 20
-    let private lockObj = obj()
-
-    type State = {
-        mutable Total: int
-        mutable Completed: int
-        mutable Failed: int
-        Label: string
-    }
-
-    let create label total = { Total = total; Completed = 0; Failed = 0; Label = label }
-
-    let update (state: State) =
-        lock lockObj (fun () ->
-            let pct = if state.Total = 0 then 0.0 else float state.Completed / float state.Total
-            let filled = int (pct * float barWidth)
-            let bar = String.replicate filled "=" + String.replicate (barWidth - filled) " "
-            let failStr = if state.Failed > 0 then $" ({Colors.red}{state.Failed} failed{Colors.reset})" else ""
-            // Use \r to return to start of line, \x1b[K to clear to end of line
-            eprint $"\r\x1b[K  {state.Label}: [{bar}] {state.Completed}/{state.Total}{failStr}"
-        )
-
-    let increment (state: State) (success: bool) =
-        lock lockObj (fun () ->
-            state.Completed <- state.Completed + 1
-            if not success then state.Failed <- state.Failed + 1
-        )
-        update state
-
-    let finish (state: State) =
-        lock lockObj (fun () ->
-            // Clear the progress line and print final summary
-            eprint "\r\x1b[K"
-        )
 
 // Format elapsed time
 let formatTime (elapsed: TimeSpan) =
@@ -723,16 +676,16 @@ let main args =
                 ProgressBar.increment progress true
                 { Passed = filePassCount; Failed = 0; FailedTests = [] }
             else
+                ProgressBar.increment progress false
+                ProgressBar.finish progress
                 let failures = ResizeArray<FailedTestInfo>()
                 for (test, result) in filteredResults do
                     if not result.Success then
-                        ProgressBar.increment progress false
-                        ProgressBar.finish progress
                         println $"  {test.Name}... {Colors.red}✗ FAIL{Colors.reset}"
                         println $"    {result.Message}"
                         let details = addExpectedActualDetails result.Expected result.Actual
                         failures.Add({ File = testPath; Name = $"Optimization: {test.Name}"; Message = result.Message; Details = details })
-                        ProgressBar.update progress
+                ProgressBar.update progress
                 { Passed = filePassCount; Failed = fileFailCount; FailedTests = failures |> Seq.toList }
         let handleOptimizationError
             (progress: ProgressBar.State)
@@ -790,6 +743,7 @@ let main args =
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Parallel Utils Tests"; Tests = ParallelUtilsTests.tests }
+        { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }

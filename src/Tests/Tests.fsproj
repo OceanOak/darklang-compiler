@@ -26,6 +26,8 @@
     <Compile Include="Runners/E2ETestRunner.fs" />
     <Compile Include="Runners/TypeCheckingTestRunner.fs" />
     <Compile Include="Runners/OptimizationTestRunner.fs" />
+    <Compile Include="TestRunnerColors.fs" />
+    <Compile Include="ProgressBar.fs" />
 
     <!-- Unit tests -->
     <Compile Include="CliFlagTests.fs" />
@@ -41,6 +43,7 @@
     <Compile Include="ScriptHelperTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
     <Compile Include="ParallelUtilsTests.fs" />
+    <Compile Include="ProgressBarTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />
