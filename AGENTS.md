@@ -42,6 +42,10 @@ The codebase uses standard F# Result extensively. See `docs/result-patterns.md` 
 
 Benchmarks are effective (ignore quicksort error). There is a `--quick` mode to speed up development, but the full benchmarks should be used to validate performance.
 
+## Benchmarking (Reporting)
+
+- After running full benchmarks, always report the performance ratio from the table header in `RESULTS.md` (for example, "Performance ratio: X.XX") in your response.
+
 ## Compiler Structure
 
 - Compiler passes start with a numbered prefix in pipeline order
