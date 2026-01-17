@@ -1,0 +1,11 @@
+// Spectral Norm Benchmark - Quick check version
+// Already minimal - same as main
+
+def matA(i: Int64, j: Int64) : Float =
+    let ij = i + j in
+    let div = ij * (ij + 1) / 2 + i + 1 in
+    1.0 / Stdlib.Int64.toFloat(div)
+
+let row0 = matA(0, 0) in
+let scaled = Stdlib.Float.toInt(row0 * 1000000000.0) in
+scaled
