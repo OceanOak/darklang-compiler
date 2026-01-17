@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+start_time="$(date +%s)"
+
 repo_root="$(git rev-parse --show-toplevel)"
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$current_branch" == "HEAD" ]]; then
@@ -125,3 +127,6 @@ while true; do
   fi
   break
 done
+
+elapsed=$(( $(date +%s) - start_time ))
+echo "Landed in ${elapsed}s"
