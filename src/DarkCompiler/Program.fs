@@ -346,14 +346,11 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
     let options = buildCompilerOptions cliOpts
     let result = CompilerLibrary.compileWithOptions (verbosityToInt verbosity) options source
 
-    if not result.Success then
-        let errorMsg =
-            match result.ErrorMessage with
-            | Some msg -> msg
-            | None -> Crash.crash "Compilation failed but no error message was provided"
-        eprintln $"Compilation failed: {errorMsg}"
+    match result with
+    | Error err ->
+        eprintln $"Compilation failed: {err}"
         1
-    else
+    | Ok binary ->
         // Write to file
         match Platform.detectOS () with
         | Error err ->
@@ -362,14 +359,14 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
         | Ok os ->
             let writeResult =
                 match os with
-                | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath result.Binary
-                | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath result.Binary
+                | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
+                | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
             match writeResult with
             | Error err ->
                 eprintln $"Failed to write binary: {err}"
                 1
             | Ok () ->
-                if showNormal then println $"Successfully wrote {result.Binary.Length} bytes to {outputPath}"
+                if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
                 0
 
 /// Run an expression (compile to temp and execute)

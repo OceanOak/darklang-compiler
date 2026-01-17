@@ -16,11 +16,7 @@ open System.Collections.Concurrent
 open Output
 
 /// Result of compilation
-type CompileResult = {
-    Binary: byte array
-    Success: bool
-    ErrorMessage: string option
-}
+type CompileResult = Result<byte array, string>
 
 /// Result of execution
 type ExecutionResult = {
@@ -1268,10 +1264,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
             println $"        {t}ms"
 
         match parseResult with
-        | Error err ->
-            { Binary = Array.empty
-              Success = false
-              ErrorMessage = Some $"Parse error: {err}" }
+        | Error err -> Error $"Parse error: {err}"
         | Ok testAst ->
             // Pass 1.5: Type Checking (test expr with preamble's TypeCheckEnv)
             if verbosity >= 1 then println "  [1.5/8] Type Checking (with preamble env)..."
@@ -1282,10 +1275,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                 println $"        {t}ms"
 
             match typeCheckResult with
-            | Error typeErr ->
-                { Binary = Array.empty
-                  Success = false
-                  ErrorMessage = Some $"Type error: {TypeChecking.typeErrorToString typeErr}" }
+            | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
             | Ok (programType, typedTestAst, _testEnv) ->
                 if verbosity >= 3 then
                     println $"Program type: {TypeChecking.typeToString programType}"
@@ -1308,10 +1298,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                     println $"        {t}ms"
 
                 match testOnlyResult with
-                | Error err ->
-                    { Binary = Array.empty
-                      Success = false
-                      ErrorMessage = Some $"ANF conversion error: {err}" }
+                | Error err -> Error $"ANF conversion error: {err}"
                 | Ok testOnly ->
                     // With per-function RegGen, all functions are compiled fresh (no caching needed
                     // for determinism). Specialized stdlib functions get deterministic VRegs.
@@ -1374,10 +1361,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                             []
                             Map.empty
                     match anfResult with
-                    | Error err ->
-                        { Binary = Array.empty
-                          Success = false
-                          ErrorMessage = Some err }
+                    | Error err -> Error err
                     | Ok (mergedAnfProgram, mergedTypeMap, testConvResult) ->
                         let allReturnTypes = extractReturnTypes testOnly.FuncReg
                         let userLirResult =
@@ -1392,10 +1376,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                 programType
                                 allReturnTypes
                         match userLirResult with
-                        | Error err ->
-                            { Binary = Array.empty
-                              Success = false
-                              ErrorMessage = Some err }
+                        | Error err -> Error err
                         | Ok userOptimizedLirProgram ->
                                 // Pass 5: Register Allocation
                                 if verbosity >= 1 then println "  [5/8] Register Allocation..."
@@ -1428,10 +1409,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                             cacheSpecializedFuncs rest
 
                                 match cacheSpecializedFuncs allocatedUserFuncs with
-                                | Error err ->
-                                    { Binary = Array.empty
-                                      Success = false
-                                      ErrorMessage = Some err }
+                                | Error err -> Error err
                                 | Ok () ->
                                     let cachedKeys =
                                         let stdlibKeys =
@@ -1453,10 +1431,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                             | Ok (Some cached) -> collectCachedEntries ((name, cached.SymbolicFunction) :: acc) rest
 
                                     match collectCachedEntries [] cachedKeys with
-                                    | Error err ->
-                                        { Binary = Array.empty
-                                          Success = false
-                                          ErrorMessage = Some err }
+                                    | Error err -> Error err
                                     | Ok cachedEntries ->
                                         if verbosity >= 3 then
                                             for (name, func) in cachedEntries do
@@ -1476,10 +1451,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                             preambleSymbolicFuncs @ cachedSymbolicFuncs @ allocatedUserFuncs
 
                                         match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
-                                        | Error err ->
-                                            { Binary = Array.empty
-                                              Success = false
-                                              ErrorMessage = Some $"LIR pool resolution error: {err}" }
+                                        | Error err -> Error $"LIR pool resolution error: {err}"
                                         | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
                                             if verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
                                             // Prune unused user functions (keeps `_start` and anything reachable from it).
@@ -1550,22 +1522,15 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                                         cacheableNames
                                                         allocatedProgram
                                             match binaryResult with
-                                            | Error err ->
-                                                { Binary = Array.empty
-                                                  Success = false
-                                                  ErrorMessage = Some err }
+                                            | Error err -> Error err
                                             | Ok binary ->
                                                 sw.Stop()
                                                 if verbosity >= 1 then
                                                     println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
-                                                { Binary = binary
-                                                  Success = true
-                                                  ErrorMessage = None }
-                    with
-                    | ex ->
-                        { Binary = Array.empty
-                          Success = false
-                          ErrorMessage = Some $"Compilation failed: {ex.Message}" }
+                                                Ok binary
+    with
+    | ex ->
+        Error $"Compilation failed: {ex.Message}"
 
 /// Compile test expression with pre-compiled preamble context (user code defaults)
 let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
@@ -1622,10 +1587,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
             println $"        {t}ms"
 
         match parseResult with
-        | Error err ->
-            { Binary = Array.empty
-              Success = false
-              ErrorMessage = Some $"Parse error: {err}" }
+        | Error err -> Error $"Parse error: {err}"
         | Ok userAst ->
             // Pass 1.5: Type Checking (user code with stdlib's TypeCheckEnv)
             if verbosity >= 1 then println "  [1.5/8] Type Checking (incremental)..."
@@ -1636,10 +1598,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                 println $"        {t}ms"
 
             match typeCheckResult with
-            | Error typeErr ->
-                { Binary = Array.empty
-                  Success = false
-                  ErrorMessage = Some $"Type error: {TypeChecking.typeErrorToString typeErr}" }
+            | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
             | Ok (programType, typedUserAst, _userEnv) ->
                 if verbosity >= 3 then
                     println $"Program type: {TypeChecking.typeToString programType}"
@@ -1663,10 +1622,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                     println $"        {t}ms"
 
                 match userOnlyResult with
-                | Error err ->
-                    { Binary = Array.empty
-                      Success = false
-                      ErrorMessage = Some $"ANF conversion error: {err}" }
+                | Error err -> Error $"ANF conversion error: {err}"
                 | Ok userOnly ->
                     let anfResult =
                         buildAnfProgram
@@ -1680,10 +1636,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                             []
                             Map.empty
                     match anfResult with
-                    | Error err ->
-                        { Binary = Array.empty
-                          Success = false
-                          ErrorMessage = Some err }
+                    | Error err -> Error err
                     | Ok (userAnfProgram, typeMap, userConvResult) ->
                         // Early tree shaking: Determine which stdlib functions are actually needed
                         // Lazily compile needed functions from MIR to LIR (cached for future use)
@@ -1713,10 +1666,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                                 programType
                                 externalReturnTypes
                         match userLirResult with
-                        | Error err ->
-                            { Binary = Array.empty
-                              Success = false
-                              ErrorMessage = Some err }
+                        | Error err -> Error err
                         | Ok userOptimizedLirProgram ->
                             // Pass 5: Register Allocation (user functions)
                             if verbosity >= 1 then println "  [5/8] Register Allocation..."
@@ -1733,10 +1683,7 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                                 println $"        {t}ms"
 
                             match LIRSymbolic.toLIR allocatedSymbolic with
-                            | Error err ->
-                                { Binary = Array.empty
-                                  Success = false
-                                  ErrorMessage = Some $"LIR pool resolution error: {err}" }
+                            | Error err -> Error $"LIR pool resolution error: {err}"
                             | Ok allocatedProgram ->
                                 let binaryResult =
                                     generateBinary
@@ -1750,33 +1697,22 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                                         false
                                         allocatedProgram
                                 match binaryResult with
-                                | Error err ->
-                                    { Binary = Array.empty
-                                      Success = false
-                                      ErrorMessage = Some err }
+                                | Error err -> Error err
                                 | Ok binary ->
                                     sw.Stop()
                                     if verbosity >= 1 then
                                         println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
-                                    { Binary = binary
-                                      Success = true
-                                      ErrorMessage = None }
+                                    Ok binary
     with
     | ex ->
-        { Binary = Array.empty
-          Success = false
-          ErrorMessage = Some $"Compilation failed: {ex.Message}" }
+        Error $"Compilation failed: {ex.Message}"
 
 /// Compile source code to binary (in-memory, no file I/O)
 /// Uses lazy stdlib compilation - only compiles stdlib functions that are actually called
 let compileWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : CompileResult =
     match prepareStdlibForLazyCompile() with
-    | Error err ->
-        { Binary = Array.empty
-          Success = false
-          ErrorMessage = Some err }
-    | Ok lazyStdlib ->
-        compileWithLazyStdlib verbosity options lazyStdlib source
+    | Error err -> Error err
+    | Ok lazyStdlib -> compileWithLazyStdlib verbosity options lazyStdlib source
 
 /// Compile source code to binary (uses default options)
 /// Execute compiled binary and capture output
@@ -1895,12 +1831,13 @@ let private execute (verbosity: int) (binary: byte array) : ExecutionResult =
         tryDeleteFile tempPath
 
 let private compileResultToExecution (verbosity: int) (compileResult: CompileResult) : ExecutionResult =
-    if not compileResult.Success then
+    match compileResult with
+    | Error err ->
         { ExitCode = 1
           Stdout = ""
-          Stderr = compileResult.ErrorMessage |> Option.defaultValue "Compilation failed" }
-    else
-        execute verbosity compileResult.Binary
+          Stderr = err }
+    | Ok binary ->
+        execute verbosity binary
 
 let private getOrCompilePreambleContextWithOptions
     (allowInternal: bool)
@@ -1954,15 +1891,16 @@ let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosi
         compileTimer.Stop()
         let compileTime = compileTimer.Elapsed
 
-        if not compileResult.Success then
+        match compileResult with
+        | Error err ->
             { ExitCode = 1
               Stdout = ""
-              Stderr = compileResult.ErrorMessage |> Option.defaultValue "Compilation failed"
+              Stderr = err
               CompileTime = compileTime
               RuntimeTime = TimeSpan.Zero }
-        else
+        | Ok binary ->
             let runtimeTimer = Stopwatch.StartNew()
-            let execResult = execute verbosity compileResult.Binary
+            let execResult = execute verbosity binary
             runtimeTimer.Stop()
             { ExitCode = execResult.ExitCode
               Stdout = execResult.Stdout

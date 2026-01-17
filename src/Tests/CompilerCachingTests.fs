@@ -47,10 +47,9 @@ let testSpecializedFunctionCaching (sharedStdlib: StdlibResult) : TestResult =
                 | Ok preambleCtx ->
                     let compileResult =
                         CompilerLibrary.compileTestWithPreamble 0 CompilerLibrary.defaultOptions stdlib preambleCtx "cache_test" source
-                    if not compileResult.Success then
-                        let errorMessage = compileResult.ErrorMessage |> Option.defaultValue "(no message)"
-                        Error $"Compilation failed: {errorMessage}"
-                    else
+                    match compileResult with
+                    | Error err -> Error $"Compilation failed: {err}"
+                    | Ok _ ->
                         let missing =
                             userOnly.SpecializedFuncNames
                             |> Set.filter (fun name ->
@@ -95,17 +94,15 @@ let testPreambleFunctionCachedOnce (sharedStdlib: StdlibResult) : TestResult =
                     preambleCtx
                     sourceFile
                     "foo(2)"
-            if not first.Success then
-                let message = first.ErrorMessage |> Option.defaultValue "(no message)"
-                Error $"First compilation failed: {message}"
-            elif not second.Success then
-                let message = second.ErrorMessage |> Option.defaultValue "(no message)"
-                Error $"Second compilation failed: {message}"
-            else
+            match first, second with
+            | Error err, _ -> Error $"First compilation failed: {err}"
+            | Ok _, Error err -> Error $"Second compilation failed: {err}"
+            | Ok _, Ok _ ->
                 match tryGetCompiledLazy stdlib cacheKey with
                 | Some secondLazy when obj.ReferenceEquals(firstLazy, secondLazy) -> Ok ()
                 | Some _ -> Error "Expected preamble cache to reuse the same Lazy"
                 | None -> Error "Expected preamble cache entry to remain available"
+
 
 /// Test that the compiled function cache returns the same Lazy for a repeated key
 let testCompiledFunctionCacheIsLazy () : TestResult =
