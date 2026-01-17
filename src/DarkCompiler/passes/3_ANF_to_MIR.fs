@@ -396,9 +396,12 @@ let operandType (builder: CFGBuilder) (operand: MIR.Operand) : AST.Type =
     | MIR.StringSymbol _ -> AST.TString
     | MIR.FuncAddr _ -> AST.TInt64  // Function addresses are pointer-sized
     | MIR.Register (MIR.VReg id) ->
-        // Check if this VReg is known to hold a float
+        // Check if this VReg is known to hold a float or has a tracked type
         if Set.contains id builder.FloatRegs then AST.TFloat64
-        else AST.TInt64  // Default to integer
+        else
+            match Map.tryFind (ANF.TempId id) builder.TypeMap with
+            | Some t -> t
+            | None -> Output.crash $"operandType: missing type for v{id}"
 
 /// Generate description for a CExpr (for coverage mapping)
 let cexprDescription (cexpr: ANF.CExpr) : string =
@@ -1063,13 +1066,17 @@ let rec convertExpr
         }
         let builder6 = { builder5 with Blocks = Map.add joinLabel joinBlock builder5.Blocks }
 
-        // Update FloatRegs if the result is a float
+        // Track the result type for nested ifs that return through this register
         let (MIR.VReg resultId) = resultReg
+        let builder6WithType =
+            { builder6 with TypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.TypeMap }
+
+        // Update FloatRegs if the result is a float
         let builder7 =
             if thenResultType = AST.TFloat64 || elseResultType = AST.TFloat64 then
-                { builder6 with FloatRegs = Set.add resultId builder6.FloatRegs }
+                { builder6WithType with FloatRegs = Set.add resultId builder6WithType.FloatRegs }
             else
-                builder6
+                builder6WithType
 
         // Return the result operand
         let resultOp = MIR.Register resultReg
@@ -1656,13 +1663,17 @@ and convertExprToOperand
             }
             let builder6 = { builder5 with Blocks = Map.add joinLabel joinBlock builder5.Blocks }
 
-            // Update FloatRegs if the result is a float
+            // Track the result type for nested ifs that return through this register
             let (MIR.VReg resultId) = resultReg
+            let builder6WithType =
+                { builder6 with TypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.TypeMap }
+
+            // Update FloatRegs if the result is a float
             let builder7 =
                 if thenResultType = AST.TFloat64 || elseResultType = AST.TFloat64 then
-                    { builder6 with FloatRegs = Set.add resultId builder6.FloatRegs }
+                    { builder6WithType with FloatRegs = Set.add resultId builder6WithType.FloatRegs }
                 else
-                    builder6
+                    builder6WithType
 
             // Return result register and our join label for potential patching by caller
             Ok (MIR.Register resultReg, Some joinLabel, builder7))
