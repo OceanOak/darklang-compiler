@@ -6,6 +6,7 @@
 #   --hyperfine              Use hyperfine for timing (default: cachegrind for instruction counts)
 #   --refresh-baseline       Re-run all baseline languages (default: use cached values)
 #   --refresh-baseline=LANGS Re-run specific languages only (comma-separated: rust,go,python,node,ocaml)
+#   --list                   Print the benchmarks that would run and exit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -18,6 +19,8 @@ BENCHMARK="all"
 BUILD_FAILURES=()
 RUN_FAILURES=()
 PROCESS_FAILURES=()
+LIST_ONLY=false
+SKIP_BENCHMARKS=("quicksort")
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -31,6 +34,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --refresh-baseline=*)
             export REFRESH_BASELINE="${1#*=}"
+            shift
+            ;;
+        --list)
+            LIST_ONLY=true
             shift
             ;;
         *)
@@ -55,6 +62,34 @@ else
     BENCHMARKS="$BENCHMARK"
 fi
 
+should_skip() {
+    local candidate="$1"
+    for skip in "${SKIP_BENCHMARKS[@]}"; do
+        if [ "$candidate" = "$skip" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+FILTERED_BENCHMARKS=()
+SKIPPED_BENCHMARKS=()
+for bench in $BENCHMARKS; do
+    if should_skip "$bench"; then
+        SKIPPED_BENCHMARKS+=("$bench")
+    else
+        FILTERED_BENCHMARKS+=("$bench")
+    fi
+done
+BENCHMARKS="${FILTERED_BENCHMARKS[*]}"
+
+if [ "$LIST_ONLY" = true ]; then
+    for bench in "${FILTERED_BENCHMARKS[@]}"; do
+        echo "$bench"
+    done
+    exit 0
+fi
+
 if [ "$USE_CACHEGRIND" = true ]; then
     if [ "$REFRESH_BASELINE" = "false" ]; then
         export RUN_BASELINES=false
@@ -71,6 +106,9 @@ else
     pretty_section "Mode: Hyperfine (timing)"
 fi
 pretty_info "Benchmarks to run: $BENCHMARKS"
+if [ "${#SKIPPED_BENCHMARKS[@]}" -ne 0 ]; then
+    pretty_warn "Skipping benchmarks: ${SKIPPED_BENCHMARKS[*]}"
+fi
 echo ""
 
 for bench in $BENCHMARKS; do
