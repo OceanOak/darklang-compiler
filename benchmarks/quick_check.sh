@@ -27,6 +27,13 @@ REGRESSION_THRESHOLD=0  # Any increase is a regression (deterministic counts)
 # Key benchmarks for fast mode (diverse coverage: recursion, loops, floats, lists, bitops)
 FAST_BENCHMARKS="fib ackermann mandelbrot quicksort nqueen"
 
+clean_cachegrind_files() {
+    rm -f "$PROJECT_ROOT"/cachegrind.out.*
+}
+
+trap clean_cachegrind_files EXIT
+clean_cachegrind_files
+
 # Parse options
 while [[ $# -gt 0 ]]; do
     case $1 in

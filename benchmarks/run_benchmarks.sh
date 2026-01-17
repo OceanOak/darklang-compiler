@@ -47,6 +47,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+clean_cachegrind_files() {
+    rm -f "$PROJECT_ROOT"/cachegrind.out.*
+}
+
+if [ "$USE_CACHEGRIND" = true ]; then
+    trap clean_cachegrind_files EXIT
+    clean_cachegrind_files
+fi
+
 OUTPUT_DIR="$SCRIPT_DIR/results/$(date +%Y-%m-%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
 

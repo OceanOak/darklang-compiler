@@ -10,6 +10,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCHMARKS_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$BENCHMARKS_DIR")"
 BENCHMARK=$1
 OUTPUT_DIR=$2
 source "$SCRIPT_DIR/pretty.sh"
@@ -152,7 +153,18 @@ finalize_results_file() {
     fi
 }
 
-trap finalize_results_file EXIT
+clean_cachegrind_files() {
+    rm -f "$PROJECT_ROOT"/cachegrind.out.*
+}
+
+on_exit() {
+    finalize_results_file
+    clean_cachegrind_files
+}
+
+trap on_exit EXIT
+
+clean_cachegrind_files
 
 # Create output file for parsed results
 echo "{\"benchmark\": \"$BENCHMARK\", \"results\": [" > "$RESULTS_FILE_PATH"
