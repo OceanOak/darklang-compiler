@@ -16,26 +16,28 @@ REFRESH_INTERVAL=2
 
 worktree_status_flags() {
     local path="$1"
-    local flags=""
+    local staged=" "
+    local unstaged=" "
+    local untracked=" "
     local porcelain=""
 
     porcelain=$(git -C "$path" status --porcelain=1 2>/dev/null || true)
 
     if [ -n "$porcelain" ]; then
         if echo "$porcelain" | grep -q '^[MADRCU]'; then
-            flags="${flags} ${YELLOW}(staged)${NC}"
+            staged="${YELLOW}s${NC}"
         fi
 
         if echo "$porcelain" | grep -q '^.[MADRCU]'; then
-            flags="${flags} ${YELLOW}(unstaged)${NC}"
+            unstaged="${YELLOW}u${NC}"
         fi
 
         if echo "$porcelain" | grep -q '^\?\?'; then
-            flags="${flags} ${YELLOW}(untracked)${NC}"
+            untracked="${YELLOW}?${NC}"
         fi
     fi
 
-    echo "$flags"
+    echo "${staged}${unstaged}${untracked}"
 }
 
 worktree_unpushed_count() {
@@ -58,18 +60,27 @@ worktree_unpushed_count() {
     echo " ${RED}↑ ${count} unpushed${NC}"
 }
 
-get_recent_commits() {
+worktree_log_line() {
     local path="$1"
-    local count="$2"
-    git -C "$path" log --oneline -n "$count" 2>/dev/null | while read -r line; do
-        echo "$line"
-    done
+    local log_hash=""
+    local log_subject=""
+
+    log_hash=$(git -C "$path" log -1 --pretty=format:%h 2>/dev/null || true)
+    log_subject=$(git -C "$path" log -1 --pretty=format:%s 2>/dev/null || true)
+    if [ -z "$log_hash" ]; then
+        echo ""
+        return
+    fi
+
+    if [ -n "$log_subject" ]; then
+        log_subject=$(printf '%s' "$log_subject" | awk '{ print substr($0, 1, 62) }')
+        echo "${DIM}${log_hash} ${log_subject}${NC}"
+    else
+        echo "${DIM}${log_hash}${NC}"
+    fi
 }
 
 render_status() {
-    local term_width
-    term_width=$(tput cols 2>/dev/null) || term_width=120
-
     # Collect output, then sort by branch name
     {
     git worktree list | while read -r line; do
@@ -84,171 +95,88 @@ render_status() {
             prunable=""
         fi
 
-        # Get recent commits (up to 8)
-        local commits=""
-        if [ -d "$path" ] && git -C "$path" rev-parse HEAD &>/dev/null; then
-            commits=$(git -C "$path" log --oneline -n 8 --format="%h %s" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
-        fi
-
         # Check if worktree path exists and is accessible
         if [ -d "$path" ] && git -C "$path" rev-parse HEAD &>/dev/null; then
             status_flags=$(worktree_status_flags "$path")
+            log_line=$(worktree_log_line "$path")
 
-            if [ "$branch" = "main" ]; then
-                unpushed=$(worktree_unpushed_count "$path")
-                status="${GREEN}✓${NC}${unpushed}${status_flags}${prunable}"
-                echo -e "0\tmain\t${CYAN}main${NC}\t${status}\t${commits}"
+        if [ "$branch" = "main" ]; then
+            unpushed=$(worktree_unpushed_count "$path")
+                status="${GREEN}✓${NC}${unpushed}${prunable}"
+                echo -e "0\tmain\t${CYAN}main${NC}\t${status_flags}\t${status}\t${log_line}"
                 continue
             fi
 
-            ahead=$(git -C "$path" rev-list --count main..HEAD 2>/dev/null || echo "?")
-            behind=$(git -C "$path" rev-list --count HEAD..main 2>/dev/null || echo "?")
+        ahead=$(git -C "$path" rev-list --count main..HEAD 2>/dev/null || echo "?")
+        behind=$(git -C "$path" rev-list --count HEAD..main 2>/dev/null || echo "?")
 
-            if [ "$ahead" = "0" ] && [ "$behind" = "0" ]; then
-                status="${GREEN}✓ merged${NC}${status_flags}${prunable}"
-            elif [ "$ahead" = "0" ]; then
-                status="${YELLOW}↓ ${behind} behind${NC}${status_flags}${prunable}"
-            elif [ "$behind" = "0" ]; then
-                status="${RED}↑ ${ahead} ahead${NC}${status_flags}${prunable}"
-            else
-                status="${RED}↑ ${ahead} ahead, ↓ ${behind} behind${NC}${status_flags}${prunable}"
-            fi
+        if [ "$ahead" = "0" ] && [ "$behind" = "0" ]; then
+            status="${GREEN}✓ merged${NC}${prunable}"
+        elif [ "$ahead" = "0" ]; then
+            status="${YELLOW}↓ ${behind} behind${NC}${prunable}"
+        elif [ "$behind" = "0" ]; then
+            status="${RED}↑ ${ahead} ahead${NC}${prunable}"
+        else
+            status="${RED}↑ ${ahead} ahead, ↓ ${behind} behind${NC}${prunable}"
+        fi
         else
             status="${DIM}(inaccessible)${NC}${prunable}"
+            log_line=""
+            status_flags="   "
         fi
 
-        echo -e "1\t${branch}\t${branch}\t${status}\t${commits}"
+        echo -e "1\t${branch}\t${branch}\t${status_flags}\t${status}\t${log_line}"
     done
-    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v term_width="$term_width" '
-    BEGIN {
-        dim = "\033[0;90m"
-        nc = "\033[0m"
+    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" '
+function vislen(s, t) {
+    t = s
+    gsub(/\x1B\[[0-9;]*m/, "", t)
+    return length(t)
+}
+{
+    branches[NR] = $2
+    labels[NR] = $3
+    bits[NR] = $4
+    statuses[NR] = $5
+    logs[NR] = $6
+    if (vislen($2) > max_branch) max_branch = vislen($2)
+    if (vislen($5) > max_status) max_status = vislen($5)
+}
+END {
+    max_rows = 8
+    rows = NR < max_rows ? NR : max_rows
+    for (i = 1; i <= rows; i++) {
+        pad_branch = max_branch - vislen(labels[i])
+        if (pad_branch < 0) pad_branch = 0
+        pad_status = max_status - vislen(statuses[i])
+        if (pad_status < 0) pad_status = 0
+        printf "%s%*s  %s  %s%*s  %s\n", labels[i], pad_branch, "", bits[i], statuses[i], pad_status, "", logs[i]
     }
-    function vislen(s, t) {
-        t = s
-        gsub(/\x1B\[[0-9;]*m/, "", t)
-        return length(t)
+    context_trim = context
+    if (vislen(context_trim) > max_branch) {
+        context_trim = substr(context_trim, 1, max_branch)
     }
-    function truncate_to_width(s, max_width, vl, result, i, c, in_escape, visible) {
-        vl = 0
-        result = ""
-        in_escape = 0
-        for (i = 1; i <= length(s); i++) {
-            c = substr(s, i, 1)
-            if (c == "\033") {
-                in_escape = 1
-                result = result c
-            } else if (in_escape) {
-                result = result c
-                if (c == "m") in_escape = 0
-            } else {
-                if (vl >= max_width) break
-                result = result c
-                vl++
-            }
-        }
-        return result
-    }
-    {
-        branches[NR] = $2
-        labels[NR] = $3
-        statuses[NR] = $4
-        commits[NR] = $5
-        if (vislen($2) > max_branch) max_branch = vislen($2)
-        if (vislen($4) > max_status) max_status = vislen($4)
-    }
-    END {
-        for (i = 1; i <= NR; i++) {
-            pad = max_branch - vislen(labels[i])
-            if (pad < 0) pad = 0
-
-            # Build left side: branch + status
-            left = sprintf("%s%*s  %s", labels[i], pad, "", statuses[i])
-            left_vislen = vislen(left)
-
-            # Calculate space for commits (leave 3 chars for separator)
-            commits_width = term_width - left_vislen - 3
-            if (commits_width < 20) commits_width = 0
-
-            if (commits_width > 0 && commits[i] != "") {
-                # Format commits: replace | with dimmed separator
-                split(commits[i], commit_arr, "|")
-                commit_str = ""
-                for (j = 1; j <= length(commit_arr); j++) {
-                    if (j > 1) commit_str = commit_str " · "
-                    commit_str = commit_str commit_arr[j]
-                    if (vislen(commit_str) > commits_width - 3) break
-                }
-                commit_str = truncate_to_width(commit_str, commits_width)
-                printf "%s   %s%s%s\n", left, dim, commit_str, nc
-            } else {
-                printf "%s\n", left
-            }
-        }
-    }
-    '
+    printf "%s%-*s%s\n", dim, max_branch, context_trim, nc
+}
+'
 }
 
-# Check if running interactively (stdout is a terminal and stdin is a terminal)
-is_interactive() {
-    [ -t 1 ] && [ -t 0 ]
+cleanup() {
+    tput rmcup 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
 }
 
-run_interactive() {
-    local lines_printed=0
-    local clear_to_eol
-    local clear_to_eos
-    clear_to_eol=$(tput el 2>/dev/null) || clear_to_eol=""
-    clear_to_eos=$(tput ed 2>/dev/null) || clear_to_eos=""
+trap cleanup EXIT
+tput smcup 2>/dev/null || true
+tput civis 2>/dev/null || true
 
-    # Hide cursor
-    tput civis 2>/dev/null || true
-
-    # Cleanup on exit
-    cleanup() {
-        tput cnorm 2>/dev/null || true  # Show cursor
-        echo ""  # Newline after status
-        exit 0
-    }
-    trap cleanup EXIT INT TERM
-
-    while true; do
-        # Build complete output first (double-buffering to prevent flicker)
-        local footer
-        local status_output
-        footer="${DIM}$(date '+%H:%M:%S') · ${REFRESH_INTERVAL}s · Ctrl+C${NC}"
-        status_output=$(render_status)
-
-        # Move cursor up to overwrite previous output
-        if [ "$lines_printed" -gt 0 ]; then
-            tput cuu "$lines_printed" 2>/dev/null || true
-            tput cr 2>/dev/null || true
+while true; do
+    context="updated $(date +'%H:%M:%S')"
+    output="$(render_status)"
+    printf "\033[H\033[J%s\n" "$output"
+    if read -rs -n 1 -t 2 key; then
+        if [ "$key" = "q" ] || [ "$key" = $'\e' ]; then
+            break
         fi
-
-        # Print status lines with clear to end of line
-        while IFS= read -r line; do
-            echo -e "${line}${clear_to_eol}"
-        done <<< "$status_output"
-        # Footer line
-        echo -e "${footer}${clear_to_eol}"
-        # Clear any remaining lines from previous output
-        echo -ne "${clear_to_eos}"
-
-        # Count lines printed (status output + footer)
-        lines_printed=$((1 + $(echo "$status_output" | wc -l)))
-
-        # Wait for refresh interval
-        sleep "$REFRESH_INTERVAL"
-    done
-}
-
-run_oneshot() {
-    render_status
-}
-
-# Main
-if is_interactive; then
-    run_interactive
-else
-    run_oneshot
-fi
+    fi
+done
