@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-17 12:35:37
-**Commit:** `ab8ed9ff` - Merge branch 'compiler-for-dark-window-1'
+**Last Updated:** 2026-01-17 21:34:28
+**Commit:** `9ddf09f3` - Split stdlib and isolate HAMT/FingerTree internals
 
 | Benchmark     |           Dark (4.43x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

@@ -1985,7 +1985,143 @@ let parse (tokens: Token list) : Result<Program, string> =
 
     parseTopLevels tokens []
 
+let private isInternalIdentifier (name: string) : bool =
+    name.StartsWith("__") || name.Contains(".__")
+
+let private validateNoInternalIdentifier (name: string) : Result<unit, string> =
+    if isInternalIdentifier name then
+        Error $"Internal identifier not allowed in user code: {name}"
+    else
+        Ok ()
+
+let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
+    match pattern with
+    | PVar name -> validateNoInternalIdentifier name
+    | PConstructor (_, payload) ->
+        match payload with
+        | None -> Ok ()
+        | Some inner -> validatePattern inner
+    | PTuple patterns ->
+        patterns
+        |> List.fold (fun acc p -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
+    | PRecord (_, fields) ->
+        fields
+        |> List.fold (fun acc (_, p) -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
+    | PList patterns ->
+        patterns
+        |> List.fold (fun acc p -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
+    | PListCons (head, tail) ->
+        let headResult =
+            head |> List.fold (fun acc p -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
+        Result.bind (fun () -> validatePattern tail) headResult
+    | PUnit | PWildcard | PLiteral _ | PBool _ | PString _ | PFloat _ -> Ok ()
+
+let rec private validateExpr (expr: Expr) : Result<unit, string> =
+    match expr with
+    | Let (name, value, body) ->
+        validateNoInternalIdentifier name
+        |> Result.bind (fun () -> validateExpr value)
+        |> Result.bind (fun () -> validateExpr body)
+    | Var name -> validateNoInternalIdentifier name
+    | Call (funcName, args) ->
+        validateNoInternalIdentifier funcName
+        |> Result.bind (fun () ->
+            args |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
+    | TypeApp (funcName, _, args) ->
+        validateNoInternalIdentifier funcName
+        |> Result.bind (fun () ->
+            args |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
+    | InterpolatedString parts ->
+        parts
+        |> List.fold (fun acc part ->
+            match part with
+            | StringText _ -> acc
+            | StringExpr inner -> Result.bind (fun () -> validateExpr inner) acc) (Ok ())
+    | BinOp (_, left, right) ->
+        validateExpr left |> Result.bind (fun () -> validateExpr right)
+    | UnaryOp (_, inner) -> validateExpr inner
+    | If (cond, thenBranch, elseBranch) ->
+        validateExpr cond
+        |> Result.bind (fun () -> validateExpr thenBranch)
+        |> Result.bind (fun () -> validateExpr elseBranch)
+    | TupleLiteral elems ->
+        elems |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ())
+    | TupleAccess (tupleExpr, _) -> validateExpr tupleExpr
+    | RecordLiteral (_, fields) ->
+        fields |> List.fold (fun acc (_, e) -> Result.bind (fun () -> validateExpr e) acc) (Ok ())
+    | RecordUpdate (recordExpr, updates) ->
+        validateExpr recordExpr
+        |> Result.bind (fun () ->
+            updates |> List.fold (fun acc (_, e) -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
+    | RecordAccess (recordExpr, _) -> validateExpr recordExpr
+    | Constructor (_, _, payload) ->
+        match payload with
+        | None -> Ok ()
+        | Some inner -> validateExpr inner
+    | Match (scrutinee, cases) ->
+        let validateCase (case: MatchCase) : Result<unit, string> =
+            let patternsResult =
+                case.Patterns
+                |> NonEmptyList.toList
+                |> List.fold (fun acc p -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
+            patternsResult
+            |> Result.bind (fun () ->
+                match case.Guard with
+                | None -> Ok ()
+                | Some guardExpr -> validateExpr guardExpr)
+            |> Result.bind (fun () -> validateExpr case.Body)
+        validateExpr scrutinee
+        |> Result.bind (fun () ->
+            cases |> List.fold (fun acc case -> Result.bind (fun () -> validateCase case) acc) (Ok ()))
+    | ListLiteral elems ->
+        elems |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ())
+    | ListCons (head, tail) ->
+        let headResult = head |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ())
+        Result.bind (fun () -> validateExpr tail) headResult
+    | Lambda (parameters, body) ->
+        parameters
+        |> List.fold (fun acc (name, _) -> Result.bind (fun () -> validateNoInternalIdentifier name) acc) (Ok ())
+        |> Result.bind (fun () -> validateExpr body)
+    | Apply (funcExpr, args) ->
+        validateExpr funcExpr
+        |> Result.bind (fun () ->
+            args |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
+    | FuncRef funcName -> validateNoInternalIdentifier funcName
+    | Closure (funcName, captures) ->
+        validateNoInternalIdentifier funcName
+        |> Result.bind (fun () ->
+            captures |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
+    | UnitLiteral | IntLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _
+    | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ -> Ok ()
+
+let private validateNoInternalIdentifiers (Program items) : Result<Program, string> =
+    let validateTopLevel (item: TopLevel) : Result<unit, string> =
+        match item with
+        | FunctionDef def ->
+            validateNoInternalIdentifier def.Name
+            |> Result.bind (fun () ->
+                def.Params
+                |> List.fold (fun acc (name, _) -> Result.bind (fun () -> validateNoInternalIdentifier name) acc) (Ok ()))
+            |> Result.bind (fun () -> validateExpr def.Body)
+        | TypeDef _ -> Ok ()
+        | Expression expr -> validateExpr expr
+    items
+    |> List.fold (fun acc item -> Result.bind (fun () -> validateTopLevel item) acc) (Ok ())
+    |> Result.map (fun () -> Program items)
+
 /// Parse a string directly to AST
-let parseString (input: string) : Result<Program, string> =
+let parseStringWithOptions (allowInternal: bool) (input: string) : Result<Program, string> =
     lex input
     |> Result.bind parse
+    |> Result.bind (fun program ->
+        if allowInternal then Ok program
+        else validateNoInternalIdentifiers program)
+
+/// Parse a string directly to AST (user code defaults)
+let parseString (input: string) : Result<Program, string> =
+    parseStringWithOptions false input
+
+/// Parse a string directly to AST, allowing internal identifiers
+let parseStringAllowInternal (input: string) : Result<Program, string> =
+    parseStringWithOptions true input

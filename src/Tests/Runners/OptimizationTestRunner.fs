@@ -30,7 +30,7 @@ let normalizeIR (ir: string) : string =
 /// Compile source and get ANF after optimization
 let getOptimizedANF (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseString source with
+    match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
@@ -50,7 +50,7 @@ let getOptimizedANF (source: string) : Result<string, string> =
 /// Compile source and get MIR after optimization
 let getOptimizedMIR (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseString source with
+    match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
@@ -90,7 +90,7 @@ let getOptimizedMIR (source: string) : Result<string, string> =
 /// Compile source and get LIR after optimization
 let getOptimizedLIR (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseString source with
+    match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check

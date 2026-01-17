@@ -877,6 +877,25 @@ let loadDarkFile (filename: string) : Result<AST.Program, string> =
         Parser.parseString source
         |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
 
+/// Load a .dark file allowing internal identifiers (for stdlib sources)
+let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
+    let exePath = Assembly.GetExecutingAssembly().Location
+    let exeDir = Path.GetDirectoryName(exePath)
+    let possiblePaths = [
+        Path.Combine(exeDir, filename)
+        Path.Combine(exeDir, "..", "..", "..", "..", "src", "DarkCompiler", filename)
+        Path.Combine(Environment.CurrentDirectory, "src", "DarkCompiler", filename)
+    ]
+    let filePath = possiblePaths |> List.tryFind File.Exists
+    match filePath with
+    | None ->
+        let pathsStr = String.Join(", ", possiblePaths)
+        Error $"Could not find {filename} in any of: {pathsStr}"
+    | Some path ->
+        let source = File.ReadAllText(path)
+        Parser.parseStringAllowInternal source
+        |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
+
 /// Load the stdlib.dark and unicode_data.dark files
 /// Returns the merged stdlib AST or an error message
 let loadStdlib () : Result<AST.Program, string> =
@@ -905,7 +924,7 @@ let loadStdlib () : Result<AST.Program, string> =
     ]
     let loadStdlibFiles (filenames: string list) : Result<AST.Program, string> =
         let mergeFile (acc: AST.TopLevel list) (filename: string) : Result<AST.TopLevel list, string> =
-            match loadDarkFile filename with
+            match loadDarkFileAllowInternal filename with
             | Error err -> Error err
             | Ok (AST.Program items) -> Ok (acc @ items)
         match List.fold (fun acc filename -> Result.bind (fun items -> mergeFile items filename) acc) (Ok []) filenames with
@@ -915,13 +934,13 @@ let loadStdlib () : Result<AST.Program, string> =
     let stdlibResult =
         match tryFindDarkFile splitMarker with
         | Some _ -> loadStdlibFiles stdlibFiles
-        | None -> loadDarkFile "stdlib.dark"
+        | None -> loadDarkFileAllowInternal "stdlib.dark"
 
     match stdlibResult with
     | Error e -> Error e
     | Ok (AST.Program stdlibItems) ->
         // Try to load unicode_data.dark (optional, may not exist in all environments)
-        match loadDarkFile "unicode_data.dark" with
+        match loadDarkFileAllowInternal "unicode_data.dark" with
         | Error _ ->
             // Unicode data not available, return stdlib only
             Ok (AST.Program stdlibItems)
