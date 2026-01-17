@@ -1,32 +1,40 @@
-# ralph.sh
-# Usage: ./ralph.sh [iterations]
+#!/bin/bash
+# ralph.sh - Run a playbook
+# Usage: ./ralph.sh <playbook> [--iterations=N] [--dry-run]
 
-set -e
+set -euo pipefail
 
-iterations="${1:-1}"
+playbook="$1"; shift
+iterations=1
+dry_run=false
 
-# For each iteration, run Codex with the following prompt.
-# This prompt is basic, we'll expand it later.
-for ((i=1; i<=$iterations; i++)); do
-  result=$(codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-5.2-codex \
-"Use the project issue tracker for planning and progress tracking. \
-1. Decide which issue to work on next using the tracker or TODO.md. \
-This should be the one YOU decide has the highest priority, \
-- not necessarily the first in the list. \
-2. Update the issue to in_progress before starting work. \
-3. Check any feedback loops, such as types and tests. Verify code compiles, tests pass, and benchmarks are not slower. NEVER commit anything not hitting these quality thresholds. \
-4. Record progress in the issue tracker and close the issue when complete. \
-5. Some tasks will involved many thousands of small-ish fixes, such as improving performance or test coverage. In the main task, only add the issues - they can be solved later. EXCEPTION: truly tiny fixes \
-6. Make a git commit of that feature. \
-ONLY WORK ON A SINGLE ISSUE. \
-If, while implementing the issue, you notice that all work \
-is complete, output <promise>COMPLETE</promise>. \
-")
+for arg in "$@"; do
+    case $arg in
+        --iterations=*) iterations="${arg#*=}" ;;
+        --dry-run) dry_run=true ;;
+    esac
+done
 
-  echo "$result"
+prompt=$(cat "$playbook")
 
-  if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
-    echo "PRD complete, exiting."
-    exit 0
-  fi
+# If prompt contains {{benchmark_name}}, find an unanalyzed benchmark
+if [[ "$prompt" == *"{{benchmark_name}}"* ]]; then
+    for bench_dir in benchmarks/problems/*/dark/main.dark; do
+        bench=$(basename "$(dirname "$(dirname "$bench_dir")")")
+        if [[ ! -f "docs/investigations/benchmark-${bench}-optimization.md" ]]; then
+            prompt="${prompt//\{\{benchmark_name\}\}/$bench}"
+            break
+        fi
+    done
+fi
+
+for ((i=1; i<=iterations; i++)); do
+    if [[ "$dry_run" == true ]]; then
+        echo "=== Would send to Claude ==="
+        echo "$prompt"
+        exit 0
+    fi
+
+    echo "=== Iteration $i of $iterations ==="
+    claude --dangerously-skip-permissions -p "$prompt"
 done
