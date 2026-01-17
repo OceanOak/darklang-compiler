@@ -322,3 +322,136 @@ return t1
 Main:
 let TempId 2 = f(3.5)
 return t2
+
+---NAME---
+identity_float_add_zero_left
+---INPUT---
+def f(x: Float) : Float = 0.0 + x
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+identity_float_add_zero_right
+---INPUT---
+def f(x: Float) : Float = x + 0.0
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+identity_float_sub_zero
+---INPUT---
+def f(x: Float) : Float = x - 0.0
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+identity_float_mul_one_left
+---INPUT---
+def f(x: Float) : Float = 1.0 * x
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+identity_float_mul_one_right
+---INPUT---
+def f(x: Float) : Float = x * 1.0
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+identity_float_div_one
+---INPUT---
+def f(x: Float) : Float = x / 1.0
+f(3.5)
+---EXPECTED---
+Function f:
+return t0
+
+Main:
+let TempId 2 = f(3.5)
+return t2
+
+---NAME---
+self_subtraction_int
+---INPUT---
+def f(x: Int64) : Int64 = x - x
+f(42)
+---EXPECTED---
+Function f:
+return 0
+
+Main:
+let TempId 2 = f(42)
+return t2
+
+---NAME---
+strength_reduce_float_div_2
+---INPUT---
+def f(x: Float) : Float = x / 2.0
+f(10.0)
+---EXPECTED---
+Function f:
+let TempId 1 = t0 * 0.5
+return t1
+
+Main:
+let TempId 2 = f(10)
+return t2
+
+---NAME---
+strength_reduce_float_div_4
+---INPUT---
+def f(x: Float) : Float = x / 4.0
+f(20.0)
+---EXPECTED---
+Function f:
+let TempId 1 = t0 * 0.25
+return t1
+
+Main:
+let TempId 2 = f(20)
+return t2
+
+---NAME---
+strength_reduce_float_div_8
+---INPUT---
+def f(x: Float) : Float = x / 8.0
+f(40.0)
+---EXPECTED---
+Function f:
+let TempId 1 = t0 * 0.125
+return t1
+
+Main:
+let TempId 2 = f(40)
+return t2

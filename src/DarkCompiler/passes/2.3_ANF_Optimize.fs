@@ -104,7 +104,7 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Eq, StringLiteral a, StringLiteral b -> Some (Atom (BoolLiteral (a = b)))
     | Neq, StringLiteral a, StringLiteral b -> Some (Atom (BoolLiteral (a <> b)))
 
-    // Algebraic identities (strength reduction) - only for Int64
+    // Algebraic identities (strength reduction) - Int64
     | Add, IntLiteral (Int64 0L), x -> Some (Atom x)
     | Add, x, IntLiteral (Int64 0L) -> Some (Atom x)
     | Sub, x, IntLiteral (Int64 0L) -> Some (Atom x)
@@ -113,6 +113,18 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Mul, IntLiteral (Int64 0L), _ -> Some (Atom (IntLiteral (Int64 0L)))
     | Mul, _, IntLiteral (Int64 0L) -> Some (Atom (IntLiteral (Int64 0L)))
     | Div, x, IntLiteral (Int64 1L) -> Some (Atom x)
+
+    // Algebraic identities - Float
+    // Note: We skip 0.0 * x -> 0.0 because 0.0 * inf = NaN, 0.0 * NaN = NaN
+    | Add, FloatLiteral 0.0, x -> Some (Atom x)
+    | Add, x, FloatLiteral 0.0 -> Some (Atom x)
+    | Sub, x, FloatLiteral 0.0 -> Some (Atom x)
+    | Mul, FloatLiteral 1.0, x -> Some (Atom x)
+    | Mul, x, FloatLiteral 1.0 -> Some (Atom x)
+    | Div, x, FloatLiteral 1.0 -> Some (Atom x)
+
+    // Self-subtraction: x - x -> 0 (only for Int64, not Float due to NaN)
+    | Sub, Var a, Var b when a = b -> Some (Atom (IntLiteral (Int64 0L)))
 
     // Short-circuit boolean
     | And, BoolLiteral false, _ -> Some (Atom (BoolLiteral false))
@@ -148,6 +160,16 @@ let tryStrengthReduce (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     // Float strength reduction: 2.0 * x -> x + x
     | Mul, FloatLiteral 2.0, x -> Some (Prim (Add, x, x))
     | Mul, x, FloatLiteral 2.0 -> Some (Prim (Add, x, x))
+    // Float division by power of 2 -> multiplication by reciprocal
+    // These reciprocals are exactly representable in IEEE 754
+    | Div, x, FloatLiteral 2.0 -> Some (Prim (Mul, x, FloatLiteral 0.5))
+    | Div, x, FloatLiteral 4.0 -> Some (Prim (Mul, x, FloatLiteral 0.25))
+    | Div, x, FloatLiteral 8.0 -> Some (Prim (Mul, x, FloatLiteral 0.125))
+    | Div, x, FloatLiteral 16.0 -> Some (Prim (Mul, x, FloatLiteral 0.0625))
+    | Div, x, FloatLiteral 32.0 -> Some (Prim (Mul, x, FloatLiteral 0.03125))
+    | Div, x, FloatLiteral 64.0 -> Some (Prim (Mul, x, FloatLiteral 0.015625))
+    | Div, x, FloatLiteral 128.0 -> Some (Prim (Mul, x, FloatLiteral 0.0078125))
+    | Div, x, FloatLiteral 256.0 -> Some (Prim (Mul, x, FloatLiteral 0.00390625))
     | _ -> None
 
 /// Fold a unary operation on constants
