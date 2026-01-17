@@ -298,7 +298,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     // Raw memory intrinsics (no ref counting - manually managed)
     | RawAlloc _ -> Some AST.TRawPtr  // Returns raw pointer
     | RawFree _ -> Some AST.TUnit  // Returns unit
-    | RawGet _ -> Some AST.TInt64  // Returns 8-byte value
+    | RawGet (_, _, valueType) -> valueType
     | RawGetByte _ -> Some AST.TInt64  // Returns 1-byte value (zero-extended)
     | RawSet _ -> Some AST.TUnit  // Returns unit
     | RawSetByte _ -> Some AST.TUnit  // Returns unit
