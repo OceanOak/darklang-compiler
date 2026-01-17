@@ -5,7 +5,7 @@
 - **Language**: Pure functional F# (no mutable state, no exceptions)
 - **Target**: ARM64 native binaries (macOS Mach-O, Linux ELF)
 - **Pipeline**: 8 passes from source to executable (see `docs/compiler-passes.md`)
-- **testing**: Run `./run-tests` to run tests.
+- **testing**: Run `./run-tests` to run tests. Tests are very fast, don't use filters, just run the whole test suite.
 - **Scripting**: Use `python3` for scripts (not `python`).
 
 ## Architecture Overview
@@ -30,7 +30,7 @@ Write in F#, with the intention to translate to Darklang later. Thus:
 - Completely avoid all mutable values, ESPECIALLY global variables"
 - Use string interpolation instead of printf-style calls
 - If a function we need throws exceptions, create a wrapper that returns `Result`
-- NEVER EVER assume a default value, type, etc, when we don't know something. Instead, use `failwith` to crash and document the error.
+- NEVER EVER assume a default value, type, etc, when we don't know something. Instead, use `Crash.crash` to crash and document the error.
 
 ## Result Handling
 
@@ -40,7 +40,7 @@ The codebase uses standard F# Result extensively. See `docs/result-patterns.md` 
 
 // The compiled code needs to be fast. DO NOT commit regressions.
 
-Benchmarks are currently broken, allow committing without validating benchmarks.
+Benchmarks are effective (ignore quicksort error). There is a `--quick` mode to speed up development, but the full benchmarks should be used to validate performance.
 
 ## Compiler Structure
 
@@ -82,7 +82,7 @@ Examples:
 4. Run the test to confirm it passes
 5. Add the smallest test that covers the case, in the right place
 
-Focus largely on end-to-end language tests in `src/Tests/e2e/`.
+Focus near-exclusively on end-to-end language tests in `src/Tests/e2e/`. If writing a different test, you must have an EXCELLENT reason why it can't be accomplished as an E2E test.
 
 **Never:**
 
@@ -96,6 +96,7 @@ Focus largely on end-to-end language tests in `src/Tests/e2e/`.
 ```bash
 ./run-tests                      # Run all tests
 ./run-tests --filter=PATTERN     # Run matching tests (case-insensitive)
+./run-tests --quiet              # Much less output
 ./run-tests --help               # Full usage information
 ```
 
@@ -103,9 +104,9 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 
 ## Best Practices
 
-- Keep README.md, TODO.md, and docs/ files updated
+- Keep README.md, and docs/ files updated
 - Always fix dotnet compiler or runtime warnings/errors before committing
-- Never make assumptions, fall-backs, or potentially incorrect defaults - use `TODO()` instead
+- Never make assumptions, fall-backs, or potentially incorrect defaults - use `Crash.TODO()` instead
 
 ## Critical Conventions
 
@@ -163,14 +164,3 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 - **Never push** - Do not run `git push`. The user handles pushing.
 - **"main" means the local branch** - References to `main` mean the local `main` branch, not `origin/main`.
 - **Landing** - "Land" means merging your branch onto main using `./scripts/land-on-main.sh`. This script rebases onto main, runs tests and benchmarks, then fast-forward merges into main.
-
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below.
-
-**MANDATORY WORKFLOW:**
-
-1. **Run quality gates** (if code changed) - Ensure it builds, all tests pass, benchmarks do not regress.
-2. **Clean up** - Clear stashes
-3. **Verify** - All changes committed
-4. **Hand off** - Provide context for next session
