@@ -17,17 +17,6 @@ done
 
 prompt=$(cat "$playbook")
 
-# If prompt contains {{benchmark_name}}, find an unanalyzed benchmark
-if [[ "$prompt" == *"{{benchmark_name}}"* ]]; then
-    for bench_dir in benchmarks/problems/*/dark/main.dark; do
-        bench=$(basename "$(dirname "$(dirname "$bench_dir")")")
-        if [[ ! -f "docs/investigations/benchmark-${bench}-optimization.md" ]]; then
-            prompt="${prompt//\{\{benchmark_name\}\}/$bench}"
-            break
-        fi
-    done
-fi
-
 for ((i=1; i<=iterations; i++)); do
     if [[ "$dry_run" == true ]]; then
         echo "=== Would send to Claude ==="

@@ -1,53 +1,56 @@
-BENCHMARK OPTIMIZATION INVESTIGATION
+# Benchmark Optimization Investigation
 
 ## Your Task
-Investigate why the Dark compiler performs worse than Rust and OCaml on the **{{benchmark_name}}** benchmark, and generate detailed optimization suggestions.
 
-## Phase 1: Gather All Compiler Output
+Pick a benchmark from `benchmarks/problems/` and investigate optimization opportunities. If new insights are found, update the existing investigation document.
 
-For the {{benchmark_name}} benchmark, dump all intermediate representations:
+## Phase 1: Select a Benchmark
 
-### 1a. Dark Compiler IRs
+1. List all benchmarks: `ls benchmarks/problems/`
+2. Pick one at random (not deterministically)
+3. Read its existing investigation at `docs/investigations/benchmark-<name>-optimization.md`
+
+## Phase 2: Gather Compiler Output
+
+For your chosen benchmark, dump all intermediate representations:
+
+### 2a. Dark Compiler IRs
 ```bash
-dark -vvv --dump-anf --dump-mir --dump-lir benchmarks/problems/{{benchmark_name}}/dark/main.dark -o /tmp/dark_bench 2>&1 | tee /tmp/dark_ir_dump.txt
+dark -vvv --dump-anf --dump-mir --dump-lir benchmarks/problems/<benchmark>/dark/main.dark -o /tmp/dark_bench 2>&1 | tee /tmp/dark_ir_dump.txt
 ```
 
-### 1b. Rust Disassembly
+### 2b. Rust Disassembly
 ```bash
-cd benchmarks/problems/{{benchmark_name}}/rust && cargo build --release 2>/dev/null
-objdump -d target/release/{{benchmark_name}} > /tmp/rust_disasm.txt
+cd benchmarks/problems/<benchmark>/rust && cargo build --release 2>/dev/null
+objdump -d target/release/<benchmark> > /tmp/rust_disasm.txt
 ```
 
-### 1c. OCaml Disassembly
+### 2c. OCaml Disassembly
 ```bash
-cd benchmarks/problems/{{benchmark_name}}/ocaml
+cd benchmarks/problems/<benchmark>/ocaml
 ocamlfind ocamlopt -O3 -o bench main.ml 2>/dev/null
 objdump -d bench > /tmp/ocaml_disasm.txt
 ```
 
-## Phase 2: Analysis
+## Phase 3: Analysis
 
-Analyze the gathered data:
-- Compare instruction counts in hot loops
-- Identify missing optimizations in Dark IRs
-- Find inefficient patterns vs Rust/OCaml
-- Quantify potential improvements
+Compare against the existing investigation document:
+- Are there new optimization opportunities not yet documented?
+- Have any documented optimizations been implemented? Update their status.
+- Are there new patterns in the IR/asm worth noting?
 
-## Phase 3: Generate Optimization Suggestions
+## Phase 4: Update Investigation Document
 
-For each optimization opportunity, document:
-1. Title and impact estimate
-2. Root cause with IR/asm evidence
-3. Implementation approach
-4. Files to modify
+If you found anything new:
+- Add new optimization suggestions with IR/asm evidence
+- Update status of existing suggestions if they've been implemented
+- Add any new insights about the benchmark
 
-## Phase 4: Create Investigation Document
+If nothing new was found, report that and move on.
 
-Write findings to: docs/investigations/benchmark-{{benchmark_name}}-optimization.md
+## Phase 5: Summary
 
-## Phase 5: Completion Check
-
-Verify:
-- [ ] Investigation document created
-- [ ] At least 2 optimization suggestions identified
-- [ ] Each suggestion includes IR/asm evidence
+Report:
+- Which benchmark was analyzed
+- What new findings (if any) were added
+- Current state of the investigation document
