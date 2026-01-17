@@ -60,27 +60,26 @@ worktree_unpushed_count() {
     echo " ${RED}↑ ${count} unpushed${NC}"
 }
 
-worktree_log_line() {
-    local path="$1"
-    local log_hash=""
-    local log_subject=""
-
-    log_hash=$(git -C "$path" log -1 --pretty=format:%h 2>/dev/null || true)
-    log_subject=$(git -C "$path" log -1 --pretty=format:%s 2>/dev/null || true)
-    if [ -z "$log_hash" ]; then
-        echo ""
-        return
-    fi
-
-    if [ -n "$log_subject" ]; then
-        log_subject=$(printf '%s' "$log_subject" | awk '{ print substr($0, 1, 62) }')
-        echo "${DIM}${log_hash} ${log_subject}${NC}"
-    else
-        echo "${DIM}${log_hash}${NC}"
-    fi
-}
-
 render_status() {
+    local repo_root=""
+    local log_lines=""
+
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if [ -n "$repo_root" ]; then
+        log_lines=$(git -C "$repo_root" log -8 --pretty=format:'%h %s' 2>/dev/null | awk '{
+            hash = $1
+            $1 = ""
+            sub(/^ /, "")
+            subject = $0
+            if (length(subject) > 62) subject = substr(subject, 1, 62)
+            if (subject != "") {
+                print hash " " subject
+            } else {
+                print hash
+            }
+        }')
+    fi
+
     # Collect output, then sort by branch name
     {
     git worktree list | while read -r line; do
@@ -98,12 +97,11 @@ render_status() {
         # Check if worktree path exists and is accessible
         if [ -d "$path" ] && git -C "$path" rev-parse HEAD &>/dev/null; then
             status_flags=$(worktree_status_flags "$path")
-            log_line=$(worktree_log_line "$path")
 
-        if [ "$branch" = "main" ]; then
-            unpushed=$(worktree_unpushed_count "$path")
+            if [ "$branch" = "main" ]; then
+                unpushed=$(worktree_unpushed_count "$path")
                 status="${GREEN}✓${NC}${unpushed}${prunable}"
-                echo -e "0\tmain\t${CYAN}main${NC}\t${status_flags}\t${status}\t${log_line}"
+                echo -e "0\tmain\t${CYAN}main${NC}\t${status_flags}\t${status}"
                 continue
             fi
 
@@ -121,36 +119,52 @@ render_status() {
         fi
         else
             status="${DIM}(inaccessible)${NC}${prunable}"
-            log_line=""
             status_flags="   "
         fi
 
-        echo -e "1\t${branch}\t${branch}\t${status_flags}\t${status}\t${log_line}"
+        echo -e "1\t${branch}\t${branch}\t${status_flags}\t${status}"
     done
-    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" '
+    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" -v log_lines="$log_lines" '
 function vislen(s, t) {
     t = s
     gsub(/\x1B\[[0-9;]*m/, "", t)
+    gsub(/↑/, "^", t)
+    gsub(/↓/, "v", t)
+    gsub(/✓/, "v", t)
     return length(t)
+}
+BEGIN {
+    log_count = split(log_lines, log_array, "\n")
+    if (log_count > 0 && log_array[log_count] == "") {
+        log_count--
+    }
 }
 {
     branches[NR] = $2
     labels[NR] = $3
     bits[NR] = $4
     statuses[NR] = $5
-    logs[NR] = $6
     if (vislen($2) > max_branch) max_branch = vislen($2)
     if (vislen($5) > max_status) max_status = vislen($5)
 }
 END {
     max_rows = 8
-    rows = NR < max_rows ? NR : max_rows
+    rows = (NR > max_rows) ? NR : max_rows
     for (i = 1; i <= rows; i++) {
-        pad_branch = max_branch - vislen(labels[i])
+        label = (i <= NR) ? labels[i] : ""
+        bit = (i <= NR) ? bits[i] : "   "
+        status = (i <= NR) ? statuses[i] : ""
+        log_line = (i <= log_count) ? log_array[i] : ""
+        if (log_line != "") {
+            log_display = dim log_line nc
+        } else {
+            log_display = ""
+        }
+        pad_branch = max_branch - vislen(label)
         if (pad_branch < 0) pad_branch = 0
-        pad_status = max_status - vislen(statuses[i])
+        pad_status = max_status - vislen(status)
         if (pad_status < 0) pad_status = 0
-        printf "%s%*s  %s  %s%*s  %s\n", labels[i], pad_branch, "", bits[i], statuses[i], pad_status, "", logs[i]
+        printf "%s%*s  %s  %s%*s  %s\n", label, pad_branch, "", bit, status, pad_status, "", log_display
     }
     context_trim = context
     if (vislen(context_trim) > max_branch) {
