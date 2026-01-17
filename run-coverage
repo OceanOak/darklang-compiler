@@ -4,7 +4,6 @@
 # Usage: ./run-coverage [OPTIONS]
 #
 # Options:
-#   --no-build         Skip building, run coverage on existing build
 #   --no-report        Skip HTML report generation
 #   -h, --help         Show this help message
 #
@@ -15,16 +14,11 @@
 set -e
 
 # Parse arguments
-NO_BUILD=false
 NO_REPORT=false
 HELP=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --no-build)
-            NO_BUILD=true
-            shift
-            ;;
         --no-report)
             NO_REPORT=true
             shift
@@ -46,7 +40,6 @@ if [ "$HELP" = true ]; then
     echo "Run tests with code coverage and generate HTML reports."
     echo ""
     echo "Options:"
-    echo "  --no-build         Skip building, run coverage on existing build"
     echo "  --no-report        Skip HTML report generation"
     echo "  -h, --help         Show this help message"
     echo ""
@@ -77,16 +70,14 @@ if [ "$NO_REPORT" = false ] && ! command -v reportgenerator &> /dev/null; then
     exit 1
 fi
 
-# Build if needed
-if [ "$NO_BUILD" = false ]; then
-    echo "Building..."
-    if ! timeout 120 dotnet build --verbosity quiet 2>&1; then
-        echo "Build failed!"
-        exit 1
-    fi
-    echo "Build complete."
-    echo ""
+# Build
+echo "Building..."
+if ! timeout 120 dotnet build --verbosity quiet 2>&1; then
+    echo "Build failed!"
+    exit 1
 fi
+echo "Build complete."
+echo ""
 
 # Paths
 TEST_DLL="$SCRIPT_DIR/bin/Tests/Debug/net9.0/Tests.dll"
@@ -96,7 +87,7 @@ REPORT_DIR="$SCRIPT_DIR/coverage-report"
 
 if [ ! -f "$TEST_DLL" ]; then
     echo "Error: Test DLL not found at $TEST_DLL"
-    echo "Try running without --no-build first."
+    echo "Try running the build first."
     exit 1
 fi
 

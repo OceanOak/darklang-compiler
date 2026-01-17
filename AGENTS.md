@@ -9,7 +9,7 @@ We use 'bd' for task tracking. See WORKFLOW.md.
 - **Language**: Pure functional F# (no mutable state, no exceptions)
 - **Target**: ARM64 native binaries (macOS Mach-O, Linux ELF)
 - **Pipeline**: 8 passes from source to executable (see `docs/compiler-passes.md`)
-- **testing**: Run `./run-tests --no-build` to run tests.
+- **testing**: Run `./run-tests` to run tests.
 - **Scripting**: Use `python3` for scripts (not `python`).
 
 ## Architecture Overview

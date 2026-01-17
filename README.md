@@ -122,7 +122,7 @@ dotnet clean && dotnet build
 # Other options
 ./run-tests --help               # Show all options
 ./run-tests --build-only         # Just build, don't run
-./run-tests --no-build           # Skip build, run directly
+./run-tests                      # Build and run tests
 ```
 
 **Check binary structure (macOS):**

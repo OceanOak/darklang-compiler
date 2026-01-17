@@ -8,7 +8,6 @@
 #   --parallel=N       Run with N parallel test workers
 #   --verification     Enable verification/stress tests
 #   --build-only       Only build, don't run tests
-#   --no-build         Skip building, run tests directly
 #   -h, --help         Show this help message
 #
 # Examples:
@@ -24,7 +23,6 @@ set -e
 FILTER=""
 PARALLEL=""
 BUILD_ONLY=false
-NO_BUILD=false
 HELP=false
 TEST_ARGS=()
 
@@ -46,10 +44,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --build-only)
             BUILD_ONLY=true
-            shift
-            ;;
-        --no-build)
-            NO_BUILD=true
             shift
             ;;
         -h|--help)
@@ -75,7 +69,6 @@ if [ "$HELP" = true ]; then
     echo "  --parallel=N       Run with N parallel test workers"
     echo "  --verification     Enable verification/stress tests"
     echo "  --build-only       Only build, don't run tests"
-    echo "  --no-build         Skip building, run tests directly"
     echo "  -h, --help         Show this help message"
     echo ""
     echo "Examples:"
@@ -99,11 +92,9 @@ cd "$SCRIPT_DIR"
 
 . "$SCRIPT_DIR/scripts/test-common.sh"
 
-# Build if needed
-if [ "$NO_BUILD" = false ]; then
-    if ! build_tests "$SCRIPT_DIR" "$SCRIPT_DIR/NuGet.Config"; then
-        exit 1
-    fi
+# Build
+if ! build_tests "$SCRIPT_DIR" "$SCRIPT_DIR/NuGet.Config"; then
+    exit 1
 fi
 
 if [ "$BUILD_ONLY" = true ]; then
@@ -112,7 +103,7 @@ if [ "$BUILD_ONLY" = true ]; then
 fi
 
 # Find and run the test executable
-TEST_EXE="$(find_test_exe "$SCRIPT_DIR" "Try running without --no-build first.")" || exit 1
+TEST_EXE="$(find_test_exe "$SCRIPT_DIR" "Try running the build first.")" || exit 1
 
 # Run tests
 run_tests "$TEST_EXE" "${TEST_ARGS[@]}"
