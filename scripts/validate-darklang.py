@@ -592,6 +592,11 @@ class Validator:
             '.indexOf',  # Returns Option in Darklang vs Int64 in Ralph2
             '.take', '.drop', '.substring',  # May not exist
             '.slice',  # Different argument interpretation (start, end vs start, length)
+            'Int64.sub',
+            'Int64.mul',
+            'Int64.div',
+            'Int64.isEven',
+            'Int64.isOdd',
         ]
         for unsup in unsupported_stdlib:
             if unsup in expr:
@@ -634,7 +639,7 @@ class Validator:
         # Skip tests with user-defined function calls (camelCase identifiers not in stdlib)
         # These are functions defined earlier in the test file that aren't available in eval
         # Look for camelCase function calls that aren't stdlib functions
-        func_call_pattern = r'\b([a-z][a-zA-Z0-9]*)\s*\('
+        func_call_pattern = r'(?<!\.)\b([a-z][a-zA-Z0-9]*)\s*\('
         func_matches = re.findall(func_call_pattern, expr)
         allowed_funcs = {'if', 'match', 'fun', 'let', 'in', 'true', 'false'}  # Keywords
         for func in func_matches:

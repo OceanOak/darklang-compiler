@@ -858,6 +858,13 @@ let truncateToType (value: int64) (opType: AST.Type) : int64 =
     | AST.TUInt32 -> int64 (uint32 value)  // Truncate to unsigned 32-bit
     | _ -> value                            // Int64/UInt64 and other types: no truncation
 
+/// Euclidean modulo: result has the sign of the divisor
+let euclideanMod (a: int64) (b: int64) : int64 =
+    let remainder = a % b
+    if remainder = 0L then 0L
+    elif (remainder > 0L && b < 0L) || (remainder < 0L && b > 0L) then remainder + b
+    else remainder
+
 /// Constant Folding for MIR
 /// Evaluate operations on constants at compile time
 let tryFoldBinOp (op: BinOp) (left: Operand) (right: Operand) (opType: AST.Type) : Operand option =
@@ -868,7 +875,7 @@ let tryFoldBinOp (op: BinOp) (left: Operand) (right: Operand) (opType: AST.Type)
     | Mul, IntConst a, IntConst b -> Some (IntConst (truncateToType (a * b) opType))
     // Division: avoid divide by zero and INT64_MIN / -1 overflow
     | Div, IntConst a, IntConst b when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (IntConst (truncateToType (a / b) opType))
-    | Mod, IntConst a, IntConst b when b <> 0L -> Some (IntConst (truncateToType (a % b) opType))
+    | Mod, IntConst a, IntConst b when b <> 0L -> Some (IntConst (truncateToType (euclideanMod a b) opType))
 
     // Comparisons
     | Eq, IntConst a, IntConst b -> Some (BoolConst (a = b))

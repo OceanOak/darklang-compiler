@@ -279,8 +279,9 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                     Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Sdiv (lirDest, leftReg, rightReg)] @ truncInstrs)
 
             | MIR.Mod ->
-                // Modulo: a % b = a - (a / b) * b
-                // ARM64: sdiv temp, left, right; msub dest, temp, right, left
+                // Modulo (Euclidean): remainder has the sign of the divisor
+                // ARM64: sdiv q, left, right; msub r, q, right, left
+                // If r != 0 and r has opposite sign of right, r += right
                 match ensureInRegister left (LIR.Virtual 1000) with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg) ->
@@ -288,9 +289,22 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg) ->
                     let quotReg = LIR.Virtual 1002  // temp for quotient
+                    let xorReg = LIR.Virtual 1003
+                    let remNonZeroReg = LIR.Virtual 1004
+                    let signMismatchReg = LIR.Virtual 1005
+                    let adjustFlagReg = LIR.Virtual 1006
+                    let adjustReg = LIR.Virtual 1007
                     Ok (leftInstrs @ rightInstrs @
                         [LIRSymbolic.Sdiv (quotReg, leftReg, rightReg);
-                         LIRSymbolic.Msub (lirDest, quotReg, rightReg, leftReg)] @ truncInstrs)
+                         LIRSymbolic.Msub (lirDest, quotReg, rightReg, leftReg);
+                         LIRSymbolic.Cmp (lirDest, LIRSymbolic.Imm 0L);
+                         LIRSymbolic.Cset (remNonZeroReg, LIR.NE);
+                         LIRSymbolic.Eor (xorReg, lirDest, rightReg);
+                         LIRSymbolic.Cmp (xorReg, LIRSymbolic.Imm 0L);
+                         LIRSymbolic.Cset (signMismatchReg, LIR.LT);
+                         LIRSymbolic.And (adjustFlagReg, remNonZeroReg, signMismatchReg);
+                         LIRSymbolic.Mul (adjustReg, adjustFlagReg, rightReg);
+                         LIRSymbolic.Add (lirDest, lirDest, LIRSymbolic.Reg adjustReg)] @ truncInstrs)
 
             // Comparisons: CMP + CSET sequence
             | MIR.Eq ->

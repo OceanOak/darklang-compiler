@@ -278,14 +278,14 @@
 2147483647 % 10 = 7
 
 // Modulo with negative dividend
--10 % 3 = -1
--7 % 2 = -1
--17 % 5 = -2
+-10 % 3 = 2
+-7 % 2 = 1
+-17 % 5 = 3
 
 // Modulo with negative divisor
-10 % -3 = 1
-7 % -2 = 1
-17 % -5 = 2
+10 % -3 = -2
+7 % -2 = -1
+17 % -5 = -3
 
 // Modulo with both negative
 -10 % -3 = -1

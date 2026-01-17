@@ -43,6 +43,13 @@ let tryLog2 (n: int64) : int64 option =
             else countBits (acc + 1L) (x >>> 1)
         Some (countBits 0L n)
 
+/// Euclidean modulo: result has the sign of the divisor
+let euclideanMod (a: int64) (b: int64) : int64 =
+    let remainder = a % b
+    if remainder = 0L then 0L
+    elif (remainder > 0L && b < 0L) || (remainder < 0L && b > 0L) then remainder + b
+    else remainder
+
 /// Check if an atom is a constant (literal or known value)
 let isConstant (atom: Atom) : bool =
     match atom with
@@ -69,7 +76,7 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Div, IntLiteral (Int64 a), IntLiteral (Int64 b) when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (Atom (IntLiteral (Int64 (a / b))))
     // Skip folding INT64_MIN / -1 - F# throws but runtime handles it (returns INT64_MIN)
     | Div, IntLiteral (Int64 _), IntLiteral (Int64 _) -> None
-    | Mod, IntLiteral (Int64 a), IntLiteral (Int64 b) when b <> 0L -> Some (Atom (IntLiteral (Int64 (a % b))))
+    | Mod, IntLiteral (Int64 a), IntLiteral (Int64 b) when b <> 0L -> Some (Atom (IntLiteral (Int64 (euclideanMod a b))))
 
     // Float arithmetic
     | Add, FloatLiteral a, FloatLiteral b -> Some (Atom (FloatLiteral (a + b)))
@@ -130,6 +137,7 @@ let tryStrengthReduce (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
         | Some shift -> Some (Prim (Shl, x, IntLiteral (Int64 shift)))
         | None -> None
     | Mod, x, IntLiteral (Int64 n) when n > 0L ->
+        // For positive power-of-two divisors, Euclidean remainder equals x & (n - 1)
         match tryLog2 n with
         | Some _ -> Some (Prim (BitAnd, x, IntLiteral (Int64 (n - 1L))))
         | None -> None
