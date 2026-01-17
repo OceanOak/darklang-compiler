@@ -63,6 +63,7 @@ Note: All major compiler bugs fixed:
 ### Documentation
 
 - [x] Update README.md with new language features
+- Language features list lives in `docs/current-language-features.md`
 
 ## Not Planned
 
@@ -70,34 +71,6 @@ The following features are explicitly out of scope:
 
 - **REPL** - interactive mode
 - **Debugger support** - DWARF debug info
-
-## Current Status
-
-- ✅ Integers with full arithmetic (+, -, \*, /)
-- ✅ Booleans with comparisons (==, !=, <, >, <=, >=) and operations (&&, ||, !)
-- ✅ Variables (let bindings with shadowing support)
-- ✅ Let-pattern matching with tuples (e.g., `let (a, b) = tuple in ...`)
-- ✅ Control flow (if/then/else expressions, including in atom position)
-- ✅ Functions with type signatures, calls, recursion, and implicit mutual recursion
-- ✅ String literals with escape sequences and concatenation (`++` operator)
-- ✅ Lists (linked list implementation with [1, 2, 3] syntax and exact-length pattern matching)
-- ✅ Type checking (51 DSL tests + 8 unit tests)
-- ✅ 9-pass compiler pipeline (Parser → TypeCheck → ANF → RefCount → MIR → LIR → RegAlloc → CodeGen → ARM64Enc → Binary)
-- ✅ Register allocation with callee-saved registers (X19-X27) and stack spilling for high register pressure
-- ✅ Reference counting with free list memory reuse
-- ✅ 2157 passing tests
-- ✅ Cross-platform (Linux ELF, macOS Mach-O)
-- ✅ Type-directed record field lookup (no ambiguity when multiple record types have same field names)
-- ✅ Function return type inference using function registry (enables type inference for let-bound function calls)
-- ✅ Record literals require type name: `Point { x = 1, y = 2 }` syntax (no anonymous records)
-- ✅ Sum types (enums with payloads, pattern matching with extraction)
-- ✅ Boolean printing (both literals and computed expressions print as true/false)
-- ✅ Generic functions with type parameters (`def id<T>(x: T): T = x`)
-- ✅ Polymorphic lists (`List<T>` with type inference)
-- ✅ Lambda expressions with immediate application (`(x: int) => x + 1`)
-- ✅ First-class functions (store lambdas in variables, call later)
-- ✅ Higher-order functions (pass named functions or lambdas as arguments)
-- ✅ Closures (lambdas that capture variables from enclosing scope)
 
 ## Implementation Notes
 

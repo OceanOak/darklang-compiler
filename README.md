@@ -253,6 +253,8 @@ dotnet clean                    # Clean build artifacts
 
 ## Current Features
 
+Full list: `docs/current-language-features.md`
+
 **Types:**
 
 - `int` - 64-bit signed integers
