@@ -1,0 +1,5 @@
+// Raw pointer internals (stdlib-only)
+// These tests rely on internal runtime helpers.
+
+// Raw float load should preserve float type through if-join
+let rawPtr = __raw_alloc(8) in let _ = __raw_set<Float>(rawPtr, 0, 1.5) in let rawVal = __raw_get<Float>(rawPtr, 0) in if true then rawVal else 2.5 = 1.50

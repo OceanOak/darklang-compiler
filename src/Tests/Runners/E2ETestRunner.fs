@@ -9,6 +9,10 @@ open System.Threading.Tasks
 open TestDSL.E2EFormat
 open StdlibTestHarness
 
+let private isInternalTestFile (sourceFile: string) : bool =
+    let normalized = sourceFile.Replace('\\', '/')
+    normalized.Contains("/stdlib-internal/")
+
 /// Result of running an E2E test
 type E2ETestResult = {
     Success: bool
@@ -35,6 +39,7 @@ type PreambleTaskMap = Map<PreambleKey, Task<Result<unit, string>>>
 let precompilePreamble (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<unit, string> =
     let preambleHash = preamble.GetHashCode()
     let cacheKey = (sourceFile, preambleHash)
+    let allowInternal = isInternalTestFile sourceFile
     if stdlib.PreambleCache.ContainsKey cacheKey then
         Ok ()
     else
@@ -43,7 +48,7 @@ let precompilePreamble (stdlib: CompilerLibrary.StdlibResult) (sourceFile: strin
                 cacheKey,
                 fun _ ->
                     Lazy<Result<CompilerLibrary.PreambleContext, string>>(
-                        (fun () -> CompilerLibrary.compilePreamble stdlib preamble sourceFile funcLineMap),
+                        (fun () -> CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap),
                         System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
         match lazyCtx.Value with
         | Error err -> Error $"Preamble precompile error ({sourceFile}): {err}"
@@ -113,8 +118,9 @@ let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestR
             DumpMIR = false
             DumpLIR = false
         }
+        let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
-            CompilerLibrary.compileAndRunWithStdlibCachedTimed 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
+            CompilerLibrary.compileAndRunWithStdlibCachedTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
 
         // Handle error expectation
         if test.ExpectCompileError then

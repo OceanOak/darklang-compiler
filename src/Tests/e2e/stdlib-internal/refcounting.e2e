@@ -1,0 +1,5 @@
+// Refcount internals (stdlib-only)
+// These tests call internal refcount helpers and should not be used by user code.
+
+// Leak check detects refcount leaks for heap strings
+let s = "a" ++ "b" in let _ = __refcount_inc_string(s) in 0 = stdout="0\n" stderr="leaks: 1\n" // leak_check

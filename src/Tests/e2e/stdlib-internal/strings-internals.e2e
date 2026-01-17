@@ -1,0 +1,9 @@
+// String internals (stdlib-only)
+// Helper functions used by Stdlib.String.
+
+Stdlib.String.__isLowercase(97) = true
+Stdlib.String.__isLowercase(122) = true
+Stdlib.String.__isLowercase(65) = false
+Stdlib.String.__isUppercase(65) = true
+Stdlib.String.__isUppercase(90) = true
+Stdlib.String.__isUppercase(97) = false

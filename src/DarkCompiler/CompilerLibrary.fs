@@ -1126,10 +1126,16 @@ let private prepareStdlibForLazyCompile () : Result<LazyStdlibResult, string> =
                             LIRCache = LIRCache()
                         }
 
+let private parseSourceWithInternal (allowInternal: bool) (source: string) : Result<AST.Program, string> =
+    if allowInternal then
+        Parser.parseStringAllowInternal source
+    else
+        Parser.parseString source
+
 /// Compile preamble with stdlib as base, returning extended context for test compilation
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is cached and reused for all tests in the same file
-let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
+let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
         Ok {
@@ -1144,7 +1150,7 @@ let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: strin
     else
         // Parse preamble with dummy expression (parser requires a main expression)
         let preambleSource = preamble + "\n0"
-        match Parser.parseString preambleSource with
+        match parseSourceWithInternal allowInternal preambleSource with
         | Error err -> Error $"Preamble parse error: {err}"
         | Ok preambleAst ->
             // Type-check preamble with stdlib.TypeCheckEnv
@@ -1248,15 +1254,19 @@ let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: strin
                                         StdlibSpecializedNames = preambleUserOnly.SpecializedFuncNames
                                     }
 
+/// Compile preamble with stdlib as base (user code defaults)
+let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
+    compilePreambleWithOptions false stdlib preamble sourceFile funcLineMap
+
 /// Compile test expression with pre-compiled preamble context
 /// Only the tiny test expression is parsed/compiled - preamble functions are merged in
-let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
-                            (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
+let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
+                                       (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
     let sw = Stopwatch.StartNew()
     try
         // Pass 1: Parse test expression only (tiny)
         if verbosity >= 1 then println "  [1/8] Parse (test expr only)..."
-        let parseResult = Parser.parseString testExpr
+        let parseResult = parseSourceWithInternal allowInternal testExpr
         let parseTime = sw.Elapsed.TotalMilliseconds
         if verbosity >= 2 then
             let t = System.Math.Round(parseTime, 1)
@@ -1561,6 +1571,11 @@ let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib:
                         { Binary = Array.empty
                           Success = false
                           ErrorMessage = Some $"Compilation failed: {ex.Message}" }
+
+/// Compile test expression with pre-compiled preamble context (user code defaults)
+let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
+                            (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
+    compileTestWithPreambleWithOptions false verbosity options stdlib preambleCtx sourceFile testExpr
 
                 /// Compile a single MIR function to LIR (used by cache factory)
 let private compileMIRToLIR (_stdlib: LazyStdlibResult) (mirFunc: MIR.Function) : LIRSymbolic.Function option =
@@ -1892,7 +1907,8 @@ let private compileResultToExecution (verbosity: int) (compileResult: CompileRes
     else
         execute verbosity compileResult.Binary
 
-let private getOrCompilePreambleContext
+let private getOrCompilePreambleContextWithOptions
+    (allowInternal: bool)
     (verbosity: int)
     (stdlib: StdlibResult)
     (preamble: string)
@@ -1911,17 +1927,26 @@ let private getOrCompilePreambleContext
             cacheKey,
             fun _ ->
                 Lazy<Result<PreambleContext, string>>(
-                    (fun () -> compilePreamble stdlib preamble sourceFile funcLineMap),
+                    (fun () -> compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap),
                     System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
     lazyCtx.Value
+
+let private getOrCompilePreambleContext
+    (verbosity: int)
+    (stdlib: StdlibResult)
+    (preamble: string)
+    (sourceFile: string)
+    (funcLineMap: Map<string, int>)
+    : Result<PreambleContext, string> =
+    getOrCompilePreambleContextWithOptions false verbosity stdlib preamble sourceFile funcLineMap
 
 /// Compile and run source code with options
 let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
     compileWithOptions verbosity options source |> compileResultToExecution verbosity
 
 /// Compile and run with timing breakdown (for test output)
-let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    match getOrCompilePreambleContext verbosity stdlib preamble sourceFile funcLineMap with
+let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
+    match getOrCompilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
     | Error err ->
         { ExitCode = 1
           Stdout = ""
@@ -1930,7 +1955,7 @@ let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOption
           RuntimeTime = TimeSpan.Zero }
     | Ok preambleCtx ->
         let compileTimer = Stopwatch.StartNew()
-        let compileResult = compileTestWithPreamble verbosity options stdlib preambleCtx sourceFile testExpr
+        let compileResult = compileTestWithPreambleWithOptions allowInternal verbosity options stdlib preambleCtx sourceFile testExpr
         compileTimer.Stop()
         let compileTime = compileTimer.Elapsed
 
@@ -1949,6 +1974,10 @@ let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOption
               Stderr = execResult.Stderr
               CompileTime = compileTime
               RuntimeTime = runtimeTimer.Elapsed }
+
+/// Compile and run with timing breakdown (for test output)
+let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
+    compileAndRunWithStdlibCachedTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
 
 /// Get the set of stdlib function names reachable from user code
 /// Used for coverage analysis without full compilation

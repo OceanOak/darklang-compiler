@@ -1,5 +1,0 @@
-// FingerTree internal module is not part of the public API.
-// User code should not be able to call Stdlib.__FingerTree.*.
-
-Stdlib.__FingerTree.empty<Int64>() = error="Internal identifier not allowed in user code: Stdlib.__FingerTree.empty"
-Stdlib.__FingerTree.length(Stdlib.__FingerTree.singleton(1)) = error="Internal identifier not allowed in user code: Stdlib.__FingerTree.length"

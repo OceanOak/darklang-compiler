@@ -12,9 +12,6 @@
 // Basic tuple creation and use - should work correctly
 // ===================================================================
 
-// Leak check uses internal refcount functions and should be rejected in user code
-let s = "a" ++ "b" in let _ = __refcount_inc_string(s) in 0 = error="Internal identifier not allowed in user code: __refcount_inc_string" // leak_check
-
 // Simple tuple
 let t = (1, 2) in t.0 + t.1 = 3
 

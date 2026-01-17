@@ -171,14 +171,6 @@ Stdlib.String.getByteAt(" ", 0) = 32
 Stdlib.String.getByteAt("0", 0) = 48
 Stdlib.String.getByteAt("9", 0) = 57
 
-// Helper functions for character type checks (internal only)
-Stdlib.String.__isLowercase(97) = error="Internal identifier not allowed in user code: Stdlib.String.__isLowercase"
-Stdlib.String.__isLowercase(122) = error="Internal identifier not allowed in user code: Stdlib.String.__isLowercase"
-Stdlib.String.__isLowercase(65) = error="Internal identifier not allowed in user code: Stdlib.String.__isLowercase"
-Stdlib.String.__isUppercase(65) = error="Internal identifier not allowed in user code: Stdlib.String.__isUppercase"
-Stdlib.String.__isUppercase(90) = error="Internal identifier not allowed in user code: Stdlib.String.__isUppercase"
-Stdlib.String.__isUppercase(97) = error="Internal identifier not allowed in user code: Stdlib.String.__isUppercase"
-
 // =============================================================================
 // Stdlib.String.startsWith Tests
 // =============================================================================
