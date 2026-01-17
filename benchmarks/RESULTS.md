@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-17 00:34:47
-**Commit:** `966dc73f` - Add multiply-by-constant strength reduction (x*3, x*5, x*7, etc.)
+**Last Updated:** 2026-01-17 12:35:37
+**Commit:** `ab8ed9ff` - Merge branch 'compiler-for-dark-window-1'
 
 | Benchmark     |           Dark (4.43x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

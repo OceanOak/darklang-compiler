@@ -410,6 +410,99 @@ let rec containsTypeVar (t: AST.Type) : bool =
     | AST.TDict (keyType, valueType) -> containsTypeVar keyType || containsTypeVar valueType
     | _ -> false
 
+/// Parse a mangled type name (from typeToMangledName) into an AST type.
+/// Returns Error if the mangled form is ambiguous or unsupported.
+let tryParseMangledType (variantLookup: VariantLookup) (mangled: string) : Result<AST.Type, string> =
+    let tokens = mangled.Split('_') |> Array.toList
+    let sumTypeNames =
+        variantLookup
+        |> Map.toList
+        |> List.map (fun (_, (typeName, _, _, _)) -> typeName)
+        |> Set.ofList
+
+    let mkNamedType (name: string) (args: AST.Type list) : AST.Type =
+        if Set.contains name sumTypeNames then AST.TSum (name, args) else AST.TRecord (name, args)
+
+    let tryPrimitive (tok: string) : AST.Type option =
+        match tok with
+        | "i8" -> Some AST.TInt8
+        | "i16" -> Some AST.TInt16
+        | "i32" -> Some AST.TInt32
+        | "i64" -> Some AST.TInt64
+        | "u8" -> Some AST.TUInt8
+        | "u16" -> Some AST.TUInt16
+        | "u32" -> Some AST.TUInt32
+        | "u64" -> Some AST.TUInt64
+        | "bool" -> Some AST.TBool
+        | "f64" -> Some AST.TFloat64
+        | "str" -> Some AST.TString
+        | "bytes" -> Some AST.TBytes
+        | "char" -> Some AST.TChar
+        | "unit" -> Some AST.TUnit
+        | "rawptr" -> Some AST.TRawPtr
+        | _ -> None
+
+    let rec parseType (toks: string list) : (AST.Type * string list) list =
+        match toks with
+        | [] -> []
+        | tok :: rest ->
+            match tok with
+            | "list" ->
+                parseType rest |> List.map (fun (elemT, rem) -> (AST.TList elemT, rem))
+            | "dict" ->
+                parseType rest
+                |> List.collect (fun (keyT, rem1) ->
+                    parseType rem1 |> List.map (fun (valueT, rem2) -> (AST.TDict (keyT, valueT), rem2)))
+            | "tup" ->
+                parseTupleElems rest |> List.map (fun (elems, rem) -> (AST.TTuple elems, rem))
+            | "fn" ->
+                parseFunction rest
+            | _ ->
+                match tryPrimitive tok with
+                | Some prim -> [ (prim, rest) ]
+                | None ->
+                    // Parse as named type with optional type arguments.
+                    let baseType = (mkNamedType tok [], rest)
+                    let withArgs =
+                        parseTupleElems rest
+                        |> List.map (fun (args, rem) -> (mkNamedType tok args, rem))
+                    baseType :: withArgs
+
+    and parseTupleElems (toks: string list) : (AST.Type list * string list) list =
+        parseType toks
+        |> List.collect (fun (firstT, rem1) ->
+            let single = ([firstT], rem1)
+            let more =
+                parseTupleElems rem1
+                |> List.map (fun (restTs, rem2) -> (firstT :: restTs, rem2))
+            single :: more)
+
+    and parseFunction (toks: string list) : (AST.Type * string list) list =
+        let rec splitParams (acc: string list) (remaining: string list) =
+            match remaining with
+            | [] -> None
+            | "to" :: rest -> Some (List.rev acc, rest)
+            | tok :: rest -> splitParams (tok :: acc) rest
+        match splitParams [] toks with
+        | None -> []
+        | Some (paramTokens, retTokens) ->
+            let paramParses =
+                parseTupleElems paramTokens
+                |> List.filter (fun (_, rem) -> rem = [])
+                |> List.map fst
+            let retParses =
+                parseType retTokens
+                |> List.filter (fun (_, rem) -> rem = [])
+                |> List.map fst
+            paramParses
+            |> List.collect (fun paramTypes ->
+                retParses |> List.map (fun ret -> (AST.TFunction (paramTypes, ret), [])))
+
+    match parseType tokens |> List.filter (fun (_, rem) -> rem = []) with
+    | [ (typ, _) ] -> Ok typ
+    | [] -> Error $"Could not parse mangled type: {mangled}"
+    | _ -> Error $"Ambiguous mangled type: {mangled}"
+
 /// Generate a specialized function name
 let specName (funcName: string) (typeArgs: AST.Type list) : string =
     if List.isEmpty typeArgs then
@@ -2467,8 +2560,10 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     // __list_to_rawptr<a> returns RawPtr (as Int64)
                     Ok AST.TInt64
                 elif funcName.StartsWith("__rawptr_to_list_") then
-                    // __rawptr_to_list<a> returns List<a> (as Int64)
-                    Ok AST.TInt64
+                    // __rawptr_to_list<a> returns List<a> - parse element type from mangled name
+                    let suffix = funcName.Substring("__rawptr_to_list_".Length)
+                    tryParseMangledType variantLookup suffix
+                    |> Result.map AST.TList
                 elif funcName.StartsWith("__list_empty_") then
                     // __list_empty<a> returns List<a> - but at ANF level it's Int64 (null ptr)
                     Ok AST.TInt64
@@ -4374,7 +4469,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 else
                     // Multiple elements: check length == patternLen (safe for all list types)
                     let (lengthVar, vg1) = ANF.freshVar vg
-                    let lengthExpr = ANF.Call ("Stdlib.FingerTree.length_i64", [listAtom])
+                    let lengthName =
+                        match elemType with
+                        | AST.TFloat64 -> "Stdlib.FingerTree.__lengthFloat"
+                        | _ -> "Stdlib.FingerTree.length_i64"
+                    let lengthExpr = ANF.Call (lengthName, [listAtom])
                     let (checkVar, vg2) = ANF.freshVar vg1
                     let checkExpr = ANF.Prim (ANF.Eq, ANF.Var lengthVar, ANF.IntLiteral (ANF.Int64 (int64 patternLen)))
                     // Untag to get pointer (only used in then-branch after length check passes)
@@ -4394,14 +4493,21 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Use getAt to retrieve element at this index
                             // getAt returns Option, but we know length == patternLen so it's always Some
-                            // Note: We call Stdlib.List.__getAtInt64 (a non-generic wrapper) rather than
-                            // Stdlib.FingerTree.getAt_i64 because monomorphization happens at AST level,
-                            // but pattern matching compilation happens at ANF level.
+                            // Select a type-specific wrapper to avoid defaulting to Int64 for floats.
+                            // Monomorphization happens at AST level, so we must use a non-generic wrapper here.
                             let (optVar, vg1) = ANF.freshVar vg
-                            let getAtExpr = ANF.Call ("Stdlib.List.__getAtInt64", [listAtom; ANF.IntLiteral (ANF.Int64 (int64 idx))])
+                            let getAtName =
+                                match elemType with
+                                | AST.TFloat64 -> "Stdlib.List.__getAtFloat"
+                                | _ -> "Stdlib.List.__getAtInt64"
+                            let getAtExpr = ANF.Call (getAtName, [listAtom; ANF.IntLiteral (ANF.Int64 (int64 idx))])
                             // Unwrap the Some - getAt returns tagged value with tag 1 for Some
                             let (rawValueVar, vg2) = ANF.freshVar vg1
-                            let rawValueExpr = ANF.RawGet (ANF.Var optVar, ANF.IntLiteral (ANF.Int64 8L), None)  // Some payload at offset 8
+                            let valueType =
+                                match elemType with
+                                | AST.TFloat64 -> Some AST.TFloat64
+                                | _ -> None
+                            let rawValueExpr = ANF.RawGet (ANF.Var optVar, ANF.IntLiteral (ANF.Int64 8L), valueType)  // Some payload at offset 8
                             // Wrap with TypedAtom to preserve element type in TypeMap
                             let (typedValueVar, vg2') = ANF.freshVar vg2
                             let typedValueExpr = ANF.TypedAtom (ANF.Var rawValueVar, elemType)
@@ -4723,7 +4829,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // Check length >= number of head patterns
                     let numHeads = List.length headPatterns
                     let (lengthVar, vg1) = ANF.freshVar vg
-                    let lengthExpr = ANF.Call ("Stdlib.FingerTree.length_i64", [listAtom])
+                    let lengthName =
+                        match elemType with
+                        | AST.TFloat64 -> "Stdlib.FingerTree.__lengthFloat"
+                        | _ -> "Stdlib.FingerTree.length_i64"
+                    let lengthExpr = ANF.Call (lengthName, [listAtom])
                     let (lengthCheckVar, vg2) = ANF.freshVar vg1
                     let lengthCheckExpr = ANF.Prim (ANF.Gte, ANF.Var lengthVar, ANF.IntLiteral (ANF.Int64 (int64 numHeads)))
 

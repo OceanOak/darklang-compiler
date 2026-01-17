@@ -341,6 +341,9 @@ def Stdlib.List.__headUnsafeInt64(list: List<Int64>) : Int64 =
 def Stdlib.List.__getAtInt64(list: List<Int64>, idx: Int64) : Stdlib.Option.Option<Int64> =
     Stdlib.FingerTree.getAt<Int64>(list, idx)
 
+def Stdlib.List.__getAtFloat(list: List<Float>, idx: Int64) : Stdlib.Option.Option<Float> =
+    Stdlib.FingerTree.getAt<Float>(list, idx)
+
 // Get tail of list or return None - O(1) amortized
 def Stdlib.List.tail<a>(list: List<a>) : Stdlib.Option.Option<List<a>> =
     if Stdlib.FingerTree.isEmpty<a>(list) then None
@@ -2605,6 +2608,9 @@ def Stdlib.FingerTree.length<a>(tree: List<a>) : Int64 =
         else if tag == Stdlib.FingerTree.__TAG_DEEP() then
             Stdlib.FingerTree.__getDeepMeasure<a>(tree)
         else 0
+
+def Stdlib.FingerTree.__lengthFloat(tree: List<Float>) : Int64 =
+    Stdlib.FingerTree.length<Float>(tree)
 
 // Helper: get leftmost element from a TreeNode (recursively unwrap until LEAF)
 def Stdlib.FingerTree.__headOfNode<a>(node: List<a>) : a =
