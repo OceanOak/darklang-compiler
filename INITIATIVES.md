@@ -21,10 +21,7 @@
 
 # Short term
 
-- tidy up repo, playbook, beads, playbooks, benchmarks, TODO, WORKFLOW
+- tidy up TODO file
 - int64 assumptions
-- remove failwith from compiler
 - fix indentation to not nest so deeply
-- get landing / worktrees bulletproof
-- stdlib hides implementation details
 - add values
