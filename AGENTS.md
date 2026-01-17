@@ -157,15 +157,20 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 | `src/DarkCompiler/Runtime.fs`                 | Runtime support, builtins        |
 | `src/DarkCompiler/Stdlib.fs`                  | Standard library definitions     |
 
+## Git Workflow
+
+- **Start by rebasing** - Begin new work by running `git rebase main` to ensure you're working on top of the latest main.
+- **Never push** - Do not run `git push`. The user handles pushing.
+- **"main" means the local branch** - References to `main` mean the local `main` branch, not `origin/main`.
+- **Landing** - "Land" means merging your branch onto main using `./scripts/land-on-main.sh`. This script rebases onto main, runs tests and benchmarks, then fast-forward merges into main.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below.
 
 **MANDATORY WORKFLOW:**
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up. Include a description in the issue.
-2. **Run quality gates** (if code changed) - Ensure it build, all tests pass, benchmarks do not regress.
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Clean up** - Clear stashes
-5. **Verify** - All changes committed
-6. **Hand off** - Provide context for next session
+1. **Run quality gates** (if code changed) - Ensure it builds, all tests pass, benchmarks do not regress.
+2. **Clean up** - Clear stashes
+3. **Verify** - All changes committed
+4. **Hand off** - Provide context for next session
