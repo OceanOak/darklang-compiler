@@ -163,4 +163,4 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 - **Start by rebasing** - Begin new work by running `git rebase main` to ensure you're working on top of the latest main.
 - **Never push** - Do not run `git push`. The user handles pushing.
 - **"main" means the local branch** - References to `main` mean the local `main` branch, not `origin/main`.
-- **Landing** - "Land" means merging your branch onto main using `./scripts/land-on-main.sh`. This script rebases onto main, runs tests and benchmarks, then fast-forward merges into main.
+- **Landing** - When the user says "land", first commit any uncommitted changes, then run `./scripts/land-on-main.sh`. This script rebases onto main, runs tests and benchmarks, then fast-forward merges into main. Do NOT push to remote - just run the land script.
