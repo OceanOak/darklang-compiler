@@ -835,7 +835,7 @@ let extractReturnTypes (funcReg: Map<string, AST.Type>) : Map<string, AST.Type> 
     |> Seq.choose (fun (name, typ) ->
         match typ with
         | AST.TFunction (_, retType) -> Some (name, retType)
-        | other -> failwith $"extractReturnTypes: Non-function type '{other}' found in FuncReg for '{name}'")
+        | other -> Crash.crash $"extractReturnTypes: Non-function type '{other}' found in FuncReg for '{name}'")
     |> Map.ofSeq
 
 /// Try to delete a file, ignoring any errors

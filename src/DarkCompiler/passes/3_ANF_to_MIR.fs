@@ -374,7 +374,7 @@ let atomType (builder: CFGBuilder) (atom: ANF.Atom) : AST.Type =
                 | None ->
                     // TypeMap is populated by RefCountInsertion pass with fallback to TInt64.
                     // If we reach here, a pass after RefCountInsertion created a TempId without tracking.
-                    failwith $"atomType: unknown type for TempId {id} - TempId created after RefCountInsertion?"
+                    Crash.crash $"atomType: unknown type for TempId {id} - TempId created after RefCountInsertion?"
         result
     | ANF.FuncRef _ -> AST.TInt64  // Function addresses are pointer-sized
 
@@ -653,7 +653,7 @@ let rec convertExpr
                         | None ->
                             match tryGetIntrinsicReturnType funcName with
                             | Some t -> t
-                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                            | None -> Crash.crash $"ANF_to_MIR: Return type not found for function: {funcName}"
                     destType := returnType  // Track call result type for FloatRegs update
                     args
                     |> List.map (atomToOperand builder)
@@ -665,7 +665,7 @@ let rec convertExpr
                     let returnType =
                         match atomType builder func with
                         | AST.TFunction (_, retType) -> retType
-                        | other -> failwith $"IndirectCall: Expected TFunction type for func, got {other}"
+                        | other -> Crash.crash $"IndirectCall: Expected TFunction type for func, got {other}"
                     atomToOperand builder func
                     |> Result.bind (fun funcOp ->
                         args
@@ -698,7 +698,7 @@ let rec convertExpr
                             match Map.tryFind tempId builder.TypeMap with
                             | Some (AST.TFunction (_, retType)) -> retType
                             | Some t -> t
-                            | None -> failwith $"ClosureCall: Return type not found for {tempId}"
+                            | None -> Crash.crash $"ClosureCall: Return type not found for {tempId}"
                         match closure with
                         | ANF.Var closureId ->
                             match Map.tryFind closureId builder.ClosureFuncs with
@@ -726,7 +726,7 @@ let rec convertExpr
                         | None ->
                             match tryGetIntrinsicReturnType funcName with
                             | Some t -> t
-                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                            | None -> Crash.crash $"ANF_to_MIR: Return type not found for function: {funcName}"
                     args
                     |> List.map (atomToOperand builder)
                     |> sequenceResults
@@ -738,7 +738,7 @@ let rec convertExpr
                     let returnType =
                         match atomType builder func with
                         | AST.TFunction (_, retType) -> retType
-                        | other -> failwith $"IndirectTailCall: Expected TFunction type for func, got {other}"
+                        | other -> Crash.crash $"IndirectTailCall: Expected TFunction type for func, got {other}"
                     atomToOperand builder func
                     |> Result.bind (fun funcOp ->
                         args
@@ -1262,7 +1262,7 @@ and convertExprToOperand
                         | None ->
                             match tryGetIntrinsicReturnType funcName with
                             | Some t -> t
-                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                            | None -> Crash.crash $"ANF_to_MIR: Return type not found for function: {funcName}"
                     destType := returnType  // Track call result type for FloatRegs update
                     args
                     |> List.map (atomToOperand builder)
@@ -1274,7 +1274,7 @@ and convertExprToOperand
                     let returnType =
                         match atomType builder func with
                         | AST.TFunction (_, retType) -> retType
-                        | other -> failwith $"IndirectCall: Expected TFunction type for func, got {other}"
+                        | other -> Crash.crash $"IndirectCall: Expected TFunction type for func, got {other}"
                     atomToOperand builder func
                     |> Result.bind (fun funcOp ->
                         args
@@ -1307,7 +1307,7 @@ and convertExprToOperand
                             match Map.tryFind tempId builder.TypeMap with
                             | Some (AST.TFunction (_, retType)) -> retType
                             | Some t -> t
-                            | None -> failwith $"ClosureCall: Return type not found for {tempId}"
+                            | None -> Crash.crash $"ClosureCall: Return type not found for {tempId}"
                         match closure with
                         | ANF.Var closureId ->
                             match Map.tryFind closureId builder.ClosureFuncs with
@@ -1335,7 +1335,7 @@ and convertExprToOperand
                         | None ->
                             match tryGetIntrinsicReturnType funcName with
                             | Some t -> t
-                            | None -> failwith $"ANF_to_MIR: Return type not found for function: {funcName}"
+                            | None -> Crash.crash $"ANF_to_MIR: Return type not found for function: {funcName}"
                     args
                     |> List.map (atomToOperand builder)
                     |> sequenceResults
@@ -1347,7 +1347,7 @@ and convertExprToOperand
                     let returnType =
                         match atomType builder func with
                         | AST.TFunction (_, retType) -> retType
-                        | other -> failwith $"IndirectTailCall: Expected TFunction type for func, got {other}"
+                        | other -> Crash.crash $"IndirectTailCall: Expected TFunction type for func, got {other}"
                     atomToOperand builder func
                     |> Result.bind (fun funcOp ->
                         args

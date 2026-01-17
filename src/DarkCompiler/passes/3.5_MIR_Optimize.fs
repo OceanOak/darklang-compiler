@@ -439,7 +439,7 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 | HeapLoad (dest, addr, offset, vt) ->
                     match rewriteOperand (Register addr) with
                     | Register addr' -> HeapLoad (dest, addr', offset, vt)
-                    | _ -> failwith "LICM: HeapLoad address should remain a register"
+                    | _ -> Crash.crash "LICM: HeapLoad address should remain a register"
                 | FloatSqrt (dest, src) -> FloatSqrt (dest, rewriteOperand src)
                 | FloatAbs (dest, src) -> FloatAbs (dest, rewriteOperand src)
                 | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)

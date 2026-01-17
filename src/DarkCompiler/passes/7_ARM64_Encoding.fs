@@ -1015,7 +1015,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let rt = encodeReg reg
             [sf ||| op ||| flag ||| imm19 ||| rt]
         | None ->
-            failwith $"CBZ: Label '{label}' not found in labelMap"
+            Crash.crash $"CBZ: Label '{label}' not found in labelMap"
 
     | ARM64.CBNZ (reg, label) ->
         match Map.tryFind label labelMap with
@@ -1030,7 +1030,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let rt = encodeReg reg
             [sf ||| op ||| flag ||| imm19 ||| rt]
         | None ->
-            failwith $"CBNZ: Label '{label}' not found in labelMap"
+            Crash.crash $"CBNZ: Label '{label}' not found in labelMap"
 
     | ARM64.TBZ_label (reg, bit, label) ->
         match Map.tryFind label labelMap with
@@ -1046,7 +1046,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let rt = encodeReg reg
             [b5 ||| op ||| flag ||| b40 ||| imm14 ||| rt]
         | None ->
-            failwith $"TBZ: Label '{label}' not found in labelMap"
+            Crash.crash $"TBZ: Label '{label}' not found in labelMap"
 
     | ARM64.TBNZ_label (reg, bit, label) ->
         match Map.tryFind label labelMap with
@@ -1062,7 +1062,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let rt = encodeReg reg
             [b5 ||| op ||| flag ||| b40 ||| imm14 ||| rt]
         | None ->
-            failwith $"TBNZ: Label '{label}' not found in labelMap"
+            Crash.crash $"TBNZ: Label '{label}' not found in labelMap"
 
     | ARM64.B_label label ->
         match Map.tryFind label labelMap with
@@ -1074,7 +1074,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let imm26 = (uint32 instrOffset) &&& 0x3FFFFFFu
             [op ||| imm26]
         | None ->
-            failwith $"B: Label '{label}' not found in labelMap"
+            Crash.crash $"B: Label '{label}' not found in labelMap"
 
     | ARM64.B_cond_label (cond, label) ->
         match Map.tryFind label labelMap with
@@ -1094,7 +1094,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
                 | ARM64.GE -> 0b1010u
             [op ||| imm19 ||| condBits]
         | None ->
-            failwith $"B.cond: Label '{label}' not found in labelMap"
+            Crash.crash $"B.cond: Label '{label}' not found in labelMap"
 
     | ARM64.BL label ->
         match Map.tryFind label labelMap with
@@ -1107,7 +1107,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let imm26 = (uint32 instrOffset) &&& 0x3FFFFFFu
             [op ||| imm26]
         | None ->
-            failwith $"BL: Label '{label}' not found in labelMap"
+            Crash.crash $"BL: Label '{label}' not found in labelMap"
 
     | ARM64.Label _ ->
         // Pseudo-instruction: no machine code
@@ -1133,7 +1133,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let opcode = 0b10000u <<< 24
             [op ||| immlo ||| opcode ||| immhi ||| rd]
         | None ->
-            failwith $"ADRP: Label '{label}' not found in labelMap"
+            Crash.crash $"ADRP: Label '{label}' not found in labelMap"
 
     | ARM64.ADR (dest, label) ->
         // ADR: form PC-relative address
@@ -1152,7 +1152,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let opcode = 0b10000u <<< 24
             [op ||| immlo ||| opcode ||| immhi ||| rd]
         | None ->
-            failwith $"ADR: Label '{label}' not found in labelMap"
+            Crash.crash $"ADR: Label '{label}' not found in labelMap"
 
     | ARM64.ADD_label (dest, src, label) ->
         // ADD with label offset (page offset portion)
@@ -1171,7 +1171,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             let rd = encodeReg dest
             [sf ||| op ||| shift ||| imm12 ||| rn ||| rd]
         | None ->
-            failwith $"ADD_label: Label '{label}' not found in labelMap"
+            Crash.crash $"ADD_label: Label '{label}' not found in labelMap"
 
     // All other instructions: use single-pass encoding
     | _ ->
