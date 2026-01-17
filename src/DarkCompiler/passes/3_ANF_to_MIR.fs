@@ -401,7 +401,7 @@ let operandType (builder: CFGBuilder) (operand: MIR.Operand) : AST.Type =
         else
             match Map.tryFind (ANF.TempId id) builder.TypeMap with
             | Some t -> t
-            | None -> Output.crash $"operandType: missing type for v{id}"
+            | None -> Crash.crash $"operandType: missing type for v{id}"
 
 /// Generate description for a CExpr (for coverage mapping)
 let cexprDescription (cexpr: ANF.CExpr) : string =

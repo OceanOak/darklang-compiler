@@ -11,3 +11,8 @@ module Crash
 /// be replaced with Darklang's error handling (Result types or similar).
 let crash (message: string) : 'a =
     failwith message
+
+/// Crash to mark incomplete work that should never be hit in production.
+/// Use this when a developer or AI needs to flag missing logic.
+let TODO (message: string) : 'a =
+    crash $"TODO: {message}"

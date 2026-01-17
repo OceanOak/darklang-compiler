@@ -202,7 +202,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             let concreteTypes = captureTypes |> List.map Option.get
             Some (AST.TTuple (AST.TInt64 :: concreteTypes))
         else
-            Output.crash "RefCountInsertion: could not infer closure capture types"
+            Crash.crash "RefCountInsertion: could not infer closure capture types"
     | ClosureCall (closureAtom, _) ->
         // Try to find the closure's function name and look up return type
         match tryGetClosureFunc ctx closureAtom with
@@ -413,9 +413,7 @@ let rec insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * Var
                 | TupleGet _, Let (aliasId, TypedAtom (Var sourceId, aliasType), _) when sourceId = tempId ->
                     aliasType
                 | _ ->
-                    // Fallback for cases where inference is still incomplete.
-                    // TODO: remove this once all CExprs are fully typed.
-                    AST.TInt64
+                    Crash.TODO "RefCountInsertion: inferred type missing for CExpr"
         let ctx' = addType ctx tempId inferredType
         let ctxWithAliases =
             match cexpr with

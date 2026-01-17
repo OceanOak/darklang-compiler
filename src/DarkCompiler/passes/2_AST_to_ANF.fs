@@ -2162,7 +2162,7 @@ let rec generateStructuralEquality
                     // Chain ANDs: result = r0 && r1 && r2 ...
                     let rec chainAnds results accBindings vg =
                         match results with
-                        | [] -> crash "empty results in chainAnds"
+                        | [] -> Crash.crash "empty results in chainAnds"
                         | [last] -> (accBindings, last, vg)
                         | a :: b :: rest ->
                             let (andVar, vg') = ANF.freshVar vg
@@ -2213,7 +2213,7 @@ let rec generateStructuralEquality
                     | first :: rest ->
                         let rec chainAnds results accBindings vg =
                             match results with
-                            | [] -> crash "empty results in chainAnds"
+                            | [] -> Crash.crash "empty results in chainAnds"
                             | [last] -> (accBindings, last, vg)
                             | a :: b :: rest ->
                                 let (andVar, vg') = ANF.freshVar vg

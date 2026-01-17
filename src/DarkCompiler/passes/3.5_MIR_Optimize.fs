@@ -744,7 +744,7 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
         |> Map.map (fun _ block ->
             match block.Terminator with
             | Jump target -> target
-            | _ -> crash "Expected Jump"
+            | _ -> Crash.crash "Expected Jump"
         )
 
     if Map.isEmpty emptyBlocks then
@@ -834,7 +834,7 @@ let eliminateUnreachableBlocks (cfg: CFG) : CFG * bool =
                     | Phi (dest, sources, valueType) ->
                         let sources' = sources |> List.filter (fun (_, srcLabel) -> Set.contains srcLabel reachable)
                         if List.isEmpty sources' then
-                            crash $"Phi in {label} has no reachable sources after CFG prune"
+                            Crash.crash $"Phi in {label} has no reachable sources after CFG prune"
                         let instr' = Phi (dest, sources', valueType)
                         (acc' @ [instr'], ch' || sources' <> sources)
                     | _ ->
