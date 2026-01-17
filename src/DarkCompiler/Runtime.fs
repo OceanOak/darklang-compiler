@@ -247,8 +247,8 @@ let generatePrintString (stringLen: int) : ARM64.Instr list =
 /// 3. Print integer part (absolute value)
 /// 4. Print decimal point '.'
 /// 5. Extract fractional part: frac = abs(D0) - floor(abs(D0))
-/// 6. Multiply by 10^6 to get up to 6 decimal digits
-/// 7. Print fractional digits, stripping trailing zeros
+/// 6. Multiply by 10^2 to get 2 decimal digits
+/// 7. Print fractional digits, trimming a trailing zero
 /// 8. Print newline and exit
 ///
 /// Register usage:
@@ -295,7 +295,7 @@ let generatePrintFloat () : ARM64.Instr list =
         // Instruction offset: 14
 
         // Check if integer part is zero (branch to print_zero_int)
-        ARM64.CBZ_offset (ARM64.X2, 62)  // If zero, branch to print_zero_int (inst 75)
+        ARM64.CBZ_offset (ARM64.X2, 64)  // If zero, branch to print_zero_int (inst 77)
 
         // convert_int_loop - Extract digits by dividing by 10
         ARM64.MOVZ (ARM64.X3, 10us, 0)  // divisor = 10
@@ -333,7 +333,7 @@ let generatePrintFloat () : ARM64.Instr list =
         ARM64.MOVZ (syscalls.SyscallRegister, syscalls.Write, 0)
         ARM64.SVC syscalls.SvcImmediate
 
-        // === Extract and print fractional part (2 decimal places) ===
+        // === Extract and print fractional part (1 or 2 decimal digits) ===
         // Reload original float value
         ARM64.LDR_fp (ARM64.D0, ARM64.SP, 32s)  // Reload original value
 
@@ -363,10 +363,12 @@ let generatePrintFloat () : ARM64.Instr list =
         ARM64.ADD_imm (ARM64.X5, ARM64.X5, 48us)  // Convert ones to ASCII
         ARM64.STRB (ARM64.X5, ARM64.SP, 2)  // Store ones digit at [SP+2]
 
-        // Print both digits in one syscall
+        // Print one or two digits in one syscall (trim trailing zero)
         ARM64.MOVZ (ARM64.X0, 1us, 0)  // stdout
         ARM64.ADD_imm (ARM64.X1, ARM64.SP, 1us)  // buffer at [SP+1]
-        ARM64.MOVZ (ARM64.X2, 2us, 0)  // length = 2
+        ARM64.SUBS_imm (ARM64.X5, ARM64.X5, 48us)  // Set flags if ones digit was '0'
+        ARM64.CSET (ARM64.X2, ARM64.NE)  // X2 = 1 when ones digit != 0
+        ARM64.ADD_imm (ARM64.X2, ARM64.X2, 1us)  // length = 1 or 2
         ARM64.MOVZ (syscalls.SyscallRegister, syscalls.Write, 0)
         ARM64.SVC syscalls.SvcImmediate
 
@@ -389,7 +391,7 @@ let generatePrintFloat () : ARM64.Instr list =
         ARM64.MOVZ (ARM64.X2, 48us, 0)  // '0' = 48
         ARM64.STRB (ARM64.X2, ARM64.X1, 0)  // Store '0'
         ARM64.SUB_imm (ARM64.X1, ARM64.X1, 1us)  // Move pointer back
-        ARM64.B (-55)  // Branch back to store_minus_if_needed (inst 23)
+        ARM64.B (-57)  // Branch back to store_minus_if_needed (inst 23)
     ]
 
 /// Generate ARM64 instructions to exit with code 0
@@ -755,7 +757,7 @@ let generatePrintFloatNoNewline () : ARM64.Instr list =
         ARM64.NEG (ARM64.X2, ARM64.X0)
 
         // Check if integer part is zero
-        ARM64.CBZ_offset (ARM64.X2, 53)  // Branch to print_zero_int (instruction 67)
+        ARM64.CBZ_offset (ARM64.X2, 55)  // Branch to print_zero_int (instruction 69)
 
         // convert_int_loop
         ARM64.MOVZ (ARM64.X3, 10us, 0)
@@ -792,7 +794,7 @@ let generatePrintFloatNoNewline () : ARM64.Instr list =
         ARM64.MOVZ (syscalls.SyscallRegister, syscalls.Write, 0)
         ARM64.SVC syscalls.SvcImmediate
 
-        // Extract and print fractional part (2 decimal places)
+        // Extract and print fractional part (1 or 2 decimal digits)
         ARM64.LDR_fp (ARM64.D0, ARM64.SP, 32s)
         ARM64.FCVTZS (ARM64.X0, ARM64.D0)
         ARM64.SCVTF (ARM64.D1, ARM64.X0)
@@ -816,10 +818,12 @@ let generatePrintFloatNoNewline () : ARM64.Instr list =
         ARM64.ADD_imm (ARM64.X5, ARM64.X5, 48us)
         ARM64.STRB (ARM64.X5, ARM64.SP, 2)
 
-        // Print both digits
+        // Print one or two digits (trim trailing zero)
         ARM64.MOVZ (ARM64.X0, 1us, 0)
         ARM64.ADD_imm (ARM64.X1, ARM64.SP, 1us)
-        ARM64.MOVZ (ARM64.X2, 2us, 0)
+        ARM64.SUBS_imm (ARM64.X5, ARM64.X5, 48us)
+        ARM64.CSET (ARM64.X2, ARM64.NE)
+        ARM64.ADD_imm (ARM64.X2, ARM64.X2, 1us)
         ARM64.MOVZ (syscalls.SyscallRegister, syscalls.Write, 0)
         ARM64.SVC syscalls.SvcImmediate
 
@@ -827,11 +831,11 @@ let generatePrintFloatNoNewline () : ARM64.Instr list =
         ARM64.ADD_imm (ARM64.SP, ARM64.SP, 48us)
         ARM64.B (5)  // Skip past print_zero_int (4 instructions + 1 to land after)
 
-        // print_zero_int (instruction 67)
+        // print_zero_int (instruction 69)
         ARM64.MOVZ (ARM64.X2, 48us, 0)
         ARM64.STRB (ARM64.X2, ARM64.X1, 0)
         ARM64.SUB_imm (ARM64.X1, ARM64.X1, 1us)
-        ARM64.B (-46)  // Branch back to store_minus_if_needed (instruction 24)
+        ARM64.B (-48)  // Branch back to store_minus_if_needed (instruction 24)
     ]
 
 /// Generate ARM64 instructions to print heap string WITHOUT newline
@@ -2677,7 +2681,7 @@ let generateCoverageFlush (coverageExprCount: int) : ARM64.Instr list =
 /// Generate ARM64 instructions to convert a float to a heap string
 /// destReg: destination register for the heap string pointer
 /// valueReg: FP register containing the float value
-/// The string format is "-123.45" (integer part + "." + 2 decimal digits)
+/// The string format is "-123.45" (integer part + "." + 1-2 decimal digits)
 /// Heap string layout: [8 bytes length][N bytes data][8 bytes refcount]
 let generateFloatToString (destReg: ARM64.Reg) (valueReg: ARM64.FReg) : ARM64.Instr list =
     // This function:
@@ -2722,7 +2726,7 @@ let generateFloatToString (destReg: ARM64.Reg) (valueReg: ARM64.FReg) : ARM64.In
         ARM64.B (2)  // Skip NEG
         ARM64.NEG (ARM64.X2, ARM64.X0)  // X2 = -X0 (make positive)
 
-        // === Build fractional part first (always 2 digits) ===
+        // === Build fractional part first (1-2 digits) ===
         ARM64.LDR_fp (ARM64.D0, ARM64.SP, 32s)
         ARM64.FCVTZS (ARM64.X0, ARM64.D0)
         ARM64.SCVTF (ARM64.D1, ARM64.X0)
@@ -2746,6 +2750,7 @@ let generateFloatToString (destReg: ARM64.Reg) (valueReg: ARM64.FReg) : ARM64.In
 
         // Store fractional digits (backwards): ones first, then tens
         ARM64.ADD_imm (ARM64.X5, ARM64.X5, 48us)  // ASCII
+        ARM64.MOV_reg (ARM64.X7, ARM64.X5)  // Keep ones digit for length trim
         ARM64.STRB (ARM64.X5, ARM64.X1, 0)
         ARM64.SUB_imm (ARM64.X1, ARM64.X1, 1us)
         ARM64.ADD_imm (ARM64.X4, ARM64.X4, 48us)  // ASCII
@@ -2759,7 +2764,7 @@ let generateFloatToString (destReg: ARM64.Reg) (valueReg: ARM64.FReg) : ARM64.In
 
         // === Build integer part ===
         // X2 still has absolute value of integer part
-        ARM64.CBZ_offset (ARM64.X2, 10)  // If zero, print just "0"
+        ARM64.CBZ_offset (ARM64.X2, 11)  // If zero, print just "0"
 
         // Convert integer digits (loop)
         ARM64.MOVZ (ARM64.X3, 10us, 0)
@@ -2785,9 +2790,12 @@ let generateFloatToString (destReg: ARM64.Reg) (valueReg: ARM64.FReg) : ARM64.In
         ARM64.SUB_imm (ARM64.X1, ARM64.X1, 1us)
 
         // X1 now points one before first char
-        // Adjust X1 to point to first char, calculate length
+        // Adjust X1 to point to first char, calculate length (trim trailing zero)
         ARM64.ADD_imm (ARM64.X1, ARM64.X1, 1us)  // X1 = start of string
         ARM64.ADD_imm (ARM64.X3, ARM64.SP, 32us)  // X3 = end+1 of buffer (SP+32)
+        ARM64.SUBS_imm (ARM64.X7, ARM64.X7, 48us)  // Set flags if ones digit was '0'
+        ARM64.CSET (ARM64.X4, ARM64.EQ)  // X4 = 1 when ones digit == 0
+        ARM64.SUB_reg (ARM64.X3, ARM64.X3, ARM64.X4)  // Drop ones digit if needed
         ARM64.SUB_reg (ARM64.X21, ARM64.X3, ARM64.X1)  // X21 = length (save for later)
 
         // Allocate heap string using bump allocator (X28)

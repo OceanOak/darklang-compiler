@@ -1,24 +1,24 @@
 // Stdlib.Float tests
 
 // sqrt
-Float.sqrt(4.0) = 2.00
-Float.sqrt(9.0) = 3.00
+Float.sqrt(4.0) = 2.0
+Float.sqrt(9.0) = 3.0
 Float.sqrt(2.0) = 1.41
-Float.sqrt(0.0) = 0.00
-Float.sqrt(1.0) = 1.00
-Float.sqrt(100.0) = 10.00
+Float.sqrt(0.0) = 0.0
+Float.sqrt(1.0) = 1.0
+Float.sqrt(100.0) = 10.0
 
 // abs
-Float.abs(5.5) = 5.50
-Float.abs(-5.5) = 5.50
-Float.abs(0.0) = 0.00
-Float.abs(-0.0) = 0.00
+Float.abs(5.5) = 5.5
+Float.abs(-5.5) = 5.5
+Float.abs(0.0) = 0.0
+Float.abs(-0.0) = 0.0
 Float.abs(-123.456) = 123.45  // Note: printf rounds to 123.45 (banker's rounding)
 
 // negate
 Float.negate(3.14) = -3.14
 Float.negate(-3.14) = 3.14
-Float.negate(0.0) = -0.00
+Float.negate(0.0) = -0.0
 
 // toInt (truncates toward zero)
 Float.toInt(3.7) = 3
@@ -29,15 +29,15 @@ Float.toInt(0.0) = 0
 Float.toInt(100.99) = 100
 
 // Int64.toFloat
-Int64.toFloat(42) = 42.00
-Int64.toFloat(0) = 0.00
-Int64.toFloat(-100) = -100.00
+Int64.toFloat(42) = 42.0
+Int64.toFloat(0) = 0.0
+Int64.toFloat(-100) = -100.0
 
 // Combined operations
-Float.sqrt(Float.abs(-16.0)) = 4.00
-Float.abs(Float.negate(5.0)) = 5.00
+Float.sqrt(Float.abs(-16.0)) = 4.0
+Float.abs(Float.negate(5.0)) = 5.0
 Float.toInt(Float.sqrt(100.0)) = 10
-Int64.toFloat(Float.toInt(9.99)) = 9.00
+Int64.toFloat(Float.toInt(9.99)) = 9.0
 
 // Float comparisons (already work, but good to test with new functions)
 Float.sqrt(4.0) > 1.0 = true

@@ -44,11 +44,11 @@ let m = Msg("world") in match m with | Msg(s) -> s | NoMsg -> "" = world
 // Sum type with float payload
 type MaybeFloat = NoFloat | SomeFloat of Float
 match SomeFloat(3.14) with | SomeFloat(f) -> f | NoFloat -> 0.0 = 3.14
-match NoFloat with | SomeFloat(f) -> f | NoFloat -> 0.0 = 0.00
+match NoFloat with | SomeFloat(f) -> f | NoFloat -> 0.0 = 0.0
 
 // Float payload with arithmetic
 type OptFloat = NoneF | JustF of Float
-match JustF(2.5) with | JustF(f) -> f * 2.0 | NoneF -> 0.0 = 5.00
+match JustF(2.5) with | JustF(f) -> f * 2.0 | NoneF -> 0.0 = 5.0
 
 // ===================================================================
 // Sum Types with Bool Payloads

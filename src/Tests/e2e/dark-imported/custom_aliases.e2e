@@ -130,7 +130,7 @@ type FloatPair = (Float, Float)
 def sumFloatPair(p: FloatPair): Float =
     match p with | (a, b) -> a + b
 
-sumFloatPair((1.5, 2.5)) = 4.00
+sumFloatPair((1.5, 2.5)) = 4.0
 
 // ===================================================================
 // NestedAlias module

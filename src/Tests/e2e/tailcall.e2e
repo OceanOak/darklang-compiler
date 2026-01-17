@@ -37,13 +37,13 @@ def swapFloat(a: Float, b: Float, n: Int64) : Float =
     if n <= 0 then a
     else swapFloat(b, a, n - 1)
 
-swapFloat(1.0, 2.0, 1) = 2.00
+swapFloat(1.0, 2.0, 1) = 2.0
 
 def swapFloat2(a: Float, b: Float, n: Int64) : Float =
     if n <= 0 then a
     else swapFloat2(b, a, n - 1)
 
-swapFloat2(1.0, 2.0, 2) = 1.00
+swapFloat2(1.0, 2.0, 2) = 1.0
 
 // Bug 2: Integer argument swap (TailArgMoves cycle)
 // Tests X0 <- X1, X1 <- X0 cycle handling
@@ -79,13 +79,13 @@ def rotate3Float(a: Float, b: Float, c: Float, n: Int64) : Float =
     if n <= 0 then a
     else rotate3Float(b, c, a, n - 1)
 
-rotate3Float(1.0, 2.0, 3.0, 1) = 2.00
+rotate3Float(1.0, 2.0, 3.0, 1) = 2.0
 
 def rotate3Floatb(a: Float, b: Float, c: Float, n: Int64) : Float =
     if n <= 0 then a
     else rotate3Floatb(b, c, a, n - 1)
 
-rotate3Floatb(1.0, 2.0, 3.0, 3) = 1.00
+rotate3Floatb(1.0, 2.0, 3.0, 3) = 1.0
 
 // Bug 5: Five-argument tail recursion (similar to String.__compareBytes)
 def compare5(a: Int64, i: Int64, b: Int64, j: Int64, count: Int64) : Bool =
@@ -215,14 +215,14 @@ def sumFloats(n: Int64, acc: Float) : Float =
     if n <= 0 then acc
     else sumFloats(n - 1, acc + 1.0)
 
-sumFloats(10, 0.0) = 10.00
+sumFloats(10, 0.0) = 10.0
 
 // Larger iteration count to verify loop works correctly
 def sumFloats100(n: Int64, acc: Float) : Float =
     if n <= 0 then acc
     else sumFloats100(n - 1, acc + 1.0)
 
-sumFloats100(100, 0.0) = 100.00
+sumFloats100(100, 0.0) = 100.0
 
 // All float parameters (2 floats + int counter)
 // Tests FPhi for both x and y parameters
@@ -230,30 +230,30 @@ def floatLoop(x: Float, y: Float, n: Int64) : Float =
     if n <= 0 then x + y
     else floatLoop(y, x, n - 1)
 
-floatLoop(1.0, 2.0, 0) = 3.00
+floatLoop(1.0, 2.0, 0) = 3.0
 
 def floatLoop1(x: Float, y: Float, n: Int64) : Float =
     if n <= 0 then x + y
     else floatLoop1(y, x, n - 1)
 
-floatLoop1(1.0, 2.0, 1) = 3.00
+floatLoop1(1.0, 2.0, 1) = 3.0
 
 def floatLoop2(x: Float, y: Float, n: Int64) : Float =
     if n <= 0 then x + y
     else floatLoop2(y, x, n - 1)
 
-floatLoop2(1.0, 2.0, 2) = 3.00
+floatLoop2(1.0, 2.0, 2) = 3.0
 
 // Float with arithmetic in loop
 def floatArithmetic(x: Float, acc: Float, n: Int64) : Float =
     if n <= 0 then acc
     else floatArithmetic(x, acc + x, n - 1)
 
-floatArithmetic(2.5, 0.0, 4) = 10.00
+floatArithmetic(2.5, 0.0, 4) = 10.0
 
 // Mixed: two floats, one being accumulated
 def floatAccum(a: Float, b: Float, n: Int64) : Float =
     if n <= 0 then a
     else floatAccum(a + b, b, n - 1)
 
-floatAccum(0.0, 1.5, 4) = 6.00
+floatAccum(0.0, 1.5, 4) = 6.0

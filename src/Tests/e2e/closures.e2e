@@ -156,13 +156,13 @@ let sq = (x: Int64) => x * x in sq(6) + 6 = 42
 let f = 3.14 in ((x: Float) => f + x)(1.0) = 4.14
 
 // Capture multiple floats
-let a = 1.5 in let b = 2.5 in ((x: Float) => a + b + x)(1.0) = 5.00
+let a = 1.5 in let b = 2.5 in ((x: Float) => a + b + x)(1.0) = 5.0
 
 // Capture float, use in multiplication
-let scale = 2.0 in ((x: Float) => x * scale)(3.5) = 7.00
+let scale = 2.0 in ((x: Float) => x * scale)(3.5) = 7.0
 
 // Capture float computed by arithmetic (force closure through extra binding)
-let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0) = 4.50
+let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0) = 4.5
 
 // =====================================================
 // Closures Capturing String Values
@@ -229,7 +229,7 @@ let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in le
 // =====================================================
 
 // Capture int and float
-let i = 10 in let f = 2.5 in ((x: Int64) => Stdlib.Int64.toFloat(i + x) + f)(5) = 17.50
+let i = 10 in let f = 2.5 in ((x: Int64) => Stdlib.Int64.toFloat(i + x) + f)(5) = 17.5
 
 // Capture bool and int
 let flag = true in let n = 42 in ((x: Int64) => if flag then n + x else 0)(8) = 50

@@ -1,19 +1,19 @@
 // Float literal tests
-// Note: Output format shows 2 decimal places
+// Note: Output format trims trailing zeros
 
 // Basic float literals
-1.0 = 1.00
-0.5 = 0.50
+1.0 = 1.0
+0.5 = 0.5
 3.14 = 3.14
-2.5 = 2.50
+2.5 = 2.5
 
 // Zero
-0.0 = 0.00
+0.0 = 0.0
 
 // Float with integer-like values
-5.0 = 5.00
-10.0 = 10.00
-100.0 = 100.00
+5.0 = 5.0
+10.0 = 10.0
+100.0 = 100.0
 
 // Small fractional values
 0.25 = 0.25
@@ -21,29 +21,29 @@
 0.01 = 0.01
 
 // Negative floats
--1.0 = -1.00
--0.5 = -0.50
+-1.0 = -1.0
+-0.5 = -0.5
 -3.14 = -3.14
--0.50 = -0.50
+-0.50 = -0.5
 -0.01 = -0.01
 
 // Unary negation of float variables
-let x = 1.5 in -x = -1.50  // floats neg var
+let x = 1.5 in -x = -1.5  // floats neg var
 
 // Float arithmetic
-1.0 + 2.0 = 3.00
-3.0 - 1.0 = 2.00
-2.0 * 3.0 = 6.00
-6.0 / 2.0 = 3.00
+1.0 + 2.0 = 3.0
+3.0 - 1.0 = 2.0
+2.0 * 3.0 = 6.0
+6.0 / 2.0 = 3.0
 
 // Chained float operations
-1.0 + 2.0 + 3.0 = 6.00
-10.0 / 2.0 / 2.0 = 2.50
+1.0 + 2.0 + 3.0 = 6.0
+10.0 / 2.0 / 2.0 = 2.5
 
 // Nested float operations with let bindings
-let a = 1.0 + 2.0 in a = 3.00
-let a = 1.0 + 2.0 in let b = 3.0 - 1.0 in a * b = 6.00
-(1.0 + 2.0) * (3.0 - 1.0) = 6.00
+let a = 1.0 + 2.0 in a = 3.0
+let a = 1.0 + 2.0 in let b = 3.0 - 1.0 in a * b = 6.0
+(1.0 + 2.0) * (3.0 - 1.0) = 6.0
 
 // =====================================================
 // Float function parameters
@@ -52,38 +52,38 @@ let a = 1.0 + 2.0 in let b = 3.0 - 1.0 in a * b = 6.00
 
 // Float parameter in binary operation
 // Bug: c + c was returning 0.00 instead of 6.00 (return type inference failed)
-def doubleFloat(c: Float) : Float = c + c doubleFloat(3.0) = 6.00
+def doubleFloat(c: Float) : Float = c + c doubleFloat(3.0) = 6.0
 
 // Float parameter returned directly (should work - baseline)
-def identityFloat(c: Float) : Float = c identityFloat(3.0) = 3.00
+def identityFloat(c: Float) : Float = c identityFloat(3.0) = 3.0
 
 // Float parameter with literal addition
-def addFour(c: Float) : Float = c + 4.0 addFour(3.0) = 7.00
+def addFour(c: Float) : Float = c + 4.0 addFour(3.0) = 7.0
 
 // Float parameter with let binding and operation
-def useLocalFloat(c: Float) : Float = let x = 4.0 in c + x useLocalFloat(3.0) = 7.00
+def useLocalFloat(c: Float) : Float = let x = 4.0 in c + x useLocalFloat(3.0) = 7.0
 
 // Two float parameters
-def addFloats(a: Float, b: Float) : Float = a + b addFloats(1.5, 2.5) = 4.00
+def addFloats(a: Float, b: Float) : Float = a + b addFloats(1.5, 2.5) = 4.0
 
 // Two float parameters - division
 // Bug: Both args got same value, returning 1.00 instead of 0.33
 def divFloats(a: Float, b: Float) : Float = a / b divFloats(1.0, 3.0) = 0.33
 
 // Two float parameters - subtraction
-def subFloats(a: Float, b: Float) : Float = a - b subFloats(5.0, 3.0) = 2.00
+def subFloats(a: Float, b: Float) : Float = a - b subFloats(5.0, 3.0) = 2.0
 
 // Two float parameters - multiplication
-def mulFloats(a: Float, b: Float) : Float = a * b mulFloats(2.0, 3.0) = 6.00
+def mulFloats(a: Float, b: Float) : Float = a * b mulFloats(2.0, 3.0) = 6.0
 
 // Three float parameters
-def sum3Floats(a: Float, b: Float, c: Float) : Float = a + b + c sum3Floats(1.0, 2.0, 3.0) = 6.00
+def sum3Floats(a: Float, b: Float, c: Float) : Float = a + b + c sum3Floats(1.0, 2.0, 3.0) = 6.0
 
 // Float list pattern matching should preserve element types
-let l = [1.5, 2.5] in match l with | [x, y] -> x + y | _ -> 0.0 = 4.00
+let l = [1.5, 2.5] in match l with | [x, y] -> x + y | _ -> 0.0 = 4.0
 
 // Four float parameters (tests D12-D15 temp allocation)
-def sum4Floats(a: Float, b: Float, c: Float, d: Float) : Float = a + b + c + d sum4Floats(1.0, 2.0, 3.0, 4.0) = 10.00
+def sum4Floats(a: Float, b: Float, c: Float, d: Float) : Float = a + b + c + d sum4Floats(1.0, 2.0, 3.0, 4.0) = 10.0
 
 // Mixed float and int parameters
 // Bug: Float param and computed float intermediate were both mapped to D0
@@ -93,7 +93,7 @@ def mixedParams(sign: Float, i: Int64) : Float = let divisor = Stdlib.Int64.toFl
 def floatWithStdlib(c: Float) : Int64 = Stdlib.Float.toInt(c) floatWithStdlib(3.7) = 3
 
 // Float param with multiple operations
-def floatChainedOps(x: Float) : Float = (x + 1.0) * 2.0 floatChainedOps(2.0) = 6.00
+def floatChainedOps(x: Float) : Float = (x + 1.0) * 2.0 floatChainedOps(2.0) = 6.0
 
 // =====================================================
 // Float comparisons in functions
@@ -116,11 +116,11 @@ def floatGte(a: Float, b: Float) : Bool = a >= b floatGte(2.0, 2.0) = true
 def floatGte(a: Float, b: Float) : Bool = a >= b floatGte(1.0, 2.0) = false
 
 // Float in if-then-else with parameters
-def floatIfThen(a: Int64, b: Int64, c: Float) : Float = if a >= b then c else 0.0 floatIfThen(1, 1, 5.0) = 5.00
-def floatIfElse(a: Int64, b: Int64, c: Float) : Float = if a >= b then c else 0.0 floatIfElse(0, 1, 5.0) = 0.00
+def floatIfThen(a: Int64, b: Int64, c: Float) : Float = if a >= b then c else 0.0 floatIfThen(1, 1, 5.0) = 5.0
+def floatIfElse(a: Int64, b: Int64, c: Float) : Float = if a >= b then c else 0.0 floatIfElse(0, 1, 5.0) = 0.0
 
 // Recursive function with float accumulator
-def floatSumLoop(i: Int64, n: Int64, acc: Float) : Float = if i >= n then acc else floatSumLoop(i + 1, n, acc + 1.0) floatSumLoop(0, 5, 0.0) = 5.00
+def floatSumLoop(i: Int64, n: Int64, acc: Float) : Float = if i >= n then acc else floatSumLoop(i + 1, n, acc + 1.0) floatSumLoop(0, 5, 0.0) = 5.0
 
 // Leibniz pi approximation (uses float in recursive control flow)
 def leibnizLoop(i: Int64, n: Int64, sum: Float, sign: Float) : Float = if i >= n then sum * 4.0 else let term = sign / Stdlib.Int64.toFloat(2 * i + 1) in leibnizLoop(i + 1, n, sum + term, Stdlib.Float.negate(sign)) def leibnizPi(n: Int64) : Float = leibnizLoop(0, n, 0.0, 1.0) leibnizPi(10) = 3.04

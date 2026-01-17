@@ -34,7 +34,7 @@ let intValue = 5 in intValue = 5
 // let uint8Value = 5uy
 // uint8Value = 5uy
 
-let floatValue = 5.5 in floatValue = 5.50
+let floatValue = 5.5 in floatValue = 5.5
 
 let boolValue = true in boolValue = true
 

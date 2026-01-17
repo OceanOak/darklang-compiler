@@ -445,7 +445,7 @@ class SyntaxConverter:
         # Negative lookahead for decimal point or existing suffix
         # Negative lookbehind for letters, underscore, or decimal point (to avoid matching in identifiers or floats)
         result = re.sub(
-            r'(?<![a-zA-Z_\.])(-?\d+)(?![.\dlLsySyulUL])\b',
+            r'(?<![\w\.])(-?\d+)(?![\w\.])',
             add_l_suffix,
             result
         )
@@ -614,9 +614,13 @@ class Validator:
         if '$"' in expr:
             return "Contains string interpolation"
 
-        # Skip tests with float literals (different representation)
-        if re.search(r'\d+\.\d+', expr):
-            return "Contains float literal"
+        # Skip tests with float literals that need >2 decimal places (different precision)
+        if re.search(r'-?\d+\.\d{3,}', expr):
+            return "Contains high-precision float literal"
+
+        # Skip float arithmetic (eval uses int operators for +, -, *)
+        if re.search(r'\d+\.\d+', expr) and re.search(r'\s[+*]\s|\s-\s', expr):
+            return "Contains float arithmetic (not supported in eval)"
 
         # Skip tests with custom type definitions/usage (not supported in eval)
         if expr.startswith('type '):
