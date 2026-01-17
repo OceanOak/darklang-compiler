@@ -64,7 +64,7 @@ format_count() {
     local count="$1"
 
     if [[ "$count" =~ ^[0-9]+$ ]]; then
-        printf "%02d" "$count"
+        printf "%d" "$count"
     else
         printf "%s" "$count"
     fi
