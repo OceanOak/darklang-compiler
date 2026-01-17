@@ -73,17 +73,35 @@ format_count() {
 render_status() {
     local repo_root=""
     local log_lines=""
+    local term_cols=""
 
     repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    term_cols=$(tput cols 2>/dev/null || echo 120)
+
     if [ -n "$repo_root" ]; then
-        log_lines=$(git -C "$repo_root" log -8 --pretty=format:'%h %s' 2>/dev/null | awk '{
-            hash = $1
-            $1 = ""
-            sub(/^ /, "")
-            subject = $0
-            if (length(subject) > 62) subject = substr(subject, 1, 62)
-            print hash "\t" subject
-        }')
+        log_lines=$(git -C "$repo_root" log -8 --pretty=format:'%h%x1f%s%x1f%b%x1e' 2>/dev/null | python3 -c '
+import sys
+
+data = sys.stdin.read()
+records = data.split("\x1e")
+lines = []
+
+for rec in records:
+    if not rec:
+        continue
+    parts = rec.split("\x1f")
+    if len(parts) < 2:
+        continue
+    log_hash = parts[0].strip()
+    subject = parts[1].replace("\r", " ").replace("\n", " ").strip()
+    body = parts[2] if len(parts) > 2 else ""
+    body = body.replace("\r", " ").replace("\n", " ").strip()
+    if log_hash == "" and subject == "" and body == "":
+        continue
+    lines.append(f"{log_hash}\t{subject}\t{body}")
+
+sys.stdout.write("\n".join(lines))
+')
     fi
 
     # Collect output, then sort by branch name
@@ -140,7 +158,7 @@ render_status() {
 
         echo -e "1\t${branch}\t${display_branch}\t${status_flags}\t${status}"
     done
-    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" -v log_lines="$log_lines" '
+    } | sort -t$'\t' -k1,1 -k2,2 | awk -F '\t' -v dim="$DIM" -v nc="$NC" -v context="$context" -v log_lines="$log_lines" -v term_cols="$term_cols" '
 function vislen(s, t) {
     t = s
     gsub(/\x1B\[[0-9;]*m/, "", t)
@@ -178,8 +196,19 @@ END {
                 split(log_line, log_parts, "\t")
                 log_hash = log_parts[1]
                 log_subject = log_parts[2]
+                log_body = log_parts[3]
                 if (log_subject != "") {
-                    log_display = dim log_hash nc " " log_subject
+                    normal_len = 62
+                    normal_subject = substr(log_subject, 1, normal_len)
+                    prefix_len = max_branch + 3 + 3 + 2 + max_status + 2 + length(log_hash) + 1 + length(normal_subject)
+                    available = term_cols - prefix_len - 1
+                    if (available < 0) available = 0
+                    if (length(log_body) > available) log_body = substr(log_body, 1, available)
+                    if (log_body != "") {
+                        log_display = dim log_hash nc " " normal_subject dim " " log_body nc
+                    } else {
+                        log_display = dim log_hash nc " " normal_subject
+                    }
                 } else {
                     log_display = dim log_hash nc
                 }
@@ -205,8 +234,19 @@ END {
             split(log_line, log_parts, "\t")
             log_hash = log_parts[1]
             log_subject = log_parts[2]
+            log_body = log_parts[3]
             if (log_subject != "") {
-                log_display = dim log_hash nc " " log_subject
+                normal_len = 62
+                normal_subject = substr(log_subject, 1, normal_len)
+                prefix_len = max_branch + 3 + 3 + 2 + max_status + 2 + length(log_hash) + 1 + length(normal_subject)
+                available = term_cols - prefix_len - 1
+                if (available < 0) available = 0
+                if (length(log_body) > available) log_body = substr(log_body, 1, available)
+                if (log_body != "") {
+                    log_display = dim log_hash nc " " normal_subject dim " " log_body nc
+                } else {
+                    log_display = dim log_hash nc " " normal_subject
+                }
             } else {
                 log_display = dim log_hash nc
             }
