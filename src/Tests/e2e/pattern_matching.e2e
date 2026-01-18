@@ -202,6 +202,13 @@ match Point { x = 100, y = 37 } with | Point { x = a, y = b } -> a - b = 63
 // Three-field record with subtraction to verify field index ordering
 match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = b, z = c } -> a - b - c = 53
 
+// Record pattern with guard clause to verify field index ordering (kills mutation #67)
+// This tests the extractAndCompileBodyWithGuard.collectFromRecord code path
+match Point { x = 100, y = 37 } with | Point { x = a, y = b } when b < a -> b - a | _ -> 999 = -63
+
+// Three-field record with guard to verify all field indices are correct
+match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = b, z = c } when c < b -> a - b - c | _ -> 999 = 53
+
 // === Nested ADT Patterns ===
 
 // Nested - testing Wrap type (MyOption already defined above)
