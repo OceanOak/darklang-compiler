@@ -140,24 +140,23 @@ let private createSchema (conn: SqliteConnection) : unit =
     """
     cmd.ExecuteNonQuery() |> ignore
 
-/// Global connection (lazily initialized, thread-safe)
-let mutable private globalConnection : SqliteConnection option = None
-let private connectionLock = obj()
+/// Flag to track if schema has been created
+let mutable private schemaCreated = false
+let private schemaLock = obj()
 
-/// Get or create the database connection
+/// Create a new database connection (thread-safe, one connection per operation)
 let private getConnection () : SqliteConnection =
-    lock connectionLock (fun () ->
-        match globalConnection with
-        | Some conn when conn.State = Data.ConnectionState.Open -> conn
-        | _ ->
-            ensureCacheDir ()
-            let dbPath = getCacheDbPath ()
-            let connStr = $"Data Source={dbPath}"
-            let conn = new SqliteConnection(connStr)
-            conn.Open()
+    ensureCacheDir ()
+    let dbPath = getCacheDbPath ()
+    let connStr = $"Data Source={dbPath}"
+    let conn = new SqliteConnection(connStr)
+    conn.Open()
+    // Create schema only once, protected by lock
+    lock schemaLock (fun () ->
+        if not schemaCreated then
             createSchema conn
-            globalConnection <- Some conn
-            conn)
+            schemaCreated <- true)
+    conn
 
 /// Check if caching is enabled (can be disabled via environment variable)
 let isCacheEnabled () : bool =
@@ -173,26 +172,24 @@ let getIntermediate
     : byte[] option =
     if not (isCacheEnabled ()) then None
     else
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                SELECT data FROM compiler_intermediates
-                WHERE compiler_key = $compilerKey
-                  AND source_hash = $sourceHash
-                  AND options_hash = $optionsHash
-                  AND stage = $stage
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
-            cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
-            cmd.Parameters.AddWithValue("$stage", stage) |> ignore
-            use reader = cmd.ExecuteReader()
-            if reader.Read() then
-                Some (reader.GetValue(0) :?> byte[])
-            else
-                None
-        with _ -> None
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            SELECT data FROM compiler_intermediates
+            WHERE compiler_key = $compilerKey
+              AND source_hash = $sourceHash
+              AND options_hash = $optionsHash
+              AND stage = $stage
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
+        cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
+        cmd.Parameters.AddWithValue("$stage", stage) |> ignore
+        use reader = cmd.ExecuteReader()
+        if reader.Read() then
+            Some (reader.GetValue(0) :?> byte[])
+        else
+            None
 
 /// Set cached intermediate data for a compilation stage
 let setIntermediate
@@ -203,22 +200,20 @@ let setIntermediate
     (data: byte[])
     : unit =
     if isCacheEnabled () then
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                INSERT OR REPLACE INTO compiler_intermediates
-                (compiler_key, source_hash, options_hash, stage, data, created_at)
-                VALUES ($compilerKey, $sourceHash, $optionsHash, $stage, $data, $createdAt)
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
-            cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
-            cmd.Parameters.AddWithValue("$stage", stage) |> ignore
-            cmd.Parameters.AddWithValue("$data", data) |> ignore
-            cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
-            cmd.ExecuteNonQuery() |> ignore
-        with _ -> ()
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            INSERT OR REPLACE INTO compiler_intermediates
+            (compiler_key, source_hash, options_hash, stage, data, created_at)
+            VALUES ($compilerKey, $sourceHash, $optionsHash, $stage, $data, $createdAt)
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
+        cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
+        cmd.Parameters.AddWithValue("$stage", stage) |> ignore
+        cmd.Parameters.AddWithValue("$data", data) |> ignore
+        cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
+        cmd.ExecuteNonQuery() |> ignore
 
 /// Get cached generated binary
 let getGeneratedCode
@@ -229,26 +224,24 @@ let getGeneratedCode
     : byte[] option =
     if not (isCacheEnabled ()) then None
     else
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                SELECT binary_data FROM generated_code
-                WHERE compiler_key = $compilerKey
-                  AND source_hash = $sourceHash
-                  AND options_hash = $optionsHash
-                  AND platform = $platform
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
-            cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
-            cmd.Parameters.AddWithValue("$platform", platform) |> ignore
-            use reader = cmd.ExecuteReader()
-            if reader.Read() then
-                Some (reader.GetValue(0) :?> byte[])
-            else
-                None
-        with _ -> None
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            SELECT binary_data FROM generated_code
+            WHERE compiler_key = $compilerKey
+              AND source_hash = $sourceHash
+              AND options_hash = $optionsHash
+              AND platform = $platform
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
+        cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
+        cmd.Parameters.AddWithValue("$platform", platform) |> ignore
+        use reader = cmd.ExecuteReader()
+        if reader.Read() then
+            Some (reader.GetValue(0) :?> byte[])
+        else
+            None
 
 /// Set cached generated binary
 let setGeneratedCode
@@ -259,22 +252,20 @@ let setGeneratedCode
     (binary: byte[])
     : unit =
     if isCacheEnabled () then
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                INSERT OR REPLACE INTO generated_code
-                (compiler_key, source_hash, options_hash, platform, binary_data, created_at)
-                VALUES ($compilerKey, $sourceHash, $optionsHash, $platform, $binary, $createdAt)
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
-            cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
-            cmd.Parameters.AddWithValue("$platform", platform) |> ignore
-            cmd.Parameters.AddWithValue("$binary", binary) |> ignore
-            cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
-            cmd.ExecuteNonQuery() |> ignore
-        with _ -> ()
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            INSERT OR REPLACE INTO generated_code
+            (compiler_key, source_hash, options_hash, platform, binary_data, created_at)
+            VALUES ($compilerKey, $sourceHash, $optionsHash, $platform, $binary, $createdAt)
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$sourceHash", sourceHash) |> ignore
+        cmd.Parameters.AddWithValue("$optionsHash", optionsHash) |> ignore
+        cmd.Parameters.AddWithValue("$platform", platform) |> ignore
+        cmd.Parameters.AddWithValue("$binary", binary) |> ignore
+        cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
+        cmd.ExecuteNonQuery() |> ignore
 
 /// Get cached test result
 let getTestResult
@@ -284,39 +275,37 @@ let getTestResult
     : CachedTestResult option =
     if not (isCacheEnabled ()) then None
     else
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                SELECT success, message, exit_code, stdout, stderr FROM test_results
-                WHERE compiler_key = $compilerKey
-                  AND test_file_hash = $testFileHash
-                  AND test_name = $testName
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$testFileHash", testFileHash) |> ignore
-            cmd.Parameters.AddWithValue("$testName", testName) |> ignore
-            use reader = cmd.ExecuteReader()
-            if reader.Read() then
-                let success = reader.GetInt32(0) <> 0
-                let message =
-                    if reader.IsDBNull(1) then "" else reader.GetString(1)
-                let exitCode =
-                    if reader.IsDBNull(2) then None else Some (reader.GetInt32(2))
-                let stdout =
-                    if reader.IsDBNull(3) then None else Some (reader.GetString(3))
-                let stderr =
-                    if reader.IsDBNull(4) then None else Some (reader.GetString(4))
-                Some {
-                    Success = success
-                    Message = message
-                    Stdout = stdout
-                    Stderr = stderr
-                    ExitCode = exitCode
-                }
-            else
-                None
-        with _ -> None
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            SELECT success, message, exit_code, stdout, stderr FROM test_results
+            WHERE compiler_key = $compilerKey
+              AND test_file_hash = $testFileHash
+              AND test_name = $testName
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$testFileHash", testFileHash) |> ignore
+        cmd.Parameters.AddWithValue("$testName", testName) |> ignore
+        use reader = cmd.ExecuteReader()
+        if reader.Read() then
+            let success = reader.GetInt32(0) <> 0
+            let message =
+                if reader.IsDBNull(1) then "" else reader.GetString(1)
+            let exitCode =
+                if reader.IsDBNull(2) then None else Some (reader.GetInt32(2))
+            let stdout =
+                if reader.IsDBNull(3) then None else Some (reader.GetString(3))
+            let stderr =
+                if reader.IsDBNull(4) then None else Some (reader.GetString(4))
+            Some {
+                Success = success
+                Message = message
+                Stdout = stdout
+                Stderr = stderr
+                ExitCode = exitCode
+            }
+        else
+            None
 
 /// Set cached test result
 let setTestResult
@@ -326,44 +315,40 @@ let setTestResult
     (result: CachedTestResult)
     : unit =
     if isCacheEnabled () then
-        try
-            let conn = getConnection ()
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- """
-                INSERT OR REPLACE INTO test_results
-                (compiler_key, test_file_hash, test_name, success, message, exit_code, stdout, stderr, created_at)
-                VALUES ($compilerKey, $testFileHash, $testName, $success, $message, $exitCode, $stdout, $stderr, $createdAt)
-            """
-            cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
-            cmd.Parameters.AddWithValue("$testFileHash", testFileHash) |> ignore
-            cmd.Parameters.AddWithValue("$testName", testName) |> ignore
-            cmd.Parameters.AddWithValue("$success", if result.Success then 1 else 0) |> ignore
-            cmd.Parameters.AddWithValue("$message", result.Message) |> ignore
-            match result.ExitCode with
-            | Some code -> cmd.Parameters.AddWithValue("$exitCode", code) |> ignore
-            | None -> cmd.Parameters.AddWithValue("$exitCode", DBNull.Value) |> ignore
-            match result.Stdout with
-            | Some s -> cmd.Parameters.AddWithValue("$stdout", s) |> ignore
-            | None -> cmd.Parameters.AddWithValue("$stdout", DBNull.Value) |> ignore
-            match result.Stderr with
-            | Some s -> cmd.Parameters.AddWithValue("$stderr", s) |> ignore
-            | None -> cmd.Parameters.AddWithValue("$stderr", DBNull.Value) |> ignore
-            cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
-            cmd.ExecuteNonQuery() |> ignore
-        with _ -> ()
+        use conn = getConnection ()
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            INSERT OR REPLACE INTO test_results
+            (compiler_key, test_file_hash, test_name, success, message, exit_code, stdout, stderr, created_at)
+            VALUES ($compilerKey, $testFileHash, $testName, $success, $message, $exitCode, $stdout, $stderr, $createdAt)
+        """
+        cmd.Parameters.AddWithValue("$compilerKey", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$testFileHash", testFileHash) |> ignore
+        cmd.Parameters.AddWithValue("$testName", testName) |> ignore
+        cmd.Parameters.AddWithValue("$success", if result.Success then 1 else 0) |> ignore
+        cmd.Parameters.AddWithValue("$message", result.Message) |> ignore
+        match result.ExitCode with
+        | Some code -> cmd.Parameters.AddWithValue("$exitCode", code) |> ignore
+        | None -> cmd.Parameters.AddWithValue("$exitCode", DBNull.Value) |> ignore
+        match result.Stdout with
+        | Some s -> cmd.Parameters.AddWithValue("$stdout", s) |> ignore
+        | None -> cmd.Parameters.AddWithValue("$stdout", DBNull.Value) |> ignore
+        match result.Stderr with
+        | Some s -> cmd.Parameters.AddWithValue("$stderr", s) |> ignore
+        | None -> cmd.Parameters.AddWithValue("$stderr", DBNull.Value) |> ignore
+        cmd.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
+        cmd.ExecuteNonQuery() |> ignore
 
 /// Clear all cache data
 let clearCache () : unit =
-    try
-        let conn = getConnection ()
-        use cmd = conn.CreateCommand()
-        cmd.CommandText <- """
-            DELETE FROM compiler_intermediates;
-            DELETE FROM generated_code;
-            DELETE FROM test_results;
-        """
-        cmd.ExecuteNonQuery() |> ignore
-    with _ -> ()
+    use conn = getConnection ()
+    use cmd = conn.CreateCommand()
+    cmd.CommandText <- """
+        DELETE FROM compiler_intermediates;
+        DELETE FROM generated_code;
+        DELETE FROM test_results;
+    """
+    cmd.ExecuteNonQuery() |> ignore
 
 /// Get cache statistics
 type CacheStats = {
@@ -375,45 +360,30 @@ type CacheStats = {
 
 /// Get cache statistics
 let getCacheStats () : CacheStats =
-    try
-        let conn = getConnection ()
+    use conn = getConnection ()
 
-        let countQuery table =
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- $"SELECT COUNT(*) FROM {table}"
-            cmd.ExecuteScalar() :?> int64 |> int
+    let countQuery table =
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- $"SELECT COUNT(*) FROM {table}"
+        cmd.ExecuteScalar() :?> int64 |> int
 
-        let intermediateCount = countQuery "compiler_intermediates"
-        let generatedCodeCount = countQuery "generated_code"
-        let testResultCount = countQuery "test_results"
+    let intermediateCount = countQuery "compiler_intermediates"
+    let generatedCodeCount = countQuery "generated_code"
+    let testResultCount = countQuery "test_results"
 
-        let dbPath = getCacheDbPath ()
-        let totalSize =
-            if File.Exists dbPath then
-                FileInfo(dbPath).Length
-            else
-                0L
+    let dbPath = getCacheDbPath ()
+    let totalSize =
+        if File.Exists dbPath then
+            FileInfo(dbPath).Length
+        else
+            0L
 
-        {
-            IntermediateCount = intermediateCount
-            GeneratedCodeCount = generatedCodeCount
-            TestResultCount = testResultCount
-            TotalSizeBytes = totalSize
-        }
-    with _ ->
-        {
-            IntermediateCount = 0
-            GeneratedCodeCount = 0
-            TestResultCount = 0
-            TotalSizeBytes = 0L
-        }
+    {
+        IntermediateCount = intermediateCount
+        GeneratedCodeCount = generatedCodeCount
+        TestResultCount = testResultCount
+        TotalSizeBytes = totalSize
+    }
 
-/// Close the cache connection (for cleanup)
-let closeConnection () : unit =
-    lock connectionLock (fun () ->
-        match globalConnection with
-        | Some conn ->
-            conn.Close()
-            conn.Dispose()
-            globalConnection <- None
-        | None -> ())
+/// Close the cache connection (no-op, connections are now per-operation)
+let closeConnection () : unit = ()
