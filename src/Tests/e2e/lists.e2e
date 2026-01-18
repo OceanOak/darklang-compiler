@@ -453,3 +453,12 @@ match [1000, 100, 10, 1] with | [a, b, c, d] -> a - b - c - d | _ -> 999 = 889
 // If idx + 1 were changed to idx - 1 in the wildcard case,
 // element 'c' would be extracted from wrong offset.
 match [100, 200, 300, 400] with | [_, _, c, d] -> c - d | _ -> 999 = -100
+
+// =====================================================
+// Tuple destructuring index increment test (kills mutation #72)
+// =====================================================
+// Tests that tuple pattern destructuring correctly increments the index
+// when extracting subsequent elements from DEEP lists containing tuples.
+// If idx + 1 were changed to idx - 1 in the PTuple case,
+// element (c, d) would be extracted from the wrong offset.
+match [(10, 1), (20, 2), (30, 3), (40, 4)] with | [(a, b), (c, d), (e, f), (g, h)] -> g - h | _ -> 999 = 36
