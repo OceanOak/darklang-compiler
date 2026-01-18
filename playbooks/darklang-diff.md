@@ -28,15 +28,26 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 
 4. Manually convert the expression to Darklang interpreter syntax and run it:
 
+   **For simple expressions**, use eval:
    ```
    darklang-interpreter eval "<converted_expression>"
    ```
+
+   **For complex expressions** (let bindings, match, lambdas), create a .dark file:
+   ```dark
+   // test.dark
+   let __result = <converted_expression>
+   Builtin.debug "" __result
+   0L
+   ```
+   Then run: `darklang-interpreter run test.dark`
 
    Key conversions:
 
    - Add `L` suffix to integer literals (e.g., `5` -> `5L`)
    - Convert `Module.func(arg1, arg2)` to `Stdlib.Module.func arg1 arg2`
    - Convert list separators from `,` to `;` (e.g., `[1, 2]` -> `[1L; 2L]`)
+   - Convert `def foo(a, b) = body` to `let foo = fun a -> fun b -> body`
 
 5. Compare results. Determine one of:
 

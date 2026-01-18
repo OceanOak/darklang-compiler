@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -49,6 +50,71 @@ class ValidationResult:
     error_message: Optional[str] = None
     converted_expr: Optional[str] = None
     converted_expected: Optional[str] = None
+
+
+class FileRunner:
+    """Runs Dark code via file-based execution using darklang-interpreter run."""
+
+    def __init__(self, temp_dir: Path):
+        self.temp_dir = temp_dir
+        self.file_counter = 0
+
+    def run_code(self, code: str) -> tuple[str, Optional[str]]:
+        """Run Dark code and return (stdout, error_if_any)."""
+        # Generate temp file
+        filename = self.temp_dir / f"test_{self.file_counter}.dark"
+        self.file_counter += 1
+
+        # Write code to file
+        with open(filename, 'w') as f:
+            f.write(code)
+
+        try:
+            # Execute
+            result = subprocess.run(
+                ['darklang-interpreter', 'run', str(filename)],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+        except subprocess.TimeoutExpired:
+            filename.unlink(missing_ok=True)
+            return ("", "Interpreter timeout")
+        except FileNotFoundError:
+            filename.unlink(missing_ok=True)
+            return ("", "darklang-interpreter not found")
+        finally:
+            # Cleanup
+            filename.unlink(missing_ok=True)
+
+        # Parse result
+        if result.returncode != 0:
+            # Extract error message from stderr
+            error_output = result.stderr.strip()
+            # Look for "Error: " prefix in output
+            for line in error_output.splitlines():
+                if line.strip().startswith("Error: "):
+                    return ("", line.strip()[len("Error: "):])
+            return ("", error_output if error_output else result.stdout.strip())
+        return (result.stdout.strip(), None)
+
+    def parse_debug_output(self, output: str) -> Optional[str]:
+        """Parse Builtin.debug output to extract the value.
+
+        Builtin.debug outputs: DEBUG: <label>: <value>
+        """
+        for line in output.splitlines():
+            line = line.strip()
+            if line.startswith("DEBUG: "):
+                # Format is "DEBUG: <label>: <value>"
+                # Label can be empty, so we look for ": " after "DEBUG: "
+                rest = line[len("DEBUG: "):]
+                # Find the label separator (first ": ")
+                colon_pos = rest.find(": ")
+                if colon_pos >= 0:
+                    return rest[colon_pos + 2:]
+                return rest
+        return None
 
 
 class E2EParser:
@@ -293,7 +359,152 @@ class SyntaxConverter:
         # Convert integer literals: add L suffix
         result = self._convert_int_literals(result)
 
+        # Convert let...in to block syntax: let x = e in body -> (let x = e\nbody)
+        result = self._convert_let_in(result)
+
         return result
+
+    def _convert_let_in(self, expr: str) -> str:
+        """Convert let...in expressions to Darklang block syntax.
+
+        Darklang doesn't use 'in' keyword. Instead:
+            let x = 5 in x + 1
+        becomes:
+            (let x = 5L
+            x + 1L)
+        """
+        result = expr
+
+        # Process from right to left to handle nested let...in properly
+        # Each iteration handles the rightmost let...in
+        max_iterations = 20  # Prevent infinite loops
+        iteration = 0
+
+        while ' in ' in result and iteration < max_iterations:
+            iteration += 1
+
+            # Find the rightmost ' in ' that's preceded by 'let ... = ...'
+            # Work backwards to find the matching let
+            in_pos = self._find_rightmost_let_in(result)
+            if in_pos is None:
+                break
+
+            # Find the matching 'let' for this 'in'
+            let_info = self._find_matching_let(result, in_pos)
+            if let_info is None:
+                break
+
+            let_start, var_name, value_end = let_info
+            value = result[value_end:in_pos].strip()
+
+            # Body is everything after ' in '
+            body_start = in_pos + 4  # len(' in ')
+            body = self._extract_let_body(result, body_start)
+
+            if body is None:
+                break
+
+            body_end = body_start + len(body)
+
+            # Build the replacement: (let var = value\nbody)
+            replacement = f"(let {var_name} = {value}\n{body})"
+
+            # Replace in result
+            result = result[:let_start] + replacement + result[body_end:]
+
+        return result
+
+    def _find_rightmost_let_in(self, expr: str) -> Optional[int]:
+        """Find the position of the rightmost ' in ' that's part of a let binding."""
+        # Search backwards for ' in '
+        pos = len(expr)
+        while True:
+            pos = expr.rfind(' in ', 0, pos)
+            if pos == -1:
+                return None
+            # Check if there's a 'let' before this 'in'
+            prefix = expr[:pos]
+            if 'let ' in prefix:
+                return pos
+            pos -= 1
+        return None
+
+    def _find_matching_let(self, expr: str, in_pos: int) -> Optional[tuple[int, str, int]]:
+        """Find the let that matches this 'in' position.
+
+        Returns (let_start, var_name, value_start) or None.
+        """
+        # Look backwards from in_pos for 'let <var> ='
+        # The tricky part is handling nested let expressions
+
+        prefix = expr[:in_pos]
+
+        # Find the rightmost 'let' that's not inside a nested block
+        depth = 0
+        i = len(prefix) - 1
+        while i >= 0:
+            if prefix[i] == ')':
+                depth += 1
+            elif prefix[i] == '(':
+                depth -= 1
+            elif depth == 0:
+                # Check for 'let '
+                if i >= 3 and prefix[i-3:i+1] == 'let ':
+                    # Found potential let, extract var name and value start
+                    match = re.match(r'(\w+)\s*=\s*', prefix[i+1:])
+                    if match:
+                        var_name = match.group(1)
+                        value_start = i + 1 + match.end()
+                        return (i - 3, var_name, value_start)
+            i -= 1
+
+        return None
+
+    def _extract_let_body(self, expr: str, start: int) -> Optional[str]:
+        """Extract the body of a let...in expression starting at position start."""
+        depth = 0
+        in_string = False
+        string_char = None
+        i = start
+
+        while i < len(expr):
+            char = expr[i]
+
+            # Handle string literals
+            if char in '"\'`' and (i == 0 or expr[i-1] != '\\'):
+                if not in_string:
+                    in_string = True
+                    string_char = char
+                elif char == string_char:
+                    in_string = False
+                    string_char = None
+                i += 1
+                continue
+
+            if in_string:
+                i += 1
+                continue
+
+            # Track nesting
+            if char in '([{':
+                depth += 1
+            elif char in ')]}':
+                if depth == 0:
+                    # End of body
+                    return expr[start:i]
+                depth -= 1
+            elif char == '=' and depth == 0:
+                # Check if this is the test separator (= expected)
+                # Look for ' = ' pattern that's not '=='
+                if i + 1 < len(expr) and expr[i + 1] != '=':
+                    if i > 0 and expr[i - 1] not in '!<>':
+                        # This might be the test separator
+                        return expr[start:i].rstrip()
+
+            i += 1
+
+        # Rest of expression is the body
+        return expr[start:]
 
     def _convert_stdlib_calls(self, expr: str) -> str:
         """Convert Ralph2 stdlib calls to Darklang syntax."""
@@ -464,14 +675,101 @@ class SyntaxConverter:
 
         return result
 
+    def convert_def_to_lambda(self, preamble: str) -> str:
+        """Convert def statements to curried lambda form for file mode.
+
+        Example:
+            def add(a: Int64, b: Int64) : Int64 = a + b
+        Becomes:
+            let add = fun a -> fun b -> a + b
+        """
+        result_lines = []
+
+        # Pattern to match: def name(params) : RetType = body
+        # We need to handle multiple defs
+        def_pattern = re.compile(
+            r'def\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*[\w\[\]<>,\s]+)?\s*=\s*(.+?)(?=\s+def\s|\s*$)',
+            re.DOTALL
+        )
+
+        for match in def_pattern.finditer(preamble):
+            func_name = match.group(1)
+            params_str = match.group(2).strip()
+            body = match.group(3).strip()
+
+            # Parse parameters (name: Type, ...)
+            param_names = []
+            if params_str:
+                for param in params_str.split(','):
+                    param = param.strip()
+                    if ':' in param:
+                        param_name = param.split(':')[0].strip()
+                        param_names.append(param_name)
+                    elif param:
+                        param_names.append(param)
+
+            # Convert body
+            converted_body = self.convert(body)
+
+            # Build curried lambda: fun a -> fun b -> body
+            if param_names:
+                lambda_expr = converted_body
+                for param in reversed(param_names):
+                    lambda_expr = f"fun {param} -> {lambda_expr}"
+                result_lines.append(f"let {func_name} = {lambda_expr}")
+            else:
+                result_lines.append(f"let {func_name} = {converted_body}")
+
+        return '\n'.join(result_lines)
+
+    def generate_file_code(self, expr: str, preamble: Optional[str] = None) -> str:
+        """Generate complete .dark file code for file-based execution.
+
+        Uses Builtin.debug to output the result, which works for any type.
+
+        Example for expr "let x = 5 in x + 1":
+            let __result = let x = 5L in x + 1L
+            Builtin.debug "" __result
+            0L
+        """
+        lines = []
+
+        # Add converted preamble (def -> lambda)
+        if preamble:
+            converted_preamble = self.convert_def_to_lambda(preamble)
+            lines.append(converted_preamble)
+
+        # Convert the main expression
+        converted_expr = self.convert(expr)
+
+        # Wrap in result capture and debug output
+        lines.append(f"let __result = {converted_expr}")
+        lines.append('Builtin.debug "" __result')
+        lines.append("0L")
+
+        return '\n'.join(lines)
+
 
 class Validator:
     """Validates test cases against the Darklang interpreter."""
 
-    def __init__(self, verbose: bool = False, show_conversions: bool = False):
+    def __init__(self, verbose: bool = False, show_conversions: bool = False, temp_dir: Optional[Path] = None):
         self.converter = SyntaxConverter()
         self.verbose = verbose
         self.show_conversions = show_conversions
+        # Create temp directory for file-based execution
+        if temp_dir is None:
+            self._temp_dir_obj = tempfile.TemporaryDirectory()
+            self.temp_dir = Path(self._temp_dir_obj.name)
+        else:
+            self._temp_dir_obj = None
+            self.temp_dir = temp_dir
+        self.file_runner = FileRunner(self.temp_dir)
+
+    def cleanup(self):
+        """Clean up temporary directory."""
+        if self._temp_dir_obj:
+            self._temp_dir_obj.cleanup()
 
     def validate_test(self, test: TestCase) -> ValidationResult:
         """Validate a single test case."""
@@ -484,11 +782,13 @@ class Validator:
                 skip_reason=skip_reason
             )
 
-        # Convert syntax
+        # Convert syntax and generate file code
         try:
-            expr_for_eval = self._strip_error_expr(test.expression)
-            converted_expr = self.converter.convert(expr_for_eval)
+            expr_for_run = self._strip_error_expr(test.expression)
+            file_code = self.converter.generate_file_code(expr_for_run, test.preamble)
             converted_expected = self.converter.convert_expected(test.expected)
+            # For display purposes, show the converted expression
+            converted_expr = self.converter.convert(expr_for_run)
         except Exception as e:
             return ValidationResult(
                 test=test,
@@ -498,40 +798,55 @@ class Validator:
 
         expected_error = self._expected_error_message(test.expression, converted_expected)
 
-        # Run through interpreter
-        try:
-            if expected_error is not None:
-                actual, actual_error = self._run_interpreter_allow_error(converted_expr)
-                if actual_error is None:
-                    return ValidationResult(
-                        test=test,
-                        result=TestResult.FAIL,
-                        actual=actual,
-                        converted_expr=converted_expr,
-                        converted_expected=converted_expected
-                    )
-                if self._compare_error(actual_error, expected_error):
-                    return ValidationResult(
-                        test=test,
-                        result=TestResult.PASS,
-                        actual=actual_error,
-                        converted_expr=converted_expr,
-                        converted_expected=converted_expected
-                    )
-                else:
-                    return ValidationResult(
-                        test=test,
-                        result=TestResult.FAIL,
-                        actual=actual_error,
-                        converted_expr=converted_expr,
-                        converted_expected=converted_expected
-                    )
-            actual = self._run_interpreter(converted_expr)
-        except Exception as e:
+        # Run through interpreter via file
+        stdout, run_error = self.file_runner.run_code(file_code)
+
+        if expected_error is not None:
+            # We expect an error
+            if run_error is None:
+                # Got success when we expected error
+                actual = self.file_runner.parse_debug_output(stdout)
+                return ValidationResult(
+                    test=test,
+                    result=TestResult.FAIL,
+                    actual=actual or stdout,
+                    converted_expr=converted_expr,
+                    converted_expected=converted_expected
+                )
+            if self._compare_error(run_error, expected_error):
+                return ValidationResult(
+                    test=test,
+                    result=TestResult.PASS,
+                    actual=run_error,
+                    converted_expr=converted_expr,
+                    converted_expected=converted_expected
+                )
+            else:
+                return ValidationResult(
+                    test=test,
+                    result=TestResult.FAIL,
+                    actual=run_error,
+                    converted_expr=converted_expr,
+                    converted_expected=converted_expected
+                )
+
+        # We expect a value, not an error
+        if run_error is not None:
             return ValidationResult(
                 test=test,
                 result=TestResult.ERROR,
-                error_message=str(e),
+                error_message=run_error,
+                converted_expr=converted_expr,
+                converted_expected=converted_expected
+            )
+
+        # Parse the debug output to get the actual value
+        actual = self.file_runner.parse_debug_output(stdout)
+        if actual is None:
+            return ValidationResult(
+                test=test,
+                result=TestResult.ERROR,
+                error_message=f"Could not parse debug output: {stdout}",
                 converted_expr=converted_expr,
                 converted_expected=converted_expected
             )
@@ -585,27 +900,34 @@ class Validator:
         """Check if test should be skipped.
 
         See docs/darklang-differences.md for detailed explanations of each skip reason.
+
+        Note: With file-based execution (darklang-interpreter run), many eval-mode
+        limitations are now supported:
+        - Function definitions (converted to curried lambdas)
+        - Let bindings
+        - Lambda expressions
+        - Match expressions
         """
         expr = test.expression
         expected = test.expected
 
-        # Eval mode limitations
-        if test.preamble or 'def ' in expr:
-            return "eval:function_definition"
-        if 'match ' in expr:
-            return "eval:match"
-        if 'let ' in expr:
-            return "eval:let_binding"
-        if '=>' in expr or 'fun ' in expr:
-            return "eval:lambda"
-        if re.search(r'let \w+\s*:\s*\w+', expr):
-            return "eval:typed_let_binding"
+        # Constructs not supported in file mode
         if expr.startswith('type '):
-            return "eval:type_definition"
+            return "run:type_definition"
         if re.search(r'\b[A-Z]\w*\s*\{', expr):
-            return "eval:record_construction"
+            return "run:record_construction"
         if re.search(r'-\s*\(', expr):
-            return "eval:negation_parenthetical"
+            return "run:negation_parenthetical"
+
+        # Immediate lambda application not supported in Darklang
+        # e.g., ((x: Int64) => x + 1)(5) or (fun x -> x)(5)
+        # Darklang requires pipe syntax: 5 |> (fun x -> x)
+        if re.search(r'=>\s*[^)]+\)\s*\(', expr):
+            return "run:immediate_lambda"
+        if re.search(r'fun\s+\w+\s*->[^)]+\)\s*\(', expr):
+            return "run:immediate_lambda"
+        if re.search(r'\(fun\s+', expr):
+            return "run:immediate_lambda"
 
         # Error/output expectations (not validatable)
         if 'expect_compile_error' in expected:
@@ -674,22 +996,26 @@ class Validator:
         if '.__' in expr:
             return "internal:helper_function"
 
-        # Custom types/enums
+        # Custom types/enums (not defined in the test itself)
         allowed_modules = {'Int64', 'Int32', 'Int16', 'Int8', 'UInt64', 'UInt32', 'UInt16', 'UInt8',
                           'Float', 'String', 'List', 'Dict', 'Option', 'Result', 'Bool', 'Char',
                           'Tuple2', 'Tuple3', 'Math', 'Bytes', 'Base64', 'Uuid', 'Stdlib', 'Some', 'None', 'Ok', 'Error'}
         pascal_matches = re.findall(r'\b([A-Z][a-z]+[A-Za-z]*)\b', expr)
         for pascal_name in pascal_matches:
             if pascal_name not in allowed_modules:
-                return f"eval:custom_type:{pascal_name}"
+                return f"run:custom_type:{pascal_name}"
 
-        # User-defined functions
+        # User-defined functions (not defined in the test itself via preamble)
+        # Note: Functions defined via preamble (def...) are converted to lambdas
         func_call_pattern = r'(?<!\.)\b([a-z][a-zA-Z0-9]*)\s*\('
         func_matches = re.findall(func_call_pattern, expr)
         allowed_funcs = {'if', 'match', 'fun', 'let', 'in', 'true', 'false'}
         for func in func_matches:
             if func not in allowed_funcs:
-                return f"eval:user_function:{func}"
+                # Check if this function is defined in the preamble
+                if test.preamble and f'def {func}' in test.preamble:
+                    continue
+                return f"run:user_function:{func}"
 
         # Semantic differences (these need to be fixed in the compiler)
         if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
@@ -704,55 +1030,6 @@ class Validator:
             return "semantic:boolean_not"
 
         return None
-
-    def _run_interpreter(self, expr: str) -> str:
-        """Run expression through darklang-interpreter."""
-        try:
-            result = subprocess.run(
-                ['darklang-interpreter', 'eval', expr],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Interpreter error: {result.stderr.strip()}")
-
-            return result.stdout.strip()
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Interpreter timeout")
-        except FileNotFoundError:
-            raise RuntimeError("darklang-interpreter not found")
-
-    def _run_interpreter_allow_error(self, expr: str) -> tuple[str, Optional[str]]:
-        """Run expression through darklang-interpreter, capturing error output."""
-        try:
-            result = subprocess.run(
-                ['darklang-interpreter', 'eval', expr],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Interpreter timeout")
-        except FileNotFoundError:
-            raise RuntimeError("darklang-interpreter not found")
-
-        combined = "\n".join([result.stderr, result.stdout]).strip()
-        error_msg = None
-        for line in reversed(combined.splitlines()):
-            stripped = line.strip()
-            if stripped.startswith("Error: "):
-                error_msg = stripped[len("Error: "):].strip()
-                break
-        if error_msg is not None:
-            return ("", error_msg)
-
-        if result.returncode == 0:
-            return (result.stdout.strip(), None)
-        if error_msg is None:
-            error_msg = combined
-        return ("", error_msg)
 
     def _strip_error_expr(self, expr: str) -> str:
         """Strip trailing '= error' from test expressions."""
@@ -885,50 +1162,53 @@ def main():
         show_conversions=args.show_conversions
     )
 
-    all_results: dict[Path, list[ValidationResult]] = {}
+    try:
+        all_results: dict[Path, list[ValidationResult]] = {}
 
-    for filepath in all_files:
-        print(f"\nValidating: {filepath.name}")
+        for filepath in all_files:
+            print(f"\nValidating: {filepath.name}")
 
-        try:
-            tests = e2e_parser.parse_file(filepath)
-        except Exception as e:
-            print(f"  Error parsing file: {e}")
-            continue
+            try:
+                tests = e2e_parser.parse_file(filepath)
+            except Exception as e:
+                print(f"  Error parsing file: {e}")
+                continue
 
-        file_results = []
-        for test in tests:
-            result = validator.validate_test(test)
-            file_results.append(result)
+            file_results = []
+            for test in tests:
+                result = validator.validate_test(test)
+                file_results.append(result)
 
-            # Print result based on verbosity
-            if args.verbose or (args.show_failures and result.result in (TestResult.FAIL, TestResult.ERROR)):
-                status_str = result.result.value
-                print(f"  Line {test.line_number}: {status_str}")
+                # Print result based on verbosity
+                if args.verbose or (args.show_failures and result.result in (TestResult.FAIL, TestResult.ERROR)):
+                    status_str = result.result.value
+                    print(f"  Line {test.line_number}: {status_str}")
 
-                if args.show_conversions and result.converted_expr:
-                    print(f"    Ralph2:   {test.expression}")
-                    print(f"    Darklang: {result.converted_expr}")
+                    if args.show_conversions and result.converted_expr:
+                        print(f"    Ralph2:   {test.expression}")
+                        print(f"    Darklang: {result.converted_expr}")
 
-                if result.result == TestResult.FAIL:
-                    print(f"    Expected: {test.expected}")
-                    print(f"    Actual:   {result.actual}")
-                elif result.result == TestResult.ERROR:
-                    print(f"    Error: {result.error_message}")
-                elif result.result == TestResult.SKIP:
-                    print(f"    Reason: {result.skip_reason}")
+                    if result.result == TestResult.FAIL:
+                        print(f"    Expected: {test.expected}")
+                        print(f"    Actual:   {result.actual}")
+                    elif result.result == TestResult.ERROR:
+                        print(f"    Error: {result.error_message}")
+                    elif result.result == TestResult.SKIP:
+                        print(f"    Reason: {result.skip_reason}")
 
-        all_results[filepath] = file_results
+            all_results[filepath] = file_results
 
-        # Quick summary for this file
-        if not args.verbose:
-            passed = sum(1 for r in file_results if r.result == TestResult.PASS)
-            failed = sum(1 for r in file_results if r.result == TestResult.FAIL)
-            skipped = sum(1 for r in file_results if r.result == TestResult.SKIP)
-            errored = sum(1 for r in file_results if r.result == TestResult.ERROR)
-            print(f"  Results: pass={passed}, fail={failed}, skip={skipped}, error={errored}")
+            # Quick summary for this file
+            if not args.verbose:
+                passed = sum(1 for r in file_results if r.result == TestResult.PASS)
+                failed = sum(1 for r in file_results if r.result == TestResult.FAIL)
+                skipped = sum(1 for r in file_results if r.result == TestResult.SKIP)
+                errored = sum(1 for r in file_results if r.result == TestResult.ERROR)
+                print(f"  Results: pass={passed}, fail={failed}, skip={skipped}, error={errored}")
 
-    return print_summary(all_results)
+        return print_summary(all_results)
+    finally:
+        validator.cleanup()
 
 
 if __name__ == '__main__':

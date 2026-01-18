@@ -5,70 +5,65 @@ This document catalogs all known differences between this compiler and the
 official Darklang interpreter. It serves as:
 - Reference for the validation script (`scripts/validate-darklang.py`)
 - Guide for fixing semantic differences
-- Documentation of eval mode limitations
+- Documentation of run mode limitations
 
 ## How to Validate
 
-Run a single expression:
+Run a single expression (limited support):
     darklang-interpreter eval "<expression>"
+
+Run a Dark script file (full support):
+    darklang-interpreter run <file>.dark
 
 Run the full validation suite:
     python scripts/validate-darklang.py
 
+The validation script uses file-based execution (`run` command) for all tests,
+which provides broader syntax support than the `eval` command.
+
 ---
 
-## 1. Eval Mode Limitations
+## 1. File-Based Validation Approach
 
-These constructs cannot be validated because `darklang-interpreter eval` doesn't support them.
+The validation script generates temporary `.dark` files for each test and
+executes them via `darklang-interpreter run`. This approach:
 
-### 1.1 Function Definitions (`def`)
+- **Supports** function definitions (converted to curried lambdas)
+- **Supports** let bindings
+- **Supports** lambda expressions
+- **Supports** match expressions
+- Uses `Builtin.debug` to output results for comparison
 
-**Skip reason:** `eval:function_definition`
+### 1.1 How Tests Are Converted
 
-The eval command only accepts single expressions, not function definitions.
+For a test like `let x = 5 in x + 1 = 6`:
+```dark
+let __result = let x = 5L in x + 1L
+Builtin.debug "" __result
+0L
+```
 
-**Example:**
-    # This compiler
-    def add(a: Int64, b: Int64) : Int64 = a + b
-    add(1, 2) = 3
+For tests with `def` preambles:
+```dark
+// Original: def add(a: Int64, b: Int64) : Int64 = a + b add(1, 2) = 3
+let add = fun a -> fun b -> a + b
+let __result = add 1L 2L
+Builtin.debug "" __result
+0L
+```
 
-    # Cannot test - eval doesn't support def
+### 1.2 Run Mode Limitations
 
-### 1.2 Let Bindings (`let`)
+These constructs cannot be validated even with file-based execution:
 
-**Skip reason:** `eval:let_binding`
+**Skip reason:** `run:type_definition`
+- Custom type and enum definitions are not portable
 
-**Example:**
-    # This compiler (variables.e2e:16)
-    let x = 5 in x = 5
+**Skip reason:** `run:record_construction`
+- Record literals like `MyRecord { field = value }` require type definitions
 
-    # Darklang eval - not supported
-    darklang-interpreter eval "let x = 5L in x"
-    # Returns: Parse error
-
-### 1.3 Lambda Expressions (`=>`)
-
-**Skip reason:** `eval:lambda`
-
-**Example:**
-    # This compiler (closures.e2e:8)
-    ((x: Int64) => x + 1)(5) = 6
-
-    # Darklang syntax would be:
-    (fun x -> x + 1L) 5L
-    # But complex lambdas not supported in eval
-
-### 1.4 Match Expressions
-
-**Skip reason:** `eval:match`
-
-Pattern matching cannot be evaluated in single-expression mode.
-
-### 1.5 Type Definitions
-
-**Skip reason:** `eval:type_definition`
-
-Custom type and enum definitions not supported in eval.
+**Skip reason:** `run:negation_parenthetical`
+- Expressions like `-(5)` may have parsing differences
 
 ---
 
@@ -323,10 +318,10 @@ Float arithmetic uses integer operators in eval mode.
 
 | Category | Skip Prefix | Example Pattern | Fixable? |
 |----------|-------------|-----------------|----------|
-| Eval: def | `eval:` | `def ` in expr | No (eval limitation) |
-| Eval: let | `eval:` | `let ` in expr | No (eval limitation) |
-| Eval: lambda | `eval:` | `=>` or `fun ` | No (eval limitation) |
-| Eval: match | `eval:` | `match ` in expr | No (eval limitation) |
+| Run: type def | `run:` | `type ` in expr | No (requires type system) |
+| Run: record | `run:` | `Name { field }` | No (requires types) |
+| Run: custom type | `run:` | PascalCase not in stdlib | No (requires types) |
+| Run: user func | `run:` | `func(...)` not in preamble | No (external def) |
 | Syntax: integers | (converted) | bare integers | Auto-converted |
 | Syntax: lists | (converted) | `[a, b]` | Auto-converted |
 | Syntax: calls | (converted) | `Mod.func(a)` | Auto-converted |
@@ -336,6 +331,12 @@ Float arithmetic uses integer operators in eval mode.
 | Stdlib: indexOf | `stdlib:` | `.indexOf` | Yes - return type |
 | Stdlib: slice | `stdlib:` | `.slice` | Yes - args differ |
 | Internal | `internal:` | `.__` | No (by design) |
+
+**Note:** With file-based execution, the following are now **supported**:
+- Function definitions (`def`) - converted to curried lambdas
+- Let bindings (`let x = ... in ...`)
+- Lambda expressions (`=>` and `fun`)
+- Match expressions
 
 ---
 
