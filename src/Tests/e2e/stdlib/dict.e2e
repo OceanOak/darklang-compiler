@@ -92,6 +92,11 @@ Option.withDefault(Dict.get(Dict.fromList([("x", 100)]), "x"), 0) = 100
 // optimization correctly collects the Dict.empty specialization (uses || not &&).
 Dict.isEmpty(Dict.fromList<Bool, String>([])) = true
 
+// Mutation #138: Test Stdlib.Dict.fromList([]) with a unique type combination using
+// the fully-qualified name. This ensures both branches of the || condition in the
+// Dict.fromList empty-list optimization work correctly.
+Dict.isEmpty(Stdlib.Dict.fromList<UInt8, UInt8>([])) = true
+
 // ===================================================================
 // Dict.merge - Combine dictionaries
 // ===================================================================
