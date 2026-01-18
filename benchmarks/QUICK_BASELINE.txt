@@ -1,6 +1,6 @@
 # Quick benchmark baseline - instruction counts
-# Generated: 2026-01-17T20:12:57+00:00
-# Compiler: 1db6c43
+# Generated: 2026-01-18T01:01:05+00:00
+# Compiler: 938f0d8
 ackermann=3695812
 binary_trees=250898
 collatz=590647
@@ -14,7 +14,7 @@ mandelbrot=1582185
 matmul=66878
 merkletrees=2569311
 nqueen=1494435
-nsieve=971150
+nsieve=983990
 pisum=130504
 primes=245242
 quicksort=3014730
