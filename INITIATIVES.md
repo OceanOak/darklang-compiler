@@ -8,6 +8,7 @@
 - completing benchmarks
 - expanding to support full language
 - support full darklang stdlib
+- Json stdlib module (parsing/serialization)
 - support full darklang test suite
 - reimplement darklang compiler in Darklang
 - reimplement test suite in Darklang
@@ -21,8 +22,6 @@
 - unify memory RawPtr, heap primitives, reference counting. Ensure everything is reference counted.
 
 # Short term
-
-- tidy up TODO file
 - int64 assumptions
 - look at Call, Apply, and TypeApp
 - fix indentation to not nest so deeply
