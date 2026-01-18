@@ -87,6 +87,11 @@ Dict.size(Dict.fromList<String, Int64>([])) = 0
 Dict.size(Dict.fromList([("a", 1), ("b", 2), ("c", 3)])) = 3
 Option.withDefault(Dict.get(Dict.fromList([("x", 100)]), "x"), 0) = 100
 
+// Mutation #137: Test Dict.fromList([]) with a unique type combination that has no
+// corresponding Dict.empty call elsewhere. This ensures the Dict.fromList empty-list
+// optimization correctly collects the Dict.empty specialization (uses || not &&).
+Dict.isEmpty(Dict.fromList<Bool, String>([])) = true
+
 // ===================================================================
 // Dict.merge - Combine dictionaries
 // ===================================================================
