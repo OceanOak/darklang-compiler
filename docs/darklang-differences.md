@@ -92,13 +92,13 @@ Different arrow syntax between compilers.
 
 Areas where compiler produces WRONG output. These need to be fixed to match Darklang.
 
-| Bug | Skip Reason | Description | Status |
-|-----|-------------|-------------|--------|
-| Division `/` | `semantic:division` | Integer vs float division | Needs fix |
-| Modulo `%` | `semantic:modulo` | Negative number handling | Needs fix |
-| indexOf | `stdlib:indexOf` | Returns Int64, should return Option | Needs fix |
-| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs | Needs fix |
-| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
+| Bug | Skip Reason | Description |
+|-----|-------------|-------------|
+| Division `/` | `semantic:division` | Integer vs float division |
+| Modulo `%` | `semantic:modulo` | Negative number handling |
+| indexOf | `stdlib:indexOf` | Returns Int64, should return Option |
+| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
+| Float precision | `eval:float_precision` | High-precision floats have different representation |
 
 ### 2.1 Division Operator (`/`)
 
@@ -114,8 +114,6 @@ Areas where compiler produces WRONG output. These need to be fixed to match Dark
 # Darklang - need to verify behavior
 darklang-interpreter eval "10L / 3L"
 ```
-
-**Implementation:** `src/DarkCompiler/stdlib/Int64.dark:13`
 
 ### 2.2 Modulo Operator (`%`)
 
@@ -150,8 +148,6 @@ darklang-interpreter eval 'Stdlib.String.indexOf "hello world" "hello"'
 # Expected: Some(0) or similar Option type
 ```
 
-**Implementation:** `src/DarkCompiler/stdlib/String.dark:84-85`
-
 ### 2.4 List Accessors (head, tail, last, init)
 
 **Skip reason:** `stdlib:list_accessors`
@@ -185,38 +181,29 @@ These tests check error conditions or output that can't be validated with the in
 
 ## 4. Compiler-Only Features
 
-Features in compiler not in interpreter. These are skipped during validation.
-
-### Internal Features
+Internal implementation details that only exist in this compiler. The interpreter has no
+equivalent - these are inherent compiler/interpreter differences.
 
 | Feature | Skip Reason | Description |
 |---------|-------------|-------------|
 | Internal functions | `internal:helper_function` | Functions like `__digitToString`, `__findFrom` are implementation helpers |
 | FingerTree/HAMT | `internal:data_structure` | `Stdlib.__FingerTree` and `Stdlib.__HAMT` are internal implementations |
 
-### Stdlib Extensions
-
-| Feature | Skip Reason | Description |
-|---------|-------------|-------------|
-| Random | `stdlib:random` | `Random.*` functions may not exist or behave differently |
-| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
-| Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
-| Missing functions | `stdlib:missing` | `take`, `drop`, `substring` may not exist in Darklang |
-| slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
-
 ---
 
 ## 5. Missing from Interpreter
 
-Features implemented in this compiler that should be added to the Darklang interpreter.
+Features implemented in this compiler that don't exist in the Darklang interpreter yet.
+These could potentially be added to the interpreter.
 
 | Feature | Skip Reason | Functions |
 |---------|-------------|-----------|
 | Bitwise operators | `semantic:bitwise` | `<<`, `>>`, `&`, `\|`, `^`, `~` |
 | Boolean not | `semantic:boolean_not` | `!` |
 | Random | `stdlib:random` | `Random.int64` |
-| Byte operations | `stdlib:byte_ops` | `String.getByteAt` |
+| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
 | Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
 | List functions | `stdlib:missing` | `List.take`, `List.drop` |
 | String functions | `stdlib:missing` | `String.substring`, `String.take`, `String.drop` |
+| slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
 
