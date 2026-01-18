@@ -171,6 +171,13 @@ match (1, 2, 3) with | (_, _, _) -> 42 = 42
 // Mix of binding and wildcard
 match (1, 2, 3, 4, 5) with | (a, _, c, _, e) -> a + c + e = 9
 
+// Tuple pattern with guard clause to verify element index ordering (kills mutation #68)
+// This tests the extractAndCompileBodyWithGuard.collectFromTuple code path
+match (100, 37) with | (a, b) when b < a -> b - a | _ -> 999 = -63
+
+// Three-element tuple with guard to verify all element indices are correct
+match (100, 40, 7) with | (a, b, c) when c < b -> a - b - c | _ -> 999 = 53
+
 // Tuple pattern with constructor payload typing (structural equality)
 type PairOption = PairNone | PairSome of (Int64, Int64)
 match (PairSome((1, 2)), PairSome((1, 2))) with | (PairSome(x), PairSome(y)) -> x == y | _ -> false = true
