@@ -949,7 +949,8 @@ class Validator:
 
         Skip reason categories:
         - Tooling differences: eval:* reasons (error testing, output capture)
-        - Semantic bugs: semantic:*, stdlib:indexOf, stdlib:list_accessors, eval:float_precision
+        - Syntactic differences: syntax:* reasons (unsupported syntax in interpreter)
+        - Semantic bugs: semantic:*, stdlib:indexOf, eval:float_precision
         - Missing from interpreter: semantic:bitwise, semantic:boolean_not, stdlib:*
         - Internal features: internal:* reasons
         """
@@ -1013,10 +1014,6 @@ class Validator:
 
         # Stdlib functions with different signatures (semantic bugs)
         semantic_stdlib_map = {
-            '.head': 'stdlib:list_accessors',
-            '.tail': 'stdlib:list_accessors',
-            '.init': 'stdlib:list_accessors',
-            '.last': 'stdlib:list_accessors',
             '.indexOf': 'stdlib:indexOf',
         }
         for pattern, reason in semantic_stdlib_map.items():

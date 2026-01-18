@@ -27,9 +27,13 @@ converts from compiler syntax to interpreter syntax.
 | Feature | Compiler | Interpreter | Conversion |
 |---------|----------|-------------|------------|
 | Integer literals | `5` | `5L` | Add L suffix |
+| Sized integers | `1y`, `1s`, `1l` | Not supported | Int8, Int16, Int32 suffixes |
+| Unsigned integers | `1uy`, `1us`, `1ul` | Not supported | UInt8, UInt16, UInt32 suffixes |
 | List separators | `[1, 2]` | `[1L; 2L]` | Comma to semicolon |
 | Function calls | `Mod.fn(a, b)` | `Stdlib.Mod.fn a b` | Parentheses to spaces |
 | Lambdas | `(x: T) => body` | `fun x -> body` | Different arrow syntax |
+| Type parameters | `List<Int64>` | Different syntax | Generic type notation |
+| String interpolation | `$"Hello {x}"` | Not supported | Interpolated strings |
 
 ### 1.1 Integer Literals
 
@@ -82,26 +86,18 @@ darklang-interpreter eval "Stdlib.Int64.add 1L 2L"
 
 Different arrow syntax between compilers.
 
-```
-# This compiler
-List.map([1, 2, 3], (x: Int64) => x * 2)
-
-# Darklang
-Stdlib.List.map [1L; 2L; 3L] (fun x -> Stdlib.Int64.multiply x 2L)
-```
-
 ---
 
 ## 2. Semantic Bugs
 
 Areas where compiler produces WRONG output. These need to be fixed to match Darklang.
 
-| Bug | Skip Reason | Description |
-|-----|-------------|-------------|
-| Division `/` | `semantic:division` | Integer vs float division |
-| Modulo `%` | `semantic:modulo` | Negative number handling |
-| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
-| Float precision | `eval:float_precision` | High-precision floats have different representation |
+| Bug | Skip Reason | Description | Status |
+|-----|-------------|-------------|--------|
+| Division `/` | `semantic:division` | Integer vs float division | Needs fix |
+| Modulo `%` | `semantic:modulo` | Negative number handling | Needs fix |
+| indexOf | `stdlib:indexOf` | Returns Int64, should return Option | Needs fix |
+| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
 
 ### 2.1 Division Operator (`/`)
 
@@ -117,6 +113,8 @@ Areas where compiler produces WRONG output. These need to be fixed to match Dark
 # Darklang - need to verify behavior
 darklang-interpreter eval "10L / 3L"
 ```
+
+**Implementation:** `src/DarkCompiler/stdlib/Int64.dark:13`
 
 ### 2.2 Modulo Operator (`%`)
 
@@ -134,20 +132,24 @@ darklang-interpreter eval "(-10L) % 3L"
 
 **Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
 
-### 2.3 List Accessors (head, tail, last, init)
+### 2.3 indexOf
 
-**Skip reason:** `stdlib:list_accessors`
+**Skip reason:** `stdlib:indexOf`
 
-All return `Option<T>` in this compiler for safety:
+**This compiler:** Returns `Int64` (-1 if not found)
+**Darklang:** Returns `Option<Int64>` (None if not found)
+
 ```
-def Stdlib.List.head<a>(list: List<a>) : Stdlib.Option.Option<a>
-def Stdlib.List.tail<a>(list: List<a>) : Stdlib.Option.Option<List<a>>
-def Stdlib.List.last<a>(list: List<a>) : Stdlib.Option.Option<a>
+# This compiler
+Stdlib.String.indexOf("hello world", "hello") = 0
+Stdlib.String.indexOf("hello world", "xyz") = -1
+
+# Darklang
+darklang-interpreter eval 'Stdlib.String.indexOf "hello world" "hello"'
+# Expected: Some(0) or similar Option type
 ```
 
-Darklang may have different signatures.
-
----
+**Implementation:** `src/DarkCompiler/stdlib/String.dark:84-85`
 
 ## 3. Tooling Differences
 
@@ -167,29 +169,37 @@ These tests check error conditions or output that can't be validated with the in
 
 ## 4. Compiler-Only Features
 
-Internal implementation details that only exist in this compiler. The interpreter has no
-equivalent - these are inherent compiler/interpreter differences.
+Features in compiler not in interpreter. These are skipped during validation.
+
+### Internal Features
 
 | Feature | Skip Reason | Description |
 |---------|-------------|-------------|
 | Internal functions | `internal:helper_function` | Functions like `__digitToString`, `__findFrom` are implementation helpers |
 | FingerTree/HAMT | `internal:data_structure` | `Stdlib.__FingerTree` and `Stdlib.__HAMT` are internal implementations |
 
+### Stdlib Extensions
+
+| Feature | Skip Reason | Description |
+|---------|-------------|-------------|
+| Random | `stdlib:random` | `Random.*` functions may not exist or behave differently |
+| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
+| Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
+| Missing functions | `stdlib:missing` | `take`, `drop`, `substring` may not exist in Darklang |
+| slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
+
 ---
 
 ## 5. Missing from Interpreter
 
-Features implemented in this compiler that don't exist in the Darklang interpreter yet.
-These could potentially be added to the interpreter.
+Features implemented in this compiler that should be added to the Darklang interpreter.
 
 | Feature | Skip Reason | Functions |
 |---------|-------------|-----------|
 | Bitwise operators | `semantic:bitwise` | `<<`, `>>`, `&`, `\|`, `^`, `~` |
 | Boolean not | `semantic:boolean_not` | `!` |
 | Random | `stdlib:random` | `Random.int64` |
-| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
+| Byte operations | `stdlib:byte_ops` | `String.getByteAt` |
 | Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
 | List functions | `stdlib:missing` | `List.take`, `List.drop` |
 | String functions | `stdlib:missing` | `String.substring`, `String.take`, `String.drop` |
-| slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
-

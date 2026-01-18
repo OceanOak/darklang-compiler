@@ -5,6 +5,15 @@
 
 module DeadCodeElimination
 
+/// Get the display string helper for lists used by PrintSum codegen
+let private getListDisplayStringFunc (elemType: AST.Type) : string option =
+    match elemType with
+    | AST.TInt64 -> Some "Stdlib.List.toDisplayString_i64"
+    | AST.TBool -> Some "Stdlib.List.toDisplayString_bool"
+    | AST.TString -> Some "Stdlib.List.toDisplayString_str"
+    | AST.TFloat64 -> Some "Stdlib.List.toDisplayString_f64"
+    | _ -> None
+
 /// Extract function names from an operand
 let private extractFromOperand (op: LIR.Operand) : string list =
     match op with
@@ -27,6 +36,15 @@ let private extractCallsFromInstr (instr: LIR.Instr) : string list =
         // Closure pointer is in a register - we can't statically determine the target
         args |> List.collect extractFromOperand
     | LIR.LoadFuncAddr (_, funcName) -> [funcName]
+    | LIR.PrintSum (_, variants) ->
+        variants
+        |> List.collect (fun (_, _, payloadType) ->
+            match payloadType with
+            | Some (AST.TList elemType) ->
+                match getListDisplayStringFunc elemType with
+                | Some funcName -> [funcName]
+                | None -> []
+            | _ -> [])
     | LIR.HeapStore (_, _, src, _) -> extractFromOperand src
     | LIR.Mov (_, src) -> extractFromOperand src
     | LIR.StringConcat (_, left, right) ->

@@ -26,6 +26,19 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
     | Return atom ->
         // For list types, call toDisplayString first
         match programType with
+        | AST.TSum ("Stdlib.Option.Option", [AST.TList elemType]) ->
+            match getListDisplayStringFunc elemType with
+            | Some toDisplayStringName ->
+                // Keep the display helper reachable so tree shaking doesn't drop it.
+                let (keepFunc, varGen1) = freshVar varGen
+                let (printTmp, varGen2) = freshVar varGen1
+                let keepExpr = Atom (FuncRef toDisplayStringName)
+                let printExpr = Print (atom, programType)
+                (Let (keepFunc, keepExpr, Let (printTmp, printExpr, Return atom)), varGen2)
+            | None ->
+                // Unsupported element type, fall back to simple print
+                let (printTmp, varGen') = freshVar varGen
+                (Let (printTmp, Print (atom, programType), Return atom), varGen')
         | AST.TList elemType ->
             match getListDisplayStringFunc elemType with
             | Some toDisplayStringName ->
