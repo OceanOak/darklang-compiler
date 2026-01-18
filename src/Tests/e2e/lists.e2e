@@ -649,3 +649,44 @@ checkSingle119([]) = 0
 
 // Multi-element list (DEEP node) should also match [h, ...t]
 checkSingle119([10, 20, 30]) = 1010
+
+// =====================================================
+// List cons pattern guard check (kills mutation #120)
+// =====================================================
+// Tests that the guard condition for list cons patterns correctly uses <> (not =)
+// when checking if the list is not nil. This guard is generated in compileListConsGuard
+// for patterns like [h, ...t] which require at least one element.
+// If the <> 0 check were changed to = 0, the cons pattern would incorrectly
+// match empty lists and reject non-empty lists.
+//
+// This test specifically exercises the pattern guard generation path which is
+// distinct from the compileSingleBranch notEmpty check tested by mutation #119.
+// The guard check is used when the cons pattern is one of multiple alternatives
+// in a match expression.
+
+// Test with multiple match cases where cons pattern is NOT the first case
+// This ensures the guard check is properly evaluated
+def checkGuard120(xs: List<Int64>) : Int64 =
+    match xs with
+    | [] -> 100
+    | [h, ...t] -> h + 200
+
+// Non-empty list should match cons pattern, returning head + 200
+checkGuard120([50]) = 250
+checkGuard120([1, 2, 3]) = 201
+
+// Empty list should match [], returning 100
+checkGuard120([]) = 100
+
+// Test with cons pattern as first alternative to exercise guard check path
+def checkGuardFirst120(xs: List<Int64>) : Int64 =
+    match xs with
+    | [h, ...t] -> h + 300
+    | [] -> 400
+
+// Non-empty list should match cons pattern
+checkGuardFirst120([99]) = 399
+checkGuardFirst120([5, 10, 15]) = 305
+
+// Empty list should fall through to [] pattern
+checkGuardFirst120([]) = 400
