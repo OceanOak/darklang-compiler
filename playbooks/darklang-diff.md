@@ -81,6 +81,8 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 - If a difference cannot be fixed without major architectural changes, report this and choose a different test.
 - If the darklang-interpreter's eval mode doesn't support certain syntax (let bindings, lambdas, etc.), that's an eval limitation, not a real difference. Choose another test.
 - Update both the compiler AND the skip rules in validate-darklang.py so the test can be validated going forward.
+- Some functions exist in this compiler's stdlib but not in Darklang (e.g., helper functions like `digitToString`). Keep those tests and keep/extend `validate-darklang.py` skip rules for them; do not treat their absence in Darklang as a compiler bug or change the tests to expect errors.
+- Internal stdlib helper tests (identifiers starting with `__`) must live under `src/Tests/e2e/stdlib-internal/` so the test runner enables internal identifiers.
 
 ## Quick reference: Areas likely to have differences
 

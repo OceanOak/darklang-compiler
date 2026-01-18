@@ -68,7 +68,7 @@ def Stdlib.Int32.popcount(x: Int32) : Int32 =
     x & mask4
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.Int32.digitToString(n: Int32) : String =
+def Stdlib.Int32.__digitToString(n: Int32) : String =
     match n with
     | 0l -> "0"
     | 1l -> "1"
@@ -85,8 +85,8 @@ def Stdlib.Int32.digitToString(n: Int32) : String =
 // Convert an integer to its string representation
 def Stdlib.Int32.toString(n: Int32) : String =
     if n < 0l then "-" ++ Stdlib.Int32.toString(0l - n)
-    else if n < 10l then Stdlib.Int32.digitToString(n)
-    else Stdlib.Int32.toString(n / 10l) ++ Stdlib.Int32.digitToString(n % 10l)
+    else if n < 10l then Stdlib.Int32.__digitToString(n)
+    else Stdlib.Int32.toString(n / 10l) ++ Stdlib.Int32.__digitToString(n % 10l)
 
 // Check if integer is even
 def Stdlib.Int32.isEven(n: Int32) : Bool =

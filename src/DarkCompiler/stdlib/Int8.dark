@@ -65,7 +65,7 @@ def Stdlib.Int8.popcount(x: Int8) : Int8 =
     x
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.Int8.digitToString(n: Int8) : String =
+def Stdlib.Int8.__digitToString(n: Int8) : String =
     match n with
     | 0y -> "0"
     | 1y -> "1"
@@ -82,8 +82,8 @@ def Stdlib.Int8.digitToString(n: Int8) : String =
 // Convert an integer to its string representation
 def Stdlib.Int8.toString(n: Int8) : String =
     if n < 0y then "-" ++ Stdlib.Int8.toString(0y - n)
-    else if n < 10y then Stdlib.Int8.digitToString(n)
-    else Stdlib.Int8.toString(n / 10y) ++ Stdlib.Int8.digitToString(n % 10y)
+    else if n < 10y then Stdlib.Int8.__digitToString(n)
+    else Stdlib.Int8.toString(n / 10y) ++ Stdlib.Int8.__digitToString(n % 10y)
 
 // Check if integer is even
 def Stdlib.Int8.isEven(n: Int8) : Bool =

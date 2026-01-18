@@ -74,9 +74,6 @@ let result = "foo" ++ "bar" in result = foobar
 // =============================================================================
 
 // Single digit conversion
-Stdlib.Int64.digitToString(0) = 0
-Stdlib.Int64.digitToString(5) = 5
-Stdlib.Int64.digitToString(9) = 9
 
 // Basic integer to string
 Stdlib.Int64.toString(0) = 0

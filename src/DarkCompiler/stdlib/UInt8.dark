@@ -65,7 +65,7 @@ def Stdlib.UInt8.popcount(x: UInt8) : UInt8 =
     x
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.UInt8.digitToString(n: UInt8) : String =
+def Stdlib.UInt8.__digitToString(n: UInt8) : String =
     match n with
     | 0uy -> "0"
     | 1uy -> "1"
@@ -81,8 +81,8 @@ def Stdlib.UInt8.digitToString(n: UInt8) : String =
 
 // Convert an integer to its string representation
 def Stdlib.UInt8.toString(n: UInt8) : String =
-    if n < 10uy then Stdlib.UInt8.digitToString(n)
-    else Stdlib.UInt8.toString(n / 10uy) ++ Stdlib.UInt8.digitToString(n % 10uy)
+    if n < 10uy then Stdlib.UInt8.__digitToString(n)
+    else Stdlib.UInt8.toString(n / 10uy) ++ Stdlib.UInt8.__digitToString(n % 10uy)
 
 // Check if integer is even
 def Stdlib.UInt8.isEven(n: UInt8) : Bool =

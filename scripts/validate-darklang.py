@@ -644,7 +644,7 @@ class Validator:
         # Skip tests with Stdlib functions that may not exist in Darklang or have different semantics
         unsupported_stdlib = [
             'Stdlib.FingerTree', 'Random.',
-            '.digitToString', '.getByteAt', '.getByteLength',
+            '.__digitToString', '.getByteAt', '.getByteLength',
             '.setByteAt', '.appendByte', '.fromBytes', '.toBytes',
             '.head', '.tail', '.init', '.last',  # Some list funcs may differ
             '.indexOf',  # Returns Option in Darklang vs Int64 in Ralph2

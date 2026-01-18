@@ -66,7 +66,7 @@ def Stdlib.UInt64.popcount(x: UInt64) : UInt64 =
     (x * mult) >> 56UL
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.UInt64.digitToString(n: UInt64) : String =
+def Stdlib.UInt64.__digitToString(n: UInt64) : String =
     match n with
     | 0UL -> "0"
     | 1UL -> "1"
@@ -82,8 +82,8 @@ def Stdlib.UInt64.digitToString(n: UInt64) : String =
 
 // Convert an integer to its string representation
 def Stdlib.UInt64.toString(n: UInt64) : String =
-    if n < 10UL then Stdlib.UInt64.digitToString(n)
-    else Stdlib.UInt64.toString(n / 10UL) ++ Stdlib.UInt64.digitToString(n % 10UL)
+    if n < 10UL then Stdlib.UInt64.__digitToString(n)
+    else Stdlib.UInt64.toString(n / 10UL) ++ Stdlib.UInt64.__digitToString(n % 10UL)
 
 // Check if integer is even
 def Stdlib.UInt64.isEven(n: UInt64) : Bool =

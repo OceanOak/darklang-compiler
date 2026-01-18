@@ -67,7 +67,7 @@ def Stdlib.UInt16.popcount(x: UInt16) : UInt16 =
     x & mask4
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.UInt16.digitToString(n: UInt16) : String =
+def Stdlib.UInt16.__digitToString(n: UInt16) : String =
     match n with
     | 0us -> "0"
     | 1us -> "1"
@@ -83,8 +83,8 @@ def Stdlib.UInt16.digitToString(n: UInt16) : String =
 
 // Convert an integer to its string representation
 def Stdlib.UInt16.toString(n: UInt16) : String =
-    if n < 10us then Stdlib.UInt16.digitToString(n)
-    else Stdlib.UInt16.toString(n / 10us) ++ Stdlib.UInt16.digitToString(n % 10us)
+    if n < 10us then Stdlib.UInt16.__digitToString(n)
+    else Stdlib.UInt16.toString(n / 10us) ++ Stdlib.UInt16.__digitToString(n % 10us)
 
 // Check if integer is even
 def Stdlib.UInt16.isEven(n: UInt16) : Bool =

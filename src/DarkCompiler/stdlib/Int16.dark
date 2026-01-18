@@ -67,7 +67,7 @@ def Stdlib.Int16.popcount(x: Int16) : Int16 =
     x & mask4
 
 // Convert a single digit (0-9) to its string representation
-def Stdlib.Int16.digitToString(n: Int16) : String =
+def Stdlib.Int16.__digitToString(n: Int16) : String =
     match n with
     | 0s -> "0"
     | 1s -> "1"
@@ -84,8 +84,8 @@ def Stdlib.Int16.digitToString(n: Int16) : String =
 // Convert an integer to its string representation
 def Stdlib.Int16.toString(n: Int16) : String =
     if n < 0s then "-" ++ Stdlib.Int16.toString(0s - n)
-    else if n < 10s then Stdlib.Int16.digitToString(n)
-    else Stdlib.Int16.toString(n / 10s) ++ Stdlib.Int16.digitToString(n % 10s)
+    else if n < 10s then Stdlib.Int16.__digitToString(n)
+    else Stdlib.Int16.toString(n / 10s) ++ Stdlib.Int16.__digitToString(n % 10s)
 
 // Check if integer is even
 def Stdlib.Int16.isEven(n: Int16) : Bool =
