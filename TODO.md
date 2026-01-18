@@ -8,10 +8,6 @@ This TODO reflects the approved implementation plan for completing the Dark comp
 
 The following work is needed to complete the standard library:
 
-**Float type and builtins**
-- Enables: Int64.sqrt, Int64.toFloat, Float module
-- Impact: Numeric computing functions
-
 **Additional Stdlib Modules**
 - **DateTime** - date/time handling
 - **Json** - JSON parsing/serialization
