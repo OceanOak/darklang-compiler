@@ -86,6 +86,86 @@ darklang-interpreter eval "Stdlib.Int64.add 1L 2L"
 
 Different arrow syntax between compilers.
 
+```
+# This compiler
+List.map([1, 2, 3], (x: Int64) => x * 2)
+
+# Darklang
+Stdlib.List.map [1L; 2L; 3L] (fun x -> Stdlib.Int64.multiply x 2L)
+```
+
+### 1.5 Sized Integers
+
+**Not supported in interpreter**
+
+This compiler supports sized integer literals with suffixes:
+- `y` for Int8 (e.g., `1y`)
+- `s` for Int16 (e.g., `1s`)
+- `l` for Int32 (e.g., `1l`)
+
+```
+# This compiler
+let x: Int8 = 127y
+let y: Int16 = 32767s
+let z: Int32 = 2147483647l
+
+# Darklang - not supported
+```
+
+Tests using sized integers are skipped with `syntax:sized_integer`.
+
+### 1.6 Unsigned Integers
+
+**Not supported in interpreter**
+
+This compiler supports unsigned integer literals with suffixes:
+- `uy` for UInt8 (e.g., `1uy`)
+- `us` for UInt16 (e.g., `1us`)
+- `ul` for UInt32 (e.g., `1ul`)
+
+```
+# This compiler
+let x: UInt8 = 255uy
+let y: UInt16 = 65535us
+let z: UInt32 = 4294967295ul
+
+# Darklang - not supported
+```
+
+Tests using unsigned integers are skipped with `syntax:unsigned_integer`.
+
+### 1.7 Type Parameters
+
+**Not supported in interpreter**
+
+This compiler uses angle bracket syntax for generic types:
+
+```
+# This compiler
+let x: List<Int64> = [1, 2, 3]
+let y: Option<String> = Some("hello")
+
+# Darklang - different syntax or not supported in eval
+```
+
+Tests using type parameters are skipped with `syntax:type_parameter`.
+
+### 1.8 String Interpolation
+
+**Not supported in interpreter**
+
+This compiler supports string interpolation with `$"..."` syntax:
+
+```
+# This compiler
+let name = "world"
+$"Hello {name}!"  // Returns: "Hello world!"
+
+# Darklang - not supported, use String.concat instead
+```
+
+Tests using string interpolation are skipped with `syntax:string_interpolation`.
+
 ---
 
 ## 2. Semantic Bugs
