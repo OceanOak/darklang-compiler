@@ -571,3 +571,15 @@ Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60, 70, 80], 7)
 // expecting 8 nodes but only having 5, causing incorrect tree construction.
 // The 9th element (at index 8) would not be accessible if tree is malformed.
 Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60, 70, 80, 90], 8), 0) = 90
+
+// =====================================================
+// Nested list pattern element extraction test (kills mutation #92)
+// =====================================================
+// Tests that element extraction from DEEP FingerTree nodes correctly
+// calculates offsets when a list pattern appears inside a constructor payload.
+// The extractElements function in extractAndCompileBody uses idx - 1 to
+// compute suffix slot offsets: 64 + (idx-1)*8 for s0, s1, s2, s3.
+// If idx - 1 were changed to idx + 1, the second element onwards would
+// be extracted from wrong offsets (e.g., idx=1 would read s2 instead of s0).
+type WrappedList = NoList | WrapList of List<Int64>
+match WrapList([100, 200, 300, 400]) with | WrapList([a, b, c, d]) -> c - d | NoList -> 999 = -100
