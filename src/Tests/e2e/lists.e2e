@@ -583,3 +583,21 @@ Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60, 70, 80, 90]
 // be extracted from wrong offsets (e.g., idx=1 would read s2 instead of s0).
 type WrappedList = NoList | WrapList of List<Int64>
 match WrapList([100, 200, 300, 400]) with | WrapList([a, b, c, d]) -> c - d | NoList -> 999 = -100
+
+// =====================================================
+// Nested list offset multiplication test (kills mutation #105)
+// =====================================================
+// Tests that the offset calculation `64L + (int64 (idx - 1) * 8L)` uses
+// multiplication, not division. If * were changed to /, all elements after
+// the first would read from offset 64 (the second element's slot), since
+// integer division of small numbers by 8 yields 0.
+// For a 5-element list in a constructor payload:
+// - idx=0: offset 16 (p0)
+// - idx=1: offset 64 + (0 * 8) = 64 (s0)
+// - idx=2: offset 64 + (1 * 8) = 72 (s1) -- with / this becomes 64 + 0 = 64
+// - idx=3: offset 64 + (2 * 8) = 80 (s2) -- with / this becomes 64 + 0 = 64
+// - idx=4: offset 64 + (3 * 8) = 88 (s3) -- with / this becomes 64 + 0 = 64
+// Sum of c+d+e with correct offsets: 30+40+50 = 120
+// Sum of c+d+e with / mutation: 20+20+20 = 60 (all read from s0)
+type WrappedList5 = NoList5 | WrapList5 of List<Int64>
+match WrapList5([10, 20, 30, 40, 50]) with | WrapList5([a, b, c, d, e]) -> c + d + e | NoList5 -> 999 = 120
