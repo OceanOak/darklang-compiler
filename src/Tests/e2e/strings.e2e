@@ -239,21 +239,21 @@ Stdlib.String.contains("", "a") = false
 // Stdlib.String.slice Tests
 // =============================================================================
 
-// Basic slice
+// Basic slice (start, end exclusive)
 Stdlib.String.slice("hello world", 0, 5) = hello
-Stdlib.String.slice("hello world", 6, 5) = world
+Stdlib.String.slice("hello world", 6, 11) = world
 Stdlib.String.slice("hello world", 0, 11) = hello world
 
 // Slice from middle
-Stdlib.String.slice("abcdef", 2, 3) = cde
+Stdlib.String.slice("abcdef", 2, 5) = cde
 
 // Empty result
 Stdlib.String.slice("hello", 0, 0) = ""
-Stdlib.String.slice("hello", 5, 0) = ""
+Stdlib.String.slice("hello", 5, 5) = ""
 
 // Clamping behavior
 Stdlib.String.slice("hello", 0, 100) = hello
-Stdlib.String.slice("hello", 10, 5) = ""
+Stdlib.String.slice("hello", 10, 15) = ""
 
 // =============================================================================
 // Stdlib.String.take and drop Tests

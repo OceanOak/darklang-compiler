@@ -202,12 +202,12 @@ String.indexOf("abcabc", "bc") = 1
 String.indexOf("", "a") = -1
 
 // ===================================================================
-// String.slice - Extract substring by start and length (byte-based)
+// String.slice - Extract substring by start and end index (byte-based, end exclusive)
 // ===================================================================
 
 String.slice("hello", 0, 2) = he
 String.slice("hello", 0, 5) = hello
-String.slice("hello", 1, 3) = ell
+String.slice("hello", 1, 4) = ell
 String.slice("hello", 2, 10) = llo
 String.slice("hello", 0, 0) = ""
 String.slice("hello", 5, 5) = ""

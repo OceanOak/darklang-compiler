@@ -97,14 +97,15 @@ def Stdlib.String.__copyBytesToPtr(src: String, srcStart: Int64, dest: RawPtr, d
         let _ = __raw_set_byte(dest, destStart, byte) in
         Stdlib.String.__copyBytesToPtr(src, srcStart + 1, dest, destStart + 1, count - 1)
 
-// Extract substring from start index with given length
+// Extract substring from start index to end index (exclusive)
 // String format: [length:8 bytes][data:N bytes][refcount:8 bytes]
-def Stdlib.String.slice(s: String, start: Int64, len: Int64) : String =
+def Stdlib.String.slice(s: String, start: Int64, end_: Int64) : String =
     let sLen = Stdlib.String.length(s) in
-    // Clamp start and len to valid range
+    // Clamp start to valid range
     let actualStart = if start < 0 then 0 else if start > sLen then sLen else start in
-    let maxLen = sLen - actualStart in
-    let actualLen = if len < 0 then 0 else if len > maxLen then maxLen else len in
+    // Clamp end to valid range
+    let actualEnd = if end_ < actualStart then actualStart else if end_ > sLen then sLen else end_ in
+    let actualLen = actualEnd - actualStart in
     if actualLen == 0 then
         ""
     else
@@ -120,9 +121,9 @@ def Stdlib.String.slice(s: String, start: Int64, len: Int64) : String =
         // Convert raw pointer to string
         __int64_to_string(__rawptr_to_int64(ptr))
 
-// Get substring from start to end (excluding end)
+// Get substring from start to end (excluding end) - same as slice
 def Stdlib.String.substring(s: String, start: Int64, end_: Int64) : String =
-    Stdlib.String.slice(s, start, end_ - start)
+    Stdlib.String.slice(s, start, end_)
 
 // Get first n characters
 def Stdlib.String.take(s: String, n: Int64) : String =
@@ -131,7 +132,7 @@ def Stdlib.String.take(s: String, n: Int64) : String =
 // Drop first n characters
 def Stdlib.String.drop(s: String, n: Int64) : String =
     let sLen = Stdlib.String.length(s) in
-    Stdlib.String.slice(s, n, sLen - n)
+    Stdlib.String.slice(s, n, sLen)
 
 // =============================================================================
 // UTF-8 Decoding (for Unicode support)

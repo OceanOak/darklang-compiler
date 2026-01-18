@@ -649,7 +649,6 @@ class Validator:
             '.head', '.tail', '.init', '.last',  # Some list funcs may differ
             '.indexOf',  # Returns Option in Darklang vs Int64 in Ralph2
             '.take', '.drop', '.substring',  # May not exist
-            '.slice',  # Different argument interpretation (start, end vs start, length)
             'Int64.sub',
             'Int64.mul',
             'Int64.div',
