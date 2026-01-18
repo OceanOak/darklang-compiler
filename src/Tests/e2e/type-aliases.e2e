@@ -24,3 +24,20 @@ type BoolAlias2 = Bool
 def useBoolAlias(b: Bool): Int64 = if b then 1 else 0
 useBoolAlias(true) = 1
 useBoolAlias(false) = 0
+
+// =====================================================
+// Parameterized Type Aliases (kills mutation #118)
+// =====================================================
+// Tests resolveAliasType's handling of generic type aliases where the
+// number of type parameters must match the number of type arguments.
+// Mutation #118 changes <> to = in the arity check, which would cause
+// type aliases with matching arity to NOT be resolved (substitution skipped).
+
+// Define a generic type alias for List<t> - this is a parameterized type alias
+type MyList118<t> = List<t>
+
+// Use the alias with a concrete type argument
+// If the mutation is applied, the alias won't resolve because substitution is skipped
+// when typeParams.Length = args.Length (should be <>, mutation makes it =)
+def sumMyList(xs: MyList118<Int64>): Int64 = match xs with | [] -> 0 | [x, ...rest] -> x + sumMyList(rest)
+sumMyList([10, 20, 12]) = 42
