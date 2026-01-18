@@ -1019,12 +1019,20 @@ let compileStdlib () : Result<StdlibResult, string> =
                                 let (LIRSymbolic.Program functions) = lirProgram
                                 let functions' = ParallelUtils.mapListParallel functions LIR_Peephole.optimizeFunction
                                 LIRSymbolic.Program functions'
-                            // Pre-allocate stdlib functions (cached for reuse)
+                            // Pre-allocate stdlib functions (with SQLite caching)
                             let (LIRSymbolic.Program lirFuncs) = optimizedLir
+                            let compilerKey = Cache.getCompilerKey()
+                            let allocateWithCache (f: LIRSymbolic.Function) =
+                                match Cache.getIntermediate compilerKey f.Name "" "lir_allocated" with
+                                | Some data -> Cache.deserialize<LIRSymbolic.Function> data
+                                | None ->
+                                    let allocated = RegisterAllocation.allocateRegisters f
+                                    Cache.setIntermediate compilerKey f.Name "" "lir_allocated" (Cache.serialize allocated)
+                                    allocated
                             let allocatedFuncs =
                                 match compileMode with
-                                | StdlibCompileMode.Sequential -> List.map RegisterAllocation.allocateRegisters lirFuncs
-                                | StdlibCompileMode.Parallel -> ParallelUtils.mapListParallel lirFuncs RegisterAllocation.allocateRegisters
+                                | StdlibCompileMode.Sequential -> List.map allocateWithCache lirFuncs
+                                | StdlibCompileMode.Parallel -> ParallelUtils.mapListParallel lirFuncs allocateWithCache
                             let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                             match LIRSymbolic.toLIR allocatedSymbolic with
                             | Error err -> Error err
@@ -1719,10 +1727,32 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
 
 /// Compile source code to binary (in-memory, no file I/O)
 /// Uses lazy stdlib compilation - only compiles stdlib functions that are actually called
+/// Also uses SQLite-based caching - if the same source/options/platform was compiled before,
+/// returns the cached binary instead of recompiling
 let compileWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : CompileResult =
-    match prepareStdlibForLazyCompile() with
-    | Error err -> Error err
-    | Ok lazyStdlib -> compileWithLazyStdlib verbosity options lazyStdlib source
+    // Compute cache keys
+    let compilerKey = Cache.getCompilerKey ()
+    let sourceHash = Cache.hashString source
+    let optionsHash = Cache.hashData options
+    let platform = Cache.getPlatform ()
+
+    // Try to get cached binary first (fastest path)
+    match Cache.getGeneratedCode compilerKey sourceHash optionsHash platform with
+    | Some binary ->
+        if verbosity >= 1 then println "  [CACHE HIT] Returning cached binary"
+        Ok binary
+    | None ->
+        // Cache miss - compile and cache the result
+        if verbosity >= 2 then println "  [CACHE MISS] Compiling..."
+        match prepareStdlibForLazyCompile() with
+        | Error err -> Error err
+        | Ok lazyStdlib ->
+            match compileWithLazyStdlib verbosity options lazyStdlib source with
+            | Error err -> Error err
+            | Ok binary ->
+                // Cache the compiled binary for future use
+                Cache.setGeneratedCode compilerKey sourceHash optionsHash platform binary
+                Ok binary
 
 /// Compile source code to binary (uses default options)
 /// Execute compiled binary and capture output

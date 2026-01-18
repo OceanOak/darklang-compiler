@@ -55,6 +55,7 @@ type CliOptions = {
     Verbosity: VerbosityLevel
     Help: bool
     Version: bool
+    CacheKey: bool               // True = output cache key (SHA256 of compiler binary)
     Argument: string option
     LeakCheck: bool
     // Optimization flags
@@ -91,6 +92,7 @@ let defaultOptions = {
     Verbosity = Normal
     Help = false
     Version = false
+    CacheKey = false
     Argument = None
     LeakCheck = false
     DisableFreeList = false
@@ -219,6 +221,9 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
         | "--version" :: rest ->
             parseFlags rest { opts with Version = true } lastVerbosity
 
+        | "--cache-key" :: rest ->
+            parseFlags rest { opts with CacheKey = true } lastVerbosity
+
         | "--no-free-list" :: rest | "--disable-opt-freelist" :: rest ->
             parseFlags rest { opts with DisableFreeList = true } lastVerbosity
 
@@ -322,8 +327,8 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
 /// Validate parsed options
 let validateOptions (opts: CliOptions) : Result<CliOptions, string> =
-    // Help and version override everything else
-    if opts.Help || opts.Version then
+    // Help, version, and cache-key override everything else
+    if opts.Help || opts.Version || opts.CacheKey then
         Ok opts
     else
         // Check for required argument
@@ -391,6 +396,16 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
 
     result.ExitCode
 
+/// Get a cache key based on the SHA256 hash of the compiler binary.
+/// This uniquely identifies this build of the compiler.
+let getCacheKey () : string =
+    let assembly = System.Reflection.Assembly.GetExecutingAssembly()
+    let location = assembly.Location
+    use stream = File.OpenRead(location)
+    use sha256 = System.Security.Cryptography.SHA256.Create()
+    let hash = sha256.ComputeHash(stream)
+    BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant()
+
 /// Print version information
 let printVersion () =
     println "Dark Compiler v0.1.0"
@@ -421,6 +436,7 @@ let printUsage () =
     println "  --leak-check         Enable leak checking (debug builds only)"
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
+    println "  --cache-key          Output compiler binary hash (for caching)"
     println ""
     println "Optimization flags (for debugging):"
     println "  --disable-opt-anf       Disable ANF-level optimizations"
@@ -463,6 +479,10 @@ let main argv =
 
         | Ok options when options.Version ->
             printVersion()
+            0
+
+        | Ok options when options.CacheKey ->
+            printf "%s" (getCacheKey())
             0
 
         | Ok options ->
