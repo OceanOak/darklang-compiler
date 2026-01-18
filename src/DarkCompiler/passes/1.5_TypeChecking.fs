@@ -874,15 +874,15 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         | And | Or ->
             let opName = if op = And then "&&" else "||"
 
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
             |> Result.bind (fun (leftType, left') ->
                 if leftType <> TBool then
-                    Error (TypeMismatch (TBool, leftType, $"left operand of {opName}"))
+                    Error (GenericError $"{opName} only supports Booleans")
                 else
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
                     |> Result.bind (fun (rightType, right') ->
                         if rightType <> TBool then
-                            Error (TypeMismatch (TBool, rightType, $"right operand of {opName}"))
+                            Error (GenericError $"{opName} only supports Booleans")
                         else
                             match expectedType with
                             | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))

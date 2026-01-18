@@ -486,7 +486,8 @@ class Validator:
 
         # Convert syntax
         try:
-            converted_expr = self.converter.convert(test.expression)
+            expr_for_eval = self._strip_error_expr(test.expression)
+            converted_expr = self.converter.convert(expr_for_eval)
             converted_expected = self.converter.convert_expected(test.expected)
         except Exception as e:
             return ValidationResult(
@@ -495,8 +496,36 @@ class Validator:
                 error_message=f"Conversion error: {e}"
             )
 
+        expected_error = self._expected_error_message(test.expression, converted_expected)
+
         # Run through interpreter
         try:
+            if expected_error is not None:
+                actual, actual_error = self._run_interpreter_allow_error(converted_expr)
+                if actual_error is None:
+                    return ValidationResult(
+                        test=test,
+                        result=TestResult.FAIL,
+                        actual=actual,
+                        converted_expr=converted_expr,
+                        converted_expected=converted_expected
+                    )
+                if self._compare_error(actual_error, expected_error):
+                    return ValidationResult(
+                        test=test,
+                        result=TestResult.PASS,
+                        actual=actual_error,
+                        converted_expr=converted_expr,
+                        converted_expected=converted_expected
+                    )
+                else:
+                    return ValidationResult(
+                        test=test,
+                        result=TestResult.FAIL,
+                        actual=actual_error,
+                        converted_expr=converted_expr,
+                        converted_expected=converted_expected
+                    )
             actual = self._run_interpreter(converted_expr)
         except Exception as e:
             return ValidationResult(
@@ -525,6 +554,33 @@ class Validator:
                 converted_expected=converted_expected
             )
 
+    def _expected_error_message(self, expr: str, expected: str) -> Optional[str]:
+        """Extract expected error message from an expected value."""
+        if re.search(r'\s*=\s*error\s*$', expr):
+            return self._strip_error_quotes(expected.strip())
+
+        normalized = expected.strip()
+        if normalized == "error":
+            return ""
+        if normalized.startswith("error="):
+            msg = normalized[len("error="):].strip()
+            return self._strip_error_quotes(msg)
+        return None
+
+    def _strip_error_quotes(self, msg: str) -> str:
+        """Strip surrounding quotes from an error message."""
+        if (msg.startswith('"') and msg.endswith('"')) or (msg.startswith("'") and msg.endswith("'")):
+            return msg[1:-1]
+        return msg
+
+    def _is_supported_error(self, msg: str) -> bool:
+        """Check if an error message is supported for interpreter validation."""
+        return msg in {"&& only supports Booleans", "|| only supports Booleans"}
+
+    def _compare_error(self, actual: str, expected: str) -> bool:
+        """Compare actual vs expected error messages."""
+        return actual.strip() == expected.strip()
+
     def _should_skip(self, test: TestCase) -> Optional[str]:
         """Check if test should be skipped."""
         expr = test.expression
@@ -539,10 +595,12 @@ class Validator:
             return "Expects compile error"
 
         # Skip tests expecting runtime errors (error messages, etc.)
+        expected_error = self._expected_error_message(expr, expected)
+        if expected_error is not None and not self._is_supported_error(expected_error):
+            return "Expects error result"
         if (expected.strip() == 'error' or
-            expected.startswith('error=') or
             (expected.startswith('"') and 'error' in expected.lower()) or
-            '= error' in expr):  # Expression ends with '= error'
+            (expected_error is None and '= error' in expr)):  # Expression ends with '= error'
             return "Expects error result"
 
         # Skip tests with stdout expectations
@@ -660,7 +718,9 @@ class Validator:
             return "Contains modulo operator"
 
         # Skip tests with bitwise operators (different semantics in Darklang)
-        if '<<' in expr or '>>' in expr or '&' in expr or '|' in expr or '^' in expr or '~' in expr:
+        if ('<<' in expr or '>>' in expr or '^' in expr or '~' in expr or
+            re.search(r'(?<!&)&(?!&)', expr) or
+            re.search(r'(?<!\|)\|(?!\|)', expr)):
             return "Contains bitwise operator"
 
         # Skip tests with unary negation applied to parenthetical (darklang eval limitation)
@@ -691,6 +751,40 @@ class Validator:
             raise RuntimeError("Interpreter timeout")
         except FileNotFoundError:
             raise RuntimeError("darklang-interpreter not found")
+
+    def _run_interpreter_allow_error(self, expr: str) -> tuple[str, Optional[str]]:
+        """Run expression through darklang-interpreter, capturing error output."""
+        try:
+            result = subprocess.run(
+                ['darklang-interpreter', 'eval', expr],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Interpreter timeout")
+        except FileNotFoundError:
+            raise RuntimeError("darklang-interpreter not found")
+
+        combined = "\n".join([result.stderr, result.stdout]).strip()
+        error_msg = None
+        for line in reversed(combined.splitlines()):
+            stripped = line.strip()
+            if stripped.startswith("Error: "):
+                error_msg = stripped[len("Error: "):].strip()
+                break
+        if error_msg is not None:
+            return ("", error_msg)
+
+        if result.returncode == 0:
+            return (result.stdout.strip(), None)
+        if error_msg is None:
+            error_msg = combined
+        return ("", error_msg)
+
+    def _strip_error_expr(self, expr: str) -> str:
+        """Strip trailing '= error' from test expressions."""
+        return re.sub(r'\s*=\s*error\s*$', '', expr).strip()
 
     def _compare_results(self, actual: str, expected: str) -> bool:
         """Compare actual output with expected value."""

@@ -18,10 +18,10 @@
 // ===================================================================
 
 // Type error - wrong type for second operand
-(true && 5) = error="Type mismatch in integer literal: expected Bool, got Int64"
+(true && 5) = error="&& only supports Booleans"
 
 // Type error - wrong type for first operand
-(5 && true) = error="Type mismatch in integer literal: expected Bool, got Int64"
+(5 && true) = error="&& only supports Booleans"
 
 // ===================================================================
 // Pipe operator with AND
