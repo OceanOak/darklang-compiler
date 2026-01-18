@@ -422,3 +422,21 @@ Stdlib.Option.withDefault(Stdlib.List.getAt([1, 2, 3, 4, 5, 6], 2), 0) = 3
 
 // Access element at index 3 (second element in middle NODE2)
 Stdlib.Option.withDefault(Stdlib.List.getAt([1, 2, 3, 4, 5, 6], 3), 0) = 4
+
+// =====================================================
+// DEEP node element extraction offset tests (kills mutation #69)
+// =====================================================
+// These tests verify that elements are extracted from the correct offsets
+// in DEEP FingerTree nodes. The mutation would change the offset calculation
+// from `64 + (idx-1)*8` to `64 - (idx-1)*8`, causing wrong element access.
+
+// 4-element list - verify third element (idx=2) is correct using subtraction
+// idx=0: offset 16 (p0), idx=1: offset 64 (s0), idx=2: offset 72 (s1), idx=3: offset 80 (s2)
+// With mutation: idx=2 would read from 56 (wrong), idx=3 would read from 48 (wrong)
+match [100, 200, 300, 400] with | [a, b, c, d] -> c - d | _ -> 999 = -100
+
+// 5-element list - verify fourth element (idx=3) is correct
+match [10, 20, 30, 40, 50] with | [a, b, c, d, e] -> d - e | _ -> 999 = -10
+
+// Alternative: verify element ordering with non-commutative expression
+match [1000, 100, 10, 1] with | [a, b, c, d] -> a - b - c - d | _ -> 999 = 889
