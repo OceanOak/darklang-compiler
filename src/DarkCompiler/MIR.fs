@@ -23,7 +23,7 @@ type TypedMIRParam = { Reg: VReg; Type: AST.Type }
 
 /// Operands
 type Operand =
-    | IntConst of int64
+    | Int64Const of int64
     | BoolConst of bool
     | FloatSymbol of float
     | StringSymbol of string
@@ -99,8 +99,8 @@ type Instr =
     | FloatSqrt of dest:VReg * src:Operand        // Square root: sqrt(x)
     | FloatAbs of dest:VReg * src:Operand         // Absolute value: |x|
     | FloatNeg of dest:VReg * src:Operand         // Negate: -x
-    | IntToFloat of dest:VReg * src:Operand       // Convert Int64 to Float64
-    | FloatToInt of dest:VReg * src:Operand       // Convert Float64 to Int64 (truncate)
+    | Int64ToFloat of dest:VReg * src:Operand     // Convert Int64 to Float64
+    | FloatToInt64 of dest:VReg * src:Operand    // Convert Float64 to Int64 (truncate)
     // Raw memory intrinsics (internal, for HAMT implementation)
     | RawAlloc of dest:VReg * numBytes:Operand    // Allocate raw bytes (no header), returns RawPtr
     | RawFree of ptr:Operand                      // Manually free raw memory

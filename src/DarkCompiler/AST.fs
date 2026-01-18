@@ -13,7 +13,7 @@
 // - Variables: identifiers bound by let
 //
 // Example AST for "let x = 5 in x + 3":
-//   Let("x", IntLiteral(5), BinOp(Add, Var("x"), IntLiteral(3)))
+//   Let("x", Int64Literal(5), BinOp(Add, Var("x"), Int64Literal(3)))
 
 module AST
 
@@ -101,7 +101,7 @@ type Pattern =
     | PWildcard                                            // _
     | PVar of string                                       // x (binds value to variable)
     | PConstructor of variantName:string * payload:Pattern option  // Red, Some(x)
-    | PLiteral of int64                                    // 42 (Int64 literal)
+    | PInt64 of int64                                      // 42 (Int64 literal)
     | PInt8Literal of sbyte                                // 1y
     | PInt16Literal of int16                               // 1s
     | PInt32Literal of int32                               // 1l
@@ -125,7 +125,7 @@ type StringPart =
 /// Expression nodes
 and Expr =
     | UnitLiteral                           // Unit value: ()
-    | IntLiteral of int64                   // 64-bit signed (default): 42, 42L
+    | Int64Literal of int64                 // 64-bit signed (default): 42, 42L
     | Int8Literal of sbyte                  // 8-bit signed: 42y
     | Int16Literal of int16                 // 16-bit signed: 42s
     | Int32Literal of int32                 // 32-bit signed: 42l

@@ -116,8 +116,8 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | FloatSqrt _ -> Some AST.TFloat64
     | FloatAbs _ -> Some AST.TFloat64
     | FloatNeg _ -> Some AST.TFloat64
-    | IntToFloat _ -> Some AST.TFloat64
-    | FloatToInt _ -> Some AST.TInt64
+    | Int64ToFloat _ -> Some AST.TFloat64
+    | FloatToInt64 _ -> Some AST.TInt64
     | FloatToString _ -> Some AST.TString
     | RandomInt64 -> Some AST.TInt64
     | DateNow -> Some AST.TInt64

@@ -64,9 +64,9 @@ type Instr =
     | ArgMoves of (PhysReg * Operand) list
     | TailArgMoves of (PhysReg * Operand) list
     | FArgMoves of (PhysFPReg * FReg) list
-    | PrintInt of Reg
+    | PrintInt64 of Reg
     | PrintBool of Reg
-    | PrintIntNoNewline of Reg
+    | PrintInt64NoNewline of Reg
     | PrintBoolNoNewline of Reg
     | PrintFloat of FReg
     | PrintFloatNoNewline of FReg
@@ -89,8 +89,8 @@ type Instr =
     | FAbs of dest:FReg * src:FReg
     | FSqrt of dest:FReg * src:FReg
     | FCmp of left:FReg * right:FReg
-    | IntToFloat of dest:FReg * src:Reg
-    | FloatToInt of dest:Reg * src:FReg
+    | Int64ToFloat of dest:FReg * src:Reg
+    | FloatToInt64 of dest:Reg * src:FReg
     | GpToFp of dest:FReg * src:Reg
     | FpToGp of dest:Reg * src:FReg
     | HeapAlloc of dest:Reg * sizeBytes:int
@@ -257,9 +257,9 @@ let fromLIR (program: LIR.Program) : Result<Program, string> =
                 symbolOperand op |> Result.map (fun op' -> (reg, op')))
             |> Result.map TailArgMoves
         | LIR.FArgMoves moves -> Ok (FArgMoves moves)
-        | LIR.PrintInt reg -> Ok (PrintInt reg)
+        | LIR.PrintInt64 reg -> Ok (PrintInt64 reg)
         | LIR.PrintBool reg -> Ok (PrintBool reg)
-        | LIR.PrintIntNoNewline reg -> Ok (PrintIntNoNewline reg)
+        | LIR.PrintInt64NoNewline reg -> Ok (PrintInt64NoNewline reg)
         | LIR.PrintBoolNoNewline reg -> Ok (PrintBoolNoNewline reg)
         | LIR.PrintFloat freg -> Ok (PrintFloat freg)
         | LIR.PrintFloatNoNewline freg -> Ok (PrintFloatNoNewline freg)
@@ -288,8 +288,8 @@ let fromLIR (program: LIR.Program) : Result<Program, string> =
         | LIR.FAbs (dest, src) -> Ok (FAbs (dest, src))
         | LIR.FSqrt (dest, src) -> Ok (FSqrt (dest, src))
         | LIR.FCmp (left, right) -> Ok (FCmp (left, right))
-        | LIR.IntToFloat (dest, src) -> Ok (IntToFloat (dest, src))
-        | LIR.FloatToInt (dest, src) -> Ok (FloatToInt (dest, src))
+        | LIR.Int64ToFloat (dest, src) -> Ok (Int64ToFloat (dest, src))
+        | LIR.FloatToInt64 (dest, src) -> Ok (FloatToInt64 (dest, src))
         | LIR.GpToFp (dest, src) -> Ok (GpToFp (dest, src))
         | LIR.FpToGp (dest, src) -> Ok (FpToGp (dest, src))
         | LIR.HeapAlloc (dest, sizeBytes) -> Ok (HeapAlloc (dest, sizeBytes))
@@ -496,9 +496,9 @@ let private resolveProgram (initialState: PoolState) (functions: Function list) 
         | TailArgMoves moves ->
             resolveArgMoves state moves |> Result.map (fun (moves', st) -> (LIR.TailArgMoves moves', st))
         | FArgMoves moves -> Ok (LIR.FArgMoves moves, state)
-        | PrintInt reg -> Ok (LIR.PrintInt reg, state)
+        | PrintInt64 reg -> Ok (LIR.PrintInt64 reg, state)
         | PrintBool reg -> Ok (LIR.PrintBool reg, state)
-        | PrintIntNoNewline reg -> Ok (LIR.PrintIntNoNewline reg, state)
+        | PrintInt64NoNewline reg -> Ok (LIR.PrintInt64NoNewline reg, state)
         | PrintBoolNoNewline reg -> Ok (LIR.PrintBoolNoNewline reg, state)
         | PrintFloat freg -> Ok (LIR.PrintFloat freg, state)
         | PrintFloatNoNewline freg -> Ok (LIR.PrintFloatNoNewline freg, state)
@@ -527,8 +527,8 @@ let private resolveProgram (initialState: PoolState) (functions: Function list) 
         | FAbs (dest, src) -> Ok (LIR.FAbs (dest, src), state)
         | FSqrt (dest, src) -> Ok (LIR.FSqrt (dest, src), state)
         | FCmp (left, right) -> Ok (LIR.FCmp (left, right), state)
-        | IntToFloat (dest, src) -> Ok (LIR.IntToFloat (dest, src), state)
-        | FloatToInt (dest, src) -> Ok (LIR.FloatToInt (dest, src), state)
+        | Int64ToFloat (dest, src) -> Ok (LIR.Int64ToFloat (dest, src), state)
+        | FloatToInt64 (dest, src) -> Ok (LIR.FloatToInt64 (dest, src), state)
         | GpToFp (dest, src) -> Ok (LIR.GpToFp (dest, src), state)
         | FpToGp (dest, src) -> Ok (LIR.FpToGp (dest, src), state)
         | HeapAlloc (dest, sizeBytes) -> Ok (LIR.HeapAlloc (dest, sizeBytes), state)

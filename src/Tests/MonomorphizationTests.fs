@@ -20,7 +20,7 @@ let testPreservesTypeVarsInSpecialization () : TestResult =
     let program =
         Program [
             FunctionDef funcDef
-            Expression (TypeApp ("id", [TVar "t"], [IntLiteral 1L]))
+            Expression (TypeApp ("id", [TVar "t"], [Int64Literal 1L]))
         ]
 
     let (Program topLevels) = monomorphize program

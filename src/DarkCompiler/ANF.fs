@@ -139,8 +139,8 @@ type CExpr =
     | FloatSqrt of Atom                       // Square root: sqrt(x)
     | FloatAbs of Atom                        // Absolute value: |x|
     | FloatNeg of Atom                        // Negate: -x
-    | IntToFloat of Atom                      // Convert Int64 to Float64
-    | FloatToInt of Atom                      // Convert Float64 to Int64 (truncate)
+    | Int64ToFloat of Atom                    // Convert Int64 to Float64
+    | FloatToInt64 of Atom                    // Convert Float64 to Int64 (truncate)
     // Raw memory intrinsics (internal, for HAMT implementation)
     | RawAlloc of numBytes:Atom               // Allocate raw bytes (no header), returns RawPtr
     | RawFree of ptr:Atom                     // Manually free raw memory

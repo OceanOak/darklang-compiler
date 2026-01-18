@@ -14,7 +14,7 @@ let testFormatMIR () : TestResult =
     let exit = Label "exit"
     let entryBlock: MIR.BasicBlock = {
         Label = entry
-        Instrs = [ Mov (VReg 0, IntConst 1L, Some AST.TInt64) ]
+        Instrs = [ Mov (VReg 0, Int64Const 1L, Some AST.TInt64) ]
         Terminator = Jump exit
     }
     let exitBlock: MIR.BasicBlock = {

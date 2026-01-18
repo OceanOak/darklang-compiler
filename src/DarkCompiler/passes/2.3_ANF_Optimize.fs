@@ -221,8 +221,8 @@ let hasSideEffects (cexpr: CExpr) : bool =
     | FloatSqrt _ -> false  // Pure float operation
     | FloatAbs _ -> false   // Pure float operation
     | FloatNeg _ -> false   // Pure float operation
-    | IntToFloat _ -> false // Pure conversion
-    | FloatToInt _ -> false // Pure conversion
+    | Int64ToFloat _ -> false // Pure conversion
+    | FloatToInt64 _ -> false // Pure conversion
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 -> true   // Reads from OS random source
@@ -277,8 +277,8 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | FloatSqrt atom -> collectAtomUses atom
     | FloatAbs atom -> collectAtomUses atom
     | FloatNeg atom -> collectAtomUses atom
-    | IntToFloat atom -> collectAtomUses atom
-    | FloatToInt atom -> collectAtomUses atom
+    | Int64ToFloat atom -> collectAtomUses atom
+    | FloatToInt64 atom -> collectAtomUses atom
     | RefCountIncString str -> collectAtomUses str
     | RefCountDecString str -> collectAtomUses str
     | RandomInt64 -> Set.empty  // No atoms
@@ -338,8 +338,8 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | FloatSqrt atom -> FloatSqrt (s atom)
     | FloatAbs atom -> FloatAbs (s atom)
     | FloatNeg atom -> FloatNeg (s atom)
-    | IntToFloat atom -> IntToFloat (s atom)
-    | FloatToInt atom -> FloatToInt (s atom)
+    | Int64ToFloat atom -> Int64ToFloat (s atom)
+    | FloatToInt64 atom -> FloatToInt64 (s atom)
     | RefCountIncString str -> RefCountIncString (s str)
     | RefCountDecString str -> RefCountDecString (s str)
     | RandomInt64 -> RandomInt64

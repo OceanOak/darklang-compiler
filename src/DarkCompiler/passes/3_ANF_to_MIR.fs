@@ -163,8 +163,8 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.FloatSqrt atom -> maxTempIdInAtom atom
     | ANF.FloatAbs atom -> maxTempIdInAtom atom
     | ANF.FloatNeg atom -> maxTempIdInAtom atom
-    | ANF.IntToFloat atom -> maxTempIdInAtom atom
-    | ANF.FloatToInt atom -> maxTempIdInAtom atom
+    | ANF.Int64ToFloat atom -> maxTempIdInAtom atom
+    | ANF.FloatToInt64 atom -> maxTempIdInAtom atom
     | ANF.RefCountIncString str -> maxTempIdInAtom str
     | ANF.RefCountDecString str -> maxTempIdInAtom str
     | ANF.RandomInt64 -> -1  // No atoms, so no TempIds
@@ -218,7 +218,7 @@ let cexprProducesFloat (floatRegs: Set<int>) (returnTypeReg: Map<string, AST.Typ
         | ANF.Add | ANF.Sub | ANF.Mul | ANF.Div | ANF.Mod
         | ANF.Shl | ANF.Shr | ANF.BitAnd | ANF.BitOr | ANF.BitXor ->
             isFloatAtom floatRegs left || isFloatAtom floatRegs right
-    | ANF.FloatSqrt _ | ANF.FloatAbs _ | ANF.FloatNeg _ | ANF.IntToFloat _ -> true
+    | ANF.FloatSqrt _ | ANF.FloatAbs _ | ANF.FloatNeg _ | ANF.Int64ToFloat _ -> true
     | ANF.Atom atom -> isFloatAtom floatRegs atom
     | ANF.IfValue (_, thenAtom, _) ->
         // IfValue produces a float if either branch produces a float
@@ -347,8 +347,8 @@ let getPayloadSizeForAtom (builder: CFGBuilder) (atom: ANF.Atom) : Result<int, s
 /// Returns Error if float/string lookup fails (internal invariant violation)
 let atomToOperand (builder: CFGBuilder) (atom: ANF.Atom) : Result<MIR.Operand, string> =
     match atom with
-    | ANF.UnitLiteral -> Ok (MIR.IntConst 0L)  // Unit is represented as 0
-    | ANF.IntLiteral n -> Ok (MIR.IntConst (ANF.sizedIntToInt64 n))
+    | ANF.UnitLiteral -> Ok (MIR.Int64Const 0L)  // Unit is represented as 0
+    | ANF.IntLiteral n -> Ok (MIR.Int64Const (ANF.sizedIntToInt64 n))
     | ANF.BoolLiteral b -> Ok (MIR.BoolConst b)
     | ANF.FloatLiteral f -> Ok (MIR.FloatSymbol f)
     | ANF.StringLiteral s -> Ok (MIR.StringSymbol s)
@@ -389,7 +389,7 @@ let binOpType (builder: CFGBuilder) (leftAtom: ANF.Atom) (rightAtom: ANF.Atom) :
 /// Get the type of an MIR operand (for generating type-specific instructions)
 let operandType (builder: CFGBuilder) (operand: MIR.Operand) : AST.Type =
     match operand with
-    | MIR.IntConst _ -> AST.TInt64
+    | MIR.Int64Const _ -> AST.TInt64
     | MIR.BoolConst _ -> AST.TBool
     | MIR.FloatSymbol _ -> AST.TFloat64
     | MIR.StringSymbol _ -> AST.TString
@@ -433,8 +433,8 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.FloatSqrt _ -> "FloatSqrt"
     | ANF.FloatAbs _ -> "FloatAbs"
     | ANF.FloatNeg _ -> "FloatNeg"
-    | ANF.IntToFloat _ -> "IntToFloat"
-    | ANF.FloatToInt _ -> "FloatToInt"
+    | ANF.Int64ToFloat _ -> "Int64ToFloat"
+    | ANF.FloatToInt64 _ -> "FloatToInt64"
     | ANF.RawAlloc _ -> "RawAlloc"
     | ANF.RawFree _ -> "RawFree"
     | ANF.RawGet _ -> "RawGet"
@@ -547,7 +547,7 @@ let rec convertExpr
             }
             let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks; RegGen = regGen' }
             // Return dummy operand since this doesn't return
-            Ok (MIR.IntConst 0L, builder'))
+            Ok (MIR.Int64Const 0L, builder'))
 
     | ANF.Let (tempId, cexpr, rest) ->
         // Let binding: handle based on cexpr type
@@ -905,13 +905,13 @@ let rec convertExpr
                     destType := AST.TFloat64
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatNeg (destReg, op)])
-                | ANF.IntToFloat atom ->
+                | ANF.Int64ToFloat atom ->
                     destType := AST.TFloat64
                     atomToOperand builder atom
-                    |> Result.map (fun op -> [MIR.IntToFloat (destReg, op)])
-                | ANF.FloatToInt atom ->
+                    |> Result.map (fun op -> [MIR.Int64ToFloat (destReg, op)])
+                | ANF.FloatToInt64 atom ->
                     atomToOperand builder atom
-                    |> Result.map (fun op -> [MIR.FloatToInt (destReg, op)])
+                    |> Result.map (fun op -> [MIR.FloatToInt64 (destReg, op)])
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])
@@ -1158,7 +1158,7 @@ and convertExprToOperand
             let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks; RegGen = regGen' }
             // Return Some startLabel to tell the caller we created a block that's terminal
             // (jumps back to loop header). The caller should not try to patch this block.
-            Ok (MIR.IntConst 0L, Some startLabel, builder'))
+            Ok (MIR.Int64Const 0L, Some startLabel, builder'))
 
     | ANF.Let (tempId, cexpr, rest) ->
         let destReg = tempToVReg tempId
@@ -1507,13 +1507,13 @@ and convertExprToOperand
                     destType := AST.TFloat64
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatNeg (destReg, op)])
-                | ANF.IntToFloat atom ->
+                | ANF.Int64ToFloat atom ->
                     destType := AST.TFloat64
                     atomToOperand builder atom
-                    |> Result.map (fun op -> [MIR.IntToFloat (destReg, op)])
-                | ANF.FloatToInt atom ->
+                    |> Result.map (fun op -> [MIR.Int64ToFloat (destReg, op)])
+                | ANF.FloatToInt64 atom ->
                     atomToOperand builder atom
-                    |> Result.map (fun op -> [MIR.FloatToInt (destReg, op)])
+                    |> Result.map (fun op -> [MIR.FloatToInt64 (destReg, op)])
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])

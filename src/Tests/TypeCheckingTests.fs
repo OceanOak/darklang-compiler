@@ -26,33 +26,33 @@ let expectType (expr: Expr) (expectedType: Type) : TestResult =
         Error $"Type checking failed: {typeErrorToString err}"
 
 /// Test that integer literals have type TInt64
-let testIntLiteral () : TestResult =
-    expectType (IntLiteral 42L) TInt64
+let testInt64Literal () : TestResult =
+    expectType (Int64Literal 42L) TInt64
 
 /// Test that addition of integers has type TInt64
 let testAddition () : TestResult =
-    expectType (BinOp (Add, IntLiteral 2L, IntLiteral 3L)) TInt64
+    expectType (BinOp (Add, Int64Literal 2L, Int64Literal 3L)) TInt64
 
 /// Test that subtraction of integers has type TInt64
 let testSubtraction () : TestResult =
-    expectType (BinOp (Sub, IntLiteral 10L, IntLiteral 5L)) TInt64
+    expectType (BinOp (Sub, Int64Literal 10L, Int64Literal 5L)) TInt64
 
 /// Test that multiplication of integers has type TInt64
 let testMultiplication () : TestResult =
-    expectType (BinOp (Mul, IntLiteral 7L, IntLiteral 6L)) TInt64
+    expectType (BinOp (Mul, Int64Literal 7L, Int64Literal 6L)) TInt64
 
 /// Test that division of integers has type TInt64
 let testDivision () : TestResult =
-    expectType (BinOp (Div, IntLiteral 20L, IntLiteral 4L)) TInt64
+    expectType (BinOp (Div, Int64Literal 20L, Int64Literal 4L)) TInt64
 
 /// Test that negation of integers has type TInt64
 let testNegation () : TestResult =
-    expectType (UnaryOp (Neg, IntLiteral 42L)) TInt64
+    expectType (UnaryOp (Neg, Int64Literal 42L)) TInt64
 
 /// Test nested operations
 let testNestedOperations () : TestResult =
     // 2 + 3 * 4
-    let expr = BinOp (Add, IntLiteral 2L, BinOp (Mul, IntLiteral 3L, IntLiteral 4L))
+    let expr = BinOp (Add, Int64Literal 2L, BinOp (Mul, Int64Literal 3L, Int64Literal 4L))
     expectType expr TInt64
 
 /// Test complex nested expression
@@ -61,13 +61,13 @@ let testComplexExpression () : TestResult =
     let expr =
         BinOp (Div,
             BinOp (Mul,
-                BinOp (Add, IntLiteral 10L, IntLiteral 20L),
-                BinOp (Sub, IntLiteral 30L, IntLiteral 15L)),
-            IntLiteral 2L)
+                BinOp (Add, Int64Literal 10L, Int64Literal 20L),
+                BinOp (Sub, Int64Literal 30L, Int64Literal 15L)),
+            Int64Literal 2L)
     expectType expr TInt64
 
 let tests = [
-    ("Integer literal", testIntLiteral)
+    ("Integer literal", testInt64Literal)
     ("Addition", testAddition)
     ("Subtraction", testSubtraction)
     ("Multiplication", testMultiplication)

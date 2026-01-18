@@ -75,7 +75,7 @@ let generateLeakCounterDec (ctx: CodeGenContext) : ARM64.Instr list =
 let generateLeakCheckReport (ctx: CodeGenContext) : ARM64.Instr list =
     if ctx.Options.EnableLeakCheck then
         let prefix = Runtime.generatePrintCharsToStderr [byte 'l'; byte 'e'; byte 'a'; byte 'k'; byte 's'; byte ':'; byte ' ']
-        let printCount = Runtime.generatePrintIntToStderrNoExit ()
+        let printCount = Runtime.generatePrintInt64ToStderrNoExit ()
         let skipOffset = List.length prefix + 1 + List.length printCount + 1
         [
             ARM64.ADRP (ARM64.X17, leakCounterLabel)
@@ -829,14 +829,14 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             else
                 Runtime.generatePrintBytes ())
 
-    | LIR.PrintIntNoNewline reg ->
+    | LIR.PrintInt64NoNewline reg ->
         // Print integer without newline (for tuple elements)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
             if regARM64 <> ARM64.X0 then
-                [ARM64.MOV_reg (ARM64.X0, regARM64)] @ Runtime.generatePrintIntNoNewline ()
+                [ARM64.MOV_reg (ARM64.X0, regARM64)] @ Runtime.generatePrintInt64NoNewline ()
             else
-                Runtime.generatePrintIntNoNewline ())
+                Runtime.generatePrintInt64NoNewline ())
 
     | LIR.PrintBoolNoNewline reg ->
         // Print boolean without newline (for tuple elements)
@@ -886,7 +886,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             // Generate element print code based on type (uses X0 for value)
             let elemPrintCode =
                 match elemType with
-                | AST.TInt64 -> Runtime.generatePrintIntNoNewline ()
+                | AST.TInt64 -> Runtime.generatePrintInt64NoNewline ()
                 | AST.TBool -> Runtime.generatePrintBoolNoNewline ()
                 | AST.TFloat64 ->
                     // Need to move from X0 to D0 for float
@@ -935,14 +935,14 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                             let loadElem = [ARM64.LDR (ARM64.X0, ARM64.X21, int16 (i * 8))]
                             let printElem =
                                 match eType with
-                                | AST.TInt64 -> Runtime.generatePrintIntNoNewline ()
+                                | AST.TInt64 -> Runtime.generatePrintInt64NoNewline ()
                                 | AST.TBool -> Runtime.generatePrintBoolNoNewline ()
                                 | AST.TFloat64 ->
                                     [ARM64.FMOV_from_gp (ARM64.D0, ARM64.X0)] @ Runtime.generatePrintFloatNoNewline ()
                                 | AST.TString ->
                                     [ARM64.LDR (ARM64.X10, ARM64.X0, 0s); ARM64.ADD_imm (ARM64.X9, ARM64.X0, 8us)] @
                                     Runtime.generatePrintStringNoNewline ()
-                                | _ -> Runtime.generatePrintIntNoNewline ()
+                                | _ -> Runtime.generatePrintInt64NoNewline ()
                             let comma = if i < List.length elemTypes - 1 then printTupleCommaSpace else []
                             loadElem @ printElem @ comma
                         )
@@ -964,7 +964,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     moveTupleToX21 @ printOpenParen @ tupleElemInstrs @ printCloseParen
                 | _ ->
                     // For other types (nested lists, etc.), print as integer for now
-                    Runtime.generatePrintIntNoNewline ()
+                    Runtime.generatePrintInt64NoNewline ()
 
             let elemPrintLen = List.length elemPrintCode
 
@@ -1111,7 +1111,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                             let loadPayload = [ARM64.LDR (ARM64.X0, ARM64.X19, 8s)]  // Load payload from offset 8
                             let printPayloadValue =
                                 match pType with
-                                | AST.TInt64 -> Runtime.generatePrintIntNoNewline ()
+                                | AST.TInt64 -> Runtime.generatePrintInt64NoNewline ()
                                 | AST.TBool -> Runtime.generatePrintBoolNoNewline ()
                                 | AST.TFloat64 ->
                                     [ARM64.FMOV_from_gp (ARM64.D0, ARM64.X0)] @ Runtime.generatePrintFloatNoNewline ()
@@ -1210,7 +1210,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
                     let loadField = [ARM64.LDR (ARM64.X0, ARM64.X19, offset)]
                     let printValue =
                         match fieldType with
-                        | AST.TInt64 -> Runtime.generatePrintIntNoNewline ()
+                        | AST.TInt64 -> Runtime.generatePrintInt64NoNewline ()
                         | AST.TBool -> Runtime.generatePrintBoolNoNewline ()
                         | AST.TFloat64 ->
                             [ARM64.FMOV_from_gp (ARM64.D0, ARM64.X0)] @ Runtime.generatePrintFloatNoNewline ()
@@ -1754,15 +1754,15 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
 
             Ok allInstrs
 
-    | LIR.PrintInt reg ->
+    | LIR.PrintInt64 reg ->
         // Value to print should be in X0 (no exit)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
             if regARM64 <> ARM64.X0 then
                 // Move to X0 if not already there
-                [ARM64.MOV_reg (ARM64.X0, regARM64)] @ Runtime.generatePrintIntNoExit ()
+                [ARM64.MOV_reg (ARM64.X0, regARM64)] @ Runtime.generatePrintInt64NoExit ()
             else
-                Runtime.generatePrintIntNoExit ())
+                Runtime.generatePrintInt64NoExit ())
 
     | LIR.Exit ->
         // Exit program with code 0
@@ -1865,13 +1865,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
             lirFRegToARM64FReg right
             |> Result.map (fun rightReg -> [ARM64.FCMP (leftReg, rightReg)]))
 
-    | LIR.IntToFloat (dest, src) ->
+    | LIR.Int64ToFloat (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64.SCVTF (destReg, srcReg)]))
 
-    | LIR.FloatToInt (dest, src) ->
+    | LIR.FloatToInt64 (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src

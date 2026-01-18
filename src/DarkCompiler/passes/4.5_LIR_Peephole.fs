@@ -213,8 +213,8 @@ let isPureLoopInstr (instr: Instr) : bool =
     | FAbs _
     | FSqrt _
     | FCmp _
-    | IntToFloat _
-    | FloatToInt _
+    | Int64ToFloat _
+    | FloatToInt64 _
     | GpToFp _
     | FpToGp _ -> true
     | _ -> false

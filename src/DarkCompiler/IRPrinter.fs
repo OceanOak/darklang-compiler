@@ -120,10 +120,10 @@ let private prettyPrintANFCExpr = function
         $"FloatAbs({prettyPrintANFAtom atom})"
     | ANF.FloatNeg atom ->
         $"FloatNeg({prettyPrintANFAtom atom})"
-    | ANF.IntToFloat atom ->
-        $"IntToFloat({prettyPrintANFAtom atom})"
-    | ANF.FloatToInt atom ->
-        $"FloatToInt({prettyPrintANFAtom atom})"
+    | ANF.Int64ToFloat atom ->
+        $"Int64ToFloat({prettyPrintANFAtom atom})"
+    | ANF.FloatToInt64 atom ->
+        $"FloatToInt64({prettyPrintANFAtom atom})"
     | ANF.FloatToString atom ->
         $"FloatToString({prettyPrintANFAtom atom})"
     | ANF.RefCountIncString str ->
@@ -174,7 +174,7 @@ let formatANF (ANF.Program (functions, mainExpr)) : string =
 
 /// Pretty-print MIR operand
 let private prettyPrintMIROperand = function
-    | MIR.IntConst n -> string n
+    | MIR.Int64Const n -> string n
     | MIR.BoolConst b -> if b then "true" else "false"
     | MIR.FloatSymbol value -> $"float[{value}]"
     | MIR.StringSymbol value -> $"str[{value}]"
@@ -289,10 +289,10 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         $"{prettyPrintMIRVReg dest} <- FloatAbs({prettyPrintMIROperand src})"
     | MIR.FloatNeg (dest, src) ->
         $"{prettyPrintMIRVReg dest} <- FloatNeg({prettyPrintMIROperand src})"
-    | MIR.IntToFloat (dest, src) ->
-        $"{prettyPrintMIRVReg dest} <- IntToFloat({prettyPrintMIROperand src})"
-    | MIR.FloatToInt (dest, src) ->
-        $"{prettyPrintMIRVReg dest} <- FloatToInt({prettyPrintMIROperand src})"
+    | MIR.Int64ToFloat (dest, src) ->
+        $"{prettyPrintMIRVReg dest} <- Int64ToFloat({prettyPrintMIROperand src})"
+    | MIR.FloatToInt64 (dest, src) ->
+        $"{prettyPrintMIRVReg dest} <- FloatToInt64({prettyPrintMIROperand src})"
     | MIR.RawAlloc (dest, numBytes) ->
         $"{prettyPrintMIRVReg dest} <- RawAlloc({prettyPrintMIROperand numBytes})"
     | MIR.RawFree ptr ->
@@ -481,8 +481,8 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
     | LIR.ClosureCall (dest, closure, args) ->
         let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
         $"{prettyPrintLIRReg dest} <- ClosureCall({prettyPrintLIRReg closure}, [{argStr}])"
-    | LIR.PrintInt reg ->
-        $"PrintInt({prettyPrintLIRReg reg})"
+    | LIR.PrintInt64 reg ->
+        $"PrintInt64({prettyPrintLIRReg reg})"
     | LIR.PrintBool reg ->
         $"PrintBool({prettyPrintLIRReg reg})"
     | LIR.PrintFloat freg ->
@@ -494,7 +494,7 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"PrintChars(\"{s}\")"
     | LIR.PrintBytes reg ->
         $"PrintBytes({prettyPrintLIRReg reg})"
-    | LIR.PrintIntNoNewline reg ->
+    | LIR.PrintInt64NoNewline reg ->
         $"PrintIntNoNewline({prettyPrintLIRReg reg})"
     | LIR.PrintBoolNoNewline reg ->
         $"PrintBoolNoNewline({prettyPrintLIRReg reg})"
@@ -546,10 +546,10 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRFReg dest} <- FSqrt({prettyPrintLIRFReg src})"
     | LIR.FCmp (left, right) ->
         $"FCmp({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIR.IntToFloat (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- IntToFloat({prettyPrintLIRReg src})"
-    | LIR.FloatToInt (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- FloatToInt({prettyPrintLIRFReg src})"
+    | LIR.Int64ToFloat (dest, src) ->
+        $"{prettyPrintLIRFReg dest} <- Int64ToFloat({prettyPrintLIRReg src})"
+    | LIR.FloatToInt64 (dest, src) ->
+        $"{prettyPrintLIRReg dest} <- FloatToInt64({prettyPrintLIRFReg src})"
     | LIR.GpToFp (dest, src) ->
         $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
     | LIR.FpToGp (dest, src) ->
@@ -769,8 +769,8 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
     | LIRSymbolic.FArgMoves moves ->
         let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIRFReg src))
         sprintf "FArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIRSymbolic.PrintInt reg ->
-        $"PrintInt({prettyPrintLIRReg reg})"
+    | LIRSymbolic.PrintInt64 reg ->
+        $"PrintInt64({prettyPrintLIRReg reg})"
     | LIRSymbolic.PrintBool reg ->
         $"PrintBool({prettyPrintLIRReg reg})"
     | LIRSymbolic.PrintFloat freg ->
@@ -782,7 +782,7 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
         $"PrintChars(\"{s}\")"
     | LIRSymbolic.PrintBytes reg ->
         $"PrintBytes({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintIntNoNewline reg ->
+    | LIRSymbolic.PrintInt64NoNewline reg ->
         $"PrintIntNoNewline({prettyPrintLIRReg reg})"
     | LIRSymbolic.PrintBoolNoNewline reg ->
         $"PrintBoolNoNewline({prettyPrintLIRReg reg})"
@@ -817,10 +817,10 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
         $"{prettyPrintLIRFReg dest} <- FSqrt({prettyPrintLIRFReg src})"
     | LIRSymbolic.FCmp (left, right) ->
         $"FCmp({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.IntToFloat (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- IntToFloat({prettyPrintLIRReg src})"
-    | LIRSymbolic.FloatToInt (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- FloatToInt({prettyPrintLIRFReg src})"
+    | LIRSymbolic.Int64ToFloat (dest, src) ->
+        $"{prettyPrintLIRFReg dest} <- Int64ToFloat({prettyPrintLIRReg src})"
+    | LIRSymbolic.FloatToInt64 (dest, src) ->
+        $"{prettyPrintLIRReg dest} <- FloatToInt64({prettyPrintLIRFReg src})"
     | LIRSymbolic.GpToFp (dest, src) ->
         $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
     | LIRSymbolic.FpToGp (dest, src) ->

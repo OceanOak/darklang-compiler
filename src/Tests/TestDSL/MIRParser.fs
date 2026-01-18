@@ -31,7 +31,7 @@ let parseOperand (text: string) : Result<Operand, string> =
     | Error _ ->
         // Try parsing as integer
         match Int64.TryParse(text) with
-        | true, n -> Ok (IntConst n)
+        | true, n -> Ok (Int64Const n)
         | false, _ -> Error $"Invalid operand '{text}' (expected number or register)"
 
 /// Parse binary operator

@@ -105,9 +105,9 @@ type Instr =
     | ArgMoves of (PhysReg * Operand) list       // Move arguments to X0-X7 (parallel move - loads clobbered from SaveRegs stack)
     | TailArgMoves of (PhysReg * Operand) list   // Move arguments for tail calls (uses temp registers, no SaveRegs)
     | FArgMoves of (PhysFPReg * FReg) list       // Move float arguments to D0-D7
-    | PrintInt of Reg                           // Print integer register to stdout (no exit)
+    | PrintInt64 of Reg                         // Print integer register to stdout (no exit)
     | PrintBool of Reg                          // Print boolean register to stdout (no exit)
-    | PrintIntNoNewline of Reg                  // Print integer without newline (for tuple elements)
+    | PrintInt64NoNewline of Reg                // Print integer without newline (for tuple elements)
     | PrintBoolNoNewline of Reg                 // Print boolean without newline (for tuple elements)
     | PrintFloat of FReg                        // Print float from FP register to stdout
     | PrintFloatNoNewline of FReg               // Print float without newline (for tuple/list elements)
@@ -131,8 +131,8 @@ type Instr =
     | FAbs of dest:FReg * src:FReg              // Absolute value
     | FSqrt of dest:FReg * src:FReg             // Square root
     | FCmp of left:FReg * right:FReg            // Compare FP values (sets flags)
-    | IntToFloat of dest:FReg * src:Reg         // Convert Int64 to Float64 (SCVTF)
-    | FloatToInt of dest:Reg * src:FReg         // Convert Float64 to Int64 (FCVTZS)
+    | Int64ToFloat of dest:FReg * src:Reg       // Convert Int64 to Float64 (SCVTF)
+    | FloatToInt64 of dest:Reg * src:FReg      // Convert Float64 to Int64 (FCVTZS)
     | GpToFp of dest:FReg * src:Reg             // Move bits from GP to FP register (for float in tuple)
     | FpToGp of dest:Reg * src:FReg             // Move bits from FP to GP register (for float in list)
     // Heap operations for tuples and other compound types

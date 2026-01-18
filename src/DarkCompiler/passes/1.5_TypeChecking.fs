@@ -197,7 +197,7 @@ let buildSubstitution (typeParams: string list) (typeArgs: Type list) : Result<S
 /// This is used to propagate concrete types through nested TypeApp nodes
 let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
     match expr with
-    | UnitLiteral | IntLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UnitLiteral | Int64Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
     | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ -> expr
     | BinOp (op, left, right) ->
@@ -308,7 +308,7 @@ let typesEqual (aliasReg: AliasRegistry) (t1: Type) (t2: Type) : bool =
 /// bound: Set of names that are currently in scope (not free)
 let rec collectFreeVars (expr: Expr) (bound: Set<string>) : Set<string> =
     match expr with
-    | UnitLiteral | IntLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UnitLiteral | Int64Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
     | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ ->
         Set.empty
@@ -392,7 +392,7 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
     | PUnit -> Set.empty
     | PWildcard -> Set.empty
     | PVar name -> Set.singleton name
-    | PLiteral _
+    | PInt64 _
     | PInt8Literal _
     | PInt16Literal _
     | PInt32Literal _
@@ -702,7 +702,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             Error (TypeMismatch (expected, TUnit, "unit literal"))
         | _ -> Ok (TUnit, expr)
 
-    | IntLiteral _ ->
+    | Int64Literal _ ->
         match expectedType with
         | Some TInt64 | None -> Ok (TInt64, expr)
         | Some other ->
@@ -1850,7 +1850,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | TUnit -> Ok []
                     | _ -> Error (GenericError "Unit pattern can only match unit type")
                 | PWildcard -> Ok []
-                | PLiteral _ -> ensureLiteralType TInt64
+                | PInt64 _ -> ensureLiteralType TInt64
                 | PInt8Literal _ -> ensureLiteralType TInt8
                 | PInt16Literal _ -> ensureLiteralType TInt16
                 | PInt32Literal _ -> ensureLiteralType TInt32

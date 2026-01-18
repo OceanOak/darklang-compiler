@@ -52,7 +52,7 @@ _start:
     RestoreRegs([], [])
     v10012 <- Mov(Reg X0)
     X0 <- Mov(Reg v10012)
-    PrintInt(X0)
+    PrintInt64(X0)
     X0 <- Mov(Reg v10012)
     Ret
 
@@ -156,6 +156,6 @@ _start:
     RestoreRegs([], [])
     v10058 <- Mov(Reg X0)
     X0 <- Mov(Reg v10058)
-    PrintInt(X0)
+    PrintInt64(X0)
     X0 <- Mov(Reg v10058)
     Ret

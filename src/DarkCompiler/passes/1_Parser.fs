@@ -11,7 +11,7 @@
 // - Parentheses for explicit grouping
 //
 // Example:
-//   "2 + 3 * 4" → BinOp(Add, IntLiteral(2), BinOp(Mul, IntLiteral(3), IntLiteral(4)))
+//   "2 + 3 * 4" → BinOp(Add, Int64Literal(2), BinOp(Mul, Int64Literal(3), Int64Literal(4)))
 
 module Parser
 
@@ -24,7 +24,7 @@ type InterpPart =
 
 /// Token types for lexer
 and Token =
-    | TInt of int64         // Default integer (Int64)
+    | TInt64 of int64       // Default integer (Int64)
     | TInt8 of sbyte        // 8-bit signed: 1y
     | TInt16 of int16       // 16-bit signed: 1s
     | TInt32 of int32       // 32-bit signed: 1l
@@ -269,16 +269,16 @@ let lex (input: string) : Result<Token list, string> =
                 | 'L' :: rest ->
                     // Int64 explicit suffix: 1L (same as default)
                     match System.Int64.TryParse(numStr) with
-                    | (true, value) -> lexHelper rest (TInt value :: acc)
+                    | (true, value) -> lexHelper rest (TInt64 value :: acc)
                     | (false, _) ->
                         if numStr = "9223372036854775808" then
-                            lexHelper rest (TInt System.Int64.MinValue :: acc)
+                            lexHelper rest (TInt64 System.Int64.MinValue :: acc)
                         else
                             Error $"Integer literal too large: {numStr}"
                 | _ ->
                     // No suffix: default Int64
                     match System.Int64.TryParse(numStr) with
-                    | (true, value) -> lexHelper afterInt (TInt value :: acc)
+                    | (true, value) -> lexHelper afterInt (TInt64 value :: acc)
                     | (false, _) ->
                         // Check for INT64_MIN special case: "9223372036854775808"
                         // This value is > INT64_MAX but equals |INT64_MIN|
@@ -286,7 +286,7 @@ let lex (input: string) : Result<Token list, string> =
                         if numStr = "9223372036854775808" then
                             // Return INT64_MIN directly - this is a special sentinel
                             // The parser will only accept this when it's negated
-                            lexHelper afterInt (TInt System.Int64.MinValue :: acc)
+                            lexHelper afterInt (TInt64 System.Int64.MinValue :: acc)
                         else
                             Error $"Integer literal too large: {numStr}"
         | '$' :: '"' :: rest ->
@@ -1032,9 +1032,9 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
     | TUnderscore :: rest ->
         // Wildcard pattern: _
         Ok (PWildcard, rest)
-    | TInt n :: rest ->
+    | TInt64 n :: rest ->
         // Integer literal pattern (Int64)
-        Ok (PLiteral n, rest)
+        Ok (PInt64 n, rest)
     | TInt8 n :: rest ->
         Ok (PInt8Literal n, rest)
     | TInt16 n :: rest ->
@@ -1049,9 +1049,9 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         Ok (PUInt32Literal n, rest)
     | TUInt64 n :: rest ->
         Ok (PUInt64Literal n, rest)
-    | TMinus :: TInt n :: rest ->
+    | TMinus :: TInt64 n :: rest ->
         // Negative integer literal pattern
-        Ok (PLiteral (-n), rest)
+        Ok (PInt64 (-n), rest)
     | TMinus :: TInt8 n :: rest ->
         Ok (PInt8Literal (sbyte (-int n)), rest)
     | TMinus :: TInt16 n :: rest ->
@@ -1488,7 +1488,7 @@ let parse (tokens: Token list) : Result<Program, string> =
     and parseUnary (toks: Token list) : Result<Expr * Token list, string> =
         match toks with
         // Negative integer literals - parse directly as negative values
-        | TMinus :: TInt n :: rest -> Ok (IntLiteral (-n), rest)
+        | TMinus :: TInt64 n :: rest -> Ok (Int64Literal (-n), rest)
         | TMinus :: TInt8 n :: rest -> Ok (Int8Literal (-n), rest)
         | TMinus :: TInt16 n :: rest -> Ok (Int16Literal (-n), rest)
         | TMinus :: TInt32 n :: rest -> Ok (Int32Literal (-n), rest)
@@ -1526,7 +1526,7 @@ let parse (tokens: Token list) : Result<Program, string> =
 
     and parsePrimaryBase (toks: Token list) : Result<Expr * Token list, string> =
         match toks with
-        | TInt n :: rest -> Ok (IntLiteral n, rest)
+        | TInt64 n :: rest -> Ok (Int64Literal n, rest)
         | TInt8 n :: rest -> Ok (Int8Literal n, rest)
         | TInt16 n :: rest -> Ok (Int16Literal n, rest)
         | TInt32 n :: rest -> Ok (Int32Literal n, rest)
@@ -1900,7 +1900,7 @@ let parse (tokens: Token list) : Result<Program, string> =
     and parsePostfix (expr: Expr) (toks: Token list) : Result<Expr * Token list, string> =
         // Handle postfix operations: tuple access (.0, .1), field access (.fieldName), or function application (args)
         match toks with
-        | TDot :: TInt index :: rest ->
+        | TDot :: TInt64 index :: rest ->
             if index < 0L then
                 Error "Tuple index cannot be negative"
             else
@@ -2015,7 +2015,7 @@ let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
         Result.bind (fun () -> validatePattern tail) headResult
     | PUnit
     | PWildcard
-    | PLiteral _
+    | PInt64 _
     | PInt8Literal _
     | PInt16Literal _
     | PInt32Literal _
@@ -2102,7 +2102,7 @@ let rec private validateExpr (expr: Expr) : Result<unit, string> =
         validateNoInternalIdentifier funcName
         |> Result.bind (fun () ->
             captures |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
-    | UnitLiteral | IntLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UnitLiteral | Int64Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
     | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ -> Ok ()
 

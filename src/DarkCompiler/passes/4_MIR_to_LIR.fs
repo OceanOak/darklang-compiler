@@ -25,7 +25,7 @@ let vregToLIRFReg (MIR.VReg id) : LIR.FReg = LIR.FVirtual id
 /// Convert MIR.Operand to LIRSymbolic.Operand
 let convertOperand (operand: MIR.Operand) : LIRSymbolic.Operand =
     match operand with
-    | MIR.IntConst n -> LIRSymbolic.Imm n
+    | MIR.Int64Const n -> LIRSymbolic.Imm n
     | MIR.BoolConst b -> LIRSymbolic.Imm (if b then 1L else 0L)  // Booleans as 0/1
     | MIR.FloatSymbol value -> LIRSymbolic.FloatSymbol value
     | MIR.StringSymbol value -> LIRSymbolic.StringSymbol value
@@ -54,7 +54,7 @@ let rec applyTypeSubst (typeParams: string list) (typeArgs: AST.Type list) (typ:
 /// Ensure operand is in a register (may need to load immediate)
 let ensureInRegister (operand: MIR.Operand) (tempReg: LIRSymbolic.Reg) : Result<LIRSymbolic.Instr list * LIRSymbolic.Reg, string> =
     match operand with
-    | MIR.IntConst n ->
+    | MIR.Int64Const n ->
         // Need to load constant into a temporary register
         Ok ([LIRSymbolic.Mov (tempReg, LIRSymbolic.Imm n)], tempReg)
     | MIR.BoolConst b ->
@@ -82,7 +82,7 @@ let ensureInFRegister (operand: MIR.Operand) (tempFReg: LIR.FReg) : Result<LIRSy
     | MIR.Register vreg ->
         // Float value already in a virtual register - treat it as FVirtual
         Ok ([], vregToLIRFReg vreg)
-    | MIR.IntConst _ | MIR.BoolConst _ ->
+    | MIR.Int64Const _ | MIR.BoolConst _ ->
         Error "Internal error: Cannot use integer/boolean as float operand"
     | MIR.StringSymbol _ ->
         Error "Internal error: Cannot use string as float operand"
@@ -369,7 +369,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 | Ok (leftInstrs, leftReg) ->
                     // Check if shift amount is a constant (0-63)
                     match right with
-                    | MIR.IntConst n when n >= 0L && n < 64L ->
+                    | MIR.Int64Const n when n >= 0L && n < 64L ->
                         Ok (leftInstrs @ [LIRSymbolic.Lsl_imm (lirDest, leftReg, int n)] @ truncInstrs)
                     | _ ->
                         match ensureInRegister right (LIR.Virtual 1001) with
@@ -383,7 +383,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 | Ok (leftInstrs, leftReg) ->
                     // Check if shift amount is a constant (0-63)
                     match right with
-                    | MIR.IntConst n when n >= 0L && n < 64L ->
+                    | MIR.Int64Const n when n >= 0L && n < 64L ->
                         Ok (leftInstrs @ [LIRSymbolic.Lsr_imm (lirDest, leftReg, int n)] @ truncInstrs)
                     | _ ->
                         match ensureInRegister right (LIR.Virtual 1001) with
@@ -399,7 +399,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                     // These are values like 0x1, 0x3, 0x7, 0xF, etc. (ones run from bit 0)
                     let isPowerOf2Minus1 n = n > 0L && (n &&& (n + 1L)) = 0L
                     match right with
-                    | MIR.IntConst n when isPowerOf2Minus1 n ->
+                    | MIR.Int64Const n when isPowerOf2Minus1 n ->
                         Ok (leftInstrs @ [LIRSymbolic.And_imm (lirDest, leftReg, n)] @ truncInstrs)
                     | _ ->
                         match ensureInRegister right (LIR.Virtual 1001) with
@@ -891,7 +891,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 match lirSrc with
                 | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
                 | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
+            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)])
         | AST.TFloat64 ->
             // Float needs to be in D0 for printing
             match src with
@@ -933,7 +933,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
                 | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 ->
                     [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.PrintInt (LIR.Physical LIR.X0)]
+                     LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)]
                 | AST.TBool ->
                     [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
                      LIRSymbolic.PrintBool (LIR.Physical LIR.X0)]
@@ -945,7 +945,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 | _ ->
                     // Other types: print address for now
                     [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.PrintInt (LIR.Physical LIR.X0)]
+                     LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)]
 
             // Generate instructions to print each element
             // Use no-newline versions for tuple elements
@@ -961,7 +961,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                         match elemType with
                         | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
                         | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 ->
-                            [LIRSymbolic.PrintIntNoNewline (LIR.Physical LIR.X0)]
+                            [LIRSymbolic.PrintInt64NoNewline (LIR.Physical LIR.X0)]
                         | AST.TBool ->
                             [LIRSymbolic.PrintBoolNoNewline (LIR.Physical LIR.X0)]
                         | AST.TFloat64 ->
@@ -1016,7 +1016,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                     match lirSrc with
                     | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
                     | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-                Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
+                Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)])
 
         | AST.TRecord (typeName, _) ->
             // Print record with field names and values
@@ -1040,7 +1040,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 match lirSrc with
                 | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
                 | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
+            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)])
         | AST.TUnit ->
             // Unit: print "()" with newline
             Ok [LIRSymbolic.PrintChars [byte '('; byte ')'; byte '\n']]
@@ -1051,7 +1051,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 match lirSrc with
                 | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
                 | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
+            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)])
         | AST.TRawPtr ->
             // Raw pointer: print address
             let lirSrc = convertOperand src
@@ -1059,7 +1059,7 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
                 match lirSrc with
                 | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
                 | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt (LIR.Physical LIR.X0)])
+            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)])
         | AST.TBytes ->
             // Bytes: print as "<N bytes>" where N is the length
             let lirSrc = convertOperand src
@@ -1231,21 +1231,21 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
         | Ok (srcInstrs, srcFReg) ->
             Ok (srcInstrs @ [LIRSymbolic.FNeg (lirFDest, srcFReg)])
 
-    | MIR.IntToFloat (dest, src) ->
+    | MIR.Int64ToFloat (dest, src) ->
         let lirFDest = vregToLIRFReg dest
         // src is an integer operand that needs to be in an integer register
         match ensureInRegister src (LIR.Virtual 1000) with
         | Error err -> Error err
         | Ok (srcInstrs, srcReg) ->
-            Ok (srcInstrs @ [LIRSymbolic.IntToFloat (lirFDest, srcReg)])
+            Ok (srcInstrs @ [LIRSymbolic.Int64ToFloat (lirFDest, srcReg)])
 
-    | MIR.FloatToInt (dest, src) ->
+    | MIR.FloatToInt64 (dest, src) ->
         let lirDest = vregToLIRReg dest
         // src is a float operand that needs to be in a float register
         match ensureInFRegister src (LIR.FVirtual 1000) with
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg) ->
-            Ok (srcInstrs @ [LIRSymbolic.FloatToInt (lirDest, srcFReg)])
+            Ok (srcInstrs @ [LIRSymbolic.FloatToInt64 (lirDest, srcFReg)])
 
     | MIR.RefCountIncString str ->
         let lirStr = convertOperand str

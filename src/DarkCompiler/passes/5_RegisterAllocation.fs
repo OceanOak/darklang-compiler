@@ -155,8 +155,8 @@ let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
         let closureVReg = regToVReg closure |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
         Set.ofList (closureVReg @ argsVRegs)
-    | LIRSymbolic.PrintInt reg | LIRSymbolic.PrintBool reg
-    | LIRSymbolic.PrintIntNoNewline reg | LIRSymbolic.PrintBoolNoNewline reg
+    | LIRSymbolic.PrintInt64 reg | LIRSymbolic.PrintBool reg
+    | LIRSymbolic.PrintInt64NoNewline reg | LIRSymbolic.PrintBoolNoNewline reg
     | LIRSymbolic.PrintHeapStringNoNewline reg | LIRSymbolic.PrintList (reg, _)
     | LIRSymbolic.PrintSum (reg, _) | LIRSymbolic.PrintRecord (reg, _, _) ->
         regToVReg reg |> Option.toList |> Set.ofList
@@ -228,8 +228,8 @@ let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
         let o = regToVReg byteOffset |> Option.toList
         let v = regToVReg value |> Option.toList
         Set.ofList (p @ o @ v)
-    // IntToFloat uses an integer source register
-    | LIRSymbolic.IntToFloat (_, src) ->
+    // Int64ToFloat uses an integer source register
+    | LIRSymbolic.Int64ToFloat (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
     | LIRSymbolic.RefCountIncString str ->
         operandToVReg str |> Option.toList |> Set.ofList
@@ -291,8 +291,8 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.RawFree _ -> None
     | LIRSymbolic.RawSet _ -> None
     | LIRSymbolic.RawSetByte _ -> None
-    // FloatToInt defines an integer destination register
-    | LIRSymbolic.FloatToInt (dest, _) -> regToVReg dest
+    // FloatToInt64 defines an integer destination register
+    | LIRSymbolic.FloatToInt64 (dest, _) -> regToVReg dest
     // FpToGp defines an integer destination register
     | LIRSymbolic.FpToGp (dest, _) -> regToVReg dest
     | LIRSymbolic.RefCountIncString _ -> None
@@ -324,7 +324,7 @@ let getUsedFVRegs (instr: LIRSymbolic.Instr) : Set<int> =
         fregToId src |> Option.toList |> Set.ofList
     | LIRSymbolic.FCmp (left, right) ->
         [fregToId left; fregToId right] |> List.choose id |> Set.ofList
-    | LIRSymbolic.FloatToInt (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIRSymbolic.FloatToInt64 (_, src) -> fregToId src |> Option.toList |> Set.ofList
     | LIRSymbolic.FpToGp (_, src) -> fregToId src |> Option.toList |> Set.ofList
     | LIRSymbolic.PrintFloat freg | LIRSymbolic.PrintFloatNoNewline freg ->
         fregToId freg |> Option.toList |> Set.ofList
@@ -349,7 +349,7 @@ let getDefinedFVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.FMul (dest, _, _) | LIRSymbolic.FDiv (dest, _, _) -> fregToId dest
     | LIRSymbolic.FNeg (dest, _) | LIRSymbolic.FAbs (dest, _) | LIRSymbolic.FSqrt (dest, _) -> fregToId dest
     | LIRSymbolic.FLoad (dest, _) -> fregToId dest
-    | LIRSymbolic.IntToFloat (dest, _) -> fregToId dest
+    | LIRSymbolic.Int64ToFloat (dest, _) -> fregToId dest
     | LIRSymbolic.GpToFp (dest, _) -> fregToId dest
     | LIRSymbolic.FPhi (dest, _) -> fregToId dest
     | _ -> None
@@ -1252,8 +1252,8 @@ let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIR
     | LIRSymbolic.FSqrt (dest, src) -> LIRSymbolic.FSqrt (applyF dest, applyF src)
     | LIRSymbolic.FCmp (left, right) -> LIRSymbolic.FCmp (applyF left, applyF right)
     | LIRSymbolic.FLoad (dest, value) -> LIRSymbolic.FLoad (applyF dest, value)
-    | LIRSymbolic.IntToFloat (dest, src) -> LIRSymbolic.IntToFloat (applyF dest, src)
-    | LIRSymbolic.FloatToInt (dest, src) -> LIRSymbolic.FloatToInt (dest, applyF src)
+    | LIRSymbolic.Int64ToFloat (dest, src) -> LIRSymbolic.Int64ToFloat (applyF dest, src)
+    | LIRSymbolic.FloatToInt64 (dest, src) -> LIRSymbolic.FloatToInt64 (dest, applyF src)
     | LIRSymbolic.FpToGp (dest, src) -> LIRSymbolic.FpToGp (dest, applyF src)
     | LIRSymbolic.GpToFp (dest, src) -> LIRSymbolic.GpToFp (applyF dest, src)
     | LIRSymbolic.PrintFloat freg -> LIRSymbolic.PrintFloat (applyF freg)
@@ -1861,17 +1861,17 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
         // Pass through unchanged for now - float argument moves use physical registers only
         [LIRSymbolic.FArgMoves moves]
 
-    | LIRSymbolic.PrintInt reg ->
+    | LIRSymbolic.PrintInt64 reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintInt regFinal]
+        regLoads @ [LIRSymbolic.PrintInt64 regFinal]
 
     | LIRSymbolic.PrintBool reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
         regLoads @ [LIRSymbolic.PrintBool regFinal]
 
-    | LIRSymbolic.PrintIntNoNewline reg ->
+    | LIRSymbolic.PrintInt64NoNewline reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintIntNoNewline regFinal]
+        regLoads @ [LIRSymbolic.PrintInt64NoNewline regFinal]
 
     | LIRSymbolic.PrintBoolNoNewline reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
@@ -1913,18 +1913,18 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
     | LIRSymbolic.FAbs (dest, src) -> [LIRSymbolic.FAbs (dest, src)]
     | LIRSymbolic.FSqrt (dest, src) -> [LIRSymbolic.FSqrt (dest, src)]
     | LIRSymbolic.FCmp (left, right) -> [LIRSymbolic.FCmp (left, right)]
-    // IntToFloat: src is integer register, dest is FP register
-    | LIRSymbolic.IntToFloat (dest, src) ->
+    // Int64ToFloat: src is integer register, dest is FP register
+    | LIRSymbolic.Int64ToFloat (dest, src) ->
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        srcLoads @ [LIRSymbolic.IntToFloat (dest, srcReg)]
+        srcLoads @ [LIRSymbolic.Int64ToFloat (dest, srcReg)]
     // GpToFp: move bits from GP register to FP register (src is integer, dest is FP)
     | LIRSymbolic.GpToFp (dest, src) ->
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
         srcLoads @ [LIRSymbolic.GpToFp (dest, srcReg)]
-    // FloatToInt: src is FP register, dest is integer register
-    | LIRSymbolic.FloatToInt (dest, src) ->
+    // FloatToInt64: src is FP register, dest is integer register
+    | LIRSymbolic.FloatToInt64 (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let instr = LIRSymbolic.FloatToInt (destReg, src)
+        let instr = LIRSymbolic.FloatToInt64 (destReg, src)
         let storeInstrs =
             match destAlloc with
             | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]

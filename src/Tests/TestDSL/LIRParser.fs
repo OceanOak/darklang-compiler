@@ -87,12 +87,12 @@ let parseInstructionOrTerminator (lineNum: int) (line: string) : Result<Choice<I
         Ok (Choice2Of2 Ret)
     else
 
-    // Try PrintInt: "PrintInt(X0)" or "PrintInt(v0)"
-    let printIntMatch = Regex.Match(line, @"^PrintInt\((.+)\)$")
+    // Try PrintInt64: "PrintInt64(X0)" or "PrintInt64(v0)"
+    let printIntMatch = Regex.Match(line, @"^PrintInt64\((.+)\)$")
     if printIntMatch.Success then
         match parseRegister printIntMatch.Groups.[1].Value with
         | Error e -> Error $"Line {lineNum}: {e}"
-        | Ok reg -> Ok (Choice1Of2 (PrintInt reg))
+        | Ok reg -> Ok (Choice1Of2 (PrintInt64 reg))
     else
 
     // Try PrintBool: "PrintBool(X0)" or "PrintBool(v0)"

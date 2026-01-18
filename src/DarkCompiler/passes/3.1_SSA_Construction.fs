@@ -214,8 +214,8 @@ let getBlockDefs (block: BasicBlock) : Set<VReg> =
         | FloatSqrt (dest, _) -> Set.add dest defs
         | FloatAbs (dest, _) -> Set.add dest defs
         | FloatNeg (dest, _) -> Set.add dest defs
-        | IntToFloat (dest, _) -> Set.add dest defs
-        | FloatToInt (dest, _) -> Set.add dest defs
+        | Int64ToFloat (dest, _) -> Set.add dest defs
+        | FloatToInt64 (dest, _) -> Set.add dest defs
         | RefCountIncString _ -> defs
         | RefCountDecString _ -> defs
         | RandomInt64 dest -> Set.add dest defs
@@ -309,8 +309,8 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
             | FloatSqrt (_, src) -> Set.union uses (getOperandUses src)
             | FloatAbs (_, src) -> Set.union uses (getOperandUses src)
             | FloatNeg (_, src) -> Set.union uses (getOperandUses src)
-            | IntToFloat (_, src) -> Set.union uses (getOperandUses src)
-            | FloatToInt (_, src) -> Set.union uses (getOperandUses src)
+            | Int64ToFloat (_, src) -> Set.union uses (getOperandUses src)
+            | FloatToInt64 (_, src) -> Set.union uses (getOperandUses src)
             | RefCountIncString str -> Set.union uses (getOperandUses str)
             | RefCountDecString str -> Set.union uses (getOperandUses str)
             | RandomInt64 _ -> uses  // No operand uses
@@ -761,15 +761,15 @@ let renameInstr (state: RenamingState) (instr: Instr) : Instr * RenamingState =
         let (_, newDest, state') = newVersion state dest
         (FloatNeg (newDest, src'), state')
 
-    | IntToFloat (dest, src) ->
+    | Int64ToFloat (dest, src) ->
         let src' = renameOperand state src
         let (_, newDest, state') = newVersion state dest
-        (IntToFloat (newDest, src'), state')
+        (Int64ToFloat (newDest, src'), state')
 
-    | FloatToInt (dest, src) ->
+    | FloatToInt64 (dest, src) ->
         let src' = renameOperand state src
         let (_, newDest, state') = newVersion state dest
-        (FloatToInt (newDest, src'), state')
+        (FloatToInt64 (newDest, src'), state')
 
     | RefCountIncString str ->
         let str' = renameOperand state str

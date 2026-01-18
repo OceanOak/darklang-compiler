@@ -72,8 +72,8 @@ let hasSideEffects (instr: Instr) : bool =
     | FloatSqrt _ -> false  // Pure float operation
     | FloatAbs _ -> false   // Pure float operation
     | FloatNeg _ -> false   // Pure float operation
-    | IntToFloat _ -> false // Pure conversion
-    | FloatToInt _ -> false // Pure conversion
+    | Int64ToFloat _ -> false // Pure conversion
+    | FloatToInt64 _ -> false // Pure conversion
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 _ -> true  // Syscall
@@ -111,8 +111,8 @@ let getInstrDest (instr: Instr) : VReg option =
     | FloatSqrt (dest, _) -> Some dest
     | FloatAbs (dest, _) -> Some dest
     | FloatNeg (dest, _) -> Some dest
-    | IntToFloat (dest, _) -> Some dest
-    | FloatToInt (dest, _) -> Some dest
+    | Int64ToFloat (dest, _) -> Some dest
+    | FloatToInt64 (dest, _) -> Some dest
     | HeapStore _ -> None
     | RefCountInc _ -> None
     | RefCountDec _ -> None
@@ -169,8 +169,8 @@ let getInstrUses (instr: Instr) : Set<VReg> =
     | FloatSqrt (_, src) -> fromOperand src
     | FloatAbs (_, src) -> fromOperand src
     | FloatNeg (_, src) -> fromOperand src
-    | IntToFloat (_, src) -> fromOperand src
-    | FloatToInt (_, src) -> fromOperand src
+    | Int64ToFloat (_, src) -> fromOperand src
+    | FloatToInt64 (_, src) -> fromOperand src
     | RefCountIncString str -> fromOperand str
     | RefCountDecString str -> fromOperand str
     | RandomInt64 _ -> Set.empty  // No operand uses
@@ -275,8 +275,8 @@ let isHoistableInstr (instr: Instr) : bool =
     | FloatSqrt _ -> true
     | FloatAbs _ -> true
     | FloatNeg _ -> true
-    | IntToFloat _ -> true
-    | FloatToInt _ -> true
+    | Int64ToFloat _ -> true
+    | FloatToInt64 _ -> true
     | _ -> false
 
 /// Apply loop-invariant code motion for loops with a simple preheader
@@ -438,8 +438,8 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 | FloatSqrt (dest, src) -> FloatSqrt (dest, rewriteOperand src)
                 | FloatAbs (dest, src) -> FloatAbs (dest, rewriteOperand src)
                 | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)
-                | IntToFloat (dest, src) -> IntToFloat (dest, rewriteOperand src)
-                | FloatToInt (dest, src) -> FloatToInt (dest, rewriteOperand src)
+                | Int64ToFloat (dest, src) -> Int64ToFloat (dest, rewriteOperand src)
+                | FloatToInt64 (dest, src) -> FloatToInt64 (dest, rewriteOperand src)
                 | _ -> instr
 
             let rec findHoistable invariants hoistMap =
@@ -573,10 +573,10 @@ let buildCopyMap (cfg: CFG) : CopyMap =
                 // Don't add if dest is a phi destination or already in map
                 if Set.contains dest phiDests || Map.containsKey dest m then m
                 else Map.add dest (Register src) m
-            | Mov (dest, (IntConst _ as src), vt) ->
+            | Mov (dest, (Int64Const _ as src), vt) ->
                 // Constant propagation: track constant moves too
                 // Only propagate if this is for integer/bool types, not for heap types like strings
-                // This prevents incorrectly propagating IntConst 0L to string variables
+                // This prevents incorrectly propagating Int64Const 0L to string variables
                 let isIntOrBoolType =
                     match vt with
                     | Some AST.TInt64 | Some AST.TInt32 | Some AST.TInt16 | Some AST.TInt8
@@ -678,8 +678,8 @@ let propagateCopyInstr (copies: CopyMap) (instr: Instr) : Instr =
     | FloatSqrt (dest, src) -> FloatSqrt (dest, p src)
     | FloatAbs (dest, src) -> FloatAbs (dest, p src)
     | FloatNeg (dest, src) -> FloatNeg (dest, p src)
-    | IntToFloat (dest, src) -> IntToFloat (dest, p src)
-    | FloatToInt (dest, src) -> FloatToInt (dest, p src)
+    | Int64ToFloat (dest, src) -> Int64ToFloat (dest, p src)
+    | FloatToInt64 (dest, src) -> FloatToInt64 (dest, p src)
     | RefCountIncString str -> RefCountIncString (p str)
     | RefCountDecString str -> RefCountDecString (p str)
     | RandomInt64 dest -> RandomInt64 dest
@@ -862,61 +862,61 @@ let euclideanMod (a: int64) (b: int64) : int64 =
 let tryFoldBinOp (op: BinOp) (left: Operand) (right: Operand) (opType: AST.Type) : Operand option =
     match op, left, right with
     // Integer arithmetic - apply truncation for proper overflow behavior
-    | Add, IntConst a, IntConst b -> Some (IntConst (truncateToType (a + b) opType))
-    | Sub, IntConst a, IntConst b -> Some (IntConst (truncateToType (a - b) opType))
-    | Mul, IntConst a, IntConst b -> Some (IntConst (truncateToType (a * b) opType))
+    | Add, Int64Const a, Int64Const b -> Some (Int64Const (truncateToType (a + b) opType))
+    | Sub, Int64Const a, Int64Const b -> Some (Int64Const (truncateToType (a - b) opType))
+    | Mul, Int64Const a, Int64Const b -> Some (Int64Const (truncateToType (a * b) opType))
     // Division: avoid divide by zero and INT64_MIN / -1 overflow
-    | Div, IntConst a, IntConst b when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (IntConst (truncateToType (a / b) opType))
-    | Mod, IntConst a, IntConst b when b <> 0L -> Some (IntConst (truncateToType (euclideanMod a b) opType))
+    | Div, Int64Const a, Int64Const b when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (Int64Const (truncateToType (a / b) opType))
+    | Mod, Int64Const a, Int64Const b when b <> 0L -> Some (Int64Const (truncateToType (euclideanMod a b) opType))
 
     // Comparisons
-    | Eq, IntConst a, IntConst b -> Some (BoolConst (a = b))
-    | Neq, IntConst a, IntConst b -> Some (BoolConst (a <> b))
-    | Lt, IntConst a, IntConst b -> Some (BoolConst (a < b))
-    | Gt, IntConst a, IntConst b -> Some (BoolConst (a > b))
-    | Lte, IntConst a, IntConst b -> Some (BoolConst (a <= b))
-    | Gte, IntConst a, IntConst b -> Some (BoolConst (a >= b))
+    | Eq, Int64Const a, Int64Const b -> Some (BoolConst (a = b))
+    | Neq, Int64Const a, Int64Const b -> Some (BoolConst (a <> b))
+    | Lt, Int64Const a, Int64Const b -> Some (BoolConst (a < b))
+    | Gt, Int64Const a, Int64Const b -> Some (BoolConst (a > b))
+    | Lte, Int64Const a, Int64Const b -> Some (BoolConst (a <= b))
+    | Gte, Int64Const a, Int64Const b -> Some (BoolConst (a >= b))
 
     // Boolean operations
     | And, BoolConst a, BoolConst b -> Some (BoolConst (a && b))
     | Or, BoolConst a, BoolConst b -> Some (BoolConst (a || b))
 
     // Algebraic identities
-    | Add, IntConst 0L, x -> Some x
-    | Add, x, IntConst 0L -> Some x
-    | Sub, x, IntConst 0L -> Some x
-    | Sub, x, y when x = y -> Some (IntConst 0L)  // x - x = 0
-    | Mul, IntConst 1L, x -> Some x
-    | Mul, x, IntConst 1L -> Some x
-    | Mul, IntConst 0L, _ -> Some (IntConst 0L)
-    | Mul, _, IntConst 0L -> Some (IntConst 0L)
-    | Mul, IntConst -1L, x -> None  // Could transform to Neg, but need instruction change
-    | Mul, x, IntConst -1L -> None  // Could transform to Neg
-    | Div, x, IntConst 1L -> Some x
-    | Div, x, y when x = y && y <> IntConst 0L -> Some (IntConst 1L)  // x / x = 1 (if x != 0)
-    | Mod, _, IntConst 1L -> Some (IntConst 0L)  // x % 1 = 0
-    | Mod, x, y when x = y && y <> IntConst 0L -> Some (IntConst 0L)  // x % x = 0 (if x != 0)
+    | Add, Int64Const 0L, x -> Some x
+    | Add, x, Int64Const 0L -> Some x
+    | Sub, x, Int64Const 0L -> Some x
+    | Sub, x, y when x = y -> Some (Int64Const 0L)  // x - x = 0
+    | Mul, Int64Const 1L, x -> Some x
+    | Mul, x, Int64Const 1L -> Some x
+    | Mul, Int64Const 0L, _ -> Some (Int64Const 0L)
+    | Mul, _, Int64Const 0L -> Some (Int64Const 0L)
+    | Mul, Int64Const -1L, x -> None  // Could transform to Neg, but need instruction change
+    | Mul, x, Int64Const -1L -> None  // Could transform to Neg
+    | Div, x, Int64Const 1L -> Some x
+    | Div, x, y when x = y && y <> Int64Const 0L -> Some (Int64Const 1L)  // x / x = 1 (if x != 0)
+    | Mod, _, Int64Const 1L -> Some (Int64Const 0L)  // x % 1 = 0
+    | Mod, x, y when x = y && y <> Int64Const 0L -> Some (Int64Const 0L)  // x % x = 0 (if x != 0)
 
     // Bitwise identities
-    | BitAnd, IntConst 0L, _ -> Some (IntConst 0L)
-    | BitAnd, _, IntConst 0L -> Some (IntConst 0L)
-    | BitAnd, IntConst -1L, x -> Some x  // -1 = all bits set
-    | BitAnd, x, IntConst -1L -> Some x
+    | BitAnd, Int64Const 0L, _ -> Some (Int64Const 0L)
+    | BitAnd, _, Int64Const 0L -> Some (Int64Const 0L)
+    | BitAnd, Int64Const -1L, x -> Some x  // -1 = all bits set
+    | BitAnd, x, Int64Const -1L -> Some x
     | BitAnd, x, y when x = y -> Some x  // x & x = x
-    | BitOr, IntConst 0L, x -> Some x
-    | BitOr, x, IntConst 0L -> Some x
-    | BitOr, IntConst -1L, _ -> Some (IntConst -1L)
-    | BitOr, _, IntConst -1L -> Some (IntConst -1L)
+    | BitOr, Int64Const 0L, x -> Some x
+    | BitOr, x, Int64Const 0L -> Some x
+    | BitOr, Int64Const -1L, _ -> Some (Int64Const -1L)
+    | BitOr, _, Int64Const -1L -> Some (Int64Const -1L)
     | BitOr, x, y when x = y -> Some x  // x | x = x
-    | BitXor, IntConst 0L, x -> Some x
-    | BitXor, x, IntConst 0L -> Some x
-    | BitXor, x, y when x = y -> Some (IntConst 0L)  // x ^ x = 0
+    | BitXor, Int64Const 0L, x -> Some x
+    | BitXor, x, Int64Const 0L -> Some x
+    | BitXor, x, y when x = y -> Some (Int64Const 0L)  // x ^ x = 0
 
     // Shift identities
-    | Shl, x, IntConst 0L -> Some x  // x << 0 = x
-    | Shr, x, IntConst 0L -> Some x  // x >> 0 = x
-    | Shl, IntConst 0L, _ -> Some (IntConst 0L)  // 0 << n = 0
-    | Shr, IntConst 0L, _ -> Some (IntConst 0L)  // 0 >> n = 0
+    | Shl, x, Int64Const 0L -> Some x  // x << 0 = x
+    | Shr, x, Int64Const 0L -> Some x  // x >> 0 = x
+    | Shl, Int64Const 0L, _ -> Some (Int64Const 0L)  // 0 << n = 0
+    | Shr, Int64Const 0L, _ -> Some (Int64Const 0L)  // 0 >> n = 0
 
     // Boolean short-circuit
     | And, BoolConst false, _ -> Some (BoolConst false)
@@ -1007,7 +1007,7 @@ let applyCSE (cfg: CFG) : CFG * bool =
 /// Try to fold a unary operation on a constant
 let tryFoldUnaryOp (op: UnaryOp) (src: Operand) : Operand option =
     match op, src with
-    | Neg, IntConst n -> Some (IntConst (-n))
+    | Neg, Int64Const n -> Some (Int64Const (-n))
     | Not, BoolConst b -> Some (BoolConst (not b))
     | _ -> None
 
@@ -1052,7 +1052,7 @@ let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
         if options.EnableCopyProp then applyCopyPropagation cfg2 else (cfg2, false)
     // Run constant folding again after copy propagation
     // This catches cases like: v1 = -127; v2 = v1 - 2
-    // After copy prop: v2 = IntConst(-127) - IntConst(2) -> can fold
+    // After copy prop: v2 = Int64Const(-127) - Int64Const(2) -> can fold
     let (cfg4, changed4) =
         if options.EnableConstFolding then applyConstantFolding cfg3 else (cfg3, false)
     let (cfg5, changed5) =

@@ -9,7 +9,7 @@
 // - Uses VarGen for generating fresh temporary variable names
 //
 // Example:
-//   BinOp(Add, IntLiteral(2), BinOp(Mul, IntLiteral(3), IntLiteral(4)))
+//   BinOp(Add, Int64Literal(2), BinOp(Mul, Int64Literal(3), Int64Literal(4)))
 //   →
 //   let tmp0 = 3; let tmp1 = 4; let tmp2 = tmp0 * tmp1;
 //   let tmp3 = 2; let tmp4 = tmp3 + tmp2; return tmp4
@@ -60,7 +60,7 @@ let rec typeToString (ty: AST.Type) : string =
 /// Convert a literal pattern into an ANF sized integer
 let patternLiteralToSizedInt (pattern: AST.Pattern) : ANF.SizedInt option =
     match pattern with
-    | AST.PLiteral n -> Some (ANF.Int64 n)
+    | AST.PInt64 n -> Some (ANF.Int64 n)
     | AST.PInt8Literal n -> Some (ANF.Int8 n)
     | AST.PInt16Literal n -> Some (ANF.Int16 n)
     | AST.PInt32Literal n -> Some (ANF.Int32 n)
@@ -101,9 +101,9 @@ let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr optio
     | "Stdlib.Float.negate", [xAtom] ->
         Some (ANF.FloatNeg xAtom)
     | "Stdlib.Float.toInt", [xAtom] ->
-        Some (ANF.FloatToInt xAtom)
+        Some (ANF.FloatToInt64 xAtom)
     | "Stdlib.Int64.toFloat", [xAtom] ->
-        Some (ANF.IntToFloat xAtom)
+        Some (ANF.Int64ToFloat xAtom)
     | "Stdlib.Float64.toString", [xAtom] ->
         Some (ANF.FloatToString xAtom)
     | _ -> None
@@ -511,7 +511,7 @@ let rec applySubstToType (subst: Substitution) (typ: AST.Type) : AST.Type =
 /// Apply a substitution to an expression, replacing type variables in type annotations
 let rec applySubstToExpr (subst: Substitution) (expr: AST.Expr) : AST.Expr =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ | AST.Var _ | AST.FuncRef _ | AST.Closure _ ->
         expr  // No types to substitute in literals, variables, function references, and closures
@@ -633,7 +633,7 @@ let specializeFunctionCached (cache: SpecializationCache) (funcDef: AST.Function
 /// Collect all TypeApp call sites from an expression
 let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ | AST.Var _ | AST.FuncRef _ | AST.Closure _ ->
         Set.empty
@@ -705,7 +705,7 @@ let collectTypeAppsFromFunc (funcDef: AST.FunctionDef) : Set<SpecKey> =
 /// Replace TypeApp with Call using specialized name in an expression
 let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ | AST.Var _ | AST.FuncRef _ | AST.Closure _ ->
         expr
@@ -781,7 +781,7 @@ type LambdaEnv = Map<string, AST.Expr>
 /// Check if a variable occurs in an expression (for dead code elimination)
 let rec varOccursInExpr (name: string) (expr: AST.Expr) : bool =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ -> false
     | AST.Var n -> n = name
@@ -832,7 +832,7 @@ let rec varOccursInExpr (name: string) (expr: AST.Expr) : bool =
 /// lambdaEnv: maps variable names to their lambda expressions
 let rec inlineLambdas (expr: AST.Expr) (lambdaEnv: LambdaEnv) : AST.Expr =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ ->
         expr
@@ -972,7 +972,7 @@ type LiftState = {
 /// Collect free variables in an expression (variables not bound by let or lambda parameters)
 let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ -> Set.empty
     | AST.Var name -> if Set.contains name bound then Set.empty else Set.singleton name
@@ -1055,7 +1055,7 @@ let rec simpleInferType
         match pattern with
         | AST.PVar name -> Map.ofList [(name, scrutType)]
         | AST.PWildcard -> Map.empty
-        | AST.PLiteral _
+        | AST.PInt64 _
         | AST.PInt8Literal _
         | AST.PInt16Literal _
         | AST.PInt32Literal _
@@ -1110,7 +1110,7 @@ let rec simpleInferType
             | _ -> Map.empty
 
     match expr with
-    | AST.IntLiteral _ -> Some AST.TInt64
+    | AST.Int64Literal _ -> Some AST.TInt64
     | AST.Int8Literal _ -> Some AST.TInt8
     | AST.Int16Literal _ -> Some AST.TInt16
     | AST.Int32Literal _ -> Some AST.TInt32
@@ -1268,7 +1268,7 @@ let inferLambdaReturnType (body: AST.Expr) (state: LiftState) : Result<AST.Type,
 /// Lift lambdas in an expression, returning (transformed expr, new state)
 let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr * LiftState, string> =
     match expr with
-    | AST.UnitLiteral | AST.IntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
     | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _
     | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ | AST.Var _ | AST.FuncRef _ | AST.Closure _ ->
         Ok (expr, state)
@@ -2304,7 +2304,7 @@ let rec generateStructuralEquality
 let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (funcReg: FunctionRegistry) (moduleRegistry: AST.ModuleRegistry) : Result<AST.Type, string> =
     match expr with
     | AST.UnitLiteral -> Ok AST.TUnit
-    | AST.IntLiteral _ -> Ok AST.TInt64
+    | AST.Int64Literal _ -> Ok AST.TInt64
     | AST.Int8Literal _ -> Ok AST.TInt8
     | AST.Int16Literal _ -> Ok AST.TInt16
     | AST.Int32Literal _ -> Ok AST.TInt32
@@ -2489,7 +2489,7 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             match pattern with
             | AST.PVar name -> Map.ofList [(name, scrutType)]
             | AST.PWildcard -> Map.empty
-            | AST.PLiteral _
+            | AST.PInt64 _
             | AST.PInt8Literal _
             | AST.PInt16Literal _
             | AST.PInt32Literal _
@@ -2663,7 +2663,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         // Unit literal becomes return of unit value (represented as 0)
         Ok (ANF.Return (ANF.UnitLiteral), varGen)
 
-    | AST.IntLiteral n ->
+    | AST.Int64Literal n ->
         // Integer literal (default Int64)
         Ok (ANF.Return (ANF.IntLiteral (ANF.Int64 n)), varGen)
 
@@ -2808,12 +2808,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         (exprWithBindings, varGen2))
             | AST.TInt64 ->
                 match innerExpr with
-                | AST.IntLiteral n when n = System.Int64.MinValue ->
+                | AST.Int64Literal n when n = System.Int64.MinValue ->
                     // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
                     // When negated, it should remain INT64_MIN (mathematically correct)
                     Ok (ANF.Return (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue)), varGen)
                 | _ ->
-                    let zeroExpr = AST.IntLiteral 0L
+                    let zeroExpr = AST.Int64Literal 0L
                     toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | AST.TInt32 ->
                 let zeroExpr = AST.Int32Literal 0l
@@ -3524,7 +3524,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 match pattern with
                 | AST.PUnit -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PWildcard -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
-                | AST.PLiteral _
+                | AST.PInt64 _
                 | AST.PInt8Literal _
                 | AST.PInt16Literal _
                 | AST.PInt32Literal _
@@ -3592,7 +3592,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // sourceType is the type of the source being matched, used to get correct element types
                     let rec collectPatternBindings (pat: AST.Pattern) (sourceAtom: ANF.Atom) (sourceType: AST.Type) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                         match pat with
-                        | AST.PLiteral _
+                        | AST.PInt64 _
                         | AST.PInt8Literal _
                         | AST.PInt16Literal _
                         | AST.PInt32Literal _
@@ -3805,7 +3805,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectRecordBindings rest restTypes newEnv (binding :: bindings) vg1 (fieldIdx + 1)
                             | AST.PWildcard ->
                                 collectRecordBindings rest restTypes env bindings vg1 (fieldIdx + 1)
-                            | AST.PLiteral _
+                            | AST.PInt64 _
                             | AST.PInt8Literal _
                             | AST.PInt16Literal _
                             | AST.PInt32Literal _
@@ -3880,7 +3880,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [elemBinding]) vg1
                             | AST.PWildcard ->
                                 collectTupleBindings tupRest tupleAtom tupleType (idx + 1) env bindings vg1
-                            | AST.PLiteral _
+                            | AST.PInt64 _
                             | AST.PInt8Literal _
                             | AST.PInt16Literal _
                             | AST.PInt32Literal _
@@ -4054,7 +4054,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                             collectTupleBindings tupRest types tupleAtom (idx + 1) newEnv (elemBinding :: rawElemBinding :: bindings) vg1'
                                         | AST.PWildcard ->
                                             collectTupleBindings tupRest types tupleAtom (idx + 1) env (rawElemBinding :: bindings) vg1
-                                        | AST.PLiteral _
+                                        | AST.PInt64 _
                                         | AST.PInt8Literal _
                                         | AST.PInt16Literal _
                                         | AST.PInt32Literal _
@@ -4071,7 +4071,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectTupleBindings innerPatterns tupleElemTypes (ANF.Var headVar) 0 env allBaseBindings vg2'
                                 |> Result.bind (fun (newEnv, newBindings, vg3) ->
                                     collectListConsBindings rest (ANF.Var tailVar) newEnv newBindings vg3)
-                            | AST.PLiteral _
+                            | AST.PInt64 _
                             | AST.PInt8Literal _
                             | AST.PInt16Literal _
                             | AST.PInt32Literal _
@@ -4119,7 +4119,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 // sourceType is the type of the source being matched
                 let rec collectBindings (pat: AST.Pattern) (sourceAtom: ANF.Atom) (sourceType: AST.Type) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                     match pat with
-                    | AST.PLiteral _
+                    | AST.PInt64 _
                     | AST.PInt8Literal _
                     | AST.PInt16Literal _
                     | AST.PInt32Literal _
@@ -4294,7 +4294,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 | AST.PUnit -> Ok None  // Unit pattern always matches unit type
                 | AST.PWildcard -> Ok None
                 | AST.PVar _ -> Ok None
-                | AST.PLiteral n ->
+                | AST.PInt64 n ->
                     let (cmpVar, vg1) = ANF.freshVar vg
                     let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.Int64 n))
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
@@ -4557,7 +4557,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [rawElemBinding; elemBinding]) vg1'
                             | AST.PWildcard ->
                                 extractTupleBindings tupRest tupleAtom tupleType (idx + 1) env (bindings @ [rawElemBinding]) vg1
-                            | AST.PLiteral _
+                            | AST.PInt64 _
                             | AST.PInt8Literal _
                             | AST.PInt16Literal _
                             | AST.PInt32Literal _
@@ -4642,7 +4642,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let withBindings = wrapBindings newBindings bodyExpr
                                 let ifExpr = ANF.If (ANF.Var checkVar, withBindings, elseExpr)
                                 (ANF.Let (tagVar, tagExpr, ANF.Let (checkVar, checkExpr, ifExpr)), vg7)))
-                    | AST.PLiteral n -> compileLiteralPattern (ANF.Int64 n)
+                    | AST.PInt64 n -> compileLiteralPattern (ANF.Int64 n)
                     | AST.PInt8Literal n -> compileLiteralPattern (ANF.Int8 n)
                     | AST.PInt16Literal n -> compileLiteralPattern (ANF.Int16 n)
                     | AST.PInt32Literal n -> compileLiteralPattern (ANF.Int32 n)
@@ -4712,7 +4712,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractTupleBindings innerPatterns (ANF.Var valueVar) elemType 0 env newBindings vg2'  // Pass tuple type
                                 |> Result.bind (fun (tupEnv, tupBindings, vg3) ->
                                     extractElements rest (idx + 1) tupEnv tupBindings litChecks vg3)
-                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt64 _ as pat)
                             | (AST.PInt8Literal _ as pat)
                             | (AST.PInt16Literal _ as pat)
                             | (AST.PInt32Literal _ as pat)
@@ -4907,7 +4907,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PTuple innerPatterns ->
                                 extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
                                 |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt64 _ as pat)
                             | (AST.PInt8Literal _ as pat)
                             | (AST.PInt16Literal _ as pat)
                             | (AST.PInt32Literal _ as pat)
@@ -4984,7 +4984,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PTuple innerPatterns ->
                                 extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
                                 |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt64 _ as pat)
                             | (AST.PInt8Literal _ as pat)
                             | (AST.PInt16Literal _ as pat)
                             | (AST.PInt32Literal _ as pat)
@@ -5081,7 +5081,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractElements rest tailResultVar newEnv newBindings vg2
                             | AST.PWildcard ->
                                 extractElements rest tailResultVar env newBindings vg2
-                            | AST.PLiteral _
+                            | AST.PInt64 _
                             | AST.PInt8Literal _
                             | AST.PInt16Literal _
                             | AST.PInt32Literal _
@@ -5442,7 +5442,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
     | AST.UnitLiteral ->
         Ok (ANF.UnitLiteral, [], varGen)
 
-    | AST.IntLiteral n ->
+    | AST.Int64Literal n ->
         Ok (ANF.IntLiteral (ANF.Int64 n), [], varGen)
 
     | AST.Int8Literal n ->
@@ -5560,12 +5560,12 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         (ANF.Var tempVar, allBindings, varGen2))
             | AST.TInt64 ->
                 match innerExpr with
-                | AST.IntLiteral n when n = System.Int64.MinValue ->
+                | AST.Int64Literal n when n = System.Int64.MinValue ->
                     // The lexer stores INT64_MIN as a sentinel for "9223372036854775808"
                     // When negated, it should remain INT64_MIN (mathematically correct)
                     Ok (ANF.IntLiteral (ANF.Int64 System.Int64.MinValue), [], varGen)
                 | _ ->
-                    let zeroExpr = AST.IntLiteral 0L
+                    let zeroExpr = AST.Int64Literal 0L
                     toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | AST.TInt32 ->
                 let zeroExpr = AST.Int32Literal 0l

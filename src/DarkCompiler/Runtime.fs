@@ -4,7 +4,7 @@
 // instruction sequences (e.g., I/O, string conversion).
 //
 // Current functions:
-// - generatePrintInt: Convert int64 in X0 to ASCII and print to stdout
+// - generatePrintInt64: Convert int64 in X0 to ASCII and print to stdout
 //
 // Platform-specific:
 // - Uses Platform.fs to get correct syscall numbers for the target OS
@@ -33,7 +33,7 @@ module Runtime
 /// - X16: Syscall number
 ///
 /// Uses platform-specific syscall numbers from Platform module
-let generatePrintInt () : ARM64.Instr list =
+let generatePrintInt64 () : ARM64.Instr list =
     // Platform detection at runtime - if it fails, default to Linux (most common for development)
     let os =
         match Platform.detectOS () with
@@ -254,7 +254,7 @@ let generatePrintString (stringLen: int) : ARM64.Instr list =
 /// Register usage:
 /// - D0: Input float value
 /// - D1-D3: Working FP registers
-/// - X0-X6: Working integer registers (same as PrintInt)
+/// - X0-X6: Working integer registers (same as PrintInt64)
 /// - X7: Loop counter for fractional digits
 /// - X16/X8: Syscall number (platform-specific)
 let generatePrintFloat () : ARM64.Instr list =
@@ -408,8 +408,8 @@ let generateExit () : ARM64.Instr list =
     ]
 
 /// Generate ARM64 instructions to print int64 in X0 to stdout with newline (NO EXIT)
-/// Same as generatePrintInt but returns instead of exiting
-let generatePrintIntNoExit () : ARM64.Instr list =
+/// Same as generatePrintInt64 but returns instead of exiting
+let generatePrintInt64NoExit () : ARM64.Instr list =
     let os =
         match Platform.detectOS () with
         | Ok platform -> platform
@@ -476,8 +476,8 @@ let generatePrintIntNoExit () : ARM64.Instr list =
     ]
 
 /// Generate ARM64 instructions to print int64 in X0 to stderr with newline (NO EXIT)
-/// Same as generatePrintIntNoExit but writes to file descriptor 2
-let generatePrintIntToStderrNoExit () : ARM64.Instr list =
+/// Same as generatePrintInt64NoExit but writes to file descriptor 2
+let generatePrintInt64ToStderrNoExit () : ARM64.Instr list =
     let os =
         match Platform.detectOS () with
         | Ok platform -> platform
@@ -605,7 +605,7 @@ let generatePrintBoolNoExit () : ARM64.Instr list =
 
 /// Generate ARM64 instructions to print int64 in X0 to stdout WITHOUT newline
 /// For use in tuple/list element printing
-let generatePrintIntNoNewline () : ARM64.Instr list =
+let generatePrintInt64NoNewline () : ARM64.Instr list =
     let os =
         match Platform.detectOS () with
         | Ok platform -> platform
@@ -946,7 +946,7 @@ let generatePrintBytes () : ARM64.Instr list =
         // Load length from [X19] into X0
         ARM64.LDR (ARM64.X0, ARM64.X19, 0s)
     ]
-    @ generatePrintIntNoNewline ()
+    @ generatePrintInt64NoNewline ()
     @ [
         // Print " bytes>\n" (8 characters)
         ARM64.SUB_imm (ARM64.SP, ARM64.SP, 16us)
