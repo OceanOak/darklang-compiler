@@ -292,3 +292,46 @@ let a = 5 in let b = 5 in (a <= b) = true
 // More complex: comparison result used in further computation
 let x = 1 in let y = 2 in if x <= y then 100 else 200 = 100
 let x = 3 in let y = 2 in if x <= y then 100 else 200 = 200
+
+// ===================================================================
+// LICM Copy Propagation (MIR Level)
+// ===================================================================
+// These tests verify that the optimizer correctly handles copy propagation
+// in loops (LICM). The buildCopyMapForLicm function tracks copies like
+// Mov(dest, Register src) where dest <> src, enabling loop-invariant
+// code motion to hoist computations that depend on copied values.
+
+// Test with copy before loop-invariant computation in recursive function
+// The copy 'alias = x' creates a Mov, and 'alias * alias' is loop-invariant
+def licmCopy(x: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let alias = x in
+    let sq = alias * alias in
+    licmCopy(x, n - 1, acc + sq)
+
+licmCopy(3, 5, 0) = 45
+licmCopy(4, 3, 0) = 48
+
+// Chain of copies that LICM needs to resolve
+def licmCopyChain(x: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let a = x in
+    let b = a in
+    let c = b in
+    let product = c * c in
+    licmCopyChain(x, n - 1, acc + product)
+
+licmCopyChain(2, 4, 0) = 16
+licmCopyChain(5, 3, 0) = 75
+
+// Copy used in comparison (loop condition optimization)
+def licmCopyCmp(x: Int64, limit: Int64, n: Int64) : Int64 =
+  if n <= 0 then 0
+  else
+    let xCopy = x in
+    if xCopy > limit then n else licmCopyCmp(x, limit, n - 1)
+
+licmCopyCmp(10, 5, 3) = 3
+licmCopyCmp(3, 5, 3) = 0
