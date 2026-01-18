@@ -523,3 +523,27 @@ match [(100, 10), (200, 20), (300, 30)] with | [(a, b), (c, d), (e, f)] -> b - d
 
 // 2-element list of 3-tuples - verify third element uses correct index
 match [(1000, 100, 10), (500, 50, 5)] with | [(a, b, c), (d, e, f)] -> c - f | _ -> 999 = 5
+
+// =====================================================
+// Wildcard in tuple within multi-element list patterns (kills mutation #88)
+// =====================================================
+// Tests that wildcard patterns inside tuples correctly increment the index
+// when processing tuple patterns inside multi-element list patterns via
+// compileListPatternWithChecks -> extractElements -> extractTupleBindings.
+// The PWildcard case must increment idx + 1 to extract subsequent elements.
+// If idx + 1 were changed to idx - 1, the element after the wildcard would
+// be extracted from the wrong tuple index.
+
+// 2-element list of 2-tuples with wildcard in first tuple
+// b should be 37 (tuple index 1 of first list element)
+// With mutation: b would read from index -1 or 0, getting wrong value
+match [(100, 37), (50, 13)] with | [(_, b), (c, d)] -> b - d | _ -> 999 = 24
+
+// 2-element list of 3-tuples with wildcard, then extraction
+// c should be 10 (tuple index 2), f should be 5 (tuple index 2)
+// With mutation: c would read from wrong index after the wildcard
+match [(1000, 100, 10), (500, 50, 5)] with | [(_, b, c), (d, e, f)] -> c - f | _ -> 999 = 5
+
+// Multiple wildcards in tuples within multi-element list
+// Verifies index increments correctly through multiple wildcards
+match [(1000, 100, 10, 1), (500, 50, 5, 0)] with | [(_, _, c, d), (_, _, g, h)] -> c - g + d - h | _ -> 999 = 6
