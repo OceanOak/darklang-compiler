@@ -489,3 +489,17 @@ match [(100, 10, 7)] with | [(a, b, c)] -> a - b - c | _ -> 999 = 83
 
 // Four-element tuple - verify third and fourth element indices are correct
 match [(1000, 100, 10, 1)] with | [(a, b, c, d)] -> a - b - c - d | _ -> 999 = 889
+
+// =====================================================
+// Wildcard inside tuple inside list cons pattern (kills mutation #78)
+// =====================================================
+// Tests that wildcards inside tuple patterns correctly increment the index
+// when extracting subsequent elements in collectTupleBindings within collectListConsBindings.
+// This is specifically for list cons patterns like [(a, _, c), ...rest] where the head
+// element is a tuple containing wildcards.
+// If idx + 1 were changed to idx - 1 in the PWildcard case inside the nested collectTupleBindings
+// (within collectListConsBindings), the element after the wildcard would be extracted from wrong index.
+match [(100, 50, 7), (1, 2, 3)] with | [(a, _, c), ...rest] -> a - c | [] -> 999 = 93
+
+// Verify with more elements after the wildcard in tuple inside cons pattern
+match [(1000, 500, 100, 10), (1, 2, 3, 4)] with | [(a, _, c, d), ...rest] -> a - c - d | [] -> 999 = 890
