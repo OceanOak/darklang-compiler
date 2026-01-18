@@ -32,6 +32,8 @@ converts from compiler syntax to interpreter syntax.
 | List separators | `[1, 2]` | `[1L; 2L]` | Comma to semicolon |
 | Function calls | `Mod.fn(a, b)` | `Stdlib.Mod.fn a b` | Parentheses to spaces |
 | Lambdas | `(x: T) => body` | `fun x -> body` | Different arrow syntax |
+| Type parameters | `List<Int64>` | Different syntax | Generic type notation |
+| String interpolation | `$"Hello {x}"` | Not supported | Interpolated strings |
 
 ### 1.1 Integer Literals
 
@@ -185,13 +187,6 @@ These tests check error conditions or output that can't be validated with the in
 
 Features in compiler not in interpreter. These are skipped during validation.
 
-### Syntax Features
-
-| Feature | Skip Reason | Example | Description |
-|---------|-------------|---------|-------------|
-| String interpolation | `syntax:string_interpolation` | `$"Hello {x}"` | Not supported in Darklang |
-| Type parameters | `syntax:type_parameter` | `List<Int64>` | Different generic syntax in Darklang |
-
 ### Internal Features
 
 | Feature | Skip Reason | Description |
@@ -211,16 +206,7 @@ Features in compiler not in interpreter. These are skipped during validation.
 
 ---
 
-## 5. Custom Types and User Functions
-
-| Skip Reason | Description |
-|-------------|-------------|
-| `run:custom_type:*` | User-defined types, enums, and records (PascalCase identifiers not in stdlib) |
-| `run:user_function:*` | Functions defined outside the test (not in preamble) |
-
----
-
-## 6. Missing from Interpreter
+## 5. Missing from Interpreter
 
 Features implemented in this compiler that should be added to the Darklang interpreter.
 
