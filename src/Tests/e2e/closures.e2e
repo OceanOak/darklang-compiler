@@ -384,3 +384,28 @@ let f = (x: Int64) => x + 10 in let y = f(5) in y = 15
 
 // Additional test: nested let value uses lambda, body just returns the computed value
 let g = (a: Int64) => a * 2 in let result = g(21) in result = 42
+
+// =====================================================
+// Lambda Used Only in Else Branch of If (Mutation #134)
+// =====================================================
+// Tests that varOccursInExpr correctly uses || (not &&) when checking
+// If expression branches. The mutation changes the second || to && on
+// line 793: varOccursInExpr name cond || varOccursInExpr name thenBranch || varOccursInExpr name elseBranch
+//
+// With the mutation, varOccursInExpr would only return true for If expressions
+// if the variable occurs in the condition OR (in BOTH then AND else branches).
+// This means a variable used only in the else-branch would be incorrectly
+// reported as not occurring, causing dead lambda elimination to remove it.
+//
+// Structure: let f = lambda in if cond then <no f> else <uses f>
+// Original: varOccursInExpr returns true because f is in elseBranch
+// Mutated: returns false because f is not in thenBranch (needs both with &&)
+
+// Lambda used only in else-branch - tests second || in If check
+let f = (x: Int64) => x + 10 in if false then 0 else f(5) = 15
+
+// Additional test with true condition to ensure then-branch works too
+let g = (x: Int64) => x * 2 in if true then g(21) else 0 = 42
+
+// Lambda used only in else-branch with complex condition
+let h = (x: Int64) => x + 100 in if 1 > 2 then 0 else h(42) = 142
