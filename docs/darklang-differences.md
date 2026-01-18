@@ -65,6 +65,35 @@ These constructs cannot be validated even with file-based execution:
 **Skip reason:** `run:negation_parenthetical`
 - Expressions like `-(5)` may have parsing differences
 
+**Skip reason:** `run:immediate_lambda`
+- Darklang doesn't support immediate lambda application syntax like `(fun x -> x) arg`
+- Must use pipe syntax instead: `arg |> (fun x -> x)`
+
+### 1.3 Evaluation/Output Expectations
+
+These tests check error conditions or output that can't be validated with the interpreter:
+
+**Skip reason:** `eval:compile_error`
+- Tests expecting compile-time errors (e.g., `expect_compile_error`)
+
+**Skip reason:** `eval:error_result`
+- Tests expecting runtime errors (e.g., `= error` or `error="message"`)
+
+**Skip reason:** `eval:stdout`
+- Tests checking stdout output (e.g., `stdout=...`)
+
+**Skip reason:** `eval:stderr`
+- Tests checking stderr output (e.g., `stderr=...`)
+
+**Skip reason:** `eval:exit_code`
+- Tests checking exit codes (e.g., `exit=...`)
+
+**Skip reason:** `eval:builtin_test`
+- Tests using `Builtin.test` functions (internal test infrastructure)
+
+**Skip reason:** `eval:float_arithmetic`
+- Float arithmetic operations may have precision differences
+
 ---
 
 ## 2. Syntactic Differences (Convertible)
@@ -125,11 +154,23 @@ Different arrow syntax between compilers.
 
 Suffixes like `1y` (Int8), `1s` (Int16), `1l` (Int32) are not in Darklang.
 
-### 2.6 String Interpolation
+### 2.6 Unsigned Integer Suffixes
+
+**Skip reason:** `syntax:unsigned_integer`
+
+Unsigned suffixes like `1uy` (UInt8), `1us` (UInt16), `1ul` (UInt32) are not in Darklang.
+
+### 2.7 String Interpolation
 
 **Skip reason:** `syntax:string_interpolation`
 
 `$"Hello {name}"` syntax not supported in Darklang eval.
+
+### 2.8 Type Parameters
+
+**Skip reason:** `syntax:type_parameter`
+
+Generic syntax like `List<Int64>` uses different notation in Darklang.
 
 ---
 
@@ -301,11 +342,17 @@ Functions like `__digitToString`, `__findFrom` are implementation helpers.
 
 ### 5.4 Custom Types
 
-**Skip reason:** `eval:custom_type`
+**Skip reason:** `run:custom_type:*`
 
-User-defined types, enums, and records cannot be validated.
+User-defined types, enums, and records cannot be validated (PascalCase identifiers not in stdlib).
 
-### 5.5 Float Precision
+### 5.5 User Functions
+
+**Skip reason:** `run:user_function:*`
+
+Functions defined outside the test (not in preamble) cannot be validated.
+
+### 5.6 Float Precision
 
 **Skip reason:** `eval:float_precision`
 
@@ -316,21 +363,53 @@ Float arithmetic uses integer operators in eval mode.
 
 ## 6. Skip Rule Quick Reference
 
-| Category | Skip Prefix | Example Pattern | Fixable? |
-|----------|-------------|-----------------|----------|
-| Run: type def | `run:` | `type ` in expr | No (requires type system) |
-| Run: record | `run:` | `Name { field }` | No (requires types) |
-| Run: custom type | `run:` | PascalCase not in stdlib | No (requires types) |
-| Run: user func | `run:` | `func(...)` not in preamble | No (external def) |
-| Syntax: integers | (converted) | bare integers | Auto-converted |
-| Syntax: lists | (converted) | `[a, b]` | Auto-converted |
-| Syntax: calls | (converted) | `Mod.func(a)` | Auto-converted |
-| Semantic: division | `semantic:` | `\s/\s` or `\d+/\d+` | Yes - needs fix |
-| Semantic: modulo | `semantic:` | `\s%\s` or `\d+%\d+` | Yes - needs fix |
-| Semantic: bitwise | `semantic:` | `<<` `>>` `&` `\|` `^` `~` | Yes - needs fix |
-| Stdlib: indexOf | `stdlib:` | `.indexOf` | Yes - return type |
-| Stdlib: slice | `stdlib:` | `.slice` | Yes - args differ |
-| Internal | `internal:` | `.__` | No (by design) |
+### Complete Skip Reason List
+
+| Category | Skip Reason | Fixable? |
+|----------|-------------|----------|
+| **Run Mode** | | |
+| | `run:type_definition` | No |
+| | `run:record_construction` | No |
+| | `run:negation_parenthetical` | No |
+| | `run:immediate_lambda` | No |
+| | `run:custom_type:*` | No |
+| | `run:user_function:*` | No |
+| **Eval/Output** | | |
+| | `eval:compile_error` | No |
+| | `eval:error_result` | No |
+| | `eval:stdout` | No |
+| | `eval:stderr` | No |
+| | `eval:exit_code` | No |
+| | `eval:builtin_test` | No |
+| | `eval:float_precision` | ? |
+| | `eval:float_arithmetic` | ? |
+| **Syntax** | | |
+| | `syntax:sized_integer` | No |
+| | `syntax:unsigned_integer` | No |
+| | `syntax:string_interpolation` | No |
+| | `syntax:type_parameter` | No |
+| **Semantic** | | |
+| | `semantic:division` | **Yes** |
+| | `semantic:modulo` | **Yes** |
+| | `semantic:bitwise` | **Yes** |
+| | `semantic:boolean_not` | ? |
+| **Stdlib** | | |
+| | `stdlib:random` | ? |
+| | `stdlib:byte_ops` | ? |
+| | `stdlib:list_accessors` | **Yes** |
+| | `stdlib:indexOf` | **Yes** |
+| | `stdlib:missing` | ? |
+| | `stdlib:slice` | Fixed ✓ |
+| | `stdlib:int64_math` | ? |
+| **Internal** | | |
+| | `internal:data_structure` | No |
+| | `internal:helper_function` | No |
+
+**Legend:**
+- **Yes** = Should be fixed to match Darklang
+- No = Cannot/should not be fixed (by design or limitation)
+- ? = Needs investigation
+- Fixed ✓ = Already fixed
 
 **Note:** With file-based execution, the following are now **supported**:
 - Function definitions (`def`) - converted to curried lambdas
@@ -351,3 +430,57 @@ To investigate a specific difference:
 4. Compare with expected result
 5. If different, fix the compiler implementation
 6. Update skip rules in validate-darklang.py
+
+---
+
+## 8. Difference Tracking
+
+### 8.1 Fixable Differences (TODO)
+
+These differences SHOULD be fixed to match Darklang:
+
+| Skip Reason | Description | Priority | Status |
+|-------------|-------------|----------|--------|
+| `semantic:division` | Integer division behavior | High | Not started |
+| `semantic:modulo` | Negative modulo handling | High | Not started |
+| `semantic:bitwise` | Bitwise operator syntax | Medium | Not started |
+| `stdlib:indexOf` | Returns Int64, should return Option | Medium | Not started |
+| `stdlib:slice` | Uses (start, length), should use (start, end) | Low | Fixed ✓ |
+| `stdlib:list_accessors` | head/tail/last signature differences | Low | Not started |
+
+### 8.2 Non-Fixable Differences
+
+These cannot/should not be fixed (by design or interpreter limitation):
+
+| Skip Reason | Reason Not Fixable |
+|-------------|-------------------|
+| `run:type_definition` | Requires portable type system |
+| `run:record_construction` | Requires type definitions |
+| `run:immediate_lambda` | Darklang syntax limitation |
+| `run:negation_parenthetical` | Darklang parsing difference |
+| `run:custom_type:*` | User types not portable |
+| `run:user_function:*` | External definitions not available |
+| `eval:compile_error` | Different error testing approach needed |
+| `eval:error_result` | Different error testing approach needed |
+| `eval:stdout` | Different output testing approach needed |
+| `eval:stderr` | Different output testing approach needed |
+| `eval:exit_code` | Different output testing approach needed |
+| `eval:builtin_test` | Test infrastructure difference |
+| `internal:data_structure` | Internal implementation details |
+| `internal:helper_function` | Internal implementation details |
+| `syntax:sized_integer` | Darklang doesn't support y/s/l suffixes |
+| `syntax:unsigned_integer` | Darklang doesn't support unsigned suffixes |
+| `syntax:string_interpolation` | Darklang doesn't support $"..." |
+| `syntax:type_parameter` | Different generic syntax |
+
+### 8.3 Needs Investigation
+
+| Skip Reason | Question |
+|-------------|----------|
+| `semantic:boolean_not` | Is this an interpreter bug or real difference? |
+| `eval:float_precision` | Can we match Darklang's float representation? |
+| `eval:float_arithmetic` | Are float operators different? |
+| `stdlib:random` | Does Darklang have Random module? |
+| `stdlib:byte_ops` | Does Darklang have byte operations? |
+| `stdlib:missing` | Do take/drop/substring exist? |
+| `stdlib:int64_math` | Do sub/mul/div/isEven/isOdd exist? |

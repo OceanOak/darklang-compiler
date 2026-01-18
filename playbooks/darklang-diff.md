@@ -73,7 +73,12 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 
    - If you fixed a semantic difference, remove or narrow the skip rule that was causing this test to be skipped
    - Run the validator again to confirm the test now passes
-   - If you discovered a new difference category or updated existing skip rules, document it in `docs/darklang-differences.md`
+
+   **REQUIRED: Update docs/darklang-differences.md:**
+   - If you discovered a NEW skip reason, add it to Section 6 (Skip Rule Quick Reference)
+   - If you FIXED a difference, update Section 8.1 (mark as "Fixed ✓")
+   - If you determined something is NOT FIXABLE, ensure it's in Section 8.2 with reason
+   - If you need to INVESTIGATE further, add to Section 8.3
 
 9. After all tests pass, run all Dark benchmarks (`./benchmarks/run_benchmarks.sh`). Ignore the quicksort failure - it's a known issue. If RESULTS.md changed, show the results.
 
@@ -84,7 +89,14 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
     - **Fix applied**: What changes were made to the compiler
     - **Validation**: Confirm the test now passes both `./run-tests` and `validate-darklang.py`
 
-11. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code and updated tests. Include in the commit message a description of the difference that was fixed. Land using scripts/land-in-main.sh
+11. **Documentation Check** (before commit):
+
+    Verify your changes are documented:
+    - [ ] Skip rule in validate-darklang.py has matching entry in darklang-differences.md Section 6
+    - [ ] Fixability status is recorded in Section 8 (8.1, 8.2, or 8.3)
+    - [ ] If fixed, Section 8.1 shows "Fixed ✓"
+
+12. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code and updated tests. Include in the commit message a description of the difference that was fixed. Land using scripts/land-in-main.sh
 
 ## Policies for fixing differences
 
