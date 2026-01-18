@@ -8,22 +8,39 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 
 2. Pick a random E2E test file from `src/Tests/e2e/`. Read through the tests one by one, and for each test, check if it would be skipped by `scripts/validate-darklang.py`. Stop at the FIRST test that would be skipped. Common skip reasons:
 
+   **Tooling differences (skip these - different testing model):**
+   - Tests expecting compile errors → `eval:compile_error`
+   - Tests expecting runtime errors → `eval:error_result`
+   - Tests checking stdout/stderr/exit codes → `eval:stdout`, `eval:stderr`, `eval:exit_code`
+   - Tests using `Builtin.test` → `eval:builtin_test`
+
+   **Syntactic differences (not supported in interpreter):**
+   - Sized integers (`1y`, `1s`, `1l`) → `syntax:sized_integer`
+   - Unsigned integers (`1uy`, `1us`, `1ul`) → `syntax:unsigned_integer`
+   - String interpolation (`$"..."`) → `syntax:string_interpolation`
+   - Type parameters (`List<Int64>`) → `syntax:type_parameter`
+
    **Semantic bugs (fixable):**
-   - Contains division operator `/` → `semantic:division`
-   - Contains modulo operator `%` → `semantic:modulo`
-   - Uses `.indexOf` → `stdlib:indexOf`
-   - Uses `.head`, `.tail`, `.last`, `.init` → `stdlib:list_accessors`
+   - Division operator `/` → `semantic:division`
+   - Modulo operator `%` → `semantic:modulo`
+   - `.indexOf` → `stdlib:indexOf`
+   - `.head`, `.tail`, `.last`, `.init` → `stdlib:list_accessors`
    - High-precision floats → `eval:float_precision`
 
    **Missing from interpreter (not fixable in compiler):**
-   - Contains bitwise operators (`<<`, `>>`, `&`, `|`, `^`, `~`) → `semantic:bitwise`
-   - Contains boolean not `!` → `semantic:boolean_not`
-   - Uses `Random.*`, `Int64.sub/mul/div`, `List.take/drop`, `String.substring/take/drop`
+   - Bitwise operators (`<<`, `>>`, `&`, `|`, `^`, `~`) → `semantic:bitwise`
+   - Boolean not `!` → `semantic:boolean_not`
+   - `Random.*` → `stdlib:random`
+   - `.getByteAt` → `stdlib:byte_ops`
+   - `.take`, `.drop`, `.substring` → `stdlib:missing`
+   - `.slice` → `stdlib:slice`
+   - `Int64.sub/mul/div/isEven/isOdd` → `stdlib:int64_math`
 
-   **Tooling differences (skip these):**
-   - Tests expecting errors, stdout, stderr, exit codes
+   **Internal features (compiler-only):**
+   - `__FingerTree`, `__HAMT` → `internal:data_structure`
+   - `__digitToString`, `__findFrom` → `internal:helper_function`
 
-   If the skip reason is `semantic:bitwise` or `semantic:boolean_not`, these are missing from the interpreter - skip and try another test.
+   Tests with `syntax:*`, `internal:*`, or `stdlib:*` (missing from interpreter) skip reasons should be skipped - try another test.
 
 3. Record the first skipped test:
 
