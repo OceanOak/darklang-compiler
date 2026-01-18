@@ -113,3 +113,19 @@ let m = Middle { x = 10, y = 1.5, z = 20 } in m.y * 4.0 = 6.0
 type AllFloats = { a: Float, b: Float, c: Float }
 let r = AllFloats { a = 1.0, b = 2.0, c = 3.0 } in r.a + r.b + r.c = 6.0
 
+// ===================================================================
+// Record Update Tests (kills mutation #139)
+// Tests record update syntax: { record with field = value }
+// Mutation #139 changes || to && in varOccursInExpr for RecordUpdate,
+// which would cause dead code elimination to incorrectly remove
+// variables that only appear in the record or only in updates.
+// ===================================================================
+
+// Record update where variable only appears in the record part
+type Point = { x: Int64, y: Int64 }
+let p = Point { x = 10, y = 20 } in { p with x = 5 }.y = 20
+
+// Record update where variable only appears in the update part
+type Point = { x: Int64, y: Int64 }
+let val = 100 in { Point { x = 1, y = 2 } with x = val }.x = 100
+
