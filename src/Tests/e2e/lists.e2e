@@ -547,3 +547,15 @@ match [(1000, 100, 10), (500, 50, 5)] with | [(_, b, c), (d, e, f)] -> c - f | _
 // Multiple wildcards in tuples within multi-element list
 // Verifies index increments correctly through multiple wildcards
 match [(1000, 100, 10, 1), (500, 50, 5, 0)] with | [(_, _, c, d), (_, _, g, h)] -> c - g + d - h | _ -> 999 = 6
+
+// =====================================================
+// groupSizes nodeCount % 3 == 1 test (kills mutation #90)
+// =====================================================
+// Tests that groupSizes correctly calculates (nodeCount - 4) / 3 for
+// middle spine nodes when nodeCount % 3 == 1 (i.e., 4, 7, 10, ... nodes).
+// For an 8-element list: prefix=2, suffix=2, middle=4 nodes.
+// With 4 middle nodes (4 % 3 == 1), groupSizes returns [2, 2].
+// If - 4 were changed to + 4, groupSizes would return [2, 2, 3, 3]
+// expecting 10 nodes but only having 4, causing incorrect tree construction.
+// The 8th element (at index 7) would not be accessible if tree is malformed.
+Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60, 70, 80], 7), 0) = 80
