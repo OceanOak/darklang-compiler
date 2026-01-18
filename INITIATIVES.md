@@ -23,5 +23,6 @@
 
 - tidy up TODO file
 - int64 assumptions
+- look at Call, Apply, and TypeApp
 - fix indentation to not nest so deeply
 - add values
