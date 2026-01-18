@@ -132,6 +132,8 @@ let private prettyPrintANFCExpr = function
         $"RefCountDecString({prettyPrintANFAtom str})"
     | ANF.RandomInt64 ->
         "RandomInt64()"
+    | ANF.DateNow ->
+        "DateNow()"
     | ANF.TailCall (funcName, args) ->
         let argStr = args |> List.map prettyPrintANFAtom |> String.concat ", "
         $"TailCall({funcName}, [{argStr}])"
@@ -311,6 +313,8 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         $"RefCountDecString({prettyPrintMIROperand str})"
     | MIR.RandomInt64 dest ->
         $"{prettyPrintMIRVReg dest} <- RandomInt64()"
+    | MIR.DateNow dest ->
+        $"{prettyPrintMIRVReg dest} <- DateNow()"
     | MIR.FloatToString (dest, value) ->
         $"{prettyPrintMIRVReg dest} <- FloatToString({prettyPrintMIROperand value})"
     | MIR.Phi (dest, sources, valueType) ->
@@ -605,6 +609,8 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"RefCountDecString({prettyPrintLIROperand str})"
     | LIR.RandomInt64 dest ->
         $"{prettyPrintLIRReg dest} <- RandomInt64()"
+    | LIR.DateNow dest ->
+        $"{prettyPrintLIRReg dest} <- DateNow()"
     | LIR.CoverageHit exprId ->
         $"CoverageHit({exprId})"
     | LIR.Exit -> "Exit"
@@ -867,6 +873,8 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
         $"RefCountDecString({prettyPrintSymbolicOperand str})"
     | LIRSymbolic.RandomInt64 dest ->
         $"{prettyPrintLIRReg dest} <- RandomInt64()"
+    | LIRSymbolic.DateNow dest ->
+        $"{prettyPrintLIRReg dest} <- DateNow()"
     | LIRSymbolic.FloatToString (dest, value) ->
         $"{prettyPrintLIRReg dest} <- FloatToString({prettyPrintLIRFReg value})"
     | LIRSymbolic.CoverageHit exprId ->

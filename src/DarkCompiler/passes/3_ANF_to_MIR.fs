@@ -168,6 +168,7 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.RefCountIncString str -> maxTempIdInAtom str
     | ANF.RefCountDecString str -> maxTempIdInAtom str
     | ANF.RandomInt64 -> -1  // No atoms, so no TempIds
+    | ANF.DateNow -> -1      // No atoms, so no TempIds
     | ANF.FloatToString atom -> maxTempIdInAtom atom
 
 /// Find the maximum TempId in an AExpr
@@ -443,6 +444,7 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.RefCountIncString _ -> "RefCountIncString"
     | ANF.RefCountDecString _ -> "RefCountDecString"
     | ANF.RandomInt64 -> "RandomInt64"
+    | ANF.DateNow -> "DateNow"
     | ANF.FloatToString _ -> "FloatToString"
 
 /// Generate coverage instrumentation for an expression
@@ -918,6 +920,8 @@ let rec convertExpr
                     |> Result.map (fun strOp -> [MIR.RefCountDecString strOp])
                 | ANF.RandomInt64 ->
                     Ok [MIR.RandomInt64 destReg]
+                | ANF.DateNow ->
+                    Ok [MIR.DateNow destReg]
                 | ANF.FloatToString valueAtom ->
                     atomToOperand builder valueAtom
                     |> Result.map (fun valueOp -> [MIR.FloatToString (destReg, valueOp)])
@@ -1518,6 +1522,8 @@ and convertExprToOperand
                     |> Result.map (fun strOp -> [MIR.RefCountDecString strOp])
                 | ANF.RandomInt64 ->
                     Ok [MIR.RandomInt64 destReg]
+                | ANF.DateNow ->
+                    Ok [MIR.DateNow destReg]
                 | ANF.FloatToString valueAtom ->
                     atomToOperand builder valueAtom
                     |> Result.map (fun valueOp -> [MIR.FloatToString (destReg, valueOp)])

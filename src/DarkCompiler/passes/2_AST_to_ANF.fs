@@ -216,6 +216,14 @@ let tryRandomIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr opti
         Some ANF.RandomInt64
     | _ -> None
 
+/// Try to convert a function call to a date intrinsic CExpr
+/// Returns Some CExpr if it's a date intrinsic, None otherwise
+let tryDateIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+    match funcName, args with
+    | "Stdlib.Date.now", [] ->
+        Some ANF.DateNow
+    | _ -> None
+
 /// Type registry - maps record type names to their field definitions
 type TypeRegistry = Map<string, (string * AST.Type) list>
 
@@ -2994,6 +3002,14 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         let exprWithBindings = wrapBindings argBindings finalExpr
                         Ok (exprWithBindings, varGen2)
                     | None ->
+                    // Check if it's a date intrinsic
+                    match tryDateIntrinsic funcName argAtoms with
+                    | Some intrinsicExpr ->
+                        // Date intrinsic call
+                        let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
+                        let exprWithBindings = wrapBindings argBindings finalExpr
+                        Ok (exprWithBindings, varGen2)
+                    | None ->
                     // Check if it's a defined function
                     match Map.tryFind funcName funcReg with
                     | Some _ ->
@@ -5515,10 +5531,17 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                                     let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                                     Ok (ANF.Var tempVar, allBindings, varGen2)
                                 | None ->
-                                    // Assume it's a defined function (direct call)
-                                    let callCExpr = ANF.Call (funcName, argAtoms)
-                                    let allBindings = argBindings @ [(tempVar, callCExpr)]
-                                    Ok (ANF.Var tempVar, allBindings, varGen2))
+                                    // Check if it's a date intrinsic
+                                    match tryDateIntrinsic funcName argAtoms with
+                                    | Some intrinsicExpr ->
+                                        // Date intrinsic call
+                                        let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
+                                        Ok (ANF.Var tempVar, allBindings, varGen2)
+                                    | None ->
+                                        // Assume it's a defined function (direct call)
+                                        let callCExpr = ANF.Call (funcName, argAtoms)
+                                        let allBindings = argBindings @ [(tempVar, callCExpr)]
+                                        Ok (ANF.Var tempVar, allBindings, varGen2))
 
     | AST.TypeApp (_, _, _) ->
         // Placeholder: Generic instantiation not yet implemented

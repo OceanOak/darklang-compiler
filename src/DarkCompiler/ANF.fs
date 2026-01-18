@@ -153,6 +153,8 @@ type CExpr =
     | RefCountDecString of Atom               // Decrement string ref count, free if zero
     // Random intrinsics
     | RandomInt64                             // Get 8 random bytes as Int64
+    // Date intrinsics
+    | DateNow                                 // Get current Unix epoch seconds as Int64
     // Float to String conversion
     | FloatToString of Atom                   // Convert Float to heap String
 

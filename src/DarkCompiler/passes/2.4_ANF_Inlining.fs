@@ -287,6 +287,7 @@ let renameCExpr (mapping: Map<TempId, TempId>) (cexpr: CExpr) : CExpr =
     | RefCountIncString a -> RefCountIncString (r a)
     | RefCountDecString a -> RefCountDecString (r a)
     | RandomInt64 -> RandomInt64
+    | DateNow -> DateNow
     | FloatToString a -> FloatToString (r a)
 
 /// Rename all TempIds in an expression, allocating fresh TempIds

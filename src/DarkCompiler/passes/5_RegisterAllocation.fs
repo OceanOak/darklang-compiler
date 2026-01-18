@@ -237,6 +237,8 @@ let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
         operandToVReg str |> Option.toList |> Set.ofList
     | LIRSymbolic.RandomInt64 _ ->
         Set.empty  // No operands to read
+    | LIRSymbolic.DateNow _ ->
+        Set.empty  // No operands to read
     | LIRSymbolic.FloatToString _ ->
         Set.empty  // Float value is in FP register, tracked by getUsedFVRegs
     // ArgMoves/TailArgMoves contain operands that use virtual registers
@@ -296,6 +298,7 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.RefCountIncString _ -> None
     | LIRSymbolic.RefCountDecString _ -> None
     | LIRSymbolic.RandomInt64 dest -> regToVReg dest
+    | LIRSymbolic.DateNow dest -> regToVReg dest
     | LIRSymbolic.FloatToString (dest, _) -> regToVReg dest
     // Phi defines its destination at block entry
     | LIRSymbolic.Phi (dest, _, _) -> regToVReg dest
@@ -2133,6 +2136,15 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [randomInstr] @ storeInstrs
+
+    | LIRSymbolic.DateNow dest ->
+        let (destReg, destAlloc) = applyToReg mapping dest
+        let dateInstr = LIRSymbolic.DateNow destReg
+        let storeInstrs =
+            match destAlloc with
+            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | _ -> []
+        [dateInstr] @ storeInstrs
 
     | LIRSymbolic.FloatToString (dest, value) ->
         // FP register value is already physical after float allocation

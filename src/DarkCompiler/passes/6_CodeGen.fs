@@ -2846,6 +2846,12 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64.Instr l
         |> Result.map (fun destReg ->
             Runtime.generateRandomInt64 destReg)
 
+    | LIR.DateNow dest ->
+        // Generate current Unix epoch seconds as Int64
+        lirRegToARM64Reg dest
+        |> Result.map (fun destReg ->
+            Runtime.generateDateNow destReg)
+
     | LIR.FloatToString (dest, value) ->
         // Convert float in FP register to heap string
         lirRegToARM64Reg dest

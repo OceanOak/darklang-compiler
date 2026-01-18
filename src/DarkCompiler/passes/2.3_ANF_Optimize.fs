@@ -226,6 +226,7 @@ let hasSideEffects (cexpr: CExpr) : bool =
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 -> true   // Reads from OS random source
+    | DateNow -> true       // Reads current time (syscall)
     | FloatToString _ -> false  // Pure conversion (but allocates - maybe should be true?)
 
 /// Collect all TempIds used in an atom
@@ -281,6 +282,7 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | RefCountIncString str -> collectAtomUses str
     | RefCountDecString str -> collectAtomUses str
     | RandomInt64 -> Set.empty  // No atoms
+    | DateNow -> Set.empty      // No atoms
     | FloatToString atom -> collectAtomUses atom
 
 /// Collect all TempIds used in an AExpr
@@ -341,6 +343,7 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | RefCountIncString str -> RefCountIncString (s str)
     | RefCountDecString str -> RefCountDecString (s str)
     | RandomInt64 -> RandomInt64
+    | DateNow -> DateNow
     | FloatToString atom -> FloatToString (s atom)
 
 /// Optimize a CExpr with constant folding

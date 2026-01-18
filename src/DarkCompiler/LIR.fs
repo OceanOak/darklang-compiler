@@ -167,6 +167,8 @@ type Instr =
     | RefCountDecString of str:Operand            // Decrement string ref count, free if zero
     // Random intrinsics
     | RandomInt64 of dest:Reg                     // Get 8 random bytes as Int64
+    // Date intrinsics
+    | DateNow of dest:Reg                         // Get current Unix epoch seconds as Int64
     // Float to String conversion
     | FloatToString of dest:Reg * value:FReg      // Convert Float to heap String
     // Coverage instrumentation - records that expression was executed

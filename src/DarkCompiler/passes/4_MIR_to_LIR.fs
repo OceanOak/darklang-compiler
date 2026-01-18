@@ -1259,6 +1259,10 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
         let lirDest = vregToLIRReg dest
         Ok [LIRSymbolic.RandomInt64 lirDest]
 
+    | MIR.DateNow dest ->
+        let lirDest = vregToLIRReg dest
+        Ok [LIRSymbolic.DateNow lirDest]
+
     | MIR.FloatToString (dest, value) ->
         let lirDest = vregToLIRReg dest
         // Ensure value is in an FP register

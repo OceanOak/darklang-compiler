@@ -117,6 +117,7 @@ type Instr =
     | RefCountIncString of str:Operand
     | RefCountDecString of str:Operand
     | RandomInt64 of dest:Reg
+    | DateNow of dest:Reg
     | FloatToString of dest:Reg * value:FReg
     | CoverageHit of exprId:int
 
@@ -338,6 +339,7 @@ let fromLIR (program: LIR.Program) : Result<Program, string> =
         | LIR.RefCountDecString str ->
             symbolOperand str |> Result.map RefCountDecString
         | LIR.RandomInt64 dest -> Ok (RandomInt64 dest)
+        | LIR.DateNow dest -> Ok (DateNow dest)
         | LIR.FloatToString (dest, value) -> Ok (FloatToString (dest, value))
         | LIR.CoverageHit exprId -> Ok (CoverageHit exprId)
 
@@ -576,6 +578,7 @@ let private resolveProgram (initialState: PoolState) (functions: Function list) 
         | RefCountDecString str ->
             resolveOperand state str |> Result.map (fun (str', st) -> (LIR.RefCountDecString str', st))
         | RandomInt64 dest -> Ok (LIR.RandomInt64 dest, state)
+        | DateNow dest -> Ok (LIR.DateNow dest, state)
         | FloatToString (dest, value) -> Ok (LIR.FloatToString (dest, value), state)
         | CoverageHit exprId -> Ok (LIR.CoverageHit exprId, state)
 

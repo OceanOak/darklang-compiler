@@ -99,6 +99,17 @@ let randomModule : ModuleDef = {
     ]
 }
 
+/// Stdlib.Date module - date/time operations (intrinsics)
+/// now() is special-cased in the compiler to generate syscalls
+/// Other Date functions are defined in Date.dark as pure Dark code
+let dateModule : ModuleDef = {
+    Name = "Stdlib.Date"
+    Functions = [
+        // now : () -> Int64 - returns current Unix epoch seconds
+        { Name = "now"; TypeParams = []; ParamTypes = []; ReturnType = TInt64 }
+    ]
+}
+
 /// Raw memory intrinsics - internal only for HAMT implementation
 /// These functions bypass the type system and should only be used in stdlib code
 /// The names start with __ to indicate they are internal
@@ -174,6 +185,7 @@ let allModules : ModuleDef list = [
     pathModule
     platformModule
     randomModule
+    dateModule
 ]
 
 /// Cached module registry (computed once, reused across all compilations)
@@ -236,3 +248,8 @@ let isFileIntrinsic (qualifiedName: string) : bool =
 /// These are special-cased in the compiler to generate syscalls
 let isRandomIntrinsic (qualifiedName: string) : bool =
     qualifiedName = "Stdlib.Random.int64"
+
+/// Check if a function name is a date intrinsic
+/// These are special-cased in the compiler to generate syscalls
+let isDateIntrinsic (qualifiedName: string) : bool =
+    qualifiedName = "Stdlib.Date.now"

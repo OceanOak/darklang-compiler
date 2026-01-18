@@ -77,6 +77,7 @@ let hasSideEffects (instr: Instr) : bool =
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 _ -> true  // Syscall
+    | DateNow _ -> true      // Syscall
     | FloatToString _ -> false  // Pure conversion (allocates but no visible side effect)
     | CoverageHit _ -> true  // Must not be eliminated (tracking side effect)
 
@@ -122,6 +123,7 @@ let getInstrDest (instr: Instr) : VReg option =
     | RefCountIncString _ -> None
     | RefCountDecString _ -> None
     | RandomInt64 dest -> Some dest
+    | DateNow dest -> Some dest
     | FloatToString (dest, _) -> Some dest
     | CoverageHit _ -> None
 
@@ -172,6 +174,7 @@ let getInstrUses (instr: Instr) : Set<VReg> =
     | RefCountIncString str -> fromOperand str
     | RefCountDecString str -> fromOperand str
     | RandomInt64 _ -> Set.empty  // No operand uses
+    | DateNow _ -> Set.empty      // No operand uses
     | FloatToString (_, value) -> fromOperand value
     | CoverageHit _ -> Set.empty  // No operand uses
 
@@ -680,6 +683,7 @@ let propagateCopyInstr (copies: CopyMap) (instr: Instr) : Instr =
     | RefCountIncString str -> RefCountIncString (p str)
     | RefCountDecString str -> RefCountDecString (p str)
     | RandomInt64 dest -> RandomInt64 dest
+    | DateNow dest -> DateNow dest
     | FloatToString (dest, value) -> FloatToString (dest, p value)
     | CoverageHit exprId -> CoverageHit exprId
 
