@@ -690,3 +690,18 @@ checkGuardFirst120([5, 10, 15]) = 305
 
 // Empty list should fall through to [] pattern
 checkGuardFirst120([]) = 400
+
+// =====================================================
+// Variable used only in list cons tail (kills mutation #141)
+// =====================================================
+// Tests that varOccursInExpr correctly uses || (not &&) when checking
+// if a variable occurs in a ListCons expression. The check is:
+//   List.exists (varOccursInExpr name) headElements || varOccursInExpr name tail
+// If || were changed to &&, a variable appearing only in the tail would be
+// incorrectly considered as not occurring, causing dead code elimination
+// to remove the let binding.
+//
+// This test uses a variable only in the tail of the list cons [1, ...xs].
+// The variable xs must be recognized as used; otherwise the compiler would
+// eliminate the let binding and produce incorrect code.
+let xs = [42] in match [1, ...xs] with | [a, b] -> a + b | _ -> 0 = 43
