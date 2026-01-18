@@ -402,3 +402,16 @@ match [true, false] with | [a, b] -> if a && b then 1 else 0 | _ -> -1 = 0
 // Concatenate list of strings
 def concatStrings(xs: List<String>) : String = match xs with | [] -> "" | [h, ...t] -> h ++ concatStrings(t)
 concatStrings(["a", "b", "c"]) = abc
+
+// =====================================================
+// Middle Spine Access Tests (6+ element lists)
+// =====================================================
+// For lists with 6+ elements, elements 2-3 are stored in the middle spine
+// (a NODE2 or NODE3). These tests verify the tree measure is correctly
+// calculated for navigating to middle elements.
+
+// Access element at index 2 (first element in middle NODE2)
+Stdlib.Option.withDefault(Stdlib.List.getAt([1, 2, 3, 4, 5, 6], 2), 0) = 3
+
+// Access element at index 3 (second element in middle NODE2)
+Stdlib.Option.withDefault(Stdlib.List.getAt([1, 2, 3, 4, 5, 6], 3), 0) = 4
