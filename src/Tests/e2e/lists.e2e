@@ -444,3 +444,12 @@ match [10, 20, 30, 40, 50] with | [a, b, c, d, e] -> d - e | _ -> 999 = -10
 
 // Alternative: verify element ordering with non-commutative expression
 match [1000, 100, 10, 1] with | [a, b, c, d] -> a - b - c - d | _ -> 999 = 889
+
+// =====================================================
+// Wildcard index increment test (kills mutation #71)
+// =====================================================
+// Tests that wildcard patterns correctly increment the index
+// when extracting subsequent elements from DEEP lists.
+// If idx + 1 were changed to idx - 1 in the wildcard case,
+// element 'c' would be extracted from wrong offset.
+match [100, 200, 300, 400] with | [_, _, c, d] -> c - d | _ -> 999 = -100
