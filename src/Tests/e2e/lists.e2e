@@ -477,3 +477,15 @@ match [(50, 25, 10)] with | [(_, b, c)] -> b - c | _ -> 999 = 15
 
 // Wildcard in middle of tuple inside list
 match [(1, 2, 3)] with | [(a, _, c)] -> a + c | _ -> 999 = 4
+
+// =====================================================
+// Tuple binding index increment test (kills mutation #77)
+// =====================================================
+// Tests that binding multiple tuple elements correctly increments the index
+// when extracting subsequent elements in collectTupleBindings.
+// If idx + 1 were changed to idx - 1 in the PVar case inside collectTupleBindings,
+// the elements would be extracted from wrong tuple indices after the first.
+match [(100, 10, 7)] with | [(a, b, c)] -> a - b - c | _ -> 999 = 83
+
+// Four-element tuple - verify third and fourth element indices are correct
+match [(1000, 100, 10, 1)] with | [(a, b, c, d)] -> a - b - c - d | _ -> 999 = 889
