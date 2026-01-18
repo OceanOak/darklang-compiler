@@ -1,0 +1,29 @@
+// Stdlib.Int32 Tests
+// Minimal coverage for integer operations
+
+Int32.add(10l, 9l) = 19
+Int32.sub(10l, 9l) = 1
+Int32.mul(8l, 8l) = 64
+Int32.div(10l, 5l) = 2
+Int32.max(5l, 6l) = 6
+Int32.min(5l, 6l) = 5
+Int32.mod(15l, 6l) = 3
+Int32.absoluteValue(-5l) = 5
+Int32.negate(5l) = -5
+Int32.power(2l, 5l) = 32
+Int32.clamp(10l, 5l, 15l) = 10
+Int32.greaterThan(20l, 1l) = true
+Int32.greaterThanOrEqualTo(5l, 5l) = true
+Int32.lessThan(6l, 8l) = true
+Int32.lessThanOrEqualTo(5l, 5l) = true
+Int32.toString(-5l) = -5
+Int32.isEven(2l) = true
+Int32.isOdd(3l) = true
+Int32.sum([1l, 2l, 3l]) = 6
+Int32.bitwiseAnd(6l, 3l) = 2
+Int32.bitwiseOr(4l, 1l) = 5
+Int32.bitwiseXor(5l, 3l) = 6
+Int32.shiftLeft(1l, 2l) = 4
+Int32.shiftRight(8l, 2l) = 2
+Int32.bitwiseNot(0l) = -1
+Int32.popcount(7l) = 3

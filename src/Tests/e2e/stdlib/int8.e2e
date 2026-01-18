@@ -1,0 +1,29 @@
+// Stdlib.Int8 Tests
+// Minimal coverage for integer operations
+
+Int8.add(10y, 9y) = 19
+Int8.sub(10y, 9y) = 1
+Int8.mul(8y, 8y) = 64
+Int8.div(10y, 5y) = 2
+Int8.max(5y, 6y) = 6
+Int8.min(5y, 6y) = 5
+Int8.mod(15y, 6y) = 3
+Int8.absoluteValue(-5y) = 5
+Int8.negate(5y) = -5
+Int8.power(2y, 5y) = 32
+Int8.clamp(10y, 5y, 15y) = 10
+Int8.greaterThan(20y, 1y) = true
+Int8.greaterThanOrEqualTo(5y, 5y) = true
+Int8.lessThan(6y, 8y) = true
+Int8.lessThanOrEqualTo(5y, 5y) = true
+Int8.toString(-5y) = -5
+Int8.isEven(2y) = true
+Int8.isOdd(3y) = true
+Int8.sum([1y, 2y, 3y]) = 6
+Int8.bitwiseAnd(6y, 3y) = 2
+Int8.bitwiseOr(4y, 1y) = 5
+Int8.bitwiseXor(5y, 3y) = 6
+Int8.shiftLeft(1y, 2y) = 4
+Int8.shiftRight(8y, 2y) = 2
+Int8.bitwiseNot(0y) = -1
+Int8.popcount(7y) = 3

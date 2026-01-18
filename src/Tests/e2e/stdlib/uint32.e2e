@@ -1,0 +1,29 @@
+// Stdlib.UInt32 Tests
+// Minimal coverage for integer operations
+
+UInt32.add(10ul, 9ul) = 19
+UInt32.sub(10ul, 9ul) = 1
+UInt32.mul(8ul, 8ul) = 64
+UInt32.div(10ul, 5ul) = 2
+UInt32.max(5ul, 6ul) = 6
+UInt32.min(5ul, 6ul) = 5
+UInt32.mod(15ul, 6ul) = 3
+UInt32.absoluteValue(5ul) = 5
+UInt32.negate(0ul) = 0
+UInt32.power(2ul, 5ul) = 32
+UInt32.clamp(10ul, 5ul, 15ul) = 10
+UInt32.greaterThan(20ul, 1ul) = true
+UInt32.greaterThanOrEqualTo(5ul, 5ul) = true
+UInt32.lessThan(6ul, 8ul) = true
+UInt32.lessThanOrEqualTo(5ul, 5ul) = true
+UInt32.toString(42ul) = 42
+UInt32.isEven(2ul) = true
+UInt32.isOdd(3ul) = true
+UInt32.sum([1ul, 2ul, 3ul]) = 6
+UInt32.bitwiseAnd(6ul, 3ul) = 2
+UInt32.bitwiseOr(4ul, 1ul) = 5
+UInt32.bitwiseXor(5ul, 3ul) = 6
+UInt32.shiftLeft(1ul, 2ul) = 4
+UInt32.shiftRight(8ul, 2ul) = 2
+UInt32.bitwiseNot(0ul) = -1
+UInt32.popcount(7ul) = 3

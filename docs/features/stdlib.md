@@ -12,7 +12,14 @@ The stdlib provides built-in modules available to all Dark programs:
 
 | Module | Description |
 |--------|-------------|
+| `Stdlib.Int8` | 8-bit integer operations |
+| `Stdlib.Int16` | 16-bit integer operations |
+| `Stdlib.Int32` | 32-bit integer operations |
 | `Stdlib.Int64` | Integer operations |
+| `Stdlib.UInt8` | 8-bit unsigned integer operations |
+| `Stdlib.UInt16` | 16-bit unsigned integer operations |
+| `Stdlib.UInt32` | 32-bit unsigned integer operations |
+| `Stdlib.UInt64` | 64-bit unsigned integer operations |
 | `Stdlib.Bool` | Boolean operations |
 | `Stdlib.Float` | Floating-point operations |
 | `Stdlib.String` | String manipulation |
@@ -81,6 +88,10 @@ def bitwiseXor(a: Int64, b: Int64) : Int64
 def shiftLeft(a: Int64, shift: Int64) : Int64
 def shiftRight(a: Int64, shift: Int64) : Int64
 ```
+
+## Stdlib.Int8/Int16/Int32/UInt8/UInt16/UInt32/UInt64
+
+These modules mirror the `Stdlib.Int64` API for their respective widths.
 
 ## Stdlib.Option
 

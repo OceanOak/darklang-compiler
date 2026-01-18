@@ -896,7 +896,14 @@ let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
 /// Returns the merged stdlib AST or an error message
 let loadStdlib () : Result<AST.Program, string> =
     let stdlibFiles = [
+        "stdlib/Int8.dark"
+        "stdlib/Int16.dark"
+        "stdlib/Int32.dark"
         "stdlib/Int64.dark"
+        "stdlib/UInt8.dark"
+        "stdlib/UInt16.dark"
+        "stdlib/UInt32.dark"
+        "stdlib/UInt64.dark"
         "stdlib/Bool.dark"
         "stdlib/Tuple2.dark"
         "stdlib/Tuple3.dark"

@@ -1,0 +1,29 @@
+// Stdlib.UInt8 Tests
+// Minimal coverage for integer operations
+
+UInt8.add(10uy, 9uy) = 19
+UInt8.sub(10uy, 9uy) = 1
+UInt8.mul(8uy, 8uy) = 64
+UInt8.div(10uy, 5uy) = 2
+UInt8.max(5uy, 6uy) = 6
+UInt8.min(5uy, 6uy) = 5
+UInt8.mod(15uy, 6uy) = 3
+UInt8.absoluteValue(5uy) = 5
+UInt8.negate(0uy) = 0
+UInt8.power(2uy, 5uy) = 32
+UInt8.clamp(10uy, 5uy, 15uy) = 10
+UInt8.greaterThan(20uy, 1uy) = true
+UInt8.greaterThanOrEqualTo(5uy, 5uy) = true
+UInt8.lessThan(6uy, 8uy) = true
+UInt8.lessThanOrEqualTo(5uy, 5uy) = true
+UInt8.toString(42uy) = 42
+UInt8.isEven(2uy) = true
+UInt8.isOdd(3uy) = true
+UInt8.sum([1uy, 2uy, 3uy]) = 6
+UInt8.bitwiseAnd(6uy, 3uy) = 2
+UInt8.bitwiseOr(4uy, 1uy) = 5
+UInt8.bitwiseXor(5uy, 3uy) = 6
+UInt8.shiftLeft(1uy, 2uy) = 4
+UInt8.shiftRight(8uy, 2uy) = 2
+UInt8.bitwiseNot(0uy) = -1
+UInt8.popcount(7uy) = 3

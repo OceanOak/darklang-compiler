@@ -1,0 +1,29 @@
+// Stdlib.UInt64 Tests
+// Minimal coverage for integer operations
+
+UInt64.add(10UL, 9UL) = 19
+UInt64.sub(10UL, 9UL) = 1
+UInt64.mul(8UL, 8UL) = 64
+UInt64.div(10UL, 5UL) = 2
+UInt64.max(5UL, 6UL) = 6
+UInt64.min(5UL, 6UL) = 5
+UInt64.mod(15UL, 6UL) = 3
+UInt64.absoluteValue(5UL) = 5
+UInt64.negate(0UL) = 0
+UInt64.power(2UL, 5UL) = 32
+UInt64.clamp(10UL, 5UL, 15UL) = 10
+UInt64.greaterThan(20UL, 1UL) = true
+UInt64.greaterThanOrEqualTo(5UL, 5UL) = true
+UInt64.lessThan(6UL, 8UL) = true
+UInt64.lessThanOrEqualTo(5UL, 5UL) = true
+UInt64.toString(42UL) = 42
+UInt64.isEven(2UL) = true
+UInt64.isOdd(3UL) = true
+UInt64.sum([1UL, 2UL, 3UL]) = 6
+UInt64.bitwiseAnd(6UL, 3UL) = 2
+UInt64.bitwiseOr(4UL, 1UL) = 5
+UInt64.bitwiseXor(5UL, 3UL) = 6
+UInt64.shiftLeft(1UL, 2UL) = 4
+UInt64.shiftRight(8UL, 2UL) = 2
+UInt64.bitwiseNot(0UL) = -1
+UInt64.popcount(7UL) = 3
