@@ -1,69 +1,21 @@
 # TODO - Compiler Implementation Plan
 
 This TODO reflects the approved implementation plan for completing the Dark compiler.
-See `/home/paulbiggar/.claude/plans/lovely-swinging-crab.md` for detailed design.
 
-## Code Quality Issues
-
-The following are known simplifications or potential issues in the compiler code.
-**Principle**: The compiler should never guess - always error if something is unknown.
-
-### HIGH Priority (Can cause crashes or wrong results)
-
-- Flesh out the language.
-  - Add all tests from https://github.com/darklang/dark/tree/main/backend/testfiles/execution/language, adapting them for this implementation of the Darklang language.
-  - Determine what features are missing to allow them all to be compiled
-
-### MEDIUM Priority (Incomplete features)
+## Incomplete Features
 
 #### Stdlib Completion
 
 The following work is needed to complete the standard library:
 
-**4. String runtime builtins** (need native/syscall implementation)
-- `length` - string length
-- `slice` - substring extraction
-- `contains`, `startsWith`, `endsWith` - search
-- `toUppercase`, `toLowercase` - case conversion
-- `trim`, `trimStart`, `trimEnd` - whitespace handling
-- Impact: ~20+ String functions
-
-**5. Float type and builtins**
+**Float type and builtins**
 - Enables: Int64.sqrt, Int64.toFloat, Float module
 - Impact: Numeric computing functions
 
-**6. Additional Stdlib Modules** (after compiler blockers fixed)
-- **Char** - character operations
-- **Dict** - dictionary/map operations
-- **Bytes** - byte array operations
+**Additional Stdlib Modules**
 - **DateTime** - date/time handling
-- **UUID** - unique identifier generation
 - **Json** - JSON parsing/serialization
 - **Crypto** - hashing, encoding
-
-Note: All major compiler bugs fixed:
-1. ~~Type checker bug with generic enum nullary constructors~~ ✅ FIXED - `None` in `Option<t>` now works
-2. ~~List construction with spread syntax~~ ✅ FIXED - `[a, b, ...rest]` now works
-3. ~~String parameter codegen bug~~ ✅ FIXED - String parameters now work correctly
-
-### LOW Priority (Feature limitations, not bugs)
-
-#### 1. ARM64 register subset
-
-**File:** `src/DarkCompiler/ARM64.fs` (line 26)
-**Issue:** Only subset of ARM64 registers implemented
-**Future:** Add more registers as needed
-
-#### 2. Parser structure limitations
-
-**File:** `src/DarkCompiler/passes/1_Parser.fs` (line 839)
-**Issue:** Only function definitions allowed after expressions
-**Future:** Expand module-level structure support
-
-### Documentation
-
-- [x] Update README.md with new language features
-- Language features list lives in `docs/current-language-features.md`
 
 ## Not Planned
 
@@ -71,29 +23,3 @@ The following features are explicitly out of scope:
 
 - **REPL** - interactive mode
 - **Debugger support** - DWARF debug info
-
-## Implementation Notes
-
-### Reference Counting (Memory Management)
-
-**Implementation:**
-
-- Ref count headers initialized to 1 at HeapAlloc
-- Memory layout: `[payload: sizeBytes][refcount: 8 bytes]`
-- RefCountInc inserted after TupleGet (when extracting heap values)
-- RefCountDec inserted at end of scope (before Return) for owned values
-- Borrowed values (TupleGet, aliases) don't get Dec (parent owns memory)
-- Free list memory reuse: freed blocks added to size-segregated free lists
-- HeapAlloc checks free list first, falls back to bump allocator
-
-**Architecture:**
-
-- X27 = free list heads base (32 size classes × 8 bytes = 256 bytes)
-- X28 = bump allocator pointer
-- Size class = payload size (8-byte aligned)
-
-**Testing:**
-
-- Stress test: 5000 allocations of 24-byte tuples (120KB) with 64KB heap
-- Verified: passes with free list, crashes (exit 139) without (`--no-free-list` flag)
-- All tests pass
