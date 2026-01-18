@@ -6,18 +6,24 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 
 1. Use this process. (Ignore WORKFLOW.md)
 
-2. Pick a random E2E test file from `src/Tests/e2e/`. Read through the tests one by one, and for each test, check if it would be skipped by `scripts/validate-darklang.py`. Stop at the FIRST test that would be skipped. Common skip reasons to look for:
+2. Pick a random E2E test file from `src/Tests/e2e/`. Read through the tests one by one, and for each test, check if it would be skipped by `scripts/validate-darklang.py`. Stop at the FIRST test that would be skipped. Common skip reasons:
 
-   - Contains division operator `/`
-   - Contains modulo operator `%`
-   - Contains bitwise operators (`<<`, `>>`, `&`, `|`, `^`, `~`)
-   - Contains boolean not operator `!`
-   - Contains `def ` (function definition)
-   - Contains `let ` binding
-   - Contains `=>` (lambda)
-   - Contains `match ` expression
-   - Uses stdlib functions that may differ (`.indexOf`, `.slice`, etc.)
-   - If the skip reason is boolean not `!`, treat it as a Darklang interpreter bug and continue to the next test instead of investigating it.
+   **Semantic bugs (fixable):**
+   - Contains division operator `/` → `semantic:division`
+   - Contains modulo operator `%` → `semantic:modulo`
+   - Uses `.indexOf` → `stdlib:indexOf`
+   - Uses `.head`, `.tail`, `.last`, `.init` → `stdlib:list_accessors`
+   - High-precision floats → `eval:float_precision`
+
+   **Missing from interpreter (not fixable in compiler):**
+   - Contains bitwise operators (`<<`, `>>`, `&`, `|`, `^`, `~`) → `semantic:bitwise`
+   - Contains boolean not `!` → `semantic:boolean_not`
+   - Uses `Random.*`, `Int64.sub/mul/div`, `List.take/drop`, `String.substring/take/drop`
+
+   **Tooling differences (skip these):**
+   - Tests expecting errors, stdout, stderr, exit codes
+
+   If the skip reason is `semantic:bitwise` or `semantic:boolean_not`, these are missing from the interpreter - skip and try another test.
 
 3. Record the first skipped test:
 
@@ -75,10 +81,9 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
    - Run the validator again to confirm the test now passes
 
    **REQUIRED: Update docs/darklang-differences.md:**
-   - If you discovered a NEW skip reason, add it to Section 6 (Skip Rule Quick Reference)
-   - If you FIXED a difference, update Section 8.1 (mark as "Fixed ✓")
-   - If you determined something is NOT FIXABLE, ensure it's in Section 8.2 with reason
-   - If you need to INVESTIGATE further, add to Section 8.3
+   - If you FIXED a semantic bug, update Section 2 (Semantic Bugs) to mark status as "Fixed"
+   - If you discovered something is missing from interpreter, add to Section 5 (Missing from Interpreter)
+   - Ensure the skip reason in validate-darklang.py matches a documented category
 
 9. After all tests pass, run all Dark benchmarks (`./benchmarks/run_benchmarks.sh`). Ignore the quicksort failure - it's a known issue. If RESULTS.md changed, show the results.
 
@@ -92,9 +97,9 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 11. **Documentation Check** (before commit):
 
     Verify your changes are documented:
-    - [ ] Skip rule in validate-darklang.py has matching entry in darklang-differences.md Section 6
-    - [ ] Fixability status is recorded in Section 8 (8.1, 8.2, or 8.3)
-    - [ ] If fixed, Section 8.1 shows "Fixed ✓"
+    - [ ] Skip rule in validate-darklang.py matches a category in darklang-differences.md
+    - [ ] If fixed a semantic bug, Section 2 shows "Fixed" status
+    - [ ] If found missing interpreter feature, it's in Section 5
 
 12. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code and updated tests. Include in the commit message a description of the difference that was fixed. Land using scripts/land-in-main.sh
 
@@ -109,10 +114,11 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 - Some functions exist in this compiler's stdlib but not in Darklang (e.g., helper functions like `digitToString`). Keep those tests and keep/extend `validate-darklang.py` skip rules for them; do not treat their absence in Darklang as a compiler bug or change the tests to expect errors.
 - Internal stdlib helper tests (identifiers starting with `__`) must live under `src/Tests/e2e/stdlib-internal/` so the test runner enables internal identifiers.
 
-## Quick reference: Areas likely to have differences
+## Quick reference: Documentation sections
 
-See [docs/darklang-differences.md](../docs/darklang-differences.md) for the comprehensive reference of all differences, including:
-- Eval mode limitations
-- Syntactic differences requiring conversion
-- Semantic differences in operators
-- Stdlib function signature differences
+See [docs/darklang-differences.md](../docs/darklang-differences.md) for the comprehensive reference:
+- **Section 1**: Syntactic differences (auto-converted or unsupported)
+- **Section 2**: Semantic bugs (fixable - compiler produces wrong output)
+- **Section 3**: Tooling differences (not fixable - different testing model)
+- **Section 4**: Compiler-only features (internal, not in interpreter)
+- **Section 5**: Missing from interpreter (features to add to Darklang)

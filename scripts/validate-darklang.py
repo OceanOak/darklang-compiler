@@ -1012,17 +1012,12 @@ class Validator:
 
         # Stdlib functions missing from interpreter
         missing_stdlib_map = {
-            'Random.': 'stdlib:random',
-            '.getByteAt': 'stdlib:byte_ops',
-            '.getByteLength': 'stdlib:byte_ops',
-            '.setByteAt': 'stdlib:byte_ops',
-            '.appendByte': 'stdlib:byte_ops',
-            '.fromBytes': 'stdlib:byte_ops',
-            '.toBytes': 'stdlib:byte_ops',
-            '.take': 'stdlib:missing',
-            '.drop': 'stdlib:missing',
-            '.substring': 'stdlib:missing',
-            '.slice': 'stdlib:slice',
+            'Random.': 'stdlib:random',              # Random.int64
+            '.getByteAt': 'stdlib:byte_ops',         # String.getByteAt
+            '.take': 'stdlib:missing',               # List.take, String.take
+            '.drop': 'stdlib:missing',               # List.drop, String.drop
+            '.substring': 'stdlib:missing',          # String.substring
+            '.slice': 'stdlib:slice',                # String.slice (different semantics)
             'Int64.sub': 'stdlib:int64_math',
             'Int64.mul': 'stdlib:int64_math',
             'Int64.div': 'stdlib:int64_math',

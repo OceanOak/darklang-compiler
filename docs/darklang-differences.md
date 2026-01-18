@@ -210,13 +210,13 @@ Features in compiler not in interpreter. These are skipped during validation.
 
 Features implemented in this compiler that should be added to the Darklang interpreter.
 
-| Feature | Skip Reason | Functions/Details |
-|---------|-------------|-------------------|
+| Feature | Skip Reason | Functions |
+|---------|-------------|-----------|
 | Bitwise operators | `semantic:bitwise` | `<<`, `>>`, `&`, `\|`, `^`, `~` |
-| Boolean not | `semantic:boolean_not` | `!` operator |
-| Random | `stdlib:random` | `Random.*` functions |
-| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
+| Boolean not | `semantic:boolean_not` | `!` |
+| Random | `stdlib:random` | `Random.int64` |
+| Byte operations | `stdlib:byte_ops` | `String.getByteAt` |
 | Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
-| List functions | `stdlib:missing` | `take`, `drop` |
-| String functions | `stdlib:missing` | `substring` |
+| List functions | `stdlib:missing` | `List.take`, `List.drop` |
+| String functions | `stdlib:missing` | `String.substring`, `String.take`, `String.drop` |
 
