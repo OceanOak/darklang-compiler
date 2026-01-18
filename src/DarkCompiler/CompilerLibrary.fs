@@ -922,6 +922,7 @@ let loadStdlib () : Result<AST.Program, string> =
         "stdlib/Bytes.dark"
         "stdlib/Char.dark"
         "stdlib/Base64.dark"
+        "stdlib/Crypto.dark"
         "stdlib/Math.dark"
         "stdlib/__FingerTree.dark"
     ]

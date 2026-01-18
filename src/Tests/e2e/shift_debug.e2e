@@ -1,0 +1,42 @@
+// Test shifts with large values to debug the shift bug
+
+// Small shifts - baseline
+1 << 10 = 1024
+1 << 20 = 1048576
+
+// Value without high bit set - should work
+2000000000 << 1 = 4000000000
+2000000000 << 2 = 8000000000
+
+// Value with high bit set (bit 31 set in 32-bit view)
+// 3282089901 = 0xC3A4BD8D (bit 31 is set)
+3282089901 << 0 = 3282089901
+3282089901 << 1 = 6564179802
+3282089901 << 2 = 13128359604
+3282089901 << 10 = 3360860058624
+
+// Another value with bit 31 set: 2^31
+2147483648 << 1 = 4294967296
+
+// Value just under 2^31
+2147483647 << 1 = 4294967294
+
+// Test with value 0xC0000000 = 3221225472
+3221225472 << 1 = 6442450944
+
+// Test each 16-bit chunk separately
+48525 << 10 = 49689600
+50084 << 10 = 51286016
+
+// Large values shifted by 1
+4000000000 << 1 = 8000000000
+
+// Test 0xBD8D0000 (the low 16 bits shifted to high position)
+// If shifted right by 6, we get value for comparison
+48525 << 16 = 3180134400
+
+// Value: 0xC3A40000 (high 16 bits only)
+3282051072 << 10 = 3360820297728
+
+// Check if value loading is correct
+3282089901 + 0 = 3282089901
