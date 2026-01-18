@@ -92,31 +92,13 @@ Different arrow syntax between compilers.
 
 Areas where compiler produces WRONG output. These need to be fixed to match Darklang.
 
-| Bug | Skip Reason | Description | Status |
-|-----|-------------|-------------|--------|
-| Division `/` | `semantic:division` | Integer vs float division | Needs fix |
-| Modulo `%` | `semantic:modulo` | Negative number handling | Needs fix |
-| indexOf | `stdlib:indexOf` | Returns Int64, should return Option | Needs fix |
-| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
+| Bug | Skip Reason | Description |
+|-----|-------------|-------------|
+| Modulo `%` | `semantic:modulo` | Negative number handling |
+| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
+| Float precision | `eval:float_precision` | High-precision floats have different representation |
 
-### 2.1 Division Operator (`/`)
-
-**Skip reason:** `semantic:division`
-
-**This compiler:** Uses `/` for integer division (truncates toward zero)
-**Darklang:** Uses `/` for float division
-
-```
-# This compiler
-10 / 3 = 3  (integer division)
-
-# Darklang - need to verify behavior
-darklang-interpreter eval "10L / 3L"
-```
-
-**Implementation:** `src/DarkCompiler/stdlib/Int64.dark:13`
-
-### 2.2 Modulo Operator (`%`)
+### 2.1 Modulo Operator (`%`)
 
 **Skip reason:** `semantic:modulo`
 
@@ -132,7 +114,7 @@ darklang-interpreter eval "(-10L) % 3L"
 
 **Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
 
-### 2.3 indexOf
+### 2.2 List Accessors (head, tail, last, init)
 
 **Skip reason:** `stdlib:indexOf`
 
@@ -175,18 +157,26 @@ Features in compiler not in interpreter. These are skipped during validation.
 
 | Feature | Skip Reason | Description |
 |---------|-------------|-------------|
+| Integer division | `extension:integer_division` | `/` operator works on integers (Darklang requires `Int64.divide`) |
 | Internal functions | `internal:helper_function` | Functions like `__digitToString`, `__findFrom` are implementation helpers |
 | FingerTree/HAMT | `internal:data_structure` | `Stdlib.__FingerTree` and `Stdlib.__HAMT` are internal implementations |
 
-### Stdlib Extensions
+### 4.3 Integer Division Operator
 
-| Feature | Skip Reason | Description |
-|---------|-------------|-------------|
-| Random | `stdlib:random` | `Random.*` functions may not exist or behave differently |
-| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
-| Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
-| Missing functions | `stdlib:missing` | `take`, `drop`, `substring` may not exist in Darklang |
-| slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
+**Skip reason:** `extension:integer_division`
+
+This compiler extends `/` to work on integers (truncating toward zero). Darklang only supports `/` for floats; integer division requires `Stdlib.Int64.divide`.
+
+```
+# This compiler
+10 / 3 = 3  (integer division, truncates)
+10.0 / 3.0 = 3.333...  (float division)
+
+# Darklang
+10L / 3L  → Error: floatDivide expects Float
+Stdlib.Int64.divide 10L 3L  → 3
+10.0 / 3.0  → 3.333...
+```
 
 ---
 

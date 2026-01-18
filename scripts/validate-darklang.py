@@ -952,7 +952,7 @@ class Validator:
         - Syntactic differences: syntax:* reasons (unsupported syntax in interpreter)
         - Semantic bugs: semantic:*, stdlib:indexOf, eval:float_precision
         - Missing from interpreter: semantic:bitwise, semantic:boolean_not, stdlib:*
-        - Internal features: internal:* reasons
+        - Compiler-only features: extension:*, internal:* reasons
         """
         expr = test.expression
         expected = test.expected
@@ -980,8 +980,6 @@ class Validator:
         # === SEMANTIC BUGS (compiler produces wrong output) ===
         if re.search(r'-?\d+\.\d{3,}', expr):
             return "eval:float_precision"
-        if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
-            return "semantic:division"
         if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
             return "semantic:modulo"
 
@@ -1020,7 +1018,11 @@ class Validator:
             if pattern in expr:
                 return reason
 
-        # === COMPILER-ONLY INTERNAL FEATURES ===
+        # === COMPILER-ONLY FEATURES ===
+        # Integer division extension: / operator works on integers
+        if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
+            return "extension:integer_division"
+        # Internal implementation details
         if 'Stdlib.FingerTree' in expr or 'Stdlib.__HAMT' in expr:
             return "internal:data_structure"
         if '.__' in expr:
