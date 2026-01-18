@@ -319,3 +319,22 @@ applyThree((a: Int64) => a + 1, (b: Int64) => b * 2, (c: Int64) => c - 5, 10) = 
 // Here 'f' is bound as a variable with type (Int64, Int64) -> Int64
 // The lambda (x: Int64) => f(x) partially applies f, returning (Int64) -> Int64
 let f = (a: Int64, b: Int64) => a + b in let makeAdder = (x: Int64) => f(x) in let addFive = makeAdder(5) in addFive(3) = 8
+
+// =====================================================
+// Apply Partial Application in Lambda Body (Mutation #113)
+// =====================================================
+// Tests that simpleInferType correctly handles partial application
+// in AST.Apply context (function expression application).
+// The mutation changes argCount < paramCount to argCount > paramCount
+// in the AST.Apply branch, which would cause type inference to fail
+// for partial applications of function expressions.
+//
+// This differs from mutation #112 which tests AST.Call (named function calls).
+// AST.Apply handles cases like applying a lambda expression directly,
+// or applying a function that is itself the result of another expression.
+
+// Partial application through AST.Apply
+// We create a 3-parameter lambda and partially apply it inside another lambda.
+// The outer lambda captures the 3-param function and calls it with just one arg,
+// returning a partially applied function.
+let threeParam = (a: Int64, b: Int64, c: Int64) => a + b + c in let makePartial = (x: Int64) => threeParam(x) in let partial = makePartial(10) in partial(20, 12) = 42
