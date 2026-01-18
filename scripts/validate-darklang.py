@@ -39,12 +39,6 @@ SYNTAX CONVERSIONS:
     - Function calls: Module.fn(a, b) -> Stdlib.Module.fn a b
     - Lambdas: (x: T) => body -> fun x -> body
 
-SKIPPED SYNTAX (not supported by interpreter):
-    - Sized integers: 1y, 1s, 1l (Int8, Int16, Int32)
-    - Unsigned integers: 1uy, 1us, 1ul (UInt8, UInt16, UInt32)
-    - Type parameters: List<Int64>
-    - String interpolation: $"Hello {x}"
-
 TEST CONVERSION EXAMPLE:
     For a test like `let x = 5 in x + 1 = 6`:
 
@@ -955,7 +949,6 @@ class Validator:
 
         Skip reason categories:
         - Tooling differences: eval:* reasons (error testing, output capture)
-        - Syntactic differences: syntax:* reasons (unsupported syntax in interpreter)
         - Semantic bugs: semantic:*, stdlib:indexOf, stdlib:list_accessors, eval:float_precision
         - Missing from interpreter: semantic:bitwise, semantic:boolean_not, stdlib:*
         - Internal features: internal:* reasons
@@ -982,16 +975,6 @@ class Validator:
             return "eval:exit_code"
         if 'Builtin.test' in expr or 'Builtin.test' in expected:
             return "eval:builtin_test"
-
-        # === SYNTACTIC DIFFERENCES (not supported by interpreter) ===
-        if re.search(r'\d+[yslYSL]\b', expr) and not re.search(r'\d+L\b', expr):
-            return "syntax:sized_integer"
-        if re.search(r'\d+u[yslYSL]\b', expr):
-            return "syntax:unsigned_integer"
-        if '$"' in expr:
-            return "syntax:string_interpolation"
-        if re.search(r'\w+<\w+>', expr):
-            return "syntax:type_parameter"
 
         # === SEMANTIC BUGS (compiler produces wrong output) ===
         if re.search(r'-?\d+\.\d{3,}', expr):
