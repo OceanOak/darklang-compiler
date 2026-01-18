@@ -196,6 +196,12 @@ type Vec3 = { x: Int64, y: Int64, z: Int64 }
 
 match Vec3 { x = 1, y = 2, z = 3 } with | Vec3 { x = a, y = b, z = c } -> a + b + c = 6
 
+// Record pattern with subtraction to verify correct field index ordering (kills mutation #62)
+match Point { x = 100, y = 37 } with | Point { x = a, y = b } -> a - b = 63
+
+// Three-field record with subtraction to verify field index ordering
+match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = b, z = c } -> a - b - c = 53
+
 // === Nested ADT Patterns ===
 
 // Nested - testing Wrap type (MyOption already defined above)
