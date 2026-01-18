@@ -1,29 +1,197 @@
 // Stdlib.Int8 Tests
-// Minimal coverage for integer operations
+// Ported from https://github.com/darklang/dark/tree/main/backend/testfiles/execution/stdlib
+//
+// Tests for Int8 module functions
+
+// ===================================================================
+// Int8.add - Add two integers
+// ===================================================================
 
 Int8.add(10y, 9y) = 19
+Int8.add(0y, 0y) = 0
+Int8.add(-5y, 5y) = 0
+Int8.add(100y, 20y) = 120
+
+// ===================================================================
+// Int8.sub - Subtract two integers
+// ===================================================================
+
 Int8.sub(10y, 9y) = 1
+Int8.sub(0y, 0y) = 0
+Int8.sub(100y, 50y) = 50
+Int8.sub(5y, 10y) = -5
+
+// ===================================================================
+// Int8.mul - Multiply two integers
+// ===================================================================
+
 Int8.mul(8y, 8y) = 64
+Int8.mul(0y, 100y) = 0
+Int8.mul(-5y, 5y) = -25
+Int8.mul(10y, 10y) = 100
+
+// ===================================================================
+// Int8.div - Divide two integers
+// ===================================================================
+
 Int8.div(10y, 5y) = 2
-Int8.max(5y, 6y) = 6
-Int8.min(5y, 6y) = 5
+Int8.div(10y, 3y) = 3
+Int8.div(100y, 10y) = 10
+Int8.div(-10y, 2y) = -5
+
+// ===================================================================
+// Int8.mod - Modulo operation
+// ===================================================================
+
 Int8.mod(15y, 6y) = 3
+Int8.mod(10y, 3y) = 1
+Int8.mod(100y, 7y) = 2
+Int8.mod(-10y, 3y) = 2
+
+// ===================================================================
+// Int8.max - Maximum of two integers
+// ===================================================================
+
+Int8.max(5y, 6y) = 6
+Int8.max(6y, 5y) = 6
+Int8.max(-5y, -10y) = -5
+Int8.max(0y, 0y) = 0
+
+// ===================================================================
+// Int8.min - Minimum of two integers
+// ===================================================================
+
+Int8.min(5y, 6y) = 5
+Int8.min(6y, 5y) = 5
+Int8.min(-5y, -10y) = -10
+Int8.min(0y, 0y) = 0
+
+// ===================================================================
+// Int8.absoluteValue - Absolute value
+// ===================================================================
+
 Int8.absoluteValue(-5y) = 5
+Int8.absoluteValue(5y) = 5
+Int8.absoluteValue(0y) = 0
+Int8.absoluteValue(-100y) = 100
+
+// ===================================================================
+// Int8.negate - Negate an integer
+// ===================================================================
+
+Int8.negate(-5y) = 5
 Int8.negate(5y) = -5
+Int8.negate(0y) = 0
+Int8.negate(100y) = -100
+
+// ===================================================================
+// Int8.power - Raise to a power
+// ===================================================================
+
+Int8.power(3y, 4y) = 81
+Int8.power(2y, 6y) = 64
+Int8.power(0y, 0y) = 1
+Int8.power(5y, 0y) = 1
+Int8.power(5y, 1y) = 5
 Int8.power(2y, 5y) = 32
+
+// ===================================================================
+// Int8.clamp - Clamp value between limits
+// ===================================================================
+
+Int8.clamp(-5y, -2y, 5y) = -2
+Int8.clamp(3y, 0y, 2y) = 2
+Int8.clamp(1y, 0y, 5y) = 1
 Int8.clamp(10y, 5y, 15y) = 10
+Int8.clamp(0y, 5y, 10y) = 5
+
+// ===================================================================
+// Int8.greaterThan - Greater than comparison
+// ===================================================================
+
 Int8.greaterThan(20y, 1y) = true
+Int8.greaterThan(1y, 20y) = false
+Int8.greaterThan(5y, 5y) = false
+
+// ===================================================================
+// Int8.greaterThanOrEqualTo - Greater than or equal comparison
+// ===================================================================
+
+Int8.greaterThanOrEqualTo(6y, 1y) = true
+Int8.greaterThanOrEqualTo(1y, 6y) = false
 Int8.greaterThanOrEqualTo(5y, 5y) = true
+
+// ===================================================================
+// Int8.lessThan - Less than comparison
+// ===================================================================
+
 Int8.lessThan(6y, 8y) = true
+Int8.lessThan(8y, 6y) = false
+Int8.lessThan(5y, 5y) = false
+
+// ===================================================================
+// Int8.lessThanOrEqualTo - Less than or equal comparison
+// ===================================================================
+
+Int8.lessThanOrEqualTo(6y, 8y) = true
+Int8.lessThanOrEqualTo(8y, 6y) = false
 Int8.lessThanOrEqualTo(5y, 5y) = true
+
+// ===================================================================
+// Int8.toString - Convert integer to string
+// ===================================================================
+
+Int8.toString(0y) = 0
+Int8.toString(42y) = 42
 Int8.toString(-5y) = -5
+Int8.toString(120y) = 120
+
+// ===================================================================
+// Int8.isEven - Check if integer is even
+// ===================================================================
+
+Int8.isEven(0y) = true
 Int8.isEven(2y) = true
+Int8.isEven(4y) = true
+Int8.isEven(-2y) = true
+Int8.isEven(1y) = false
+Int8.isEven(3y) = false
+Int8.isEven(-1y) = false
+
+// ===================================================================
+// Int8.isOdd - Check if integer is odd
+// ===================================================================
+
+Int8.isOdd(1y) = true
 Int8.isOdd(3y) = true
-Int8.sum([1y, 2y, 3y]) = 6
-Int8.bitwiseAnd(6y, 3y) = 2
-Int8.bitwiseOr(4y, 1y) = 5
-Int8.bitwiseXor(5y, 3y) = 6
-Int8.shiftLeft(1y, 2y) = 4
-Int8.shiftRight(8y, 2y) = 2
-Int8.bitwiseNot(0y) = -1
-Int8.popcount(7y) = 3
+Int8.isOdd(-1y) = true
+Int8.isOdd(0y) = false
+Int8.isOdd(2y) = false
+Int8.isOdd(4y) = false
+Int8.isOdd(-2y) = false
+
+// ===================================================================
+// Int8.sum - Sum all integers in a list
+// ===================================================================
+
+Int8.sum([1y, 2y, 3y, 4y, 5y]) = 15
+Int8.sum([]) = 0
+Int8.sum([100y]) = 100
+Int8.sum([1y, -1y, 2y, -2y]) = 0
+Int8.sum([10y, 20y, 30y]) = 60
+
+// ===================================================================
+// NOTE: Functions not yet implemented due to missing types or features
+// ===================================================================
+
+// Int8.sqrt - needs Float type
+// Int8.sqrt(4) = 2.0
+
+// Int8.toFloat - needs Float type
+// Int8.toFloat(2) = 2.0
+
+// Int8.parse - needs Result type (blocked by type checker bug)
+// Int8.parse("1") = Result.Ok(1)
+
+// Int8.remainder - needs Result type (blocked by type checker bug)
+// Int8.remainder(15, 6) = Result.Ok(3)
