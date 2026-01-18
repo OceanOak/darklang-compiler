@@ -18,6 +18,7 @@
 - SSA-based HIR (sub ANF?)
 - SCCP-based HIR, MIR, and LIR optimizations
 - remove non-functional idioms
+- unify memory RawPtr, heap primitives, reference counting. Ensure everything is reference counted.
 
 # Short term
 
