@@ -1896,7 +1896,8 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | None -> Error (GenericError $"Unknown record type: {recordName}")
                     | _ -> Error (GenericError "Record pattern used on non-record type")
                 | PList patterns ->
-                    match patternType with
+                    let resolvedPatternType = resolveType aliasReg patternType
+                    match resolvedPatternType with
                     | TList elemType ->
                         // Each element pattern binds variables of the list's element type
                         patterns
@@ -1908,7 +1909,8 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | _, Error e -> Error e) (Ok [])
                     | _ -> Error (GenericError "List pattern used on non-list type")
                 | PListCons (headPatterns, tailPattern) ->
-                    match patternType with
+                    let resolvedPatternType = resolveType aliasReg patternType
+                    match resolvedPatternType with
                     | TList elemType ->
                         // Head patterns bind to element type
                         let headBindings =

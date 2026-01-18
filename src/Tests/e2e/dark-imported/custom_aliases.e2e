@@ -124,6 +124,15 @@ def fstPair(p: Pair<Int64>): Int64 =
 match makePair(5) with | (a, b) -> a + b = 11
 fstPair((10, 20)) = 10
 
+type StringPairList = List<Pair<String>>
+
+def hasGreeting(pairs: StringPairList): Bool =
+    match pairs with
+    | [(left, _)] -> left == ("he" ++ "llo")
+    | _ -> false
+
+hasGreeting([("he" ++ "llo", "x")]) = true
+
 // Alias for tuple without type parameters
 type FloatPair = (Float, Float)
 

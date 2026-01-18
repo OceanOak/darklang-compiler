@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-18 00:17:44
-**Commit:** `031ccbc8` - playbook: skip ! interpreter bug
+**Last Updated:** 2026-01-18 00:39:10
+**Commit:** `93825834` - Update initiatives
 
 | Benchmark     |           Dark (4.43x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

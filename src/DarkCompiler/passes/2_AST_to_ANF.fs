@@ -225,63 +225,32 @@ type VariantLookup = Map<string, (string * string list * int * AST.Type option)>
 /// Function registry - maps function names to their FULL function types (TFunction)
 type FunctionRegistry = Map<string, AST.Type>
 
-/// Alias registry - maps type alias names to their target types
-/// For simple record aliases: "Vec" -> TRecord "Point"
-type AliasRegistry = Map<string, AST.Type>
+/// Alias registry - maps type alias names to their type params and target types
+/// For simple record aliases: "Vec" -> ([], TRecord "Point")
+type AliasRegistry = Map<string, string list * AST.Type>
 
 /// Resolve a type name through the alias registry
 /// If the name is an alias for a record type, returns the resolved record name
 /// Otherwise returns the original name
 let rec resolveRecordTypeName (aliasReg: AliasRegistry) (typeName: string) : string =
     match Map.tryFind typeName aliasReg with
-    | Some (AST.TRecord (targetName, _)) -> resolveRecordTypeName aliasReg targetName
-    | Some (AST.TSum (targetName, _)) -> resolveRecordTypeName aliasReg targetName
+    | Some ([], AST.TRecord (targetName, _)) -> resolveRecordTypeName aliasReg targetName
+    | Some ([], AST.TSum (targetName, _)) -> resolveRecordTypeName aliasReg targetName
     | _ -> typeName
 
 /// Expand a type registry to include alias entries
 /// If "Vec" aliases to "Point" and "Point" has fields [x, y], then "Vec" also gets [x, y]
 let expandTypeRegWithAliases (typeReg: TypeRegistry) (aliasReg: AliasRegistry) : TypeRegistry =
     aliasReg
-    |> Map.fold (fun accReg aliasName targetType ->
-        match targetType with
-        | AST.TRecord (targetName, _) ->
+    |> Map.fold (fun accReg aliasName (typeParams, targetType) ->
+        match typeParams, targetType with
+        | [], AST.TRecord (targetName, _) ->
             let resolvedName = resolveRecordTypeName aliasReg targetName
             match Map.tryFind resolvedName typeReg with
             | Some fields -> Map.add aliasName fields accReg
             | None -> accReg  // Target not found, skip
-        | _ -> accReg  // Not a record alias, skip
+        | _ -> accReg  // Not a non-generic record alias, skip
     ) typeReg
-
-/// Resolve non-generic type aliases to their target types
-let rec resolveAliasType (aliasReg: AliasRegistry) (typ: AST.Type) : AST.Type =
-    match typ with
-    | AST.TRecord (name, []) ->
-        match Map.tryFind name aliasReg with
-        | Some targetType -> resolveAliasType aliasReg targetType
-        | None -> typ
-    | AST.TSum (name, []) ->
-        match Map.tryFind name aliasReg with
-        | Some targetType -> resolveAliasType aliasReg targetType
-        | None -> typ
-    | AST.TRecord (name, args) ->
-        AST.TRecord (name, List.map (resolveAliasType aliasReg) args)
-    | AST.TSum (name, args) ->
-        AST.TSum (name, List.map (resolveAliasType aliasReg) args)
-    | AST.TTuple elems ->
-        AST.TTuple (List.map (resolveAliasType aliasReg) elems)
-    | AST.TList elem ->
-        AST.TList (resolveAliasType aliasReg elem)
-    | AST.TDict (k, v) ->
-        AST.TDict (resolveAliasType aliasReg k, resolveAliasType aliasReg v)
-    | AST.TFunction (args, ret) ->
-        AST.TFunction (List.map (resolveAliasType aliasReg) args, resolveAliasType aliasReg ret)
-    | _ -> typ
-
-/// Resolve non-generic type aliases within function signatures
-let resolveAliasesInFunction (aliasReg: AliasRegistry) (funcDef: AST.FunctionDef) : AST.FunctionDef =
-    let resolvedParams = funcDef.Params |> List.map (fun (name, typ) -> (name, resolveAliasType aliasReg typ))
-    let resolvedReturnType = resolveAliasType aliasReg funcDef.ReturnType
-    { funcDef with Params = resolvedParams; ReturnType = resolvedReturnType }
 
 /// Variable environment - maps variable names to their TempIds and types
 /// The type information is used for type-directed field lookup in record access
@@ -569,6 +538,48 @@ let rec applySubstToExpr (subst: Substitution) (expr: AST.Expr) : AST.Expr =
             | AST.StringText s -> AST.StringText s
             | AST.StringExpr e -> AST.StringExpr (applySubstToExpr subst e)
         AST.InterpolatedString (List.map substPart parts)
+
+/// Resolve type aliases to their target types
+let rec resolveAliasType (aliasReg: AliasRegistry) (typ: AST.Type) : AST.Type =
+    match typ with
+    | AST.TRecord (name, []) ->
+        match Map.tryFind name aliasReg with
+        | Some ([], targetType) -> resolveAliasType aliasReg targetType
+        | Some (_, _) -> typ
+        | None -> typ
+    | AST.TSum (name, []) ->
+        match Map.tryFind name aliasReg with
+        | Some ([], targetType) -> resolveAliasType aliasReg targetType
+        | Some (_, _) -> typ
+        | None -> typ
+    | AST.TSum (name, args) ->
+        match Map.tryFind name aliasReg with
+        | Some (typeParams, targetType) ->
+            if List.length typeParams <> List.length args then
+                typ
+            else
+                let subst = List.zip typeParams args |> Map.ofList
+                let substituted = applySubstToType subst targetType
+                resolveAliasType aliasReg substituted
+        | None ->
+            AST.TSum (name, List.map (resolveAliasType aliasReg) args)
+    | AST.TRecord (name, args) ->
+        AST.TRecord (name, List.map (resolveAliasType aliasReg) args)
+    | AST.TTuple elems ->
+        AST.TTuple (List.map (resolveAliasType aliasReg) elems)
+    | AST.TList elem ->
+        AST.TList (resolveAliasType aliasReg elem)
+    | AST.TDict (k, v) ->
+        AST.TDict (resolveAliasType aliasReg k, resolveAliasType aliasReg v)
+    | AST.TFunction (args, ret) ->
+        AST.TFunction (List.map (resolveAliasType aliasReg) args, resolveAliasType aliasReg ret)
+    | _ -> typ
+
+/// Resolve type aliases within function signatures
+let resolveAliasesInFunction (aliasReg: AliasRegistry) (funcDef: AST.FunctionDef) : AST.FunctionDef =
+    let resolvedParams = funcDef.Params |> List.map (fun (name, typ) -> (name, resolveAliasType aliasReg typ))
+    let resolvedReturnType = resolveAliasType aliasReg funcDef.ReturnType
+    { funcDef with Params = resolvedParams; ReturnType = resolvedReturnType }
 
 /// Specialize a generic function definition with specific type arguments
 let specializeFunction (funcDef: AST.FunctionDef) (typeArgs: AST.Type list) : AST.FunctionDef =
@@ -1609,7 +1620,7 @@ let rec liftLambdasInProgram (baseTypeReg: TypeRegistry) (baseVariantLookup: Var
     let aliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
@@ -2342,9 +2353,30 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         | first :: _ ->
             inferType first typeEnv typeReg variantLookup funcReg moduleRegistry
             |> Result.map (fun elemType -> AST.TList elemType)
-    | AST.ListCons (_, tail) ->
-        // List cons has same type as tail
+    | AST.ListCons (headElements, tail) ->
+        // List cons has same element type as tail, but refine unknown element types from heads.
         inferType tail typeEnv typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun tailType ->
+            match tailType with
+            | AST.TList elemType ->
+                let reconcileElemType (current: AST.Type) (next: AST.Type) : Result<AST.Type, string> =
+                    if containsTypeVar current && not (containsTypeVar next) then Ok next
+                    elif containsTypeVar next && not (containsTypeVar current) then Ok current
+                    elif current = next then Ok current
+                    else Error $"List cons element type mismatch: {typeToString current} vs {typeToString next}"
+
+                let rec refineElemType (current: AST.Type) (elems: AST.Expr list) : Result<AST.Type, string> =
+                    match elems with
+                    | [] -> Ok current
+                    | head :: rest ->
+                        inferType head typeEnv typeReg variantLookup funcReg moduleRegistry
+                        |> Result.bind (fun headType ->
+                            reconcileElemType current headType
+                            |> Result.bind (fun refined -> refineElemType refined rest))
+
+                refineElemType elemType headElements
+                |> Result.map (fun finalElemType -> AST.TList finalElemType)
+            | _ -> Ok tailType)
     | AST.Let (name, value, body) ->
         inferType value typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun valueType ->
@@ -4341,32 +4373,37 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     (bindings: (ANF.TempId * ANF.CExpr) list)
                     (vg: ANF.VarGen)
                     : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-                    // Extract element types from tuple type
-                    let tupleElemTypes =
+                    let tupleElemTypesResult =
                         match tupleType with
-                        | AST.TTuple types -> types
-                        | _ -> List.replicate (List.length tupPats) AST.TInt64
-                    match tupPats with
-                    | [] -> Ok (env, bindings, vg)
-                    | tupPat :: tupRest ->
-                        let (rawElemVar, vg1) = ANF.freshVar vg
-                        let rawElemExpr = ANF.TupleGet (tupleAtom, idx)
-                        let rawElemBinding = (rawElemVar, rawElemExpr)
-                        let elemT = if idx < List.length tupleElemTypes then List.item idx tupleElemTypes else AST.TInt64
-                        // Wrap with TypedAtom to preserve correct element type in TypeMap
-                        let (elemVar, vg1') = ANF.freshVar vg1
-                        let elemExpr = ANF.TypedAtom (ANF.Var rawElemVar, elemT)
-                        let elemBinding = (elemVar, elemExpr)
-                        match tupPat with
-                        | AST.PVar name ->
-                            let newEnv = Map.add name (elemVar, elemT) env  // Use correct element type
-                            extractTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [rawElemBinding; elemBinding]) vg1'
-                        | AST.PWildcard ->
-                            extractTupleBindings tupRest tupleAtom tupleType (idx + 1) env (bindings @ [rawElemBinding]) vg1
-                        | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
-                        | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
-                        | AST.PList _ | AST.PListCons _ ->
-                            Error $"Nested pattern in tuple element not yet supported: {tupPat}"
+                        | AST.TTuple types when List.length types >= List.length tupPats -> Ok types
+                        | AST.TTuple types ->
+                            Error $"Tuple pattern expects {List.length tupPats} elements but got {List.length types}"
+                        | _ ->
+                            Error $"Tuple pattern expects tuple elements, got {typeToString tupleType}"
+                    match tupleElemTypesResult with
+                    | Error err -> Error err
+                    | Ok tupleElemTypes ->
+                        match tupPats with
+                        | [] -> Ok (env, bindings, vg)
+                        | tupPat :: tupRest ->
+                            let (rawElemVar, vg1) = ANF.freshVar vg
+                            let rawElemExpr = ANF.TupleGet (tupleAtom, idx)
+                            let rawElemBinding = (rawElemVar, rawElemExpr)
+                            let elemT = List.item idx tupleElemTypes
+                            // Wrap with TypedAtom to preserve correct element type in TypeMap
+                            let (elemVar, vg1') = ANF.freshVar vg1
+                            let elemExpr = ANF.TypedAtom (ANF.Var rawElemVar, elemT)
+                            let elemBinding = (elemVar, elemExpr)
+                            match tupPat with
+                            | AST.PVar name ->
+                                let newEnv = Map.add name (elemVar, elemT) env  // Use correct element type
+                                extractTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [rawElemBinding; elemBinding]) vg1'
+                            | AST.PWildcard ->
+                                extractTupleBindings tupRest tupleAtom tupleType (idx + 1) env (bindings @ [rawElemBinding]) vg1
+                            | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                            | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                            | AST.PList _ | AST.PListCons _ ->
+                                Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 
                 if patternLen = 0 then
                     // Empty list: check scrutinee == 0 (EMPTY)
@@ -6103,7 +6140,7 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
     let aliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
@@ -6221,7 +6258,7 @@ let convertUserWithStdlib
     let userAliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
@@ -6338,7 +6375,7 @@ let convertUserOnly
     let userAliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
@@ -6461,7 +6498,7 @@ let convertUserOnlyCached
     let userAliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
@@ -6602,7 +6639,7 @@ let convertProgram (program: AST.Program) : Result<ANF.Program, string> =
     let aliasReg : AliasRegistry =
         topLevels
         |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, [], targetType)) -> Some (name, targetType)
+            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
             | _ -> None)
         |> Map.ofList
 
