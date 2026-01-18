@@ -950,7 +950,7 @@ class Validator:
         Skip reason categories:
         - Tooling differences: eval:* reasons (error testing, output capture)
         - Syntactic differences: syntax:* reasons (unsupported syntax in interpreter)
-        - Semantic bugs: semantic:*, stdlib:indexOf, eval:float_precision
+        - Semantic bugs: semantic:*, eval:float_precision
         - Missing from interpreter: semantic:bitwise, semantic:boolean_not, stdlib:*
         - Compiler-only features: extension:*, internal:* reasons
         """
@@ -1010,19 +1010,7 @@ class Validator:
             if pattern in expr:
                 return reason
 
-        # Stdlib functions with different signatures (semantic bugs)
-        semantic_stdlib_map = {
-            '.indexOf': 'stdlib:indexOf',
-        }
-        for pattern, reason in semantic_stdlib_map.items():
-            if pattern in expr:
-                return reason
-
-        # === COMPILER-ONLY FEATURES ===
-        # Integer division extension: / operator works on integers
-        if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
-            return "extension:integer_division"
-        # Internal implementation details
+        # === COMPILER-ONLY INTERNAL FEATURES ===
         if 'Stdlib.FingerTree' in expr or 'Stdlib.__HAMT' in expr:
             return "internal:data_structure"
         if '.__' in expr:
@@ -1076,6 +1064,9 @@ class Validator:
         # Darklang interpreter outputs strings without quotes
         if result.startswith('"') and result.endswith('"'):
             result = result[1:-1]
+
+        # Strip interpreter type prefixes (e.g., "<Int64>.Some(0)" -> "Some(0)")
+        result = re.sub(r'^<[^>]+>\.', '', result)
 
         # Normalize whitespace in lists/tuples
         result = re.sub(r'\s*,\s*', ', ', result)

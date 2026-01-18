@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-18 00:39:10
-**Commit:** `93825834` - Update initiatives
+**Last Updated:** 2026-01-18 21:22:23
+**Commit:** `ae0a1e5b` - Fix printing Option<List> in tree-shaken builds
 
 | Benchmark     |           Dark (4.43x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

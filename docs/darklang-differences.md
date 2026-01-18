@@ -92,11 +92,11 @@ Different arrow syntax between compilers.
 
 Areas where compiler produces WRONG output. These need to be fixed to match Darklang.
 
-| Bug | Skip Reason | Description |
-|-----|-------------|-------------|
-| Modulo `%` | `semantic:modulo` | Negative number handling |
-| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
-| Float precision | `eval:float_precision` | High-precision floats have different representation |
+| Bug | Skip Reason | Description | Status |
+|-----|-------------|-------------|--------|
+| Division `/` | `semantic:division` | Integer vs float division | Needs fix |
+| Modulo `%` | `semantic:modulo` | Negative number handling | Needs fix |
+| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
 
 ### 2.1 Modulo Operator (`%`)
 
@@ -113,25 +113,6 @@ darklang-interpreter eval "(-10L) % 3L"
 ```
 
 **Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
-
-### 2.2 List Accessors (head, tail, last, init)
-
-**Skip reason:** `stdlib:indexOf`
-
-**This compiler:** Returns `Int64` (-1 if not found)
-**Darklang:** Returns `Option<Int64>` (None if not found)
-
-```
-# This compiler
-Stdlib.String.indexOf("hello world", "hello") = 0
-Stdlib.String.indexOf("hello world", "xyz") = -1
-
-# Darklang
-darklang-interpreter eval 'Stdlib.String.indexOf "hello world" "hello"'
-# Expected: Some(0) or similar Option type
-```
-
-**Implementation:** `src/DarkCompiler/stdlib/String.dark:84-85`
 
 ## 3. Tooling Differences
 

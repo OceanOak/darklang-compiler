@@ -23,7 +23,6 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
    **Semantic bugs (fixable):**
    - Division operator `/` → `semantic:division`
    - Modulo operator `%` → `semantic:modulo`
-   - `.indexOf` → `stdlib:indexOf`
    - High-precision floats → `eval:float_precision`
 
    **Missing from interpreter (not fixable in compiler):**

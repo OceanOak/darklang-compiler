@@ -1,0 +1,3 @@
+// darklang-diff-indexof.e2e - Validate String.indexOf against interpreter
+
+let result = Stdlib.String.indexOf("hello", "l") in Stdlib.Option.isSome(result) = true

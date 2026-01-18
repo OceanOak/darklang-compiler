@@ -87,7 +87,7 @@ Defined in `stdlib.dark:370-499`:
 | `startsWith` | `(String, String) -> Bool` | Prefix check |
 | `endsWith` | `(String, String) -> Bool` | Suffix check |
 | `contains` | `(String, String) -> Bool` | Substring check |
-| `indexOf` | `(String, String) -> Int64` | Find position (-1 if not found) |
+| `indexOf` | `(String, String) -> Option<Int64>` | Find position (None if not found) |
 | `slice` | `(String, Int64, Int64) -> String` | Extract substring |
 | `take` | `(String, Int64) -> String` | First N bytes |
 | `drop` | `(String, Int64) -> String` | Skip first N bytes |
