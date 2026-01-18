@@ -424,6 +424,26 @@ match Some(false) with | Some(true) -> 100 | _ -> 0 = 0
 // Variable binding in Some still works
 match Some(true) with | Some(x) -> match x with | true -> 42 | false -> 0 | None -> -1 = 42
 
+// === Nested tuple literal patterns in constructor payloads (kills mutation #85) ===
+// Tests that buildPatternComparison correctly handles tuple patterns with literals
+// inside constructor payloads, specifically testing index incrementing
+
+// Define a type with a tuple payload
+type TupleBox = TupleEmpty | TupleHas of (Int64, Int64)
+
+// Tuple literal pattern inside constructor - should NOT match when second element differs
+// If index + 1 were changed to index - 1, both comparisons would check the first element
+// causing (5, 7) to incorrectly match (5, 5) since it would compare 5==5 twice
+match TupleHas((5, 7)) with | TupleHas((5, 5)) -> 1 | _ -> 0 = 0
+
+// Verify positive case - should match when all elements are equal
+match TupleHas((5, 5)) with | TupleHas((5, 5)) -> 1 | _ -> 0 = 1
+
+// Three-element tuple payload to verify all indices increment correctly
+type TripleBox = TripleEmpty | TripleHas of (Int64, Int64, Int64)
+match TripleHas((10, 20, 30)) with | TripleHas((10, 10, 10)) -> 1 | _ -> 0 = 0
+match TripleHas((10, 10, 10)) with | TripleHas((10, 10, 10)) -> 1 | _ -> 0 = 1
+
 // === Tuple with list patterns (regression test) ===
 // Tests that tuple patterns containing list patterns correctly check each list
 
