@@ -462,3 +462,18 @@ match [100, 200, 300, 400] with | [_, _, c, d] -> c - d | _ -> 999 = -100
 // If idx + 1 were changed to idx - 1 in the PTuple case,
 // element (c, d) would be extracted from the wrong offset.
 match [(10, 1), (20, 2), (30, 3), (40, 4)] with | [(a, b), (c, d), (e, f), (g, h)] -> g - h | _ -> 999 = 36
+
+// =====================================================
+// Wildcard inside tuple inside list pattern (kills mutation #76)
+// =====================================================
+// Tests that wildcards inside tuple patterns correctly increment the index
+// when extracting subsequent elements within collectTupleBindings.
+// If idx + 1 were changed to idx - 1 in the PWildcard case inside collectTupleBindings,
+// the element 'b' would be extracted from wrong tuple index.
+match [(100, 37)] with | [(_, b)] -> b | _ -> 999 = 37
+
+// Three-element tuple with wildcard at start
+match [(50, 25, 10)] with | [(_, b, c)] -> b - c | _ -> 999 = 15
+
+// Wildcard in middle of tuple inside list
+match [(1, 2, 3)] with | [(a, _, c)] -> a + c | _ -> 999 = 4
