@@ -911,24 +911,6 @@ class Validator:
         expr = test.expression
         expected = test.expected
 
-        # Constructs not supported in file mode
-        if expr.startswith('type '):
-            return "run:type_definition"
-        if re.search(r'\b[A-Z]\w*\s*\{', expr):
-            return "run:record_construction"
-        if re.search(r'-\s*\(', expr):
-            return "run:negation_parenthetical"
-
-        # Immediate lambda application not supported in Darklang
-        # e.g., ((x: Int64) => x + 1)(5) or (fun x -> x)(5)
-        # Darklang requires pipe syntax: 5 |> (fun x -> x)
-        if re.search(r'=>\s*[^)]+\)\s*\(', expr):
-            return "run:immediate_lambda"
-        if re.search(r'fun\s+\w+\s*->[^)]+\)\s*\(', expr):
-            return "run:immediate_lambda"
-        if re.search(r'\(fun\s+', expr):
-            return "run:immediate_lambda"
-
         # Error/output expectations (not validatable)
         if 'expect_compile_error' in expected:
             return "eval:compile_error"
@@ -959,8 +941,6 @@ class Validator:
             return "syntax:type_parameter"
         if re.search(r'-?\d+\.\d{3,}', expr):
             return "eval:float_precision"
-        if re.search(r'\d+\.\d+', expr) and re.search(r'\s[+*]\s|\s-\s', expr):
-            return "eval:float_arithmetic"
 
         # Stdlib differences
         stdlib_skip_map = {
