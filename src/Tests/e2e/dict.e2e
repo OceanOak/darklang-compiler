@@ -231,6 +231,10 @@ Stdlib.Dict.isEmpty(Stdlib.Dict.fromList([])) = true
 // fromList single
 Stdlib.Dict.size(Stdlib.Dict.fromList([(1, 100)])) = 1
 
+// Mutation #130: Test that Dict.fromList with non-empty list is not optimized to Dict.empty
+// This catches the bug where && becomes || in the Dict.fromList empty-list optimization condition
+Stdlib.Dict.getOrDefault(Stdlib.Dict.fromList([(42, 999)]), 42, -1) = 999
+
 // fromList multiple
 Stdlib.Dict.size(Stdlib.Dict.fromList([(1, 10), (2, 20), (3, 30)])) = 3
 
