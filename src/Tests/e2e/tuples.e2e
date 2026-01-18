@@ -177,3 +177,20 @@ let (x, y, z) = (10, 20, 30) in z - x = 20
 
 // Four-element tuple: verify all indices are correct
 let (a, b, c, d) = (1000, 100, 10, 1) in d - a = -999
+
+// ===================================================================
+// Tuple pattern index ordering with guards (kills mutation #66)
+// Tests that tuple destructuring in match+guard expressions uses
+// correct indices for each element. The guard path has a separate
+// collectFromTuple function that increments idx for each element.
+// ===================================================================
+
+// Verify second element gets correct index in guard context
+// Using subtraction to detect if wrong element is bound
+match (100, 37) with | (a, b) when b < a -> b - a | _ -> 999 = -63
+
+// Three-element tuple with guard: verify third element uses index 2
+match (10, 20, 30) with | (x, y, z) when z > y -> z - x | _ -> 999 = 20
+
+// Four-element tuple with guard: verify all indices are correct
+match (1000, 100, 10, 1) with | (a, b, c, d) when d < c -> d - a | _ -> 999 = -999
