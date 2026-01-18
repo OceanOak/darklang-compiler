@@ -216,6 +216,10 @@ match Point { x = 100, y = 37 } with | Point { x = a, y = b } when b < a -> b - 
 // Three-field record with guard to verify all field indices are correct
 match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = b, z = c } when c < b -> a - b - c | _ -> 999 = 53
 
+// Record pattern with wildcard followed by field extraction (kills mutation #73)
+// Tests that fieldIdx is correctly incremented after wildcard patterns
+match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = _, y = b, z = c } -> b - c = 33
+
 // === Nested ADT Patterns ===
 
 // Nested - testing Wrap type (MyOption already defined above)
