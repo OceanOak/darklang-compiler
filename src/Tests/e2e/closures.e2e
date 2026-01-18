@@ -363,3 +363,24 @@ def applyWith122(fn: (Int64) -> Int64, x: Int64): Int64 = fn(x)
 // The key structure: let f = lambda in let y = <not using f> in <use f in body>
 // With mutation, the check skips body because y <> f is false under mutated condition
 let f = (x: Int64) => x + 10 in let y = 5 in applyWith122(f, y) = 15
+
+// =====================================================
+// Lambda Used in Nested Let Value (Mutation #133)
+// =====================================================
+// Tests that varOccursInExpr correctly checks for variable occurrences
+// in the VALUE part of nested let bindings. The mutation (|| -> &&)
+// at line 791 would cause the function to return false when a variable
+// occurs only in the value of a nested let but not in its body.
+//
+// Structure: let f = lambda in let y = <uses f> in <doesn't use f>
+// Original: varOccursInExpr returns true because f is in the value
+// Mutated: returns false because f is not in body (even though it's in value)
+//
+// With the mutation, f would be incorrectly identified as unused and
+// the dead lambda elimination would remove the f binding.
+
+// Lambda used in nested let's value but not in its body
+let f = (x: Int64) => x + 10 in let y = f(5) in y = 15
+
+// Additional test: nested let value uses lambda, body just returns the computed value
+let g = (a: Int64) => a * 2 in let result = g(21) in result = 42
