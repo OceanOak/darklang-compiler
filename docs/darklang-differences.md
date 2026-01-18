@@ -100,7 +100,6 @@ Areas where compiler produces WRONG output. These need to be fixed to match Dark
 |-----|-------------|-------------|
 | Division `/` | `semantic:division` | Integer vs float division |
 | Modulo `%` | `semantic:modulo` | Negative number handling |
-| indexOf | `stdlib:indexOf` | Returns Int64, should return Option |
 | list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
 | Float precision | `eval:float_precision` | High-precision floats have different representation |
 
@@ -135,24 +134,7 @@ darklang-interpreter eval "(-10L) % 3L"
 
 **Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
 
-### 2.3 indexOf
-
-**Skip reason:** `stdlib:indexOf`
-
-**This compiler:** Returns `Int64` (-1 if not found)
-**Darklang:** Returns `Option<Int64>` (None if not found)
-
-```
-# This compiler
-Stdlib.String.indexOf("hello world", "hello") = 0
-Stdlib.String.indexOf("hello world", "xyz") = -1
-
-# Darklang
-darklang-interpreter eval 'Stdlib.String.indexOf "hello world" "hello"'
-# Expected: Some(0) or similar Option type
-```
-
-### 2.4 List Accessors (head, tail, last, init)
+### 2.3 List Accessors (head, tail, last, init)
 
 **Skip reason:** `stdlib:list_accessors`
 

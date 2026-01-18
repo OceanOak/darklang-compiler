@@ -67,26 +67,26 @@ def Stdlib.String.endsWith(s: String, suffix: String) : Bool =
     else
         Stdlib.String.__compareBytes(s, sLen - suffixLen, suffix, 0, suffixLen)
 
-// Internal: Find substring starting at offset, returns -1 if not found
-def Stdlib.String.__findFrom(s: String, search: String, offset: Int64) : Int64 =
+// Internal: Find substring starting at offset, returns None if not found
+def Stdlib.String.__findFrom(s: String, search: String, offset: Int64) : Stdlib.Option.Option<Int64> =
     let sLen = Stdlib.String.length(s) in
     let searchLen = Stdlib.String.length(search) in
     if searchLen == 0 then
-        offset  // Empty string is always found at current position
+        Some(offset)  // Empty string is always found at current position
     else if offset + searchLen > sLen then
-        -1  // Not enough characters left
+        None  // Not enough characters left
     else if Stdlib.String.__compareBytes(s, offset, search, 0, searchLen) then
-        offset  // Found match at this position
+        Some(offset)  // Found match at this position
     else
         Stdlib.String.__findFrom(s, search, offset + 1)
 
-// Find position of first occurrence of search string, returns -1 if not found
-def Stdlib.String.indexOf(s: String, search: String) : Int64 =
+// Find position of first occurrence of search string, returns None if not found
+def Stdlib.String.indexOf(s: String, search: String) : Stdlib.Option.Option<Int64> =
     Stdlib.String.__findFrom(s, search, 0)
 
 // Check if string contains substring
 def Stdlib.String.contains(s: String, search: String) : Bool =
-    Stdlib.String.indexOf(s, search) >= 0
+    Stdlib.Option.isSome<Int64>(Stdlib.String.indexOf(s, search))
 
 // Internal: Copy n bytes from source string to destination raw pointer
 def Stdlib.String.__copyBytesToPtr(src: String, srcStart: Int64, dest: RawPtr, destStart: Int64, count: Int64) : Unit =
@@ -443,11 +443,11 @@ def Stdlib.String.__splitHelper(s: String, delim: String, start: Int64, acc: Lis
     if start > sLen then
         Stdlib.List.reverse<String>(acc)
     else
-        let idx = Stdlib.String.__findFrom(s, delim, start) in
-        if idx < 0 then
+        match Stdlib.String.__findFrom(s, delim, start) with
+        | None ->
             // No more delimiters - add rest of string
             Stdlib.List.reverse<String>([Stdlib.String.drop(s, start), ...acc])
-        else
+        | Some(idx) ->
             // Found delimiter - add segment and continue
             let segment = Stdlib.String.substring(s, start, idx) in
             Stdlib.String.__splitHelper(s, delim, idx + delimLen, [segment, ...acc])
