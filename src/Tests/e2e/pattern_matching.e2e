@@ -182,6 +182,19 @@ match (100, 40, 7) with | (a, b, c) when c < b -> a - b - c | _ -> 999 = 53
 type PairOption = PairNone | PairSome of (Int64, Int64)
 match (PairSome((1, 2)), PairSome((1, 2))) with | (PairSome(x), PairSome(y)) -> x == y | _ -> false = true
 
+// Tuple literal pattern index increment verification (kills mutation #82)
+// Tests that buildTupleComparisons correctly increments index for second element comparison
+// If index + 1 were changed to index - 1, the second comparison would re-read index 0
+// causing (5, 7) to incorrectly match pattern (5, 5) since it would compare 5==5 twice
+match (5, 7) with | (5, 5) -> 1 | _ -> 0 = 0
+
+// Three-element tuple literal pattern to verify all indices increment correctly
+// Pattern (10, 10, 10) should NOT match (10, 20, 30) - only first element matches
+match (10, 20, 30) with | (10, 10, 10) -> 1 | _ -> 0 = 0
+
+// Verify the positive case still works - pattern should match when all elements are equal
+match (5, 5) with | (5, 5) -> 1 | _ -> 0 = 1
+
 // === Record Patterns ===
 
 type Point = { x: Int64, y: Int64 }
