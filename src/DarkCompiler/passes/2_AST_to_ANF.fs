@@ -3570,11 +3570,16 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 match pats, types with
                                 | [], _ -> Ok (env, bindings, vg)
                                 | p :: rest, t :: restTypes ->
-                                    let (elemVar, vg1) = ANF.freshVar vg
-                                    let elemExpr = ANF.TupleGet (sourceAtom, idx)
+                                    // Extract raw element with TupleGet
+                                    let (rawElemVar, vg1) = ANF.freshVar vg
+                                    let rawElemExpr = ANF.TupleGet (sourceAtom, idx)
+                                    let rawElemBinding = (rawElemVar, rawElemExpr)
+                                    // Wrap with TypedAtom to preserve correct element type in TypeMap
+                                    let (elemVar, vg1') = ANF.freshVar vg1
+                                    let elemExpr = ANF.TypedAtom (ANF.Var rawElemVar, t)
                                     let elemBinding = (elemVar, elemExpr)
                                     // Recursively collect bindings from this element's pattern with correct type
-                                    collectPatternBindings p (ANF.Var elemVar) t env (elemBinding :: bindings) vg1
+                                    collectPatternBindings p (ANF.Var elemVar) t env (elemBinding :: rawElemBinding :: bindings) vg1'
                                     |> Result.bind (fun (env', bindings', vg') ->
                                         collectFromTuple rest restTypes (idx + 1) env' bindings' vg')
                                 | _ ->
@@ -3940,7 +3945,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let tailExpr = ANF.TypedAtom (ANF.Var rawTailVar, listType)
                             let tailBinding = (tailVar, tailExpr)
                             // All bindings including raw extractions
-                            // Order: typedBindings first (will be reversed), so after reversal raw bindings come before typed
+                            // Order: typedBindings first (will be reversed at line 3923), so after reversal raw bindings come before typed
                             let allBaseBindings = tailBinding :: rawTailBinding :: headBinding :: rawHeadBinding :: bindings
                             match pat with
                             | AST.PVar name ->
@@ -3995,7 +4000,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let newEnv' = Map.add name (tailVar, scrutType) newEnv
                             toANF body vg2 newEnv' typeReg variantLookup funcReg moduleRegistry
                             |> Result.map (fun (bodyExpr, vg3) ->
-                                let tailBinding = (tailVar, ANF.Atom tailAtom)
+                                let tailBinding = (tailVar, ANF.TypedAtom (tailAtom, scrutType))
                                 let allBindings = bindings @ [tailBinding]
                                 let finalExpr = wrapBindings allBindings bodyExpr
                                 (finalExpr, vg3))
