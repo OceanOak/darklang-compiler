@@ -39,6 +39,12 @@ SYNTAX CONVERSIONS:
     - Function calls: Module.fn(a, b) -> Stdlib.Module.fn a b
     - Lambdas: (x: T) => body -> fun x -> body
 
+SKIPPED SYNTAX (not supported by interpreter):
+    - Sized integers: 1y, 1s, 1l (Int8, Int16, Int32)
+    - Unsigned integers: 1uy, 1us, 1ul (UInt8, UInt16, UInt32)
+    - Type parameters: List<Int64>
+    - String interpolation: $"Hello {x}"
+
 TEST CONVERSION EXAMPLE:
     For a test like `let x = 5 in x + 1 = 6`:
 
@@ -947,17 +953,18 @@ class Validator:
 
         See docs/darklang-differences.md for detailed explanations of each skip reason.
 
-        Note: With file-based execution (darklang-interpreter run), many eval-mode
-        limitations are now supported:
-        - Function definitions (converted to curried lambdas)
-        - Let bindings
-        - Lambda expressions
-        - Match expressions
+        Skip reason categories:
+        - Tooling differences: eval:* reasons (error testing, output capture)
+        - Syntactic differences: syntax:* reasons (unsupported syntax in interpreter)
+        - Semantic bugs: semantic:*, stdlib:indexOf, stdlib:list_accessors, eval:float_precision
+        - Missing from interpreter: semantic:bitwise, semantic:boolean_not, stdlib:*
+        - Internal features: internal:* reasons
         """
         expr = test.expression
         expected = test.expected
 
-        # Error/output expectations (not validatable)
+        # === TOOLING DIFFERENCES ===
+        # Tests that check error conditions or output that can't be validated
         if 'expect_compile_error' in expected:
             return "eval:compile_error"
         expected_error = self._expected_error_message(expr, expected)
@@ -976,7 +983,7 @@ class Validator:
         if 'Builtin.test' in expr or 'Builtin.test' in expected:
             return "eval:builtin_test"
 
-        # Syntax differences
+        # === SYNTACTIC DIFFERENCES (not supported by interpreter) ===
         if re.search(r'\d+[yslYSL]\b', expr) and not re.search(r'\d+L\b', expr):
             return "syntax:sized_integer"
         if re.search(r'\d+u[yslYSL]\b', expr):
@@ -985,25 +992,33 @@ class Validator:
             return "syntax:string_interpolation"
         if re.search(r'\w+<\w+>', expr):
             return "syntax:type_parameter"
+
+        # === SEMANTIC BUGS (compiler produces wrong output) ===
         if re.search(r'-?\d+\.\d{3,}', expr):
             return "eval:float_precision"
+        if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
+            return "semantic:division"
+        if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
+            return "semantic:modulo"
 
-        # Stdlib differences
-        stdlib_skip_map = {
-            'Stdlib.FingerTree': 'internal:data_structure',
+        # === MISSING FROM INTERPRETER ===
+        # Features implemented in compiler that should be added to interpreter
+        if ('<<' in expr or '>>' in expr or '^' in expr or '~' in expr or
+            re.search(r'(?<!&)&(?!&)', expr) or
+            re.search(r'(?<!\|)\|(?!\|)', expr)):
+            return "semantic:bitwise"
+        if '!' in expr:
+            return "semantic:boolean_not"
+
+        # Stdlib functions missing from interpreter
+        missing_stdlib_map = {
             'Random.': 'stdlib:random',
-            '.__digitToString': 'internal:helper_function',
             '.getByteAt': 'stdlib:byte_ops',
             '.getByteLength': 'stdlib:byte_ops',
             '.setByteAt': 'stdlib:byte_ops',
             '.appendByte': 'stdlib:byte_ops',
             '.fromBytes': 'stdlib:byte_ops',
             '.toBytes': 'stdlib:byte_ops',
-            '.head': 'stdlib:list_accessors',
-            '.tail': 'stdlib:list_accessors',
-            '.init': 'stdlib:list_accessors',
-            '.last': 'stdlib:list_accessors',
-            '.indexOf': 'stdlib:indexOf',
             '.take': 'stdlib:missing',
             '.drop': 'stdlib:missing',
             '.substring': 'stdlib:missing',
@@ -1014,13 +1029,31 @@ class Validator:
             'Int64.isEven': 'stdlib:int64_math',
             'Int64.isOdd': 'stdlib:int64_math',
         }
-        for pattern, reason in stdlib_skip_map.items():
+        for pattern, reason in missing_stdlib_map.items():
             if pattern in expr:
                 return reason
 
-        # Internal functions
+        # Stdlib functions with different signatures (semantic bugs)
+        semantic_stdlib_map = {
+            '.head': 'stdlib:list_accessors',
+            '.tail': 'stdlib:list_accessors',
+            '.init': 'stdlib:list_accessors',
+            '.last': 'stdlib:list_accessors',
+            '.indexOf': 'stdlib:indexOf',
+        }
+        for pattern, reason in semantic_stdlib_map.items():
+            if pattern in expr:
+                return reason
+
+        # === COMPILER-ONLY INTERNAL FEATURES ===
+        if 'Stdlib.FingerTree' in expr or 'Stdlib.__HAMT' in expr:
+            return "internal:data_structure"
         if '.__' in expr:
             return "internal:helper_function"
+
+        # === VALIDATION LIMITATIONS ===
+        # These are not interpreter differences, but tests we can't validate
+        # because they reference types/functions not available to the interpreter
 
         # Custom types/enums (not defined in the test itself)
         allowed_modules = {'Int64', 'Int32', 'Int16', 'Int8', 'UInt64', 'UInt32', 'UInt16', 'UInt8',
@@ -1031,29 +1064,15 @@ class Validator:
             if pascal_name not in allowed_modules:
                 return f"run:custom_type:{pascal_name}"
 
-        # User-defined functions (not defined in the test itself via preamble)
-        # Note: Functions defined via preamble (def...) are converted to lambdas
+        # User-defined functions (not defined in the test preamble)
         func_call_pattern = r'(?<!\.)\b([a-z][a-zA-Z0-9]*)\s*\('
         func_matches = re.findall(func_call_pattern, expr)
         allowed_funcs = {'if', 'match', 'fun', 'let', 'in', 'true', 'false'}
         for func in func_matches:
             if func not in allowed_funcs:
-                # Check if this function is defined in the preamble
                 if test.preamble and f'def {func}' in test.preamble:
                     continue
                 return f"run:user_function:{func}"
-
-        # Semantic differences (these need to be fixed in the compiler)
-        if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
-            return "semantic:division"
-        if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
-            return "semantic:modulo"
-        if ('<<' in expr or '>>' in expr or '^' in expr or '~' in expr or
-            re.search(r'(?<!&)&(?!&)', expr) or
-            re.search(r'(?<!\|)\|(?!\|)', expr)):
-            return "semantic:bitwise"
-        if '!' in expr:
-            return "semantic:boolean_not"
 
         return None
 
