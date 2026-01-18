@@ -2,14 +2,60 @@
 """
 Validate E2E test expected outputs against the Darklang interpreter.
 
-This script parses .e2e test files, converts Ralph2 syntax to Darklang syntax,
+This script parses .e2e test files, converts compiler syntax to Darklang syntax,
 runs expressions through the darklang-interpreter, and compares results.
 
-Usage:
+USAGE:
     python scripts/validate-darklang.py                    # Validate all e2e tests
     python scripts/validate-darklang.py path/to/test.e2e   # Validate specific file
     python scripts/validate-darklang.py --verbose          # Show all results
     python scripts/validate-darklang.py --show-conversions # Show syntax conversions
+    python scripts/validate-darklang.py --show-failures    # Show only failures
+
+MANUAL VALIDATION:
+    Run a single expression (limited support):
+        darklang-interpreter eval "<expression>"
+
+    Run a Dark script file (full support):
+        darklang-interpreter run <file>.dark
+
+HOW IT WORKS:
+    The script generates temporary .dark files for each test and executes them
+    via `darklang-interpreter run`. This provides broader syntax support than
+    the `eval` command.
+
+    Supported constructs:
+    - Function definitions (converted to curried lambdas)
+    - Let bindings
+    - Lambda expressions
+    - Match expressions
+
+    Results are captured using Builtin.debug for comparison.
+
+SYNTAX CONVERSIONS:
+    The script automatically converts compiler syntax to Darklang syntax:
+    - Integer literals: 5 -> 5L
+    - List separators: [1, 2] -> [1L; 2L]
+    - Function calls: Module.fn(a, b) -> Stdlib.Module.fn a b
+    - Lambdas: (x: T) => body -> fun x -> body
+
+TEST CONVERSION EXAMPLE:
+    For a test like `let x = 5 in x + 1 = 6`:
+
+        let __result = let x = 5L in x + 1L
+        Builtin.debug "" __result
+        0L
+
+    For tests with `def` preambles:
+
+        // Original: def add(a: Int64, b: Int64) : Int64 = a + b add(1, 2) = 3
+        let add = fun a -> fun b -> a + b
+        let __result = add 1L 2L
+        Builtin.debug "" __result
+        0L
+
+SEE ALSO:
+    docs/darklang-differences.md - Documents all known differences and skip reasons
 """
 
 import argparse
@@ -1096,7 +1142,14 @@ def print_summary(results: dict[Path, list[ValidationResult]]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate E2E test expected outputs against Darklang interpreter"
+        description="Validate E2E test expected outputs against Darklang interpreter",
+        epilog="Run with --help-full for detailed documentation.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '--help-full',
+        action='store_true',
+        help='Show full documentation'
     )
     parser.add_argument(
         'paths',
@@ -1121,6 +1174,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.help_full:
+        print(__doc__)
+        return 0
 
     # Find all e2e files
     all_files = []

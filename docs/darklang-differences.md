@@ -10,51 +10,10 @@ Darklang interpreter. It serves as:
 - Guide for fixing semantic differences
 - Documentation of compiler-only features
 
-## How to Validate
-
-Run a single expression (limited support):
+To validate tests against the interpreter, run:
 ```bash
-darklang-interpreter eval "<expression>"
-```
-
-Run a Dark script file (full support):
-```bash
-darklang-interpreter run <file>.dark
-```
-
-Run the full validation suite:
-```bash
-python scripts/validate-darklang.py
-```
-
-The validation script uses file-based execution (`run` command) for all tests,
-which provides broader syntax support than the `eval` command.
-
-### How Tests Are Converted
-
-The validation script generates temporary `.dark` files for each test and
-executes them via `darklang-interpreter run`. This approach:
-
-- **Supports** function definitions (converted to curried lambdas)
-- **Supports** let bindings
-- **Supports** lambda expressions
-- **Supports** match expressions
-- Uses `Builtin.debug` to output results for comparison
-
-For a test like `let x = 5 in x + 1 = 6`:
-```dark
-let __result = let x = 5L in x + 1L
-Builtin.debug "" __result
-0L
-```
-
-For tests with `def` preambles:
-```dark
-// Original: def add(a: Int64, b: Int64) : Int64 = a + b add(1, 2) = 3
-let add = fun a -> fun b -> a + b
-let __result = add 1L 2L
-Builtin.debug "" __result
-0L
+python scripts/validate-darklang.py --help-full  # See detailed documentation
+python scripts/validate-darklang.py              # Run validation
 ```
 
 ---
