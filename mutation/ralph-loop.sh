@@ -262,7 +262,7 @@ process_mutation() {
         echo ""
 
         # Invoke Claude Code with the prompt
-        claude "$prompt"
+        claude --dangerously-skip-permissions --print "$prompt"
 
         echo ""
         echo -e "${BLUE}Claude Code session ended for mutation #$id${NC}"
