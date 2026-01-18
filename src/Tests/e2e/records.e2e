@@ -90,3 +90,26 @@ type Product = { name: String, price: Float }
 let p = Product { name = "Widget", price = 19.75 } in p.name = "Widget"
 let p = Product { name = "Widget", price = 19.75 } in p.price = 19.75
 
+// ===================================================================
+// Record field type inference with floats (kills mutation #115)
+// Tests that record field access correctly infers types for fields
+// at later positions. If the type lookup uses > instead of < for
+// index bounds checking, field types would be incorrectly inferred.
+// ===================================================================
+
+// Record with float in second field - verify float arithmetic works
+type Pair = { first: Int64, second: Float }
+let p = Pair { first = 1, second = 2.5 } in p.second * 2.0 = 5.0
+
+// Record with float in third field - verify correct type at index 2
+type Triple = { a: Int64, b: Int64, c: Float }
+let t = Triple { a = 1, b = 2, c = 3.5 } in t.c + 1.5 = 5.0
+
+// Record with float in middle position
+type Middle = { x: Int64, y: Float, z: Int64 }
+let m = Middle { x = 10, y = 1.5, z = 20 } in m.y * 4.0 = 6.0
+
+// Record with all floats - verify all field positions get float type
+type AllFloats = { a: Float, b: Float, c: Float }
+let r = AllFloats { a = 1.0, b = 2.0, c = 3.0 } in r.a + r.b + r.c = 6.0
+
