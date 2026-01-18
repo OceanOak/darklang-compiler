@@ -3702,7 +3702,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     let (headVar, vg1') = ANF.freshVar vg1
                                     let headExpr = ANF.TypedAtom (ANF.Var rawHeadVar, elemType)
                                     let headBinding = (headVar, headExpr)
-                                    collectPatternBindings p (ANF.Var headVar) elemType env (rawHeadBinding :: headBinding :: bindings) vg1'
+                                    collectPatternBindings p (ANF.Var headVar) elemType env (headBinding :: rawHeadBinding :: bindings) vg1'
                                     |> Result.bind (fun (env', bindings', vg') ->
                                         let (rawTailVar, vg2) = ANF.freshVar vg'
                                         let rawTailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
@@ -3711,7 +3711,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         let (tailVar, vg2') = ANF.freshVar vg2
                                         let tailExpr = ANF.TypedAtom (ANF.Var rawTailVar, sourceType)
                                         let tailBinding = (tailVar, tailExpr)
-                                        collectHeads rest (ANF.Var tailVar) env' (rawTailBinding :: tailBinding :: bindings') vg2')
+                                        collectHeads rest (ANF.Var tailVar) env' (tailBinding :: rawTailBinding :: bindings') vg2')
                             collectHeads headPatterns sourceAtom env bindings vg
 
                     // Collect all bindings from the tuple pattern, then compile body
@@ -3940,7 +3940,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let tailExpr = ANF.TypedAtom (ANF.Var rawTailVar, listType)
                             let tailBinding = (tailVar, tailExpr)
                             // All bindings including raw extractions
-                            let allBaseBindings = rawTailBinding :: tailBinding :: rawHeadBinding :: headBinding :: bindings
+                            // Order: typedBindings first (will be reversed), so after reversal raw bindings come before typed
+                            let allBaseBindings = tailBinding :: rawTailBinding :: headBinding :: rawHeadBinding :: bindings
                             match pat with
                             | AST.PVar name ->
                                 let newEnv = Map.add name (headVar, elemType) env
