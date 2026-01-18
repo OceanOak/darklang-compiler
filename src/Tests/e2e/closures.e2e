@@ -301,3 +301,21 @@ applyTwo((a: Int64) => a + 1, (b: Int64) => b * 2, 10) = 31
 // Three lambdas as arguments - tests counter incrementing through multiple args
 def applyThree(f: (Int64) -> Int64, g: (Int64) -> Int64, h: (Int64) -> Int64, x: Int64): Int64 = f(x) + g(x) + h(x)
 applyThree((a: Int64) => a + 1, (b: Int64) => b * 2, (c: Int64) => c - 5, 10) = 36
+
+// =====================================================
+// Partial Application in Lambda Body (Mutation #112)
+// =====================================================
+// Tests that simpleInferType correctly handles partial application
+// of function variables within lambda bodies. The mutation changes
+// argCount < paramCount to argCount > paramCount, which would
+// cause type inference to fail for partial applications.
+//
+// The key is that the function must be accessed via typeEnv (as a local
+// binding with function type), not via funcReturnTypes (named functions).
+// When a let-bound function variable is partially applied inside a lambda,
+// simpleInferType is called to infer the return type.
+
+// Function variable partially applied inside lambda
+// Here 'f' is bound as a variable with type (Int64, Int64) -> Int64
+// The lambda (x: Int64) => f(x) partially applies f, returning (Int64) -> Int64
+let f = (a: Int64, b: Int64) => a + b in let makeAdder = (x: Int64) => f(x) in let addFive = makeAdder(5) in addFive(3) = 8
