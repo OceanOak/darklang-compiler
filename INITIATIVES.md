@@ -22,7 +22,7 @@
 - unify memory RawPtr, heap primitives, reference counting. Ensure everything is reference counted.
 
 # Short term
+
 - int64 assumptions
-- look at Call, Apply, and TypeApp
 - fix indentation to not nest so deeply
 - add values
