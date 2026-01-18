@@ -194,3 +194,23 @@ match (10, 20, 30) with | (x, y, z) when z > y -> z - x | _ -> 999 = 20
 
 // Four-element tuple with guard: verify all indices are correct
 match (1000, 100, 10, 1) with | (a, b, c, d) when d < c -> d - a | _ -> 999 = -999
+
+// ===================================================================
+// Tuple pattern matching with float elements (kills mutation #114)
+// Tests that tuple destructuring in match expressions correctly
+// preserves float types for later tuple positions. If the type lookup
+// uses > instead of < for index bounds checking, all elements would
+// be typed as Int64, causing float operations to fail.
+// ===================================================================
+
+// Match tuple with float in second position - verify float arithmetic works
+match (42, 2.5) with | (_, f) -> f * 2.0 = 5.0
+
+// Match tuple with float in third position - verify index 2 gets correct type
+match (1, 2, 3.5) with | (_, _, f) -> f + 1.5 = 5.0
+
+// Match tuple with mixed types - extract float from middle position
+match (10, 1.5, 20) with | (_, f, _) -> f * 4.0 = 6.0
+
+// Match tuple with all floats - verify all positions get float type
+match (1.0, 2.0, 3.0) with | (a, b, c) -> a + b + c = 6.0
