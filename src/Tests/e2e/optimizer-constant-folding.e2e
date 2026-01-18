@@ -273,3 +273,22 @@ testNestedIfChangeFlag(true, true) = 8
 testNestedIfChangeFlag(true, false) = 51
 testNestedIfChangeFlag(false, true) = 9
 testNestedIfChangeFlag(false, false) = 52
+
+// ===================================================================
+// Comparison Constant Folding (MIR Level)
+// ===================================================================
+// These tests verify that comparison operators are correctly folded
+// when operands become constants through propagation.
+// This specifically exercises the MIR_Optimize constant folding for Lte.
+
+// Less-than-or-equal comparison with propagated constants
+// The key is using values where <= and >= produce different results
+let a = 2 in let b = 3 in (a <= b) = true
+let a = 3 in let b = 2 in (a <= b) = false
+
+// Boundary case: equal values (both <= and >= would be true)
+let a = 5 in let b = 5 in (a <= b) = true
+
+// More complex: comparison result used in further computation
+let x = 1 in let y = 2 in if x <= y then 100 else 200 = 100
+let x = 3 in let y = 2 in if x <= y then 100 else 200 = 200
