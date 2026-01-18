@@ -343,3 +343,23 @@ let f = (a: Int64, b: Int64) => a + b in let makeAdder = (x: Int64) => f(x) in l
 // The outer lambda captures the 3-param function and calls it with just one arg,
 // returning a partially applied function.
 let threeParam = (a: Int64, b: Int64, c: Int64) => a + b + c in let makePartial = (x: Int64) => threeParam(x) in let partial = makePartial(10) in partial(20, 12) = 42
+
+// =====================================================
+// Lambda in Nested Let Body (Mutation #122)
+// =====================================================
+// Tests that varOccursInExpr correctly checks for variable occurrences
+// inside nested let bindings. The mutation (<> -> =) at line 791 would
+// cause the check to skip the body when the inner let doesn't shadow
+// the variable, leading to incorrect dead code elimination.
+//
+// In this test, lambda f is passed as an argument (not called directly),
+// so it cannot be inlined and must remain. The lambda is used inside
+// a nested let's body, not its value. With the mutation, varOccursInExpr
+// would incorrectly report that f doesn't occur, and f would be dropped.
+
+// Helper function that takes a function and applies it
+def applyWith122(fn: (Int64) -> Int64, x: Int64): Int64 = fn(x)
+
+// The key structure: let f = lambda in let y = <not using f> in <use f in body>
+// With mutation, the check skips body because y <> f is false under mutated condition
+let f = (x: Int64) => x + 10 in let y = 5 in applyWith122(f, y) = 15
