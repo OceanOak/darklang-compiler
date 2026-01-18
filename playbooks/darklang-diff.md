@@ -58,10 +58,11 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
    - Fix the compiler, not the tests (unless a test had the wrong expected value)
    - Repeat until all tests pass
 
-8. Update `scripts/validate-darklang.py`:
+8. Update `scripts/validate-darklang.py` and documentation:
 
    - If you fixed a semantic difference, remove or narrow the skip rule that was causing this test to be skipped
    - Run the validator again to confirm the test now passes
+   - If you discovered a new difference category or updated existing skip rules, document it in `docs/darklang-differences.md`
 
 9. After all tests pass, run all Dark benchmarks (`./benchmarks/run_benchmarks.sh`). Ignore the quicksort failure - it's a known issue. If RESULTS.md changed, show the results.
 
@@ -81,22 +82,14 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
 - If a difference cannot be fixed without major architectural changes, report this and choose a different test.
 - If the darklang-interpreter's eval mode doesn't support certain syntax (let bindings, lambdas, etc.), that's an eval limitation, not a real difference. Choose another test.
 - Update both the compiler AND the skip rules in validate-darklang.py so the test can be validated going forward.
+- When adding or modifying skip rules, document the difference in `docs/darklang-differences.md` with examples and status.
 - Some functions exist in this compiler's stdlib but not in Darklang (e.g., helper functions like `digitToString`). Keep those tests and keep/extend `validate-darklang.py` skip rules for them; do not treat their absence in Darklang as a compiler bug or change the tests to expect errors.
 - Internal stdlib helper tests (identifiers starting with `__`) must live under `src/Tests/e2e/stdlib-internal/` so the test runner enables internal identifiers.
 
 ## Quick reference: Areas likely to have differences
 
-**Syntactic differences:**
-
-- Lambda syntax: `(x: Type) => body` vs `fun x -> body`
-- Function call syntax: `Module.func(arg1, arg2)` vs `Stdlib.Module.func arg1 arg2`
-- List syntax: `[1, 2, 3]` vs `[1L; 2L; 3L]`
-- Integer literals: `5` vs `5L`
-
-**Semantic differences:**
-
-- **Division `/` and modulo `%`**: Integer vs float semantics, negative number handling
-- **Bitwise operators** (`<<`, `>>`, `&`, `|`, `^`, `~`): May be missing or different
-- **List.indexOf**: May return `Option` vs `Int64`
-- **String.slice**: Argument interpretation (start/end vs start/length)
-- **Stdlib function signatures**: Argument order, optional parameters
+See [docs/darklang-differences.md](../docs/darklang-differences.md) for the comprehensive reference of all differences, including:
+- Eval mode limitations
+- Syntactic differences requiring conversion
+- Semantic differences in operators
+- Stdlib function signature differences

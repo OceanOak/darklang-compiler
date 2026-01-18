@@ -582,153 +582,126 @@ class Validator:
         return actual.strip() == expected.strip()
 
     def _should_skip(self, test: TestCase) -> Optional[str]:
-        """Check if test should be skipped."""
+        """Check if test should be skipped.
+
+        See docs/darklang-differences.md for detailed explanations of each skip reason.
+        """
         expr = test.expression
         expected = test.expected
 
-        # Skip tests with def (function definitions)
+        # Eval mode limitations
         if test.preamble or 'def ' in expr:
-            return "Contains function definition"
+            return "eval:function_definition"
+        if 'match ' in expr:
+            return "eval:match"
+        if 'let ' in expr:
+            return "eval:let_binding"
+        if '=>' in expr or 'fun ' in expr:
+            return "eval:lambda"
+        if re.search(r'let \w+\s*:\s*\w+', expr):
+            return "eval:typed_let_binding"
+        if expr.startswith('type '):
+            return "eval:type_definition"
+        if re.search(r'\b[A-Z]\w*\s*\{', expr):
+            return "eval:record_construction"
+        if re.search(r'-\s*\(', expr):
+            return "eval:negation_parenthetical"
 
-        # Skip tests expecting compile errors
+        # Error/output expectations (not validatable)
         if 'expect_compile_error' in expected:
-            return "Expects compile error"
-
-        # Skip tests expecting runtime errors (error messages, etc.)
+            return "eval:compile_error"
         expected_error = self._expected_error_message(expr, expected)
         if expected_error is not None and not self._is_supported_error(expected_error):
-            return "Expects error result"
+            return "eval:error_result"
         if (expected.strip() == 'error' or
             (expected.startswith('"') and 'error' in expected.lower()) or
-            (expected_error is None and '= error' in expr)):  # Expression ends with '= error'
-            return "Expects error result"
-
-        # Skip tests with stdout expectations
+            (expected_error is None and '= error' in expr)):
+            return "eval:error_result"
         if 'stdout=' in expected:
-            return "Expects stdout output"
-
-        # Skip tests with stderr expectations
+            return "eval:stdout"
         if 'stderr=' in expected:
-            return "Expects stderr output"
-
-        # Skip tests with exit code expectations
+            return "eval:stderr"
         if 'exit=' in expected:
-            return "Expects exit code"
-
-        # Skip tests with Builtin.test* functions
+            return "eval:exit_code"
         if 'Builtin.test' in expr or 'Builtin.test' in expected:
-            return "Uses Builtin.test functions"
+            return "eval:builtin_test"
 
-        # Skip tests with match expressions (complex conversion)
-        if 'match ' in expr:
-            return "Contains match expression"
-
-        # Skip tests with let bindings (not supported in darklang-interpreter eval)
-        if 'let ' in expr:
-            return "Contains let binding (not supported in eval)"
-
-        # Skip tests with lambda expressions (not supported in darklang-interpreter eval)
-        if '=>' in expr or 'fun ' in expr:
-            return "Contains lambda (not supported in eval)"
-
-        # Skip tests with type annotations in let bindings (complex)
-        if re.search(r'let \w+\s*:\s*\w+', expr):
-            return "Contains typed let binding"
-
-        # Skip tests with sized integer suffixes (y, s, l for int8/16/32, uy, us, ul for unsigned)
+        # Syntax differences
         if re.search(r'\d+[yslYSL]\b', expr) and not re.search(r'\d+L\b', expr):
-            return "Contains sized integer literal"
+            return "syntax:sized_integer"
         if re.search(r'\d+u[yslYSL]\b', expr):
-            return "Contains unsigned integer literal"
-
-        # Skip tests with Stdlib functions that may not exist in Darklang or have different semantics
-        unsupported_stdlib = [
-            'Stdlib.FingerTree', 'Random.',
-            '.__digitToString', '.getByteAt', '.getByteLength',
-            '.setByteAt', '.appendByte', '.fromBytes', '.toBytes',
-            '.head', '.tail', '.init', '.last',  # Some list funcs may differ
-            '.indexOf',  # Returns Option in Darklang vs Int64 in Ralph2
-            '.take', '.drop', '.substring',  # May not exist
-            'Int64.sub',
-            'Int64.mul',
-            'Int64.div',
-            'Int64.isEven',
-            'Int64.isOdd',
-        ]
-        for unsup in unsupported_stdlib:
-            if unsup in expr:
-                return f"Uses unsupported stdlib: {unsup}"
-
-        # Skip tests with internal functions (double underscore prefix)
-        if '.__' in expr:
-            return "Contains internal function"
-
-        # Skip tests with explicit type parameters (Func<Type>)
-        if re.search(r'\w+<\w+>', expr):
-            return "Contains explicit type parameter"
-
-        # Skip tests with string interpolation ($"...")
+            return "syntax:unsigned_integer"
         if '$"' in expr:
-            return "Contains string interpolation"
-
-        # Skip tests with float literals that need >2 decimal places (different precision)
+            return "syntax:string_interpolation"
+        if re.search(r'\w+<\w+>', expr):
+            return "syntax:type_parameter"
         if re.search(r'-?\d+\.\d{3,}', expr):
-            return "Contains high-precision float literal"
-
-        # Skip float arithmetic (eval uses int operators for +, -, *)
+            return "eval:float_precision"
         if re.search(r'\d+\.\d+', expr) and re.search(r'\s[+*]\s|\s-\s', expr):
-            return "Contains float arithmetic (not supported in eval)"
+            return "eval:float_arithmetic"
 
-        # Skip tests with custom type definitions/usage (not supported in eval)
-        if expr.startswith('type '):
-            return "Contains type definition"
+        # Stdlib differences
+        stdlib_skip_map = {
+            'Stdlib.FingerTree': 'internal:data_structure',
+            'Random.': 'stdlib:random',
+            '.__digitToString': 'internal:helper_function',
+            '.getByteAt': 'stdlib:byte_ops',
+            '.getByteLength': 'stdlib:byte_ops',
+            '.setByteAt': 'stdlib:byte_ops',
+            '.appendByte': 'stdlib:byte_ops',
+            '.fromBytes': 'stdlib:byte_ops',
+            '.toBytes': 'stdlib:byte_ops',
+            '.head': 'stdlib:list_accessors',
+            '.tail': 'stdlib:list_accessors',
+            '.init': 'stdlib:list_accessors',
+            '.last': 'stdlib:list_accessors',
+            '.indexOf': 'stdlib:indexOf',
+            '.take': 'stdlib:missing',
+            '.drop': 'stdlib:missing',
+            '.substring': 'stdlib:missing',
+            '.slice': 'stdlib:slice',
+            'Int64.sub': 'stdlib:int64_math',
+            'Int64.mul': 'stdlib:int64_math',
+            'Int64.div': 'stdlib:int64_math',
+            'Int64.isEven': 'stdlib:int64_math',
+            'Int64.isOdd': 'stdlib:int64_math',
+        }
+        for pattern, reason in stdlib_skip_map.items():
+            if pattern in expr:
+                return reason
 
-        # Skip tests with record construction (Name { ... }) or enum variants
-        if re.search(r'\b[A-Z]\w*\s*\{', expr):
-            return "Contains record/type construction"
+        # Internal functions
+        if '.__' in expr:
+            return "internal:helper_function"
 
-        # Skip tests with custom enum/type usage (PascalCase.Variant or Type.method)
-        # Standard stdlib modules are allowed (Int64, List, String, etc.)
+        # Custom types/enums
         allowed_modules = {'Int64', 'Int32', 'Int16', 'Int8', 'UInt64', 'UInt32', 'UInt16', 'UInt8',
                           'Float', 'String', 'List', 'Dict', 'Option', 'Result', 'Bool', 'Char',
                           'Tuple2', 'Tuple3', 'Math', 'Bytes', 'Base64', 'Uuid', 'Stdlib', 'Some', 'None', 'Ok', 'Error'}
         pascal_matches = re.findall(r'\b([A-Z][a-z]+[A-Za-z]*)\b', expr)
         for pascal_name in pascal_matches:
             if pascal_name not in allowed_modules:
-                return f"Contains custom type/enum: {pascal_name}"
+                return f"eval:custom_type:{pascal_name}"
 
-        # Skip tests with user-defined function calls (camelCase identifiers not in stdlib)
-        # These are functions defined earlier in the test file that aren't available in eval
-        # Look for camelCase function calls that aren't stdlib functions
+        # User-defined functions
         func_call_pattern = r'(?<!\.)\b([a-z][a-zA-Z0-9]*)\s*\('
         func_matches = re.findall(func_call_pattern, expr)
-        allowed_funcs = {'if', 'match', 'fun', 'let', 'in', 'true', 'false'}  # Keywords
+        allowed_funcs = {'if', 'match', 'fun', 'let', 'in', 'true', 'false'}
         for func in func_matches:
             if func not in allowed_funcs:
-                return f"Contains user-defined function: {func}"
+                return f"eval:user_function:{func}"
 
-        # Skip tests with division operator (different semantics in Darklang)
-        # Ralph2 uses / for integer division, Darklang uses / for float division
+        # Semantic differences (these need to be fixed in the compiler)
         if re.search(r'\s/\s', expr) or re.search(r'\d+\s*/\s*\d+', expr):
-            return "Contains division operator (different semantics)"
-
-        # Skip tests with modulo operator (may have different semantics)
+            return "semantic:division"
         if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
-            return "Contains modulo operator"
-
-        # Skip tests with bitwise operators (different semantics in Darklang)
+            return "semantic:modulo"
         if ('<<' in expr or '>>' in expr or '^' in expr or '~' in expr or
             re.search(r'(?<!&)&(?!&)', expr) or
             re.search(r'(?<!\|)\|(?!\|)', expr)):
-            return "Contains bitwise operator"
-
-        # Skip tests with unary negation applied to parenthetical (darklang eval limitation)
-        if re.search(r'-\s*\(', expr):
-            return "Contains negation of parenthetical (eval limitation)"
-
-        # Skip tests with boolean not operator (! has different semantics in darklang eval)
+            return "semantic:bitwise"
         if '!' in expr:
-            return "Contains boolean not operator"
+            return "semantic:boolean_not"
 
         return None
 
