@@ -19,7 +19,7 @@ This document lists the language features currently supported by the Dark compil
 
 ## Expressions
 
-- Integer, float, boolean, string, and unit literals (with string escape sequences)
+- Integer, float, boolean, string, and unit literals (with string escape sequences); unsuffixed integer literals are Int64
 - Arithmetic: `+`, `-`, `*`, `/`
 - Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical operators: `&&`, `||`, `!`
@@ -60,3 +60,28 @@ This document lists the language features currently supported by the Dark compil
 - Higher-order functions (pass named functions or lambdas as arguments)
 - Closures (lambdas that capture variables from enclosing scope)
 - Currying and partial application
+
+## Examples
+
+```dark
+// Factorial
+def factorial(n: Int64) : Int64 =
+  if n <= 1 then 1
+  else n * factorial(n - 1)
+
+def main() : Int64 = factorial(5)
+
+// Pattern matching on ADT
+type Option<T> = None | Some of T
+
+def main() : Int64 =
+  match Some(42) with
+  | Some(x) -> x * 2
+  | None -> 0
+
+// List processing (exact-length matching)
+def main() : Int64 =
+  match [1, 2, 3] with
+  | [a, b, c] -> a + b + c  // matches exactly 3 elements
+  | _ -> 0
+```
