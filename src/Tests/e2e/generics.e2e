@@ -174,3 +174,34 @@ def tuple3_id<t>(x: t) : t = x tuple3_id<(Int64, Int64, Int64)>((1, 2, 3)).0 + t
 // Match scrutinee from explicit TypeApp preserves payload type (string equality)
 def gen_match_string<t>(x: t) : t = x
 match gen_match_string<String>("hello") with | s -> if s == ("he" ++ "llo") then 1 else 0 = 1
+
+// =====================================================
+// Mutation #131: Generic Pattern Variable Type Substitution
+// =====================================================
+// Tests that extractPatternBindings correctly performs type substitution
+// when matching on generic sum types with type parameters. The mutation
+// changes && to || in the guard that checks both type name match AND
+// type parameter count match. While this is defensive programming and
+// should always succeed for well-typed code, we test the type substitution
+// code path to ensure correct behavior.
+
+// Generic Option-like type with single type parameter
+type GenOpt<t> = GenNone | GenSome of t
+
+// Match on GenSome with Int64 payload - tests type substitution in pattern binding
+match GenSome(42) with | GenSome(x) -> x + 8 | GenNone -> 0 = 50
+
+// Match on GenSome with nested arithmetic to verify correct type inference
+match GenSome(10) with | GenSome(x) -> x * x + x | GenNone -> 0 = 110
+
+// Generic Result-like type with two type parameters
+type GenRes<t, e> = GenOk of t | GenErr of e
+
+// Match with multiple type params - verify type substitution for both params
+match GenOk(7) with | GenOk(x) -> x * 6 | GenErr(e) -> 0 = 42
+
+// Match on error branch to verify second type param substitution (using Int64 error to avoid string comparison)
+match GenErr(99) with | GenOk(x) -> x | GenErr(e) -> if e == 99 then 42 else 0 = 42
+
+// Nested generic types - GenOpt containing GenRes
+match GenSome(GenOk(21)) with | GenSome(inner) -> match inner with | GenOk(v) -> v * 2 | GenErr(_) -> 0 | GenNone -> 0 = 42
