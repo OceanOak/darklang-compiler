@@ -120,8 +120,6 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | FloatToInt _ -> Some AST.TInt64
     | FloatToString _ -> Some AST.TString
     | RandomInt64 -> Some AST.TInt64
-    | StringHash _ -> Some AST.TInt64
-    | StringEq _ -> Some AST.TBool
     | IfValue (_, thenAtom, _) ->
         // Type is the type of the branches (should be the same)
         match thenAtom with

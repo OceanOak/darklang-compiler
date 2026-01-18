@@ -113,7 +113,7 @@ let createFloatData (floatPool: MIR.FloatPool) : byte array =
 
 /// Create string data bytes from string pool
 /// Format: [length:8 bytes][data:N bytes][null:1 byte] for each string
-/// This matches what StringEq expects (length at offset 0, data at offset 8)
+/// This matches the pooled string layout used by the runtime
 let createStringData (stringPool: MIR.StringPool) : byte array =
     if stringPool.Strings.IsEmpty then
         [||]

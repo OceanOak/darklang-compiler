@@ -165,8 +165,6 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.FloatNeg atom -> maxTempIdInAtom atom
     | ANF.IntToFloat atom -> maxTempIdInAtom atom
     | ANF.FloatToInt atom -> maxTempIdInAtom atom
-    | ANF.StringHash str -> maxTempIdInAtom str
-    | ANF.StringEq (left, right) -> max (maxTempIdInAtom left) (maxTempIdInAtom right)
     | ANF.RefCountIncString str -> maxTempIdInAtom str
     | ANF.RefCountDecString str -> maxTempIdInAtom str
     | ANF.RandomInt64 -> -1  // No atoms, so no TempIds
@@ -442,8 +440,6 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.RawGetByte _ -> "RawGetByte"
     | ANF.RawSet _ -> "RawSet"
     | ANF.RawSetByte _ -> "RawSetByte"
-    | ANF.StringHash _ -> "StringHash"
-    | ANF.StringEq _ -> "StringEq"
     | ANF.RefCountIncString _ -> "RefCountIncString"
     | ANF.RefCountDecString _ -> "RefCountDecString"
     | ANF.RandomInt64 -> "RandomInt64"
@@ -914,15 +910,6 @@ let rec convertExpr
                 | ANF.FloatToInt atom ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatToInt (destReg, op)])
-                | ANF.StringHash strAtom ->
-                    atomToOperand builder strAtom
-                    |> Result.map (fun strOp -> [MIR.StringHash (destReg, strOp)])
-                | ANF.StringEq (leftAtom, rightAtom) ->
-                    atomToOperand builder leftAtom
-                    |> Result.bind (fun leftOp ->
-                        atomToOperand builder rightAtom
-                        |> Result.map (fun rightOp ->
-                            [MIR.StringEq (destReg, leftOp, rightOp)]))
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])
@@ -1523,15 +1510,6 @@ and convertExprToOperand
                 | ANF.FloatToInt atom ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatToInt (destReg, op)])
-                | ANF.StringHash strAtom ->
-                    atomToOperand builder strAtom
-                    |> Result.map (fun strOp -> [MIR.StringHash (destReg, strOp)])
-                | ANF.StringEq (leftAtom, rightAtom) ->
-                    atomToOperand builder leftAtom
-                    |> Result.bind (fun leftOp ->
-                        atomToOperand builder rightAtom
-                        |> Result.map (fun rightOp ->
-                            [MIR.StringEq (destReg, leftOp, rightOp)]))
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])

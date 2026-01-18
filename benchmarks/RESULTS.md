@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-17 23:15:37
-**Commit:** `4d064f08` - Refactor compile result to Result
+**Last Updated:** 2026-01-18 00:09:12
+**Commit:** `c3e5bbc1` - Move string/hash intrinsics into Dark
 
 | Benchmark     |           Dark (4.43x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

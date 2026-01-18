@@ -74,8 +74,6 @@ let hasSideEffects (instr: Instr) : bool =
     | FloatNeg _ -> false   // Pure float operation
     | IntToFloat _ -> false // Pure conversion
     | FloatToInt _ -> false // Pure conversion
-    | StringHash _ -> false  // Pure
-    | StringEq _ -> false    // Pure
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 _ -> true  // Syscall
@@ -114,8 +112,6 @@ let getInstrDest (instr: Instr) : VReg option =
     | FloatNeg (dest, _) -> Some dest
     | IntToFloat (dest, _) -> Some dest
     | FloatToInt (dest, _) -> Some dest
-    | StringHash (dest, _) -> Some dest
-    | StringEq (dest, _, _) -> Some dest
     | HeapStore _ -> None
     | RefCountInc _ -> None
     | RefCountDec _ -> None
@@ -173,8 +169,6 @@ let getInstrUses (instr: Instr) : Set<VReg> =
     | FloatNeg (_, src) -> fromOperand src
     | IntToFloat (_, src) -> fromOperand src
     | FloatToInt (_, src) -> fromOperand src
-    | StringHash (_, str) -> fromOperand str
-    | StringEq (_, left, right) -> Set.union (fromOperand left) (fromOperand right)
     | RefCountIncString str -> fromOperand str
     | RefCountDecString str -> fromOperand str
     | RandomInt64 _ -> Set.empty  // No operand uses
@@ -280,8 +274,6 @@ let isHoistableInstr (instr: Instr) : bool =
     | FloatNeg _ -> true
     | IntToFloat _ -> true
     | FloatToInt _ -> true
-    | StringHash _ -> true
-    | StringEq _ -> true
     | _ -> false
 
 /// Apply loop-invariant code motion for loops with a simple preheader
@@ -445,8 +437,6 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)
                 | IntToFloat (dest, src) -> IntToFloat (dest, rewriteOperand src)
                 | FloatToInt (dest, src) -> FloatToInt (dest, rewriteOperand src)
-                | StringHash (dest, str) -> StringHash (dest, rewriteOperand str)
-                | StringEq (dest, left, right) -> StringEq (dest, rewriteOperand left, rewriteOperand right)
                 | _ -> instr
 
             let rec findHoistable invariants hoistMap =
@@ -687,8 +677,6 @@ let propagateCopyInstr (copies: CopyMap) (instr: Instr) : Instr =
     | FloatNeg (dest, src) -> FloatNeg (dest, p src)
     | IntToFloat (dest, src) -> IntToFloat (dest, p src)
     | FloatToInt (dest, src) -> FloatToInt (dest, p src)
-    | StringHash (dest, str) -> StringHash (dest, p str)
-    | StringEq (dest, left, right) -> StringEq (dest, p left, p right)
     | RefCountIncString str -> RefCountIncString (p str)
     | RefCountDecString str -> RefCountDecString (p str)
     | RandomInt64 dest -> RandomInt64 dest

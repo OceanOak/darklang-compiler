@@ -22,7 +22,6 @@ let private buildSymbolicProgram () : Result<LIR.Program * string * float, strin
         let label = LIR.Label "entry"
         let instrs = [
             LIR.PrintString (stringIdx, len)
-            LIR.StringHash (LIR.Virtual 0, LIR.StringRef stringIdx)
             LIR.FLoad (LIR.FVirtual 0, floatIdx)
         ]
         let block: LIR.BasicBlock = { Label = label; Instrs = instrs; Terminator = LIR.Ret }
@@ -52,7 +51,6 @@ let testSymbolizeResolveRoundTrip () : TestResult =
                     |> List.exists (function
                         | LIRSymbolic.PrintString value -> value = stringValue
                         | LIRSymbolic.FLoad (_, value) -> value = floatValue
-                        | LIRSymbolic.StringHash (_, LIRSymbolic.StringSymbol value) -> value = stringValue
                         | _ -> false)
                 | _ -> false
             if not hasSymbols then

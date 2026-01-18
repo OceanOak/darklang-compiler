@@ -216,8 +216,6 @@ let getBlockDefs (block: BasicBlock) : Set<VReg> =
         | FloatNeg (dest, _) -> Set.add dest defs
         | IntToFloat (dest, _) -> Set.add dest defs
         | FloatToInt (dest, _) -> Set.add dest defs
-        | StringHash (dest, _) -> Set.add dest defs
-        | StringEq (dest, _, _) -> Set.add dest defs
         | RefCountIncString _ -> defs
         | RefCountDecString _ -> defs
         | RandomInt64 dest -> Set.add dest defs
@@ -312,9 +310,6 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
             | FloatNeg (_, src) -> Set.union uses (getOperandUses src)
             | IntToFloat (_, src) -> Set.union uses (getOperandUses src)
             | FloatToInt (_, src) -> Set.union uses (getOperandUses src)
-            | StringHash (_, str) -> Set.union uses (getOperandUses str)
-            | StringEq (_, left, right) ->
-                uses |> Set.union (getOperandUses left) |> Set.union (getOperandUses right)
             | RefCountIncString str -> Set.union uses (getOperandUses str)
             | RefCountDecString str -> Set.union uses (getOperandUses str)
             | RandomInt64 _ -> uses  // No operand uses
@@ -773,17 +768,6 @@ let renameInstr (state: RenamingState) (instr: Instr) : Instr * RenamingState =
         let src' = renameOperand state src
         let (_, newDest, state') = newVersion state dest
         (FloatToInt (newDest, src'), state')
-
-    | StringHash (dest, str) ->
-        let str' = renameOperand state str
-        let (_, newDest, state') = newVersion state dest
-        (StringHash (newDest, str'), state')
-
-    | StringEq (dest, left, right) ->
-        let left' = renameOperand state left
-        let right' = renameOperand state right
-        let (_, newDest, state') = newVersion state dest
-        (StringEq (newDest, left', right'), state')
 
     | RefCountIncString str ->
         let str' = renameOperand state str

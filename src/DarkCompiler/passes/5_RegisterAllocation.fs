@@ -14,7 +14,7 @@
 // General-Purpose Registers:
 // - X0: reserved for return values
 // - X1-X8: caller-saved (preferred for allocation)
-// - X9-X10: excluded (used by StringHash/StringEq internally)
+// - X9-X10: excluded (used as compiler scratch registers)
 // - X11-X13: reserved as scratch registers for spill code
 // - X19-X26: callee-saved (used when caller-saved exhausted)
 // - X27: reserved for free list base pointer
@@ -231,12 +231,6 @@ let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
     // IntToFloat uses an integer source register
     | LIRSymbolic.IntToFloat (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.StringHash (_, str) ->
-        operandToVReg str |> Option.toList |> Set.ofList
-    | LIRSymbolic.StringEq (_, left, right) ->
-        let l = operandToVReg left |> Option.toList
-        let r = operandToVReg right |> Option.toList
-        Set.ofList (l @ r)
     | LIRSymbolic.RefCountIncString str ->
         operandToVReg str |> Option.toList |> Set.ofList
     | LIRSymbolic.RefCountDecString str ->
@@ -299,8 +293,6 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.FloatToInt (dest, _) -> regToVReg dest
     // FpToGp defines an integer destination register
     | LIRSymbolic.FpToGp (dest, _) -> regToVReg dest
-    | LIRSymbolic.StringHash (dest, _) -> regToVReg dest
-    | LIRSymbolic.StringEq (dest, _, _) -> regToVReg dest
     | LIRSymbolic.RefCountIncString _ -> None
     | LIRSymbolic.RefCountDecString _ -> None
     | LIRSymbolic.RandomInt64 dest -> regToVReg dest
@@ -710,7 +702,7 @@ let buildLiveIntervals (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, BlockLiv
 
 /// Caller-saved registers (X1-X7) - preferred for allocation
 /// Note: X8 is excluded because StringConcat uses it as a scratch register for byte copying
-/// Note: X9-X10 are excluded because StringHash/StringEq use them internally
+/// Note: X9-X10 are excluded because they are used as compiler scratch registers
 let callerSavedRegs = [
     LIR.X1; LIR.X2; LIR.X3; LIR.X4; LIR.X5
     LIR.X6; LIR.X7
@@ -2124,27 +2116,6 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
         let (valueReg, valueLoads) = loadSpilled mapping value LIR.X14
         ptrLoads @ offsetLoads @ valueLoads @ [LIRSymbolic.RawSetByte (ptrReg, offsetReg, valueReg)]
-
-    | LIRSymbolic.StringHash (dest, str) ->
-        let (destReg, destAlloc) = applyToReg mapping dest
-        let (strOp, strLoads) = applyToOperand mapping str LIR.X12
-        let hashInstr = LIRSymbolic.StringHash (destReg, strOp)
-        let storeInstrs =
-            match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
-            | _ -> []
-        strLoads @ [hashInstr] @ storeInstrs
-
-    | LIRSymbolic.StringEq (dest, left, right) ->
-        let (destReg, destAlloc) = applyToReg mapping dest
-        let (leftOp, leftLoads) = applyToOperand mapping left LIR.X12
-        let (rightOp, rightLoads) = applyToOperand mapping right LIR.X13
-        let eqInstr = LIRSymbolic.StringEq (destReg, leftOp, rightOp)
-        let storeInstrs =
-            match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
-            | _ -> []
-        leftLoads @ rightLoads @ [eqInstr] @ storeInstrs
 
     | LIRSymbolic.RefCountIncString str ->
         let (strOp, strLoads) = applyToOperand mapping str LIR.X12

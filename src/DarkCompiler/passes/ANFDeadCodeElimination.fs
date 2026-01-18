@@ -68,9 +68,6 @@ let private extractFromCExpr (cexpr: ANF.CExpr) : string list =
         extractFromAtom ptr @ extractFromAtom offset @ extractFromAtom value
     | ANF.RawSetByte (ptr, offset, value) ->
         extractFromAtom ptr @ extractFromAtom offset @ extractFromAtom value
-    | ANF.StringHash str -> extractFromAtom str
-    | ANF.StringEq (left, right) ->
-        extractFromAtom left @ extractFromAtom right
     | ANF.RefCountIncString atom -> extractFromAtom atom
     | ANF.RefCountDecString atom -> extractFromAtom atom
     | ANF.RandomInt64 -> []  // No atoms

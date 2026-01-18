@@ -284,8 +284,6 @@ let renameCExpr (mapping: Map<TempId, TempId>) (cexpr: CExpr) : CExpr =
     | RawGetByte (ptr, offset) -> RawGetByte (r ptr, r offset)
     | RawSet (ptr, offset, value, valueType) -> RawSet (r ptr, r offset, r value, valueType)
     | RawSetByte (ptr, offset, value) -> RawSetByte (r ptr, r offset, r value)
-    | StringHash str -> StringHash (r str)
-    | StringEq (left, right) -> StringEq (r left, r right)
     | RefCountIncString a -> RefCountIncString (r a)
     | RefCountDecString a -> RefCountDecString (r a)
     | RandomInt64 -> RandomInt64

@@ -2807,9 +2807,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         let exprWithLeft = wrapBindings leftBindings exprWithRight
                         Ok (exprWithLeft, varGen4)
                     | Ok AST.TString ->
-                        // String equality - use StringEq
+                        // String equality - call __string_eq
                         let (tempVar, varGen3) = ANF.freshVar varGen2
-                        let cexpr = ANF.StringEq (leftAtom, rightAtom)
+                        let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
                         // For Neq, negate the result
                         let (finalAtom, finalBindings, varGen4) =
                             if op = AST.Neq then
@@ -5370,9 +5370,9 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         let allBindings = leftBindings @ rightBindings @ finalBindings
                         Ok (finalAtom, allBindings, varGen4)
                     | Ok AST.TString ->
-                        // String equality - use StringEq
+                        // String equality - call __string_eq
                         let (tempVar, varGen3) = ANF.freshVar varGen2
-                        let cexpr = ANF.StringEq (leftAtom, rightAtom)
+                        let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
                         // For Neq, negate the result
                         let (finalAtom, finalBindings, varGen4) =
                             if op = AST.Neq then

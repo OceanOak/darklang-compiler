@@ -1247,17 +1247,6 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
         | Ok (srcInstrs, srcFReg) ->
             Ok (srcInstrs @ [LIRSymbolic.FloatToInt (lirDest, srcFReg)])
 
-    | MIR.StringHash (dest, str) ->
-        let lirDest = vregToLIRReg dest
-        let lirStr = convertOperand str
-        Ok [LIRSymbolic.StringHash (lirDest, lirStr)]
-
-    | MIR.StringEq (dest, left, right) ->
-        let lirDest = vregToLIRReg dest
-        let lirLeft = convertOperand left
-        let lirRight = convertOperand right
-        Ok [LIRSymbolic.StringEq (lirDest, lirLeft, lirRight)]
-
     | MIR.RefCountIncString str ->
         let lirStr = convertOperand str
         Ok [LIRSymbolic.RefCountIncString lirStr]

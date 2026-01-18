@@ -114,8 +114,6 @@ type Instr =
     | RawGetByte of dest:Reg * ptr:Reg * byteOffset:Reg
     | RawSet of ptr:Reg * byteOffset:Reg * value:Reg
     | RawSetByte of ptr:Reg * byteOffset:Reg * value:Reg
-    | StringHash of dest:Reg * str:Operand
-    | StringEq of dest:Reg * left:Operand * right:Operand
     | RefCountIncString of str:Operand
     | RefCountDecString of str:Operand
     | RandomInt64 of dest:Reg
@@ -335,14 +333,6 @@ let fromLIR (program: LIR.Program) : Result<Program, string> =
         | LIR.RawGetByte (dest, ptr, byteOffset) -> Ok (RawGetByte (dest, ptr, byteOffset))
         | LIR.RawSet (ptr, byteOffset, value) -> Ok (RawSet (ptr, byteOffset, value))
         | LIR.RawSetByte (ptr, byteOffset, value) -> Ok (RawSetByte (ptr, byteOffset, value))
-        | LIR.StringHash (dest, str) ->
-            symbolOperand str |> Result.map (fun str' -> StringHash (dest, str'))
-        | LIR.StringEq (dest, left, right) ->
-            match symbolOperand left with
-            | Error err -> Error err
-            | Ok left' ->
-                symbolOperand right
-                |> Result.map (fun right' -> StringEq (dest, left', right'))
         | LIR.RefCountIncString str ->
             symbolOperand str |> Result.map RefCountIncString
         | LIR.RefCountDecString str ->
@@ -581,14 +571,6 @@ let private resolveProgram (initialState: PoolState) (functions: Function list) 
         | RawGetByte (dest, ptr, byteOffset) -> Ok (LIR.RawGetByte (dest, ptr, byteOffset), state)
         | RawSet (ptr, byteOffset, value) -> Ok (LIR.RawSet (ptr, byteOffset, value), state)
         | RawSetByte (ptr, byteOffset, value) -> Ok (LIR.RawSetByte (ptr, byteOffset, value), state)
-        | StringHash (dest, str) ->
-            resolveOperand state str |> Result.map (fun (str', st) -> (LIR.StringHash (dest, str'), st))
-        | StringEq (dest, left, right) ->
-            match resolveOperand state left with
-            | Error err -> Error err
-            | Ok (left', st1) ->
-                resolveOperand st1 right
-                |> Result.map (fun (right', st2) -> (LIR.StringEq (dest, left', right'), st2))
         | RefCountIncString str ->
             resolveOperand state str |> Result.map (fun (str', st) -> (LIR.RefCountIncString str', st))
         | RefCountDecString str ->

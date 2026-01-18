@@ -124,10 +124,6 @@ let private prettyPrintANFCExpr = function
         $"IntToFloat({prettyPrintANFAtom atom})"
     | ANF.FloatToInt atom ->
         $"FloatToInt({prettyPrintANFAtom atom})"
-    | ANF.StringHash str ->
-        $"StringHash({prettyPrintANFAtom str})"
-    | ANF.StringEq (left, right) ->
-        $"StringEq({prettyPrintANFAtom left}, {prettyPrintANFAtom right})"
     | ANF.FloatToString atom ->
         $"FloatToString({prettyPrintANFAtom atom})"
     | ANF.RefCountIncString str ->
@@ -309,10 +305,6 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         appendTypeSuffix valueType baseText
     | MIR.RawSetByte (ptr, byteOffset, value) ->
         $"RawSetByte({prettyPrintMIROperand ptr}, {prettyPrintMIROperand byteOffset}, {prettyPrintMIROperand value})"
-    | MIR.StringHash (dest, str) ->
-        $"{prettyPrintMIRVReg dest} <- StringHash({prettyPrintMIROperand str})"
-    | MIR.StringEq (dest, left, right) ->
-        $"{prettyPrintMIRVReg dest} <- StringEq({prettyPrintMIROperand left}, {prettyPrintMIROperand right})"
     | MIR.RefCountIncString str ->
         $"RefCountIncString({prettyPrintMIROperand str})"
     | MIR.RefCountDecString str ->
@@ -605,10 +597,6 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
     | LIR.RawSetByte (ptr, byteOffset, value) ->
         $"RawSetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
     // String intrinsics
-    | LIR.StringHash (dest, str) ->
-        $"{prettyPrintLIRReg dest} <- StringHash({prettyPrintLIROperand str})"
-    | LIR.StringEq (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- StringEq({prettyPrintLIROperand left}, {prettyPrintLIROperand right})"
     | LIR.FloatToString (dest, value) ->
         $"{prettyPrintLIRReg dest} <- FloatToString({prettyPrintLIRFReg value})"
     | LIR.RefCountIncString str ->
@@ -873,10 +861,6 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
         $"RawSet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
     | LIRSymbolic.RawSetByte (ptr, byteOffset, value) ->
         $"RawSetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
-    | LIRSymbolic.StringHash (dest, str) ->
-        $"{prettyPrintLIRReg dest} <- StringHash({prettyPrintSymbolicOperand str})"
-    | LIRSymbolic.StringEq (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- StringEq({prettyPrintSymbolicOperand left}, {prettyPrintSymbolicOperand right})"
     | LIRSymbolic.RefCountIncString str ->
         $"RefCountIncString({prettyPrintSymbolicOperand str})"
     | LIRSymbolic.RefCountDecString str ->

@@ -108,9 +108,6 @@ type Instr =
     | RawGetByte of dest:VReg * ptr:Operand * byteOffset:Operand  // Read 1 byte at offset (zero-extended)
     | RawSet of ptr:Operand * byteOffset:Operand * value:Operand * valueType:AST.Type option  // Write 8 bytes at offset, valueType for float
     | RawSetByte of ptr:Operand * byteOffset:Operand * value:Operand  // Write 1 byte at offset
-    // String intrinsics (for Dict with string keys)
-    | StringHash of dest:VReg * str:Operand       // FNV-1a hash of string, returns Int64
-    | StringEq of dest:VReg * left:Operand * right:Operand  // Byte-wise string equality
     // String reference counting (at dynamic offset)
     | RefCountIncString of str:Operand             // Increment string ref count (at [str + 8 + len])
     | RefCountDecString of str:Operand             // Decrement string ref count, free if zero
