@@ -101,7 +101,14 @@ type Pattern =
     | PWildcard                                            // _
     | PVar of string                                       // x (binds value to variable)
     | PConstructor of variantName:string * payload:Pattern option  // Red, Some(x)
-    | PLiteral of int64                                    // 42 (integer literal)
+    | PLiteral of int64                                    // 42 (Int64 literal)
+    | PInt8Literal of sbyte                                // 1y
+    | PInt16Literal of int16                               // 1s
+    | PInt32Literal of int32                               // 1l
+    | PUInt8Literal of byte                                // 1uy
+    | PUInt16Literal of uint16                             // 1us
+    | PUInt32Literal of uint32                             // 1ul
+    | PUInt64Literal of uint64                             // 1UL
     | PBool of bool                                        // true, false
     | PString of string                                    // "hello"
     | PFloat of float                                      // 3.14

@@ -319,6 +319,9 @@ match (1 > 10) || (10 > 1) with | true -> 42 | false -> 0 = 42
 // This should produce a compile error
 match [1, 2, 3] with | [a, b] -> a + b = error="Non-exhaustive"
 
+// Integer literal pattern on non-int scrutinee should be rejected
+match true with | 1 -> 42 | _ -> 0 = error="Integer literal pattern used on non-Int64 type"
+
 // === Unsupported nested pattern tests ===
 // These test that we properly reject patterns that aren't yet supported,
 // rather than silently generating incorrect code.

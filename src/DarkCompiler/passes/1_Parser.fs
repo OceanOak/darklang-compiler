@@ -1036,29 +1036,28 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         // Integer literal pattern (Int64)
         Ok (PLiteral n, rest)
     | TInt8 n :: rest ->
-        // Int8 literal pattern (convert to int64 for pattern matching)
-        Ok (PLiteral (int64 n), rest)
+        Ok (PInt8Literal n, rest)
     | TInt16 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PInt16Literal n, rest)
     | TInt32 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PInt32Literal n, rest)
     | TUInt8 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PUInt8Literal n, rest)
     | TUInt16 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PUInt16Literal n, rest)
     | TUInt32 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PUInt32Literal n, rest)
     | TUInt64 n :: rest ->
-        Ok (PLiteral (int64 n), rest)
+        Ok (PUInt64Literal n, rest)
     | TMinus :: TInt n :: rest ->
         // Negative integer literal pattern
         Ok (PLiteral (-n), rest)
     | TMinus :: TInt8 n :: rest ->
-        Ok (PLiteral (int64 (-n)), rest)
+        Ok (PInt8Literal (sbyte (-int n)), rest)
     | TMinus :: TInt16 n :: rest ->
-        Ok (PLiteral (int64 (-n)), rest)
+        Ok (PInt16Literal (int16 (-int n)), rest)
     | TMinus :: TInt32 n :: rest ->
-        Ok (PLiteral (int64 (-n)), rest)
+        Ok (PInt32Literal (-n), rest)
     | TTrue :: rest ->
         // Boolean true pattern
         Ok (PBool true, rest)
@@ -2014,7 +2013,19 @@ let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
         let headResult =
             head |> List.fold (fun acc p -> Result.bind (fun () -> validatePattern p) acc) (Ok ())
         Result.bind (fun () -> validatePattern tail) headResult
-    | PUnit | PWildcard | PLiteral _ | PBool _ | PString _ | PFloat _ -> Ok ()
+    | PUnit
+    | PWildcard
+    | PLiteral _
+    | PInt8Literal _
+    | PInt16Literal _
+    | PInt32Literal _
+    | PUInt8Literal _
+    | PUInt16Literal _
+    | PUInt32Literal _
+    | PUInt64Literal _
+    | PBool _
+    | PString _
+    | PFloat _ -> Ok ()
 
 let rec private validateExpr (expr: Expr) : Result<unit, string> =
     match expr with

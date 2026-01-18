@@ -392,7 +392,17 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
     | PUnit -> Set.empty
     | PWildcard -> Set.empty
     | PVar name -> Set.singleton name
-    | PLiteral _ | PBool _ | PString _ | PFloat _ -> Set.empty
+    | PLiteral _
+    | PInt8Literal _
+    | PInt16Literal _
+    | PInt32Literal _
+    | PUInt8Literal _
+    | PUInt16Literal _
+    | PUInt32Literal _
+    | PUInt64Literal _
+    | PBool _
+    | PString _
+    | PFloat _ -> Set.empty
     | PConstructor (_, None) -> Set.empty
     | PConstructor (_, Some payload) -> collectPatternBindings payload
     | PTuple patterns ->
@@ -1827,13 +1837,27 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         |> Result.bind (fun (scrutineeType, scrutinee') ->
             // Extract bindings from a pattern based on scrutinee type
             let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
+                let ensureLiteralType (expectedType: Type) : Result<(string * Type) list, TypeError> =
+                    let resolvedPatternType = resolveType aliasReg patternType
+                    if resolvedPatternType = expectedType then
+                        Ok []
+                    else
+                        Error (GenericError $"Integer literal pattern used on non-{typeToString expectedType} type")
+
                 match pattern with
                 | PUnit ->
                     match patternType with
                     | TUnit -> Ok []
                     | _ -> Error (GenericError "Unit pattern can only match unit type")
                 | PWildcard -> Ok []
-                | PLiteral _ -> Ok []
+                | PLiteral _ -> ensureLiteralType TInt64
+                | PInt8Literal _ -> ensureLiteralType TInt8
+                | PInt16Literal _ -> ensureLiteralType TInt16
+                | PInt32Literal _ -> ensureLiteralType TInt32
+                | PUInt8Literal _ -> ensureLiteralType TUInt8
+                | PUInt16Literal _ -> ensureLiteralType TUInt16
+                | PUInt32Literal _ -> ensureLiteralType TUInt32
+                | PUInt64Literal _ -> ensureLiteralType TUInt64
                 | PBool _ -> Ok []
                 | PString _ -> Ok []
                 | PFloat _ -> Ok []

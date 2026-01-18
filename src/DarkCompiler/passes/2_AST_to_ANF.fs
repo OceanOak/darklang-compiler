@@ -57,6 +57,19 @@ let rec typeToString (ty: AST.Type) : string =
         "(" + (paramTypes |> List.map typeToString |> String.concat ",") + ")->" + typeToString retType
     | AST.TTuple types -> "(" + (types |> List.map typeToString |> String.concat "*") + ")"
 
+/// Convert a literal pattern into an ANF sized integer
+let patternLiteralToSizedInt (pattern: AST.Pattern) : ANF.SizedInt option =
+    match pattern with
+    | AST.PLiteral n -> Some (ANF.Int64 n)
+    | AST.PInt8Literal n -> Some (ANF.Int8 n)
+    | AST.PInt16Literal n -> Some (ANF.Int16 n)
+    | AST.PInt32Literal n -> Some (ANF.Int32 n)
+    | AST.PUInt8Literal n -> Some (ANF.UInt8 n)
+    | AST.PUInt16Literal n -> Some (ANF.UInt16 n)
+    | AST.PUInt32Literal n -> Some (ANF.UInt32 n)
+    | AST.PUInt64Literal n -> Some (ANF.UInt64 n)
+    | _ -> None
+
 /// Try to convert a function call to a file I/O intrinsic CExpr
 /// Returns Some CExpr if it's a file intrinsic, None otherwise
 let tryFileIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
@@ -1042,7 +1055,18 @@ let rec simpleInferType
         match pattern with
         | AST.PVar name -> Map.ofList [(name, scrutType)]
         | AST.PWildcard -> Map.empty
-        | AST.PUnit | AST.PLiteral _ | AST.PBool _ | AST.PString _ | AST.PFloat _ -> Map.empty
+        | AST.PLiteral _
+        | AST.PInt8Literal _
+        | AST.PInt16Literal _
+        | AST.PInt32Literal _
+        | AST.PUInt8Literal _
+        | AST.PUInt16Literal _
+        | AST.PUInt32Literal _
+        | AST.PUInt64Literal _
+        | AST.PUnit
+        | AST.PBool _
+        | AST.PString _
+        | AST.PFloat _ -> Map.empty
         | AST.PTuple innerPats ->
             match scrutType with
             | AST.TTuple elemTypes when List.length elemTypes = List.length innerPats ->
@@ -2465,7 +2489,18 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             match pattern with
             | AST.PVar name -> Map.ofList [(name, scrutType)]
             | AST.PWildcard -> Map.empty
-            | AST.PUnit | AST.PLiteral _ | AST.PBool _ | AST.PString _ | AST.PFloat _ -> Map.empty
+            | AST.PLiteral _
+            | AST.PInt8Literal _
+            | AST.PInt16Literal _
+            | AST.PInt32Literal _
+            | AST.PUInt8Literal _
+            | AST.PUInt16Literal _
+            | AST.PUInt32Literal _
+            | AST.PUInt64Literal _
+            | AST.PUnit
+            | AST.PBool _
+            | AST.PString _
+            | AST.PFloat _ -> Map.empty
             | AST.PTuple innerPats ->
                 match scrutType with
                 | AST.TTuple elemTypes when List.length elemTypes = List.length innerPats ->
@@ -3489,7 +3524,15 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 match pattern with
                 | AST.PUnit -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PWildcard -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
-                | AST.PLiteral _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
+                | AST.PLiteral _
+                | AST.PInt8Literal _
+                | AST.PInt16Literal _
+                | AST.PInt32Literal _
+                | AST.PUInt8Literal _
+                | AST.PUInt16Literal _
+                | AST.PUInt32Literal _
+                | AST.PUInt64Literal _ ->
+                    toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PBool _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PString _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PFloat _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
@@ -3549,7 +3592,19 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // sourceType is the type of the source being matched, used to get correct element types
                     let rec collectPatternBindings (pat: AST.Pattern) (sourceAtom: ANF.Atom) (sourceType: AST.Type) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                         match pat with
-                        | AST.PUnit | AST.PWildcard | AST.PLiteral _ | AST.PBool _ | AST.PString _ | AST.PFloat _ ->
+                        | AST.PLiteral _
+                        | AST.PInt8Literal _
+                        | AST.PInt16Literal _
+                        | AST.PInt32Literal _
+                        | AST.PUInt8Literal _
+                        | AST.PUInt16Literal _
+                        | AST.PUInt32Literal _
+                        | AST.PUInt64Literal _
+                        | AST.PUnit
+                        | AST.PWildcard
+                        | AST.PBool _
+                        | AST.PString _
+                        | AST.PFloat _ ->
                             // No variable bindings
                             Ok (env, bindings, vg)
                         | AST.PVar name ->
@@ -3750,7 +3805,17 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectRecordBindings rest restTypes newEnv (binding :: bindings) vg1 (fieldIdx + 1)
                             | AST.PWildcard ->
                                 collectRecordBindings rest restTypes env bindings vg1 (fieldIdx + 1)
-                            | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                            | AST.PLiteral _
+                            | AST.PInt8Literal _
+                            | AST.PInt16Literal _
+                            | AST.PInt32Literal _
+                            | AST.PUInt8Literal _
+                            | AST.PUInt16Literal _
+                            | AST.PUInt32Literal _
+                            | AST.PUInt64Literal _
+                            | AST.PUnit
+                            | AST.PConstructor _
+                            | AST.PBool _
                             | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in record field not yet supported: {pat}"
@@ -3815,7 +3880,17 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [elemBinding]) vg1
                             | AST.PWildcard ->
                                 collectTupleBindings tupRest tupleAtom tupleType (idx + 1) env bindings vg1
-                            | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                            | AST.PLiteral _
+                            | AST.PInt8Literal _
+                            | AST.PInt16Literal _
+                            | AST.PInt32Literal _
+                            | AST.PUInt8Literal _
+                            | AST.PUInt16Literal _
+                            | AST.PUInt32Literal _
+                            | AST.PUInt64Literal _
+                            | AST.PUnit
+                            | AST.PConstructor _
+                            | AST.PBool _
                             | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in tuple element not yet supported: {tupPat}"
@@ -3979,14 +4054,34 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                             collectTupleBindings tupRest types tupleAtom (idx + 1) newEnv (elemBinding :: rawElemBinding :: bindings) vg1'
                                         | AST.PWildcard ->
                                             collectTupleBindings tupRest types tupleAtom (idx + 1) env (rawElemBinding :: bindings) vg1
-                                        | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                                        | AST.PLiteral _
+                                        | AST.PInt8Literal _
+                                        | AST.PInt16Literal _
+                                        | AST.PInt32Literal _
+                                        | AST.PUInt8Literal _
+                                        | AST.PUInt16Literal _
+                                        | AST.PUInt32Literal _
+                                        | AST.PUInt64Literal _
+                                        | AST.PUnit
+                                        | AST.PConstructor _
+                                        | AST.PBool _
                                         | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                                         | AST.PList _ | AST.PListCons _ ->
                                             Error $"Nested pattern in tuple element not yet supported: {tupPat}"
                                 collectTupleBindings innerPatterns tupleElemTypes (ANF.Var headVar) 0 env allBaseBindings vg2'
                                 |> Result.bind (fun (newEnv, newBindings, vg3) ->
                                     collectListConsBindings rest (ANF.Var tailVar) newEnv newBindings vg3)
-                            | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                            | AST.PLiteral _
+                            | AST.PInt8Literal _
+                            | AST.PInt16Literal _
+                            | AST.PInt32Literal _
+                            | AST.PUInt8Literal _
+                            | AST.PUInt16Literal _
+                            | AST.PUInt32Literal _
+                            | AST.PUInt64Literal _
+                            | AST.PUnit
+                            | AST.PConstructor _
+                            | AST.PBool _
                             | AST.PString _ | AST.PFloat _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in list cons element not yet supported: {pat}"
@@ -4024,7 +4119,19 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 // sourceType is the type of the source being matched
                 let rec collectBindings (pat: AST.Pattern) (sourceAtom: ANF.Atom) (sourceType: AST.Type) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                     match pat with
-                    | AST.PUnit | AST.PWildcard | AST.PLiteral _ | AST.PBool _ | AST.PString _ | AST.PFloat _ ->
+                    | AST.PLiteral _
+                    | AST.PInt8Literal _
+                    | AST.PInt16Literal _
+                    | AST.PInt32Literal _
+                    | AST.PUInt8Literal _
+                    | AST.PUInt16Literal _
+                    | AST.PUInt32Literal _
+                    | AST.PUInt64Literal _
+                    | AST.PUnit
+                    | AST.PWildcard
+                    | AST.PBool _
+                    | AST.PString _
+                    | AST.PFloat _ ->
                         Ok (env, bindings, vg)
                     | AST.PVar name ->
                         let (tempId, vg1) = ANF.freshVar vg
@@ -4190,6 +4297,34 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 | AST.PLiteral n ->
                     let (cmpVar, vg1) = ANF.freshVar vg
                     let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.Int64 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PInt8Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.Int8 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PInt16Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.Int16 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PInt32Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.Int32 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PUInt8Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.UInt8 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PUInt16Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.UInt16 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PUInt32Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.UInt32 n))
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PUInt64Literal n ->
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.IntLiteral (ANF.UInt64 n))
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PBool b ->
                     let (cmpVar, vg1) = ANF.freshVar vg
@@ -4422,7 +4557,17 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [rawElemBinding; elemBinding]) vg1'
                             | AST.PWildcard ->
                                 extractTupleBindings tupRest tupleAtom tupleType (idx + 1) env (bindings @ [rawElemBinding]) vg1
-                            | AST.PUnit | AST.PConstructor _ | AST.PLiteral _ | AST.PBool _
+                            | AST.PLiteral _
+                            | AST.PInt8Literal _
+                            | AST.PInt16Literal _
+                            | AST.PInt32Literal _
+                            | AST.PUInt8Literal _
+                            | AST.PUInt16Literal _
+                            | AST.PUInt32Literal _
+                            | AST.PUInt64Literal _
+                            | AST.PUnit
+                            | AST.PConstructor _
+                            | AST.PBool _
                             | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in tuple element not yet supported: {tupPat}"
@@ -4459,6 +4604,22 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
                     // Bind the pattern
                     let pat = List.head patterns
+                    let compileLiteralPattern (literal: ANF.SizedInt) =
+                        // Literal pattern: check tag==SINGLE, extract value, check value==literal
+                        // Important: bindings must come BEFORE the literal check since they define valueVar
+                        let (litCheckVar, vg6) = ANF.freshVar vg5'
+                        let litCheckExpr = ANF.Prim (ANF.Eq, valueAtom, ANF.IntLiteral literal)
+                        toANF body vg6 currentEnv typeReg variantLookup funcReg moduleRegistry
+                        |> Result.map (fun (bodyExpr, vg7) ->
+                            // Structure: check tag -> extract value (bindings) -> check literal -> if match then body else else
+                            // Note: We use two nested Ifs because the tag check guards the memory access in bindings
+                            let ifLitExpr = ANF.If (ANF.Var litCheckVar, bodyExpr, elseExpr)
+                            let withLitBinding = ANF.Let (litCheckVar, litCheckExpr, ifLitExpr)
+                            // bindings must be OUTSIDE the inner If to define valueVar before litCheckExpr uses it
+                            let withBindings = wrapBindings bindings withLitBinding
+                            let withTagCheck = ANF.If (ANF.Var checkVar, withBindings, elseExpr)
+                            (ANF.Let (tagVar, tagExpr, ANF.Let (checkVar, checkExpr, withTagCheck)), vg7))
+
                     match pat with
                     | AST.PVar name ->
                         let newEnv = Map.add name (valueVar, elemType) currentEnv  // Use element type
@@ -4481,21 +4642,14 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let withBindings = wrapBindings newBindings bodyExpr
                                 let ifExpr = ANF.If (ANF.Var checkVar, withBindings, elseExpr)
                                 (ANF.Let (tagVar, tagExpr, ANF.Let (checkVar, checkExpr, ifExpr)), vg7)))
-                    | AST.PLiteral n ->
-                        // Literal pattern: check tag==SINGLE, extract value, check value==literal
-                        // Important: bindings must come BEFORE the literal check since they define valueVar
-                        let (litCheckVar, vg6) = ANF.freshVar vg5'
-                        let litCheckExpr = ANF.Prim (ANF.Eq, valueAtom, ANF.IntLiteral (ANF.Int64 n))
-                        toANF body vg6 currentEnv typeReg variantLookup funcReg moduleRegistry
-                        |> Result.map (fun (bodyExpr, vg7) ->
-                            // Structure: check tag -> extract value (bindings) -> check literal -> if match then body else else
-                            // Note: We use two nested Ifs because the tag check guards the memory access in bindings
-                            let ifLitExpr = ANF.If (ANF.Var litCheckVar, bodyExpr, elseExpr)
-                            let withLitBinding = ANF.Let (litCheckVar, litCheckExpr, ifLitExpr)
-                            // bindings must be OUTSIDE the inner If to define valueVar before litCheckExpr uses it
-                            let withBindings = wrapBindings bindings withLitBinding
-                            let withTagCheck = ANF.If (ANF.Var checkVar, withBindings, elseExpr)
-                            (ANF.Let (tagVar, tagExpr, ANF.Let (checkVar, checkExpr, withTagCheck)), vg7))
+                    | AST.PLiteral n -> compileLiteralPattern (ANF.Int64 n)
+                    | AST.PInt8Literal n -> compileLiteralPattern (ANF.Int8 n)
+                    | AST.PInt16Literal n -> compileLiteralPattern (ANF.Int16 n)
+                    | AST.PInt32Literal n -> compileLiteralPattern (ANF.Int32 n)
+                    | AST.PUInt8Literal n -> compileLiteralPattern (ANF.UInt8 n)
+                    | AST.PUInt16Literal n -> compileLiteralPattern (ANF.UInt16 n)
+                    | AST.PUInt32Literal n -> compileLiteralPattern (ANF.UInt32 n)
+                    | AST.PUInt64Literal n -> compileLiteralPattern (ANF.UInt64 n)
                     | AST.PConstructor _ | AST.PList _ | AST.PListCons _ ->
                         Error "Nested pattern in list element not yet supported"
                     | _ ->
@@ -4521,7 +4675,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
                     // Extract elements using getAt (handles varying prefix/suffix layouts)
                     // Returns: (env, bindings, literalChecks, vg) where literalChecks are (valueVar, expectedLit) pairs
-                    let rec extractElements (pats: AST.Pattern list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (litChecks: (ANF.TempId * int64) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * (ANF.TempId * int64) list * ANF.VarGen, string> =
+                    let rec extractElements (pats: AST.Pattern list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (litChecks: (ANF.TempId * ANF.SizedInt) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * (ANF.TempId * ANF.SizedInt) list * ANF.VarGen, string> =
                         match pats with
                         | [] -> Ok (env, bindings, litChecks, vg)
                         | pat :: rest ->
@@ -4558,9 +4712,20 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractTupleBindings innerPatterns (ANF.Var valueVar) elemType 0 env newBindings vg2'  // Pass tuple type
                                 |> Result.bind (fun (tupEnv, tupBindings, vg3) ->
                                     extractElements rest (idx + 1) tupEnv tupBindings litChecks vg3)
-                            | AST.PLiteral n ->
+                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt8Literal _ as pat)
+                            | (AST.PInt16Literal _ as pat)
+                            | (AST.PInt32Literal _ as pat)
+                            | (AST.PUInt8Literal _ as pat)
+                            | (AST.PUInt16Literal _ as pat)
+                            | (AST.PUInt32Literal _ as pat)
+                            | (AST.PUInt64Literal _ as pat) ->
                                 // Track this literal check for later
-                                extractElements rest (idx + 1) env newBindings ((valueVar, n) :: litChecks) vg2'
+                                let literal =
+                                    match patternLiteralToSizedInt pat with
+                                    | Some value -> value
+                                    | None -> Crash.crash $"Expected integer literal pattern, got {pat}"
+                                extractElements rest (idx + 1) env newBindings ((valueVar, literal) :: litChecks) vg2'
                             | _ ->
                                 Error $"Unsupported pattern in list element: {pat}"
 
@@ -4577,13 +4742,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | checks ->
                                     // Build literal checks - AND them all together
                                     // Note: We don't AND with checkVar since we already checked length
-                                    let rec buildLitOnlyChecks (remaining: (ANF.TempId * int64) list) (accBindings: (ANF.TempId * ANF.CExpr) list) (prevCondVar: ANF.TempId option) (vg: ANF.VarGen) : (ANF.TempId * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) =
+                                    let rec buildLitOnlyChecks (remaining: (ANF.TempId * ANF.SizedInt) list) (accBindings: (ANF.TempId * ANF.CExpr) list) (prevCondVar: ANF.TempId option) (vg: ANF.VarGen) : (ANF.TempId * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) =
                                         match remaining with
                                         | [] ->
                                             (Option.get prevCondVar, accBindings, vg)
                                         | (valueVar, litVal) :: rest ->
                                             let (litCheckVar, vg1) = ANF.freshVar vg
-                                            let litCheckExpr = ANF.Prim (ANF.Eq, ANF.Var valueVar, ANF.IntLiteral (ANF.Int64 litVal))
+                                            let litCheckExpr = ANF.Prim (ANF.Eq, ANF.Var valueVar, ANF.IntLiteral litVal)
                                             match prevCondVar with
                                             | None ->
                                                 // First check - use directly
@@ -4742,10 +4907,21 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PTuple innerPatterns ->
                                 extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
                                 |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                            | AST.PLiteral n ->
+                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt8Literal _ as pat)
+                            | (AST.PInt16Literal _ as pat)
+                            | (AST.PInt32Literal _ as pat)
+                            | (AST.PUInt8Literal _ as pat)
+                            | (AST.PUInt16Literal _ as pat)
+                            | (AST.PUInt32Literal _ as pat)
+                            | (AST.PUInt64Literal _ as pat) ->
                                 // Compare head value to literal - guard check
                                 let (guardVar, vg4) = ANF.freshVar vg3'
-                                let guardExpr = ANF.Prim (ANF.Eq, ANF.Var typedHeadVar, ANF.IntLiteral (ANF.Int64 n))
+                                let literal =
+                                    match patternLiteralToSizedInt pat with
+                                    | Some value -> value
+                                    | None -> Crash.crash $"Expected integer literal pattern, got {pat}"
+                                let guardExpr = ANF.Prim (ANF.Eq, ANF.Var typedHeadVar, ANF.IntLiteral literal)
                                 Ok (currentEnv, [], vg4, Some (guardVar, guardExpr))
                             | AST.PConstructor _ ->
                                 Error "Nested pattern in list cons element not yet supported"
@@ -4808,10 +4984,21 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PTuple innerPatterns ->
                                 extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
                                 |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                            | AST.PLiteral n ->
+                            | (AST.PLiteral _ as pat)
+                            | (AST.PInt8Literal _ as pat)
+                            | (AST.PInt16Literal _ as pat)
+                            | (AST.PInt32Literal _ as pat)
+                            | (AST.PUInt8Literal _ as pat)
+                            | (AST.PUInt16Literal _ as pat)
+                            | (AST.PUInt32Literal _ as pat)
+                            | (AST.PUInt64Literal _ as pat) ->
                                 // Compare head value to literal - guard check
                                 let (guardVar, vg4) = ANF.freshVar vg3'
-                                let guardExpr = ANF.Prim (ANF.Eq, ANF.Var typedHeadVar, ANF.IntLiteral (ANF.Int64 n))
+                                let literal =
+                                    match patternLiteralToSizedInt pat with
+                                    | Some value -> value
+                                    | None -> Crash.crash $"Expected integer literal pattern, got {pat}"
+                                let guardExpr = ANF.Prim (ANF.Eq, ANF.Var typedHeadVar, ANF.IntLiteral literal)
                                 Ok (currentEnv, [], vg4, Some (guardVar, guardExpr))
                             | AST.PConstructor _ ->
                                 Error "Nested pattern in list cons element not yet supported"
@@ -4894,7 +5081,16 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 extractElements rest tailResultVar newEnv newBindings vg2
                             | AST.PWildcard ->
                                 extractElements rest tailResultVar env newBindings vg2
-                            | AST.PLiteral _ | AST.PConstructor _ ->
+                            | AST.PLiteral _
+                            | AST.PInt8Literal _
+                            | AST.PInt16Literal _
+                            | AST.PInt32Literal _
+                            | AST.PUInt8Literal _
+                            | AST.PUInt16Literal _
+                            | AST.PUInt32Literal _
+                            | AST.PUInt64Literal _ ->
+                                Error "Nested pattern in list cons element not yet supported"
+                            | AST.PConstructor _ ->
                                 Error "Nested pattern in list cons element not yet supported"
                             | _ ->
                                 Error $"Unsupported head pattern in multi-element list cons: {pat}"
