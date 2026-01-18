@@ -17,6 +17,7 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
    - Contains `=>` (lambda)
    - Contains `match ` expression
    - Uses stdlib functions that may differ (`.indexOf`, `.slice`, etc.)
+   - If the skip reason is boolean not `!`, treat it as a Darklang interpreter bug and continue to the next test instead of investigating it.
 
 3. Record the first skipped test:
 
@@ -42,6 +43,7 @@ You are going to fix EXACTLY ONE difference (syntactic or semantic).
    - **MATCH**: Results are equivalent - update `validate-darklang.py` to remove this unnecessary skip rule
    - **DIFFERENCE**: Results differ - this needs to be fixed in the compiler
    - **EVAL_LIMITATION**: The interpreter's eval mode doesn't support this syntax - skip and try another test
+   - **INTERPRETER_BUG**: If the difference is caused by a Darklang interpreter bug (e.g., `!` behaves as a no-op), skip this test and choose another
 
 6. If you found a DIFFERENCE, fix the compiler:
 
