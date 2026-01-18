@@ -359,6 +359,13 @@ def makePairs(n: Int64) : List<(Int64, Int64)> =
 
 let pairs = makePairs(1) in match pairs with | [(a, b)] -> a + b | _ -> 999 = 3
 
+// Tuple pattern destructuring in list with non-commutative operation
+// This test ensures tuple element indices are extracted correctly (kills mutation #61)
+match [(10, 3)] with | [(a, b)] -> a - b | _ -> 0 = 7
+
+// Three-element tuple in list with subtraction to verify correct index ordering
+match [(100, 40, 7)] with | [(a, b, c)] -> a - b - c | _ -> 0 = 53
+
 // List of float tuples
 match [(1.0, 2.5), (3.5, 4.0)] with | [t1, t2] -> t1.0 + t1.1 + t2.0 + t2.1 | _ -> 0.0 = 11.0
 
