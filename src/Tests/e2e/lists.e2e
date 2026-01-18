@@ -42,6 +42,10 @@ match [10, 20] with | [a, _] -> a | _ -> 0 = 10
 // Two element list - second element
 match [10, 20] with | [_, b] -> b | _ -> 0 = 20
 
+// Two element list - subtraction to verify element index increment (kills mutation #70)
+// This ensures extractElements increments idx correctly when processing 2+ element DEEP lists
+match [10, 3] with | [a, b] -> a - b | _ -> 999 = 7
+
 // === Three Element List ===
 
 // Three element list - sum
