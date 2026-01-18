@@ -220,6 +220,10 @@ match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = b, z = c } when c
 // Tests that fieldIdx is correctly incremented after wildcard patterns
 match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = _, y = b, z = c } -> b - c = 33
 
+// Record pattern with field extraction, wildcard, then another extraction (kills mutation #74)
+// Tests that fieldIdx is correctly incremented when wildcard appears between extractions
+match Vec3 { x = 100, y = 40, z = 7 } with | Vec3 { x = a, y = _, z = c } -> a - c = 93
+
 // === Nested ADT Patterns ===
 
 // Nested - testing Wrap type (MyOption already defined above)
