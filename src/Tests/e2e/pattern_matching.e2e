@@ -502,3 +502,17 @@ def tupleConsListAccum(a: List<Int64>, b: List<Int64>, acc: List<Int64>) : List<
     | ([x, ...xs], [y, ...ys]) -> tupleConsListAccum(xs, ys, [(x + y), ...acc])
 
 Stdlib.List.length<Int64>(tupleConsListAccum([1, 2, 3], [4, 5, 6], [])) = 3
+
+// ===================================================================
+// Variable in scrutinee only (kills mutation #140)
+// Tests that varOccursInExpr correctly detects variables appearing
+// ONLY in the scrutinee (not in case bodies). Mutation #140 changes
+// || to && in the Match case, which would incorrectly report that
+// a variable doesn't occur if it only appears in the scrutinee.
+// ===================================================================
+
+// Variable only appears in scrutinee - literal patterns in cases
+let scrutineeOnly = 42 in match scrutineeOnly with | 42 -> 100 | _ -> 0 = 100
+
+// Variable in scrutinee with complex expression
+let computed = 6 * 7 in match computed with | 42 -> 1 | 0 -> 2 | _ -> 3 = 1
