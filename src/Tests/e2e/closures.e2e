@@ -95,6 +95,11 @@ let y = 10 in ((x: Int64) => ((z: Int64) => x + y + z)(2))(30) = 42
 // Chain of immediate applications
 ((x: Int64) => ((y: Int64) => x + y)(10))(32) = 42
 
+// Immediate curried lambda application (Mutation #121)
+// Tests that desugaAll correctly handles matching argument counts.
+// The mutation (<> -> =) would cause correct calls to be treated as errors.
+((x: Int64) => (y: Int64) => x + y)(10)(32) = 42
+
 // =====================================================
 // Edge Cases
 // =====================================================
