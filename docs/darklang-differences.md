@@ -2,7 +2,8 @@
 
 ## Overview
 
-This compiler aims to match the Darklang interpreter. The interpreter is always correct.
+This compiler aims to match the Darklang interpreter. The interpreter is always correct,
+except in places where a developer identifies specific issues.
 
 This document catalogs all known differences between this compiler and the official
 Darklang interpreter. It serves as:
@@ -26,6 +27,8 @@ converts from compiler syntax to interpreter syntax.
 | Feature | Compiler | Interpreter | Conversion |
 |---------|----------|-------------|------------|
 | Integer literals | `5` | `5L` | Add L suffix |
+| Sized integers | `1y`, `1s`, `1l` | Not supported | Int8, Int16, Int32 suffixes |
+| Unsigned integers | `1uy`, `1us`, `1ul` | Not supported | UInt8, UInt16, UInt32 suffixes |
 | List separators | `[1, 2]` | `[1L; 2L]` | Comma to semicolon |
 | Function calls | `Mod.fn(a, b)` | `Stdlib.Mod.fn a b` | Parentheses to spaces |
 | Lambdas | `(x: T) => body` | `fun x -> body` | Different arrow syntax |
@@ -91,10 +94,9 @@ Areas where compiler produces WRONG output. These need to be fixed to match Dark
 |-----|-------------|-------------|--------|
 | Division `/` | `semantic:division` | Integer vs float division | Needs fix |
 | Modulo `%` | `semantic:modulo` | Negative number handling | Needs fix |
-| Bitwise ops | `semantic:bitwise` | `<<`, `>>`, `&`, `\|`, `^`, `~` | Needs fix |
-| Boolean not `!` | `semantic:boolean_not` | Incorrect behavior | Needs fix |
 | indexOf | `stdlib:indexOf` | Returns Int64, should return Option | Needs fix |
 | list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs | Needs fix |
+| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
 
 ### 2.1 Division Operator (`/`)
 
@@ -129,37 +131,7 @@ darklang-interpreter eval "(-10L) % 3L"
 
 **Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
 
-### 2.3 Bitwise Operators
-
-**Skip reason:** `semantic:bitwise`
-
-Operators: `<<`, `>>`, `&`, `|`, `^`, `~`
-
-```
-# Left shift
-1 << 1 = 2
-
-# Right shift
-256 >> 1 = 128
-
-# Bitwise AND
-1 & 1 = 1
-```
-
-**Validation:**
-```bash
-darklang-interpreter eval "1L <<< 1L"   # Note: Darklang may use <<< syntax
-darklang-interpreter eval "256L >>> 1L"
-```
-
-### 2.4 Boolean Not (`!`)
-
-**Skip reason:** `semantic:boolean_not`
-
-The `!` operator may behave incorrectly in darklang-interpreter eval mode.
-This may be an interpreter bug.
-
-### 2.5 indexOf
+### 2.3 indexOf
 
 **Skip reason:** `stdlib:indexOf`
 
@@ -178,7 +150,7 @@ darklang-interpreter eval 'Stdlib.String.indexOf "hello world" "hello"'
 
 **Implementation:** `src/DarkCompiler/stdlib/String.dark:84-85`
 
-### 2.6 List Accessors (head, tail, last, init)
+### 2.4 List Accessors (head, tail, last, init)
 
 **Skip reason:** `stdlib:list_accessors`
 
@@ -217,8 +189,6 @@ Features in compiler not in interpreter. These are skipped during validation.
 
 | Feature | Skip Reason | Example | Description |
 |---------|-------------|---------|-------------|
-| Sized integers | `syntax:sized_integer` | `1y`, `1s`, `1l` | Int8, Int16, Int32 suffixes |
-| Unsigned integers | `syntax:unsigned_integer` | `1uy`, `1us`, `1ul` | UInt8, UInt16, UInt32 suffixes |
 | String interpolation | `syntax:string_interpolation` | `$"Hello {x}"` | Not supported in Darklang |
 | Type parameters | `syntax:type_parameter` | `List<Int64>` | Different generic syntax in Darklang |
 
@@ -239,12 +209,6 @@ Features in compiler not in interpreter. These are skipped during validation.
 | Missing functions | `stdlib:missing` | `take`, `drop`, `substring` may not exist in Darklang |
 | slice | `stdlib:slice` | Uses (start, length) semantics vs Darklang's (start, end) |
 
-### Precision Differences
-
-| Feature | Skip Reason | Description |
-|---------|-------------|-------------|
-| Float precision | `eval:float_precision` | High-precision floats (>2 decimal places) may have different representation |
-
 ---
 
 ## 5. Custom Types and User Functions
@@ -256,89 +220,17 @@ Features in compiler not in interpreter. These are skipped during validation.
 
 ---
 
-## 6. Skip Reason Quick Reference
+## 6. Missing from Interpreter
 
-| Category | Skip Reason | Fixable? |
-|----------|-------------|----------|
-| **Semantic** | | |
-| | `semantic:division` | **Yes** |
-| | `semantic:modulo` | **Yes** |
-| | `semantic:bitwise` | **Yes** |
-| | `semantic:boolean_not` | ? |
-| **Stdlib** | | |
-| | `stdlib:indexOf` | **Yes** |
-| | `stdlib:list_accessors` | **Yes** |
-| | `stdlib:slice` | Fixed ✓ |
-| | `stdlib:random` | ? |
-| | `stdlib:byte_ops` | ? |
-| | `stdlib:missing` | ? |
-| | `stdlib:int64_math` | ? |
-| **Tooling** | | |
-| | `eval:compile_error` | No |
-| | `eval:error_result` | No |
-| | `eval:stdout` | No |
-| | `eval:stderr` | No |
-| | `eval:exit_code` | No |
-| | `eval:builtin_test` | No |
-| | `eval:float_precision` | ? |
-| **Syntax** | | |
-| | `syntax:sized_integer` | No |
-| | `syntax:unsigned_integer` | No |
-| | `syntax:string_interpolation` | No |
-| | `syntax:type_parameter` | No |
-| **Internal** | | |
-| | `internal:data_structure` | No |
-| | `internal:helper_function` | No |
-| **Custom** | | |
-| | `run:custom_type:*` | No |
-| | `run:user_function:*` | No |
+Features implemented in this compiler that should be added to the Darklang interpreter.
 
-**Legend:**
-- **Yes** = Should be fixed to match Darklang
-- No = Cannot/should not be fixed (by design or limitation)
-- ? = Needs investigation
-- Fixed ✓ = Already fixed
+| Feature | Skip Reason | Functions/Details |
+|---------|-------------|-------------------|
+| Bitwise operators | `semantic:bitwise` | `<<`, `>>`, `&`, `\|`, `^`, `~` |
+| Boolean not | `semantic:boolean_not` | `!` operator |
+| Random | `stdlib:random` | `Random.*` functions |
+| Byte operations | `stdlib:byte_ops` | `getByteAt`, `setByteAt`, `appendByte`, `fromBytes`, `toBytes` |
+| Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
+| List functions | `stdlib:missing` | `take`, `drop` |
+| String functions | `stdlib:missing` | `substring` |
 
----
-
-## 7. Validation Workflow
-
-To investigate a specific difference:
-
-1. Find a skipped test in E2E files
-2. Convert to Darklang syntax manually
-3. Run through interpreter:
-   ```bash
-   darklang-interpreter eval "<darklang_expression>"
-   ```
-4. Compare with expected result
-5. If different, fix the compiler implementation
-6. Update skip rules in `validate-darklang.py`
-
----
-
-## 8. Fixable Differences (TODO)
-
-These differences SHOULD be fixed to match Darklang:
-
-| Skip Reason | Description | Priority | Status |
-|-------------|-------------|----------|--------|
-| `semantic:division` | Integer division behavior | High | Not started |
-| `semantic:modulo` | Negative modulo handling | High | Not started |
-| `semantic:bitwise` | Bitwise operator syntax | Medium | Not started |
-| `stdlib:indexOf` | Returns Int64, should return Option | Medium | Not started |
-| `stdlib:slice` | Uses (start, length), should use (start, end) | Low | Fixed ✓ |
-| `stdlib:list_accessors` | head/tail/last signature differences | Low | Not started |
-
----
-
-## 9. Needs Investigation
-
-| Skip Reason | Question |
-|-------------|----------|
-| `semantic:boolean_not` | Is this an interpreter bug or real difference? |
-| `eval:float_precision` | Can we match Darklang's float representation? |
-| `stdlib:random` | Does Darklang have Random module? |
-| `stdlib:byte_ops` | Does Darklang have byte operations? |
-| `stdlib:missing` | Do take/drop/substring exist? |
-| `stdlib:int64_math` | Do sub/mul/div/isEven/isOdd exist? |
