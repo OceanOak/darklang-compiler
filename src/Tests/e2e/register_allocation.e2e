@@ -393,3 +393,37 @@ let n1 = 1 in let n2 = 2 in let n3 = 3 in let n4 = 4 in let n5 = 5 in let n6 = 6
 
 // Maximum register usage without spills - exercises full color range
 let w1 = 1 in let w2 = 2 in let w3 = 3 in let w4 = 4 in let w5 = 5 in let w6 = 6 in let w7 = 7 in let w8 = 8 in let w9 = 9 in let w10 = 10 in let w11 = 11 in let w12 = 12 in let w13 = 13 in let w14 = 14 in let w15 = 15 in w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9 + w10 + w11 + w12 + w13 + w14 + w15 = 120
+
+
+// ===================================================================
+// ColorVertexWithPartners MaxColor Tracking Tests (Mutation #236)
+// ===================================================================
+
+// Mutation #236 targets the maxColor tracking in colorVertexWithPartners:
+//   if c > maxColor then maxColor <- c
+// This code assigns colors when coloring deferred vertices that have
+// phi partners. Variables with uncolored phi partners are deferred
+// until their partners are colored, then colorVertexWithPartners
+// colors them together if they don't interfere.
+//
+// The maxColor variable only affects the ChromaticNumber return value,
+// which is computed but never used in the actual register allocation.
+// The mutation changes > to <, which would track the minimum instead
+// of maximum color. Since ChromaticNumber isn't consumed by
+// coloringToAllocation (which uses Colors and Spills only), this
+// mutation is equivalent and cannot be killed by E2E tests.
+//
+// These tests exercise the code path through colorVertexWithPartners
+// to ensure phi coalescing allocation works correctly.
+
+// Phi coalescing with conditional - exercises colorVertexWithPartners
+let phiResult = if true then 42 else 0 in phiResult = 42
+
+// Multiple phi nodes with high register pressure - deferred vertices colored together
+let p1 = 1 in let p2 = 2 in let p3 = 3 in let p4 = 4 in let p5 = 5 in let p6 = 6 in let p7 = 7 in let p8 = 8 in let joined = if p1 > 0 then p2 + p3 + p4 else p5 + p6 + p7 in joined + p8 = 17
+
+// Nested conditionals create multiple phi nodes needing colorVertexWithPartners
+let x = 10 in let y = 20 in let z = 30 in let outer = if x > 0 then (let inner = if y > 0 then x + y else x - y in inner) else z in outer + z = 60
+
+// High pressure with many variables live across phi coalescing points
+let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in let g = 7 in let h = 8 in let i = 9 in let j = 10 in let k = 11 in let l = 12 in let m = if a > 0 then b + c + d + e + f else g + h + i + j + k + l in m = 20
