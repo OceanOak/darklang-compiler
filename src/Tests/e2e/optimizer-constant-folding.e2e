@@ -440,3 +440,49 @@ def copyPropCSEComplex(a: Int64, b: Int64) : Int64 =
 
 copyPropCSEComplex(10, 20) = 90
 copyPropCSEComplex(5, 5) = 30
+
+// ===================================================================
+// Phi Node Copy Propagation (mutation #150 test)
+// ===================================================================
+// This test exercises buildCopyMap's handling of Phi nodes where all
+// sources are the same register. The code at line 603 checks:
+//   if dest <> firstSrc then Map.add dest (Register firstSrc) m
+//
+// If the mutation changes <> to =, only self-copy phis would be tracked,
+// which breaks propagation for useful phi copies like:
+//   y = phi(a, a) where y != a
+//
+// The test creates a phi node by having both branches of an if-else
+// return the same variable. The phi merges these identical sources.
+
+// Simple phi with identical sources from both branches
+// Creates: y = phi(x, x) from both if-branches returning x
+// The optimizer should propagate y -> x, enabling y + y -> x + x
+def phiCopyProp(flag: Bool, x: Int64) : Int64 =
+  let y = if flag then x else x in
+  y + y
+
+phiCopyProp(true, 10) = 20
+phiCopyProp(false, 7) = 14
+
+// Phi copy propagation enabling further optimization
+// After phi propagation, uses of 'result' become uses of 'input'
+def phiCopyPropChain(flag: Bool, input: Int64) : Int64 =
+  let a = input in
+  let result = if flag then a else a in
+  result * 2 + input
+
+phiCopyPropChain(true, 5) = 15
+phiCopyPropChain(false, 8) = 24
+
+// Nested branches creating phi with same sources
+// The inner if-else creates a phi, then outer expression uses it
+def phiCopyPropNested(outer: Bool, inner: Bool, x: Int64) : Int64 =
+  let value = x + 1 in
+  let y = if inner then value else value in
+  if outer then y + value else y - value
+
+phiCopyPropNested(true, true, 10) = 22
+phiCopyPropNested(true, false, 10) = 22
+phiCopyPropNested(false, true, 10) = 0
+phiCopyPropNested(false, false, 10) = 0
