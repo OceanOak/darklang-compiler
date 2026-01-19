@@ -257,3 +257,38 @@ def floatAccum(a: Float, b: Float, n: Int64) : Float =
     else floatAccum(a + b, b, n - 1)
 
 floatAccum(0.0, 1.5, 4) = 6.0
+
+// ============================================================================
+// Tail Call with Multiple Float Literal Arguments (Mutation #181)
+// ============================================================================
+// Tests that multiple float constant arguments in a tail call are loaded
+// into separate temporary registers. Mutation #181 changes tempFRegCounter + 1
+// to tempFRegCounter - 1 in the TailCall float argument handling, which would
+// cause multiple float literals to share the same temp register and clobber
+// each other's values.
+
+// Tail call passes two float literals - each needs its own temp register
+def tailMultiFloatLit(n: Int64) : Float =
+    if n <= 0 then 0.0
+    else tailMultiFloatLitHelper(10.0, 20.0, n)
+
+def tailMultiFloatLitHelper(a: Float, b: Float, n: Int64) : Float =
+    if n <= 1 then a + b
+    else tailMultiFloatLitHelper(a, b, n - 1)
+
+tailMultiFloatLit(3) = 30.0
+
+// Direct tail recursion with multiple float literals in the recursive call
+// This is the key test: the tail call itself passes literals 1.0 and 2.0
+def tailRecurWithFloatLiterals(a: Float, b: Float, n: Int64) : Float =
+    if n <= 0 then a + b
+    else tailRecurWithFloatLiterals(1.0, 2.0, n - 1)
+
+tailRecurWithFloatLiterals(100.0, 200.0, 1) = 3.0
+
+// Three float literals in tail call - ensures counter increments for each
+def tailWith3FloatLits(a: Float, b: Float, c: Float, n: Int64) : Float =
+    if n <= 0 then a + b + c
+    else tailWith3FloatLits(5.0, 10.0, 15.0, n - 1)
+
+tailWith3FloatLits(0.0, 0.0, 0.0, 1) = 30.0
