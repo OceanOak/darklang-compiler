@@ -337,3 +337,36 @@ floatInterferenceAtBranch(2.0, 3.0, 4.0, 5.0, false) = 120.0
 
 // Multiple float let bindings all live at the end - creates many interference edges
 let f1 = 1.1 in let f2 = 2.2 in let f3 = 3.3 in let f4 = 4.4 in let f5 = 5.5 in f1 + f2 + f3 + f4 + f5 = 16.5
+
+// =====================================================
+// Float Interference Graph LiveOut Processing (Mutation #205)
+// =====================================================
+// Tests the buildFloatInterferenceGraph function's LiveOut processing.
+// The function first processes blockLiveness.LiveOut for each block:
+//   let liveList = Set.toList live
+//   for i in 0 .. liveList.Length - 2 do
+//     for j in i + 1 .. liveList.Length - 1 do
+//       addEdge liveList.[i] liveList.[j]
+// If mutation changes - 2 to + 2, the loop bounds become invalid,
+// causing array index out of bounds or incorrect interference edges.
+// This test specifically targets the LiveOut processing path by having
+// multiple float variables live at the exit of a block.
+
+// Multiple floats live-out from a block with conditional successor
+// All floats a,b,c,d must be in the LiveOut set of the entry block
+// because they're used in successor blocks
+def floatLiveOut4(a: Float, b: Float, c: Float, d: Float, cond: Bool) : Float = if cond then a + b else c + d
+floatLiveOut4(1.0, 2.0, 10.0, 20.0, true) = 3.0
+floatLiveOut4(1.0, 2.0, 10.0, 20.0, false) = 30.0
+
+// 5 floats live-out - forces the loop to iterate over multiple pairs
+def floatLiveOut5(a: Float, b: Float, c: Float, d: Float, e: Float, cond: Bool) : Float = if cond then a + b + c else d + e
+floatLiveOut5(1.0, 2.0, 3.0, 100.0, 200.0, true) = 6.0
+floatLiveOut5(1.0, 2.0, 3.0, 100.0, 200.0, false) = 300.0
+
+// Multiple blocks with float LiveOut - tests interference at multiple block exits
+def floatMultiBlockLiveOut(a: Float, b: Float, c: Float, cond1: Bool, cond2: Bool) : Float = if cond1 then (if cond2 then a + b else a + c) else (if cond2 then b + c else a + b + c)
+floatMultiBlockLiveOut(1.0, 2.0, 3.0, true, true) = 3.0
+floatMultiBlockLiveOut(1.0, 2.0, 3.0, true, false) = 4.0
+floatMultiBlockLiveOut(1.0, 2.0, 3.0, false, true) = 5.0
+floatMultiBlockLiveOut(1.0, 2.0, 3.0, false, false) = 6.0
