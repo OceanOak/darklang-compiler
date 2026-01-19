@@ -128,3 +128,8 @@ floatAcrossCall(2.0) = 3.0
 // If globalIdx were decremented instead of incremented, intervals would be inverted
 // causing variables to appear non-overlapping when they actually overlap
 let a = 100 in let b = a + 1 in let c = b + 1 in let d = c + 1 in let e = d + 1 in a + e = 204
+
+// Terminator position globalIdx test - variables used in conditionals
+// If terminator globalIdx were decremented instead of incremented, the variable used
+// in the condition would have an incorrect live interval
+let x = 10 in let y = 20 in let z = 30 in let w = 40 in let v = 50 in let u = 60 in let t = 70 in let cond = x > 5 in if cond then x + y + z + w + v + u + t else 0 = 280
