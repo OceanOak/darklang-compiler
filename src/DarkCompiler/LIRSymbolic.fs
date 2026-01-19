@@ -95,6 +95,7 @@ type Instr =
     | FCmp of left:FReg * right:FReg
     | Int64ToFloat of dest:FReg * src:Reg
     | FloatToInt64 of dest:Reg * src:FReg
+    | FloatToBits of dest:Reg * src:FReg
     | GpToFp of dest:FReg * src:Reg
     | FpToGp of dest:Reg * src:FReg
     | HeapAlloc of dest:Reg * sizeBytes:int
@@ -296,6 +297,7 @@ let fromLIR (program: LIR.Program) : Result<Program, string> =
         | LIR.FCmp (left, right) -> Ok (FCmp (left, right))
         | LIR.Int64ToFloat (dest, src) -> Ok (Int64ToFloat (dest, src))
         | LIR.FloatToInt64 (dest, src) -> Ok (FloatToInt64 (dest, src))
+        | LIR.FloatToBits (dest, src) -> Ok (FloatToBits (dest, src))
         | LIR.GpToFp (dest, src) -> Ok (GpToFp (dest, src))
         | LIR.FpToGp (dest, src) -> Ok (FpToGp (dest, src))
         | LIR.HeapAlloc (dest, sizeBytes) -> Ok (HeapAlloc (dest, sizeBytes))
@@ -535,6 +537,7 @@ let private resolveProgram (initialState: PoolState) (functions: Function list) 
         | FCmp (left, right) -> Ok (LIR.FCmp (left, right), state)
         | Int64ToFloat (dest, src) -> Ok (LIR.Int64ToFloat (dest, src), state)
         | FloatToInt64 (dest, src) -> Ok (LIR.FloatToInt64 (dest, src), state)
+        | FloatToBits (dest, src) -> Ok (LIR.FloatToBits (dest, src), state)
         | GpToFp (dest, src) -> Ok (LIR.GpToFp (dest, src), state)
         | FpToGp (dest, src) -> Ok (LIR.FpToGp (dest, src), state)
         | HeapAlloc (dest, sizeBytes) -> Ok (LIR.HeapAlloc (dest, sizeBytes), state)

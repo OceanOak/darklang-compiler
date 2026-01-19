@@ -74,6 +74,7 @@ let hasSideEffects (instr: Instr) : bool =
     | FloatNeg _ -> false   // Pure float operation
     | Int64ToFloat _ -> false // Pure conversion
     | FloatToInt64 _ -> false // Pure conversion
+    | FloatToBits _ -> false  // Pure conversion
     | RefCountIncString _ -> true   // Mutates refcount
     | RefCountDecString _ -> true   // Mutates refcount
     | RandomInt64 _ -> true  // Syscall
@@ -113,6 +114,7 @@ let getInstrDest (instr: Instr) : VReg option =
     | FloatNeg (dest, _) -> Some dest
     | Int64ToFloat (dest, _) -> Some dest
     | FloatToInt64 (dest, _) -> Some dest
+    | FloatToBits (dest, _) -> Some dest
     | HeapStore _ -> None
     | RefCountInc _ -> None
     | RefCountDec _ -> None
@@ -171,6 +173,7 @@ let getInstrUses (instr: Instr) : Set<VReg> =
     | FloatNeg (_, src) -> fromOperand src
     | Int64ToFloat (_, src) -> fromOperand src
     | FloatToInt64 (_, src) -> fromOperand src
+    | FloatToBits (_, src) -> fromOperand src
     | RefCountIncString str -> fromOperand str
     | RefCountDecString str -> fromOperand str
     | RandomInt64 _ -> Set.empty  // No operand uses
@@ -277,6 +280,7 @@ let isHoistableInstr (instr: Instr) : bool =
     | FloatNeg _ -> true
     | Int64ToFloat _ -> true
     | FloatToInt64 _ -> true
+    | FloatToBits _ -> true
     | _ -> false
 
 /// Apply loop-invariant code motion for loops with a simple preheader
@@ -440,6 +444,7 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 | FloatNeg (dest, src) -> FloatNeg (dest, rewriteOperand src)
                 | Int64ToFloat (dest, src) -> Int64ToFloat (dest, rewriteOperand src)
                 | FloatToInt64 (dest, src) -> FloatToInt64 (dest, rewriteOperand src)
+                | FloatToBits (dest, src) -> FloatToBits (dest, rewriteOperand src)
                 | _ -> instr
 
             let rec findHoistable invariants hoistMap =
@@ -680,6 +685,7 @@ let propagateCopyInstr (copies: CopyMap) (instr: Instr) : Instr =
     | FloatNeg (dest, src) -> FloatNeg (dest, p src)
     | Int64ToFloat (dest, src) -> Int64ToFloat (dest, p src)
     | FloatToInt64 (dest, src) -> FloatToInt64 (dest, p src)
+    | FloatToBits (dest, src) -> FloatToBits (dest, p src)
     | RefCountIncString str -> RefCountIncString (p str)
     | RefCountDecString str -> RefCountDecString (p str)
     | RandomInt64 dest -> RandomInt64 dest

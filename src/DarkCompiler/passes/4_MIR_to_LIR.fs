@@ -1247,6 +1247,15 @@ let selectInstr (instr: MIR.Instr) (variantRegistry: MIR.VariantRegistry) (recor
         | Ok (srcInstrs, srcFReg) ->
             Ok (srcInstrs @ [LIRSymbolic.FloatToInt64 (lirDest, srcFReg)])
 
+    | MIR.FloatToBits (dest, src) ->
+        let lirDest = vregToLIRReg dest
+        // src is a float operand that needs to be in a float register
+        match ensureInFRegister src (LIR.FVirtual 1000) with
+        | Error err -> Error err
+        | Ok (srcInstrs, srcFReg) ->
+            // FloatToBits uses FpToGp (bit copy, not conversion)
+            Ok (srcInstrs @ [LIRSymbolic.FloatToBits (lirDest, srcFReg)])
+
     | MIR.RefCountIncString str ->
         let lirStr = convertOperand str
         Ok [LIRSymbolic.RefCountIncString lirStr]
@@ -1325,9 +1334,10 @@ let selectTerminator (terminator: MIR.Terminator) (returnType: AST.Type) : Resul
             let moveToX0 = [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirOp)]
             Ok (moveToX0, LIRSymbolic.Ret)
         | MIR.StringSymbol _ ->
-            // Strings don't have a meaningful register return value
-            // The value has been printed, so just exit with code 0
-            Ok ([LIRSymbolic.Exit], LIRSymbolic.Ret)
+            // Return string pointer in X0 (like other operands)
+            let lirOp = convertOperand operand
+            let moveToX0 = [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirOp)]
+            Ok (moveToX0, LIRSymbolic.Ret)
         | MIR.Register vreg when returnType = AST.TFloat64 ->
             // Float return - move to D0 via FMov
             let srcFReg = vregToLIRFReg vreg

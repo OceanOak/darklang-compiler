@@ -133,6 +133,7 @@ type Instr =
     | FCmp of left:FReg * right:FReg            // Compare FP values (sets flags)
     | Int64ToFloat of dest:FReg * src:Reg       // Convert Int64 to Float64 (SCVTF)
     | FloatToInt64 of dest:Reg * src:FReg      // Convert Float64 to Int64 (FCVTZS)
+    | FloatToBits of dest:Reg * src:FReg       // Copy Float64 bits to UInt64 (FMOV to GP)
     | GpToFp of dest:FReg * src:Reg             // Move bits from GP to FP register (for float in tuple)
     | FpToGp of dest:Reg * src:FReg             // Move bits from FP to GP register (for float in list)
     // Heap operations for tuples and other compound types

@@ -141,6 +141,7 @@ type CExpr =
     | FloatNeg of Atom                        // Negate: -x
     | Int64ToFloat of Atom                    // Convert Int64 to Float64
     | FloatToInt64 of Atom                    // Convert Float64 to Int64 (truncate)
+    | FloatToBits of Atom                     // Copy Float64 bits to UInt64
     // Raw memory intrinsics (internal, for HAMT implementation)
     | RawAlloc of numBytes:Atom               // Allocate raw bytes (no header), returns RawPtr
     | RawFree of ptr:Atom                     // Manually free raw memory

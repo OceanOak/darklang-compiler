@@ -165,6 +165,7 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.FloatNeg atom -> maxTempIdInAtom atom
     | ANF.Int64ToFloat atom -> maxTempIdInAtom atom
     | ANF.FloatToInt64 atom -> maxTempIdInAtom atom
+    | ANF.FloatToBits atom -> maxTempIdInAtom atom
     | ANF.RefCountIncString str -> maxTempIdInAtom str
     | ANF.RefCountDecString str -> maxTempIdInAtom str
     | ANF.RandomInt64 -> -1  // No atoms, so no TempIds
@@ -435,6 +436,7 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.FloatNeg _ -> "FloatNeg"
     | ANF.Int64ToFloat _ -> "Int64ToFloat"
     | ANF.FloatToInt64 _ -> "FloatToInt64"
+    | ANF.FloatToBits _ -> "FloatToBits"
     | ANF.RawAlloc _ -> "RawAlloc"
     | ANF.RawFree _ -> "RawFree"
     | ANF.RawGet _ -> "RawGet"
@@ -633,7 +635,13 @@ let rec convertExpr
                     |> Result.map (fun op -> [MIR.Mov (destReg, op, Some aType)])
                 | ANF.Prim (op, leftAtom, rightAtom) ->
                     let opType = binOpType builder leftAtom rightAtom
-                    destType := opType
+                    // Comparison and boolean ops produce Bool, not the operand type
+                    let resultType =
+                        match op with
+                        | ANF.Eq | ANF.Neq | ANF.Lt | ANF.Gt | ANF.Lte | ANF.Gte
+                        | ANF.And | ANF.Or -> AST.TBool
+                        | _ -> opType
+                    destType := resultType
                     atomToOperand builder leftAtom
                     |> Result.bind (fun leftOp ->
                         atomToOperand builder rightAtom
@@ -912,6 +920,10 @@ let rec convertExpr
                 | ANF.FloatToInt64 atom ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatToInt64 (destReg, op)])
+                | ANF.FloatToBits atom ->
+                    // FloatToBits copies float bits to UInt64 (produces integer, not float)
+                    atomToOperand builder atom
+                    |> Result.map (fun op -> [MIR.FloatToBits (destReg, op)])
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])
@@ -1235,7 +1247,13 @@ and convertExprToOperand
                     |> Result.map (fun op -> [MIR.Mov (destReg, op, Some aType)])
                 | ANF.Prim (op, leftAtom, rightAtom) ->
                     let opType = binOpType builder leftAtom rightAtom
-                    destType := opType
+                    // Comparison and boolean ops produce Bool, not the operand type
+                    let resultType =
+                        match op with
+                        | ANF.Eq | ANF.Neq | ANF.Lt | ANF.Gt | ANF.Lte | ANF.Gte
+                        | ANF.And | ANF.Or -> AST.TBool
+                        | _ -> opType
+                    destType := resultType
                     atomToOperand builder leftAtom
                     |> Result.bind (fun leftOp ->
                         atomToOperand builder rightAtom
@@ -1514,6 +1532,10 @@ and convertExprToOperand
                 | ANF.FloatToInt64 atom ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.FloatToInt64 (destReg, op)])
+                | ANF.FloatToBits atom ->
+                    // FloatToBits copies float bits to UInt64 (produces integer, not float)
+                    atomToOperand builder atom
+                    |> Result.map (fun op -> [MIR.FloatToBits (destReg, op)])
                 | ANF.RefCountIncString strAtom ->
                     atomToOperand builder strAtom
                     |> Result.map (fun strOp -> [MIR.RefCountIncString strOp])

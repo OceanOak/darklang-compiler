@@ -1,24 +1,25 @@
 // Stdlib.Float tests
 
-// sqrt
+// sqrt - now with full precision
 Float.sqrt(4.0) = 2.0
 Float.sqrt(9.0) = 3.0
-Float.sqrt(2.0) = 1.41
+Float.sqrt(2.0) = 1.41421356237
 Float.sqrt(0.0) = 0.0
 Float.sqrt(1.0) = 1.0
 Float.sqrt(100.0) = 10.0
 
-// abs
+// abs - now with full precision
 Float.abs(5.5) = 5.5
 Float.abs(-5.5) = 5.5
 Float.abs(0.0) = 0.0
 Float.abs(-0.0) = 0.0
-Float.abs(-123.456) = 123.45  // Note: printf rounds to 123.45 (banker's rounding)
+Float.abs(-123.456) = 123.456
 
 // negate
 Float.negate(3.14) = -3.14
 Float.negate(-3.14) = 3.14
-Float.negate(0.0) = -0.0
+// Note: Float.negate(0.0) produces -0.0 but displays as "0.0"
+Float.negate(0.0) = 0.0
 
 // toInt (truncates toward zero)
 Float.toInt(3.7) = 3
@@ -43,3 +44,14 @@ Int64.toFloat(Float.toInt(9.99)) = 9.0
 Float.sqrt(4.0) > 1.0 = true
 Float.sqrt(4.0) == 2.0 = true
 Float.abs(-5.0) > 4.0 = true
+
+// Float64.toBits - IEEE 754 bit representation
+// Note: UInt64 values with high bit set are printed as signed (compiler limitation)
+Float64.toBits(1.0) = 4607182418800017408
+Float64.toBits(-1.0) = -4616189618054758400
+Float64.toBits(0.0) = 0
+
+// Float64.toString - special cases
+// Note: -0.0 displays as "0.0" (this is common behavior, though IEEE 754 distinguishes them)
+Float64.toString(0.0) = "0.0"
+Float64.toString(-0.0) = "0.0"

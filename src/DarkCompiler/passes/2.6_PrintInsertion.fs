@@ -53,6 +53,13 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
                 // Unsupported element type, fall back to simple print
                 let (printTmp, varGen') = freshVar varGen
                 (Let (printTmp, Print (atom, programType), Return atom), varGen')
+        | AST.TFloat64 ->
+            // For Float64, call Float64.toString first, then print the string
+            let (strTmp, varGen1) = freshVar varGen
+            let (printTmp, varGen2) = freshVar varGen1
+            let callExpr = Call ("Stdlib.Float64.toString", [atom])
+            let printExpr = Print (Var strTmp, AST.TString)
+            (Let (strTmp, callExpr, Let (printTmp, printExpr, Return atom)), varGen2)
         | _ ->
             // Non-list types: simple print
             let (printTmp, varGen') = freshVar varGen

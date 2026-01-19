@@ -104,8 +104,9 @@ let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr optio
         Some (ANF.FloatToInt64 xAtom)
     | "Stdlib.Int64.toFloat", [xAtom] ->
         Some (ANF.Int64ToFloat xAtom)
-    | "Stdlib.Float64.toString", [xAtom] ->
-        Some (ANF.FloatToString xAtom)
+    // NOTE: Float64.toString is now implemented in Dark, not as an intrinsic
+    | "Stdlib.Float64.toBits", [xAtom] ->
+        Some (ANF.FloatToBits xAtom)
     | _ -> None
 
 /// Try to constant-fold platform/path intrinsics at compile time

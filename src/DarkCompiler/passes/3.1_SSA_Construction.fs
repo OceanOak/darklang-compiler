@@ -216,6 +216,7 @@ let getBlockDefs (block: BasicBlock) : Set<VReg> =
         | FloatNeg (dest, _) -> Set.add dest defs
         | Int64ToFloat (dest, _) -> Set.add dest defs
         | FloatToInt64 (dest, _) -> Set.add dest defs
+        | FloatToBits (dest, _) -> Set.add dest defs
         | RefCountIncString _ -> defs
         | RefCountDecString _ -> defs
         | RandomInt64 dest -> Set.add dest defs
@@ -311,6 +312,7 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
             | FloatNeg (_, src) -> Set.union uses (getOperandUses src)
             | Int64ToFloat (_, src) -> Set.union uses (getOperandUses src)
             | FloatToInt64 (_, src) -> Set.union uses (getOperandUses src)
+            | FloatToBits (_, src) -> Set.union uses (getOperandUses src)
             | RefCountIncString str -> Set.union uses (getOperandUses str)
             | RefCountDecString str -> Set.union uses (getOperandUses str)
             | RandomInt64 _ -> uses  // No operand uses
@@ -770,6 +772,11 @@ let renameInstr (state: RenamingState) (instr: Instr) : Instr * RenamingState =
         let src' = renameOperand state src
         let (_, newDest, state') = newVersion state dest
         (FloatToInt64 (newDest, src'), state')
+
+    | FloatToBits (dest, src) ->
+        let src' = renameOperand state src
+        let (_, newDest, state') = newVersion state dest
+        (FloatToBits (newDest, src'), state')
 
     | RefCountIncString str ->
         let str' = renameOperand state str

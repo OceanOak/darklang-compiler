@@ -280,6 +280,7 @@ let renameCExpr (mapping: Map<TempId, TempId>) (cexpr: CExpr) : CExpr =
     | FloatNeg a -> FloatNeg (r a)
     | Int64ToFloat a -> Int64ToFloat (r a)
     | FloatToInt64 a -> FloatToInt64 (r a)
+    | FloatToBits a -> FloatToBits (r a)
     | RawAlloc numBytes -> RawAlloc (r numBytes)
     | RawFree ptr -> RawFree (r ptr)
     | RawGet (ptr, offset, valueType) -> RawGet (r ptr, r offset, valueType)

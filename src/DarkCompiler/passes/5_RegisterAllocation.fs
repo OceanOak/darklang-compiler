@@ -293,6 +293,8 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.RawSetByte _ -> None
     // FloatToInt64 defines an integer destination register
     | LIRSymbolic.FloatToInt64 (dest, _) -> regToVReg dest
+    // FloatToBits defines an integer destination register
+    | LIRSymbolic.FloatToBits (dest, _) -> regToVReg dest
     // FpToGp defines an integer destination register
     | LIRSymbolic.FpToGp (dest, _) -> regToVReg dest
     | LIRSymbolic.RefCountIncString _ -> None
@@ -325,6 +327,7 @@ let getUsedFVRegs (instr: LIRSymbolic.Instr) : Set<int> =
     | LIRSymbolic.FCmp (left, right) ->
         [fregToId left; fregToId right] |> List.choose id |> Set.ofList
     | LIRSymbolic.FloatToInt64 (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIRSymbolic.FloatToBits (_, src) -> fregToId src |> Option.toList |> Set.ofList
     | LIRSymbolic.FpToGp (_, src) -> fregToId src |> Option.toList |> Set.ofList
     | LIRSymbolic.PrintFloat freg | LIRSymbolic.PrintFloatNoNewline freg ->
         fregToId freg |> Option.toList |> Set.ofList
@@ -1254,6 +1257,7 @@ let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIR
     | LIRSymbolic.FLoad (dest, value) -> LIRSymbolic.FLoad (applyF dest, value)
     | LIRSymbolic.Int64ToFloat (dest, src) -> LIRSymbolic.Int64ToFloat (applyF dest, src)
     | LIRSymbolic.FloatToInt64 (dest, src) -> LIRSymbolic.FloatToInt64 (dest, applyF src)
+    | LIRSymbolic.FloatToBits (dest, src) -> LIRSymbolic.FloatToBits (dest, applyF src)
     | LIRSymbolic.FpToGp (dest, src) -> LIRSymbolic.FpToGp (dest, applyF src)
     | LIRSymbolic.GpToFp (dest, src) -> LIRSymbolic.GpToFp (applyF dest, src)
     | LIRSymbolic.PrintFloat freg -> LIRSymbolic.PrintFloat (applyF freg)
@@ -1935,6 +1939,16 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
     | LIRSymbolic.FpToGp (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let instr = LIRSymbolic.FpToGp (destReg, src)
+        let storeInstrs =
+            match destAlloc with
+            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | _ -> []
+        [instr] @ storeInstrs
+
+    // FloatToBits: src is FP register, dest is integer register (bit copy)
+    | LIRSymbolic.FloatToBits (dest, src) ->
+        let (destReg, destAlloc) = applyToReg mapping dest
+        let instr = LIRSymbolic.FloatToBits (destReg, src)
         let storeInstrs =
             match destAlloc with
             | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]

@@ -101,6 +101,7 @@ type Instr =
     | FloatNeg of dest:VReg * src:Operand         // Negate: -x
     | Int64ToFloat of dest:VReg * src:Operand     // Convert Int64 to Float64
     | FloatToInt64 of dest:VReg * src:Operand    // Convert Float64 to Int64 (truncate)
+    | FloatToBits of dest:VReg * src:Operand     // Copy Float64 bits to UInt64
     // Raw memory intrinsics (internal, for HAMT implementation)
     | RawAlloc of dest:VReg * numBytes:Operand    // Allocate raw bytes (no header), returns RawPtr
     | RawFree of ptr:Operand                      // Manually free raw memory

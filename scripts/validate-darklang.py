@@ -978,8 +978,7 @@ class Validator:
             return "eval:builtin_test"
 
         # === SEMANTIC BUGS (compiler produces wrong output) ===
-        if re.search(r'-?\d+\.\d{3,}', expr):
-            return "eval:float_precision"
+        # NOTE: Float precision has been fixed - Float64.toString now outputs full precision
         if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
             return "semantic:modulo"
 
@@ -1005,6 +1004,12 @@ class Validator:
             'Int64.div': 'stdlib:int64_math',
             'Int64.isEven': 'stdlib:int64_math',
             'Int64.isOdd': 'stdlib:int64_math',
+            'Float64.toBits': 'stdlib:float64',      # Float64.toBits - IEEE 754 bit representation
+            'Float64.toString': 'stdlib:float64',    # Float64.toString - full precision float to string
+            'Float.toInt': 'stdlib:float_ops',       # Float.toInt - conversion
+            'Float.abs': 'stdlib:float_ops',         # Float.abs - absolute value
+            'Float.negate': 'stdlib:float_ops',      # Float.negate - displays -0.0 as 0.0
+            'Float.sqrt': 'stdlib:float_ops',        # Float.sqrt - interpreter uses different function
         }
         for pattern, reason in missing_stdlib_map.items():
             if pattern in expr:

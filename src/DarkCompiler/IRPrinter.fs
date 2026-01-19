@@ -124,6 +124,8 @@ let private prettyPrintANFCExpr = function
         $"Int64ToFloat({prettyPrintANFAtom atom})"
     | ANF.FloatToInt64 atom ->
         $"FloatToInt64({prettyPrintANFAtom atom})"
+    | ANF.FloatToBits atom ->
+        $"FloatToBits({prettyPrintANFAtom atom})"
     | ANF.FloatToString atom ->
         $"FloatToString({prettyPrintANFAtom atom})"
     | ANF.RefCountIncString str ->
@@ -293,6 +295,8 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         $"{prettyPrintMIRVReg dest} <- Int64ToFloat({prettyPrintMIROperand src})"
     | MIR.FloatToInt64 (dest, src) ->
         $"{prettyPrintMIRVReg dest} <- FloatToInt64({prettyPrintMIROperand src})"
+    | MIR.FloatToBits (dest, src) ->
+        $"{prettyPrintMIRVReg dest} <- FloatToBits({prettyPrintMIROperand src})"
     | MIR.RawAlloc (dest, numBytes) ->
         $"{prettyPrintMIRVReg dest} <- RawAlloc({prettyPrintMIROperand numBytes})"
     | MIR.RawFree ptr ->
@@ -550,6 +554,8 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRFReg dest} <- Int64ToFloat({prettyPrintLIRReg src})"
     | LIR.FloatToInt64 (dest, src) ->
         $"{prettyPrintLIRReg dest} <- FloatToInt64({prettyPrintLIRFReg src})"
+    | LIR.FloatToBits (dest, src) ->
+        $"{prettyPrintLIRReg dest} <- FloatToBits({prettyPrintLIRFReg src})"
     | LIR.GpToFp (dest, src) ->
         $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
     | LIR.FpToGp (dest, src) ->
@@ -821,6 +827,8 @@ let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
         $"{prettyPrintLIRFReg dest} <- Int64ToFloat({prettyPrintLIRReg src})"
     | LIRSymbolic.FloatToInt64 (dest, src) ->
         $"{prettyPrintLIRReg dest} <- FloatToInt64({prettyPrintLIRFReg src})"
+    | LIRSymbolic.FloatToBits (dest, src) ->
+        $"{prettyPrintLIRReg dest} <- FloatToBits({prettyPrintLIRFReg src})"
     | LIRSymbolic.GpToFp (dest, src) ->
         $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
     | LIRSymbolic.FpToGp (dest, src) ->
