@@ -104,8 +104,8 @@ let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr optio
         Some (ANF.FloatToInt64 xAtom)
     | "Stdlib.Int64.toFloat", [xAtom] ->
         Some (ANF.Int64ToFloat xAtom)
-    // NOTE: Float64.toString is now implemented in Dark, not as an intrinsic
-    | "Stdlib.Float64.toBits", [xAtom] ->
+    // NOTE: Float.toString is now implemented in Dark, not as an intrinsic
+    | "Stdlib.Float.toBits", [xAtom] ->
         Some (ANF.FloatToBits xAtom)
     | _ -> None
 

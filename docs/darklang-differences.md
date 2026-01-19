@@ -96,7 +96,7 @@ Areas where compiler produces WRONG output. These need to be fixed to match Dark
 |-----|-------------|-------------|
 | Modulo `%` | `semantic:modulo` | Negative number handling |
 | list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
-| ~~Float precision~~ | ~~`eval:float_precision`~~ | **FIXED** - Float64.toString now outputs up to 12 significant digits |
+| ~~Float precision~~ | ~~`eval:float_precision`~~ | **FIXED** - Float.toString now outputs up to 12 significant digits |
 
 ### 2.1 Modulo Operator (`%`)
 
@@ -172,7 +172,6 @@ Features implemented in this compiler that should be added to the Darklang inter
 | Random | `stdlib:random` | `Random.int64` |
 | Byte operations | `stdlib:byte_ops` | `String.getByteAt` |
 | Int64 math | `stdlib:int64_math` | `Int64.sub`, `Int64.mul`, `Int64.div`, `Int64.isEven`, `Int64.isOdd` |
-| Float64 functions | `stdlib:float64` | `Float64.toBits`, `Float64.toString` |
-| Float operations | `stdlib:float_ops` | `Float.toInt`, `Float.abs`, `Float.negate`, `Float.sqrt` |
+| Float operations | `stdlib:float_ops` | `Float.toBits`, `Float.toString`, `Float.toInt`, `Float.abs`, `Float.negate`, `Float.sqrt` |
 | List functions | `stdlib:missing` | `List.take`, `List.drop` |
 | String functions | `stdlib:missing` | `String.substring`, `String.take`, `String.drop` |

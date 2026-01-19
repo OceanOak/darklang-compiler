@@ -54,10 +54,10 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
                 let (printTmp, varGen') = freshVar varGen
                 (Let (printTmp, Print (atom, programType), Return atom), varGen')
         | AST.TFloat64 ->
-            // For Float64, call Float64.toString first, then print the string
+            // For Float64, call Float.toString first, then print the string
             let (strTmp, varGen1) = freshVar varGen
             let (printTmp, varGen2) = freshVar varGen1
-            let callExpr = Call ("Stdlib.Float64.toString", [atom])
+            let callExpr = Call ("Stdlib.Float.toString", [atom])
             let printExpr = Print (Var strTmp, AST.TString)
             (Let (strTmp, callExpr, Let (printTmp, printExpr, Return atom)), varGen2)
         | _ ->

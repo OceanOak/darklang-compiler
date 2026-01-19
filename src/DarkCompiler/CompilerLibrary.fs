@@ -912,7 +912,7 @@ let loadStdlib () : Result<AST.Program, string> =
         "stdlib/Result.dark"
         "stdlib/Option.dark"
         "stdlib/List.dark"
-        "stdlib/Float64.dark"
+        "stdlib/Float.dark"
         "stdlib/Path.dark"
         "stdlib/Platform.dark"
         "stdlib/String.dark"
