@@ -409,3 +409,25 @@ let g = (x: Int64) => x * 2 in if true then g(21) else 0 = 42
 
 // Lambda used only in else-branch with complex condition
 let h = (x: Int64) => x + 100 in if 1 > 2 then 0 else h(42) = 142
+
+// =====================================================
+// Closure Returning Float with Arithmetic (Mutation #171)
+// =====================================================
+// Tests that cexprProducesFloat correctly uses || (not &&) when checking
+// if an arithmetic operation produces a float. The mutation changes:
+//   isFloatAtom floatRegs left || isFloatAtom floatRegs right
+// to:
+//   isFloatAtom floatRegs left && isFloatAtom floatRegs right
+//
+// ClosureCall results are NOT added to floatRegs (cexprProducesFloat returns
+// false for ClosureCall). So when we do: closureResult + 1.0
+// - isFloatAtom(closureResult) = false (not in floatRegs)
+// - isFloatAtom(1.0) = true (FloatLiteral)
+// - Original: false || true = true (result is correctly tracked as float)
+// - Mutated: false && true = false (result incorrectly NOT tracked as float)
+//
+// If the mutation is applied, the return type of the addition would be
+// incorrectly inferred as Int64 instead of Float64, causing wrong output.
+
+// Closure that returns a Float, then add a float literal to the result
+let toFloat = (x: Int64) => Stdlib.Int64.toFloat(x) in let result = toFloat(5) + 1.0 in result = 6.0
