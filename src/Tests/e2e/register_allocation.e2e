@@ -487,3 +487,33 @@ let ev1 = 1 in let ev2 = 2 in let ev3 = 3 in let ev4 = 4 in let ev5 = 5 in let e
 // Early variables used late while many intermediate variables exist
 // This pattern would trigger eviction in linear scan if it were used
 let first1 = 100 in let first2 = 200 in let mid1 = 1 in let mid2 = 2 in let mid3 = 3 in let mid4 = 4 in let mid5 = 5 in let mid6 = 6 in let mid7 = 7 in let mid8 = 8 in let mid9 = 9 in let mid10 = 10 in let mid11 = 11 in let mid12 = 12 in let mid13 = 13 in let mid14 = 14 in first1 + first2 + mid1 + mid2 + mid3 + mid4 + mid5 + mid6 + mid7 + mid8 + mid9 + mid10 + mid11 + mid12 + mid13 + mid14 = 405
+
+
+// ===================================================================
+// Deferred Vertex Color Assignment Tests (Mutation #251)
+// ===================================================================
+
+// Mutation #251 targets the second-pass condition in greedyColorReverse:
+//   if Set.contains v deferred && not (Map.containsKey v colors) then
+// This controls which vertices get colored via colorVertexWithPartners.
+// Vertices are deferred in the first pass if they have uncolored phi partners.
+//
+// If mutation changes && to ||, vertices would be processed when:
+// - They are in deferred set (as intended), OR
+// - They are NOT yet colored (including spilled vertices)
+// This could cause spilled vertices to be reprocessed unnecessarily,
+// or already-colored deferred vertices to be processed again.
+//
+// These tests exercise the deferred vertex coloring path with phi coalescing
+// under high register pressure to detect any incorrect color assignments.
+
+// Multiple phi nodes with high register pressure - tests deferred vertex handling
+// Each conditional creates phi nodes that get deferred until partners are colored
+let d1 = 1 in let d2 = 2 in let d3 = 3 in let d4 = 4 in let d5 = 5 in let d6 = 6 in let d7 = 7 in let d8 = 8 in let d9 = 9 in let d10 = 10 in let d11 = 11 in let d12 = 12 in let phi1 = if d1 > 0 then d2 + d3 else d4 + d5 in let phi2 = if d6 > 3 then d7 + d8 else d9 + d10 in phi1 + phi2 + d11 + d12 = 43
+
+// Nested conditionals creating deferred phi chains - exercises second-pass ordering
+let n1 = 10 in let n2 = 20 in let n3 = 30 in let n4 = 40 in let n5 = 50 in let n6 = 60 in let n7 = 70 in let n8 = 80 in let n9 = 90 in let n10 = 100 in let outer = if n1 > 5 then (if n2 > 10 then n3 + n4 else n5 + n6) else (if n7 > 35 then n8 + n9 else n10) in outer + n1 + n2 = 100
+
+// High pressure with spills AND deferred vertices - tests mutation boundary
+// Some variables get spilled, others deferred; mutation would reprocess spilled ones
+let sp1 = 1 in let sp2 = 2 in let sp3 = 3 in let sp4 = 4 in let sp5 = 5 in let sp6 = 6 in let sp7 = 7 in let sp8 = 8 in let sp9 = 9 in let sp10 = 10 in let sp11 = 11 in let sp12 = 12 in let sp13 = 13 in let sp14 = 14 in let sp15 = 15 in let sp16 = 16 in let sp17 = 17 in let sp18 = 18 in let phiSp = if sp1 > 0 then sp2 + sp3 + sp4 + sp5 + sp6 + sp7 + sp8 + sp9 else sp10 + sp11 + sp12 + sp13 + sp14 + sp15 + sp16 + sp17 in phiSp + sp18 = 62
