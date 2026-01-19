@@ -154,3 +154,16 @@ if false then (if true then 1.0 else 2.0) else 3.0 = 3.0
 (if true then (if true then 1.0 else 2.0) else 3.0) + 0.5 = 1.5
 (if true then (if false then 1.0 else 2.0) else 3.0) + 0.5 = 2.5
 (if false then (if true then 1.0 else 2.0) else 3.0) + 0.5 = 3.5
+
+// Mutation #173: Nested if with let bindings in branches
+// Tests that float result registers are properly marked when branches contain let bindings
+// The then-branch returns a Register (from let binding), else-branch returns FloatSymbol
+(if true then (let x = 1.5 in x) else 2.0) + 0.5 = 2.0
+(if false then (let x = 1.5 in x) else 2.0) + 0.5 = 2.5
+// Both branches with let bindings
+(if true then (let a = 1.0 in a + 0.5) else (let b = 2.0 in b + 0.5)) + 1.0 = 2.5
+(if false then (let a = 1.0 in a + 0.5) else (let b = 2.0 in b + 0.5)) + 1.0 = 3.5
+// Nested if inside let binding with float result used in arithmetic
+let r = (if true then (if true then 3.0 else 4.0) else 5.0) in r * 2.0 = 6.0
+// Triple nested if with float results
+(if true then (if true then (if true then 1.0 else 2.0) else 3.0) else 4.0) + 0.5 = 1.5
