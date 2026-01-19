@@ -721,3 +721,20 @@ let xs = [42] in match [1, ...xs] with | [a, b] -> a + b | _ -> 0 = 43
 // would be interpreted as a float, giving a wrong result.
 def makeIntList167() : List<Int64> = [42, 84, 126]
 match makeIntList167() with | [h, ...t] -> h + 100 | [] -> 999 = 142
+
+// =====================================================
+// List head type tracking via TFunction test (kills mutation #168)
+// =====================================================
+// Tests that the TupleGet handler for TFunction returning TList correctly
+// uses && (not ||) when checking whether to set destType to Float64.
+// The condition at line 796 is:
+//   if index = 1 && elemType = AST.TFloat64 then destType := AST.TFloat64
+// This is specifically for when TypeMap contains TFunction instead of just
+// the return type (happens with closures stored in variables).
+// If && were changed to ||, accessing index 1 of a List<Int64> from a
+// closure would incorrectly mark the result as Float64.
+//
+// This test creates a function that returns List<Int64>, stores it as a
+// first-class function value, calls it, and accesses the head. This exercises
+// the TFunction path in TypeMap lookup.
+def makeList168(n: Int64) : List<Int64> = [55 + n, 110, 165] let f = makeList168 in match f(0) with | [h, ...t] -> h + 200 | [] -> 999 = 255
