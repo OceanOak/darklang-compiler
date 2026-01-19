@@ -278,3 +278,31 @@ floatPhiAllBranches(2.0, 3.0, 4.0, 0) = 9.0
 floatPhiAllBranches(2.0, 3.0, 4.0, 1) = 10.0
 floatPhiAllBranches(2.0, 3.0, 4.0, 2) = 14.0
 floatPhiAllBranches(2.0, 3.0, 4.0, 3) = 24.0
+
+// =====================================================
+// Float MIR Intermediate Fallback Mapping (Mutation #198)
+// =====================================================
+// Tests the fallback path in generateFloatMoveInstrsWithAllocation for
+// MIR intermediates (VRegs >= 10000) that aren't in the allocation mapping.
+// The fallback formula is ((id - 10000) + 7) % 13 to select a temp register.
+// If mutation changes + to -, the formula becomes ((id - 10000) - 7) % 13,
+// which would produce negative indices or wrong register selection.
+
+// Float phi with many intermediates that stress the fallback mapping
+// Creates intermediates with different VReg IDs, each needing proper register mapping
+def floatPhiManyIntermediates(a: Float, b: Float, c: Float, cond: Bool) : Float = let i1 = a + b in let i2 = b + c in let i3 = a + c in let i4 = i1 + i2 in let i5 = i2 + i3 in let i6 = i3 + i1 in if cond then i4 + i5 + i6 else i4 * i5 * i6
+floatPhiManyIntermediates(1.0, 2.0, 3.0, true) = 24.0
+floatPhiManyIntermediates(1.0, 2.0, 3.0, false) = 504.0
+
+// Deep intermediate chain across phi boundary
+// Creates many sequential intermediates that must be correctly mapped in phi resolution
+def floatDeepPhiChain(x: Float, cond: Bool) : Float = let t0 = x * 1.1 in let t1 = t0 * 1.1 in let t2 = t1 * 1.1 in let t3 = t2 * 1.1 in let t4 = t3 * 1.1 in let t5 = t4 * 1.1 in let t6 = t5 * 1.1 in let t7 = t6 * 1.1 in if cond then t7 else t0
+floatDeepPhiChain(10.0, true) = 21.43
+floatDeepPhiChain(10.0, false) = 11.0
+
+// Multiple branches with float intermediates - exercises parallel move resolution with fallback
+def floatMultiBranchIntermediates(a: Float, b: Float, selector: Int64) : Float = let sum = a + b in let diff = a - b in let prod = a * b in let quot = a / b in if selector == 1 then sum else if selector == 2 then diff else if selector == 3 then prod else quot
+floatMultiBranchIntermediates(10.0, 2.0, 1) = 12.0
+floatMultiBranchIntermediates(10.0, 2.0, 2) = 8.0
+floatMultiBranchIntermediates(10.0, 2.0, 3) = 20.0
+floatMultiBranchIntermediates(10.0, 2.0, 4) = 5.0
