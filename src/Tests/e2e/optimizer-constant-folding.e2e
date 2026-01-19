@@ -1156,3 +1156,70 @@ def nestedConstantBranches(flag: Bool) : Int64 =
 // flag=true: outer true -> inner (false branch) -> 200
 nestedConstantBranches(true) = 200
 nestedConstantBranches(false) = 400
+
+// ===================================================================
+// Phi Source Trimming Change Flag Propagation (mutation #161)
+// ===================================================================
+// This test exercises the || operator in eliminateUnreachableBlocks at line 831:
+//   (acc' @ [instr'], ch' || sources' <> sources)
+//
+// The change flag accumulates across multiple phi instructions in a block.
+// With ||: if ANY phi has sources trimmed, instrChanged=true
+// With &&: ALL phis must have sources trimmed for instrChanged=true (WRONG!)
+//
+// If || becomes &&, then:
+// - First phi has sources trimmed: ch' = false || true = true
+// - Second phi has no sources trimmed: with mutation ch' = true && false = false
+// - The change flag gets reset when a phi doesn't change!
+//
+// However, this is combined with removedBlocks on line 839:
+//   ({ cfg with Blocks = blocks' }, removedBlocks || phiChanged)
+//
+// If blocks are removed (which happens whenever phi sources are trimmed from
+// unreachable predecessors), the function still returns changed=true.
+//
+// The test creates a scenario with:
+// 1. A constant condition that makes one branch unreachable
+// 2. Multiple variables assigned in both branches (creates multiple phis at merge)
+// 3. Verification that the optimizer correctly handles this pattern
+
+// Test: multiple phi nodes in merge block after constant branch simplification
+// The constant 'if true' creates an unreachable else-branch
+// Multiple variables are assigned in both branches, creating multiple phis
+// When the unreachable branch is eliminated, all phis have sources trimmed
+def multiPhiMerge(flag: Bool, x: Int64) : Int64 =
+  let choice = if true then 1 else 2 in
+  let result = if flag then choice + x else choice - x in
+  result
+
+// flag=true: choice=1, result = 1 + 5 = 6
+multiPhiMerge(true, 5) = 6
+// flag=false: choice=1, result = 1 - 5 = -4
+multiPhiMerge(false, 5) = -4
+
+// More complex: nested conditionals creating multiple merge points with phis
+// Each merge point may have multiple phi nodes that need source trimming
+def nestedPhiMerge(flag: Bool, x: Int64, y: Int64) : Int64 =
+  let a = if true then x else y in  // constant branch creates unreachable
+  let b = if true then y else x in  // another constant branch
+  let result = if flag then a + b else a - b in
+  result
+
+// flag=true: a=x, b=y, result = x + y = 3 + 7 = 10
+nestedPhiMerge(true, 3, 7) = 10
+// flag=false: a=x, b=y, result = x - y = 3 - 7 = -4
+nestedPhiMerge(false, 3, 7) = -4
+
+// Test where constant branch in one path affects phi in sibling path
+// This creates a more complex CFG structure for elimination
+def siblingPhiElimination(outer: Bool, x: Int64) : Int64 =
+  if outer then
+    // This branch has a constant condition
+    let inner = if true then x * 2 else x * 3 in
+    inner
+  else
+    // This branch is purely runtime
+    x + 1
+
+siblingPhiElimination(true, 5) = 10
+siblingPhiElimination(false, 5) = 6
