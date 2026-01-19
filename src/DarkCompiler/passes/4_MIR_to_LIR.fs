@@ -1274,11 +1274,11 @@ let selectInstr
     | MIR.FloatToBits (dest, src) ->
         let lirDest = vregToLIRReg dest
         // src is a float operand that needs to be in a float register
-        match ensureInFRegister src (LIR.FVirtual 1000) with
+        match ensureInFRegister src state with
         | Error err -> Error err
-        | Ok (srcInstrs, srcFReg) ->
+        | Ok (srcInstrs, srcFReg, nextState) ->
             // FloatToBits uses FpToGp (bit copy, not conversion)
-            Ok (srcInstrs @ [LIRSymbolic.FloatToBits (lirDest, srcFReg)])
+            Ok (srcInstrs @ [LIRSymbolic.FloatToBits (lirDest, srcFReg)], nextState)
 
     | MIR.RefCountIncString str ->
         let lirStr = convertOperand str
@@ -1434,6 +1434,7 @@ let vregIdsFromInstr (instr: MIR.Instr) : int list =
     | MIR.FloatNeg (dest, src) -> vregId dest :: vregIdsFromOperand src
     | MIR.Int64ToFloat (dest, src) -> vregId dest :: vregIdsFromOperand src
     | MIR.FloatToInt64 (dest, src) -> vregId dest :: vregIdsFromOperand src
+    | MIR.FloatToBits (dest, src) -> vregId dest :: vregIdsFromOperand src
     | MIR.RawAlloc (dest, numBytes) -> vregId dest :: vregIdsFromOperand numBytes
     | MIR.RawFree ptr -> vregIdsFromOperand ptr
     | MIR.RawGet (dest, ptr, byteOffset, _) -> vregId dest :: (vregIdsFromOperand ptr @ vregIdsFromOperand byteOffset)
