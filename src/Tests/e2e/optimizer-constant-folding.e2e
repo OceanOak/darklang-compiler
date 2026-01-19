@@ -1060,3 +1060,99 @@ nestedPhiDestCopy(true, false, 1, 2, 3) = 8
 nestedPhiDestCopy(false, true, 1, 2, 3) = 8
 // f1=false: p1=b=2, f2=false: p2=c=3, result = (2+2) + (3+3) = 10
 nestedPhiDestCopy(false, false, 1, 2, 3) = 10
+
+// ===================================================================
+// Constant Branch Simplification Change Flag (mutation #160)
+// ===================================================================
+// This test exercises the || operator in simplifyConstantBranches at line 793:
+//   let changed' = ch || term' <> block.Terminator
+//
+// The change flag aggregates across multiple basic blocks in the CFG.
+// With ||: if ANY block has a constant branch simplified, changed=true
+// With &&: ALL blocks must have changes for changed=true (WRONG!)
+//
+// The simplifyConstantBranches function converts:
+//   Branch(BoolConst true, trueLabel, falseLabel) -> Jump trueLabel
+//   Branch(BoolConst false, trueLabel, falseLabel) -> Jump falseLabel
+//
+// If || becomes &&, the accumulator starts with ch=false and:
+// - After first block with change: ch = false && true = false
+// - After block without change: ch = false && false = false
+// - Result: always false, even when changes occurred!
+//
+// This causes the optimizer to stop iterating early. The test creates:
+// 1. A function with multiple blocks (via conditionals)
+// 2. One block has a constant condition (if true then ...) that gets simplified
+// 3. Other blocks have runtime conditions (no simplification)
+// 4. Multi-pass optimization depends on the change flag
+
+// Test: constant branch in one block, runtime condition in another
+// The inner 'if true then 10 else 20' should simplify to just 10
+// The outer condition uses a runtime parameter (flag)
+// With ||: change flag is true, enabling further passes
+// With && mutation: change flag incorrectly becomes false
+def constantBranchMultiBlock(flag: Bool, x: Int64) : Int64 =
+  if flag then
+    // This block has a constant branch: 'if true then 10 else 20' -> 10
+    let inner = if true then 10 else 20 in
+    x + inner
+  else
+    // This block has a runtime condition - no constant branch to simplify
+    x * 2
+
+// flag=true: inner = 10, result = x + 10 = 15
+constantBranchMultiBlock(true, 5) = 15
+// flag=false: result = x * 2 = 10
+constantBranchMultiBlock(false, 5) = 10
+
+// More complex: chain of constant branches that require multiple passes
+// First pass simplifies outer constant, second pass can see more patterns
+def constantBranchChain(flag: Bool) : Int64 =
+  if flag then
+    // Multiple constant conditions in sequence
+    let a = if true then 1 else 99 in
+    let b = if false then 99 else 2 in
+    a + b
+  else
+    // Runtime path - no constant branches
+    42
+
+// flag=true: a=1, b=2, result=3
+constantBranchChain(true) = 3
+// flag=false: result=42
+constantBranchChain(false) = 42
+
+// Test that relies on constant branch enabling dead code elimination
+// The constant branch simplifies 'if true then x else y' to just x
+// This makes 'y' potentially dead if not used elsewhere
+def constantBranchEnablesDCE(flag: Bool, x: Int64, y: Int64) : Int64 =
+  if flag then
+    // Constant branch chooses x, making the computation for y unused
+    let result = if true then x * 2 else y * 3 in
+    result
+  else
+    // Both are used here, so DCE cannot remove either
+    x + y
+
+// flag=true: uses x*2 = 20, the y*3 computation can be DCE'd
+constantBranchEnablesDCE(true, 10, 5) = 20
+// flag=false: uses x+y = 15
+constantBranchEnablesDCE(false, 10, 5) = 15
+
+// Nested constant branches in different blocks
+// Each level has a constant condition that simplifies
+def nestedConstantBranches(flag: Bool) : Int64 =
+  if flag then
+    // Outer constant branch
+    if true then
+      // Inner constant branch
+      if false then 100 else 200
+    else
+      300
+  else
+    // Runtime path
+    400
+
+// flag=true: outer true -> inner (false branch) -> 200
+nestedConstantBranches(true) = 200
+nestedConstantBranches(false) = 400
