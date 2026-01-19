@@ -133,3 +133,22 @@ let a = 100 in let b = a + 1 in let c = b + 1 in let d = c + 1 in let e = d + 1 
 // If terminator globalIdx were decremented instead of incremented, the variable used
 // in the condition would have an incorrect live interval
 let x = 10 in let y = 20 in let z = 30 in let w = 40 in let v = 50 in let u = 60 in let t = 70 in let cond = x > 5 in if cond then x + y + z + w + v + u + t else 0 = 280
+
+
+// ===================================================================
+// Stack Alignment Tests (Mutation #194)
+// ===================================================================
+
+// Tests for stack alignment calculation: ((size + 15) / 16) * 16
+// The alignTo16 function rounds up to the nearest 16-byte boundary.
+// If mutation changes + to -, alignment would be wrong causing memory corruption.
+
+// Single spilled value - needs 16-byte aligned stack (not 0)
+let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in let g = 7 in let h = 8 in let i = 9 in let j = 10 in let k = 11 in let l = 12 in let m = 13 in a + b + c + d + e + f + g + h + i + j + k + l + m = 91
+
+// Multiple spilled values with specific stack sizes that exercise alignment edge cases
+// 14 values: tests stack allocation with multiple spills
+let a1 = 1 in let b1 = 2 in let c1 = 3 in let d1 = 4 in let e1 = 5 in let f1 = 6 in let g1 = 7 in let h1 = 8 in let i1 = 9 in let j1 = 10 in let k1 = 11 in let l1 = 12 in let m1 = 13 in let n1 = 14 in a1 + b1 + c1 + d1 + e1 + f1 + g1 + h1 + i1 + j1 + k1 + l1 + m1 + n1 = 105
+
+// 15 values: more pressure on alignment
+let v1 = 1 in let v2 = 2 in let v3 = 3 in let v4 = 4 in let v5 = 5 in let v6 = 6 in let v7 = 7 in let v8 = 8 in let v9 = 9 in let v10 = 10 in let v11 = 11 in let v12 = 12 in let v13 = 13 in let v14 = 14 in let v15 = 15 in v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15 = 120
