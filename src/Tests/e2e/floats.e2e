@@ -503,3 +503,41 @@ floatNestedCondPhi(2.0, true, true) = 14.1
 floatNestedCondPhi(2.0, true, false) = 14.1
 floatNestedCondPhi(2.0, false, true) = 5.09
 floatNestedCondPhi(2.0, false, false) = 5.09
+
+// =====================================================
+// MIR Intermediate VReg Offset Mapping (Mutation #221)
+// =====================================================
+// Tests the formula ((id - 10000) + 7) % 13 in generateFloatMoveInstrsWithAllocation.
+// MIR intermediates get VRegs starting at 10000. The formula maps these to
+// a pool of 13 temp registers: [D0, D1, D10-D15, D27-D31].
+// If mutation changes - to +, the formula becomes ((id + 10000) + 7) % 13,
+// which produces completely different register assignments, causing value corruption.
+//
+// For VReg 10007: original = (7 + 7) % 13 = 1 (D1), mutated = (20014) % 13 = 7 (D15)
+// For VReg 10000: original = (0 + 7) % 13 = 7 (D15), mutated = (20007) % 13 = 0 (D0)
+//
+// This test creates many MIR float intermediates with specific VReg numbers
+// that would collide with wrong registers if the mutation were applied.
+
+// Create many intermediates that cycle through VReg numbers 10000+
+// Each intermediate maps to a specific temp register; mutation would break this
+def floatMirIntermediateMapping(x: Float) : Float = let i0 = x + 0.0 in let i1 = i0 + 1.0 in let i2 = i1 + 2.0 in let i3 = i2 + 3.0 in let i4 = i3 + 4.0 in let i5 = i4 + 5.0 in let i6 = i5 + 6.0 in let i7 = i6 + 7.0 in let i8 = i7 + 8.0 in let i9 = i8 + 9.0 in let i10 = i9 + 10.0 in let i11 = i10 + 11.0 in let i12 = i11 + 12.0 in let i13 = i12 + 13.0 in i13
+floatMirIntermediateMapping(100.0) = 191.0
+
+// MIR intermediates with phi resolution - tests parallel move with MIR temps
+// Creates intermediates that must be correctly mapped for phi moves
+// Note: variable 'f' renamed to 'ff' to avoid conflict with function name in nested scope
+def floatMirPhiMapping(x: Float, sel: Int64) : Float = let a = x * 1.1 in let b = a * 1.2 in let c = b * 1.3 in let d = c * 1.4 in let e = d * 1.5 in let g = e * 1.6 in let h = g * 1.7 in let ii = h * 1.8 in let j = ii * 1.9 in let k = j * 2.0 in let l = k * 2.1 in let m = l * 2.2 in let n = m * 2.3 in let o = n * 2.4 in if sel == 1 then a + b else if sel == 2 then c + d else if sel == 3 then e + g else if sel == 4 then h + ii else if sel == 5 then j + k else if sel == 6 then l + m else n + o
+floatMirPhiMapping(1.0, 1) = 2.41
+floatMirPhiMapping(1.0, 2) = 4.11
+floatMirPhiMapping(1.0, 3) = 9.36
+floatMirPhiMapping(1.0, 4) = 27.44
+floatMirPhiMapping(1.0, 5) = 100.56
+floatMirPhiMapping(1.0, 6) = 450.53
+floatMirPhiMapping(1.0, 7) = 2422.2
+
+// Test with parallel computation chains creating many MIR intermediates
+// Forces many VRegs to be allocated and resolved at phi nodes
+def floatMirParallelChains(x: Float, y: Float, cond: Bool) : Float = let ax = x * 1.1 in let bx = ax + 0.1 in let cx = bx * 1.2 in let dx = cx + 0.2 in let ex = dx * 1.3 in let fx = ex + 0.3 in let gx = fx * 1.4 in let ay = y * 2.1 in let by = ay - 0.1 in let cy = by * 2.2 in let dy = cy - 0.2 in let ey = dy * 2.3 in let fy = ey - 0.3 in let gy = fy * 2.4 in if cond then gx + gy else gx * gy
+floatMirParallelChains(1.0, 1.0, true) = 25.86
+floatMirParallelChains(1.0, 1.0, false) = 76.48
