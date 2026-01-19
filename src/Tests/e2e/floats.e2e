@@ -306,3 +306,34 @@ floatMultiBranchIntermediates(10.0, 2.0, 1) = 12.0
 floatMultiBranchIntermediates(10.0, 2.0, 2) = 8.0
 floatMultiBranchIntermediates(10.0, 2.0, 3) = 20.0
 floatMultiBranchIntermediates(10.0, 2.0, 4) = 5.0
+
+// =====================================================
+// Float Interference Graph Building (Mutation #203)
+// =====================================================
+// Tests the buildFloatInterferenceGraph function which builds edges between
+// all pairs of live float variables. The loop uses:
+//   for i in 0 .. liveList.Length - 2 do
+//     for j in i + 1 .. liveList.Length - 1 do
+// If mutation changes - to +, the loop bounds become invalid (liveList.Length + 2),
+// causing array index out of bounds or incorrect interference edges.
+// When interference edges are missing, two float variables that are live together
+// may be assigned the same physical register, causing incorrect values.
+
+// Many float variables live at the same point - exercises pairwise edge generation
+// With 5 live floats, the loop iterates over all 10 pairs (5 choose 2)
+// If interference edges are missing, some floats may share registers incorrectly
+def floatInterference5(a: Float, b: Float, c: Float, d: Float, e: Float) : Float = let sum = a + b + c + d + e in sum
+floatInterference5(1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
+
+// 6 live floats with distinct values - more pairs to generate (15 edges)
+def floatInterference6(a: Float, b: Float, c: Float, d: Float, e: Float, f: Float) : Float = a + b + c + d + e + f
+floatInterference6(1.5, 2.5, 3.5, 4.5, 5.5, 6.5) = 24.0
+
+// Float variables all live across a conditional - tests interference at terminator
+// All 4 floats must interfere because they're all live at the branch point
+def floatInterferenceAtBranch(w: Float, x: Float, y: Float, z: Float, cond: Bool) : Float = if cond then w + x + y + z else w * x * y * z
+floatInterferenceAtBranch(2.0, 3.0, 4.0, 5.0, true) = 14.0
+floatInterferenceAtBranch(2.0, 3.0, 4.0, 5.0, false) = 120.0
+
+// Multiple float let bindings all live at the end - creates many interference edges
+let f1 = 1.1 in let f2 = 2.2 in let f3 = 3.3 in let f4 = 4.4 in let f5 = 5.5 in f1 + f2 + f3 + f4 + f5 = 16.5
