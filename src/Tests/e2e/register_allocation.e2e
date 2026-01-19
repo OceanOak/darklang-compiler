@@ -582,3 +582,82 @@ calleeSavedTest(0) = 91
 // This exercises the callee-saved save/restore for values preserved across calls
 def recursiveCalleeSaved(n: Int64) : Int64 = if n <= 0 then 0 else let v1 = n in let v2 = n + 1 in let v3 = n + 2 in let v4 = n + 3 in let v5 = n + 4 in let v6 = n + 5 in let v7 = n + 6 in let v8 = n + 7 in let v9 = n + 8 in let v10 = n + 9 in let v11 = n + 10 in let v12 = n + 11 in let v13 = n + 12 in let rest = recursiveCalleeSaved(n - 1) in v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + rest
 recursiveCalleeSaved(5) = 585
+
+
+// ===================================================================
+// SaveRegs Second-Register-Only Offset Tests (Mutation #263)
+// ===================================================================
+
+// Mutation #263 targets the offset calculation in SaveRegs for the
+// (false, true) case - when only the second register of a pair is live:
+//   [ARM64.STR (lirPhysRegToARM64Reg r2, ARM64.SP, offset + 8s)]
+// The mutation changes + to -, which would store at offset - 8 instead
+// of offset + 8, causing incorrect memory access.
+//
+// Register pairs layout: (X1,X2)@0, (X3,X4)@16, (X5,X6)@32, (X7,X8)@48, (X9,X10)@64
+// When only X2 is live (not X1), it should be stored at offset 0 + 8 = 8
+// With mutation: offset 0 - 8 = -8 (invalid memory access or corruption)
+//
+// To trigger this, we need a value in an odd-position register (X2, X4, etc.)
+// that survives a function call, while its pair partner is NOT live.
+
+// Helper function that returns its argument (forces a function call)
+def identity263(x: Int64) : Int64 = x
+
+// Test case: Single value survives across call
+// The value 42 is computed, then a function call happens, then the value is used.
+// This should trigger SaveRegs with just one register to save.
+// If the second register of a pair (e.g., X2) is the one holding 42 but X1 is not live,
+// the mutation would corrupt the save/restore.
+def singleValueAcrossCall263(n: Int64) : Int64 =
+    let value = n + 100 in
+    let _ = identity263(0) in
+    value
+
+singleValueAcrossCall263(42) = 142
+
+// Test with two values where one is used before call, one after
+// This creates asymmetric liveness to hit the (false, true) branch
+def asymmetricLiveness263(a: Int64, b: Int64) : Int64 =
+    let first = a + 1 in
+    let second = b + 1 in
+    let _ = identity263(first) in
+    second
+
+asymmetricLiveness263(10, 20) = 21
+
+// Test with specific odd count of values to maximize chance of hitting (false, true)
+// 3 values live across call - could result in X1+X2 pair saving, then X3 alone
+// OR X1 alone with X2+X3 not paired, etc.
+def threeValuesAcrossCall263(x: Int64) : Int64 =
+    let a = x + 1 in
+    let b = x + 2 in
+    let c = x + 3 in
+    let _ = identity263(0) in
+    a + b + c
+
+threeValuesAcrossCall263(10) = 36
+
+// Test with 5 values - odd count increases chance of unpaired second register
+def fiveValuesAcrossCall263(x: Int64) : Int64 =
+    let v1 = x + 1 in
+    let v2 = x + 2 in
+    let v3 = x + 3 in
+    let v4 = x + 4 in
+    let v5 = x + 5 in
+    let _ = identity263(0) in
+    v1 + v2 + v3 + v4 + v5
+
+fiveValuesAcrossCall263(10) = 65
+
+// Chain of calls to stress test SaveRegs/RestoreRegs with various register sets
+def chainCalls263(n: Int64) : Int64 =
+    let a = n + 10 in
+    let _ = identity263(0) in
+    let b = a + 20 in
+    let _ = identity263(0) in
+    let c = b + 30 in
+    let _ = identity263(0) in
+    c
+
+chainCalls263(5) = 65
