@@ -126,3 +126,45 @@ loopWithBitTest(3, 5, 0) = 0
 loopWithBitTest(7, 3, 0) = 30
 // mask=0 doesn't have bit 2 set
 loopWithBitTest(0, 10, 0) = 0
+
+// ===================================================================
+// Multiply-by-Constant Strength Reduction Tests
+// ===================================================================
+// The LIR peephole optimizer converts multiplication by constants
+// of the form (2^n - 1) or (2^n + 1) to shift + add/sub sequences.
+// For (2^n - 1): x * n = (x << shift) - x
+// For (2^n + 1): x * n = (x << shift) + x
+//
+// Mutation #175 tests: if the subtraction in (x << shift) - x
+// were changed to addition, multiply by 7, 15, 31, 63 would be wrong.
+
+// Multiply by 7 (2^3 - 1 = 8 - 1)
+// Correct: x * 7 = (x << 3) - x = 8x - x = 7x
+// If mutated to +: (x << 3) + x = 8x + x = 9x (WRONG)
+def mulBy7(x: Int64) : Int64 = x * 7
+mulBy7(1) = 7
+mulBy7(2) = 14
+mulBy7(3) = 21
+mulBy7(10) = 70
+mulBy7(100) = 700
+
+// Multiply by 15 (2^4 - 1 = 16 - 1)
+def mulBy15(x: Int64) : Int64 = x * 15
+mulBy15(1) = 15
+mulBy15(2) = 30
+mulBy15(3) = 45
+mulBy15(10) = 150
+
+// Multiply by 31 (2^5 - 1 = 32 - 1)
+def mulBy31(x: Int64) : Int64 = x * 31
+mulBy31(1) = 31
+mulBy31(2) = 62
+mulBy31(3) = 93
+mulBy31(10) = 310
+
+// Multiply by 63 (2^6 - 1 = 64 - 1)
+def mulBy63(x: Int64) : Int64 = x * 63
+mulBy63(1) = 63
+mulBy63(2) = 126
+mulBy63(3) = 189
+mulBy63(10) = 630
