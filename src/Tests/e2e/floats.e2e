@@ -297,7 +297,7 @@ floatPhiManyIntermediates(1.0, 2.0, 3.0, false) = 504.0
 // Deep intermediate chain across phi boundary
 // Creates many sequential intermediates that must be correctly mapped in phi resolution
 def floatDeepPhiChain(x: Float, cond: Bool) : Float = let t0 = x * 1.1 in let t1 = t0 * 1.1 in let t2 = t1 * 1.1 in let t3 = t2 * 1.1 in let t4 = t3 * 1.1 in let t5 = t4 * 1.1 in let t6 = t5 * 1.1 in let t7 = t6 * 1.1 in if cond then t7 else t0
-floatDeepPhiChain(10.0, true) = 21.43
+floatDeepPhiChain(10.0, true) = 21.4358881
 floatDeepPhiChain(10.0, false) = 11.0
 
 // Multiple branches with float intermediates - exercises parallel move resolution with fallback
@@ -462,8 +462,8 @@ float15BindingsWithPhi(1.0, 5) = 42.0
 
 // Many float intermediates with sequential computation - stresses VReg allocation
 def floatManySequentialIntermediates(x: Float, cond: Bool) : Float = let t1 = x * 1.1 in let t2 = t1 * 1.1 in let t3 = t2 * 1.1 in let t4 = t3 * 1.1 in let t5 = t4 * 1.1 in let t6 = t5 * 1.1 in let t7 = t6 * 1.1 in let t8 = t7 * 1.1 in let t9 = t8 * 1.1 in let t10 = t9 * 1.1 in if cond then t10 else t5
-floatManySequentialIntermediates(10.0, true) = 25.93
-floatManySequentialIntermediates(10.0, false) = 16.1
+floatManySequentialIntermediates(10.0, true) = 25.937424601
+floatManySequentialIntermediates(10.0, false) = 16.1051
 
 // =====================================================
 // MIR Intermediate Float VRegs (Mutation #220)
@@ -481,28 +481,28 @@ floatManySequentialIntermediates(10.0, false) = 16.1
 // Deeply nested float computation chain - creates many MIR intermediates
 // Each operation generates a temporary VReg for its result
 def floatDeepChain(x: Float) : Float = let a = x * 2.0 in let b = a + 1.0 in let c = b * 3.0 in let d = c - 2.0 in let e = d / 4.0 in let f = e * 5.0 in let g = f + 6.0 in let h = g - 7.0 in let i = h / 8.0 in let j = i * 9.0 in let k = j + 10.0 in let l = k - 11.0 in let m = l * 12.0 in let n = m / 13.0 in let o = n + 14.0 in let p = o * 15.0 in p
-floatDeepChain(1.0) = 316.87
+floatDeepChain(1.0) = 316.875
 
 // Complex phi with many float intermediates from different branches
 // Tests register mapping consistency across phi resolution for MIR temps
 def floatComplexPhi(x: Float, sel: Int64) : Float = let base = x * 10.0 in if sel == 1 then let a = base + 1.0 in let b = a * 1.1 in let c = b + 2.0 in c else if sel == 2 then let d = base - 1.0 in let e = d * 0.9 in let f = e - 2.0 in f else if sel == 3 then let g = base * 2.0 in let h = g / 1.5 in let i = h + 5.0 in i else let j = base / 2.0 in let k = j * 3.0 in let l = k - 1.0 in l
 floatComplexPhi(1.0, 1) = 14.1
-floatComplexPhi(1.0, 2) = 6.09
-floatComplexPhi(1.0, 3) = 18.33
+floatComplexPhi(1.0, 2) = 6.09999999999
+floatComplexPhi(1.0, 3) = 18.33333333333
 floatComplexPhi(1.0, 4) = 14.0
 
 // Multiple computation chains that must be resolved at phi nodes
 // Each chain creates distinct MIR VRegs that are combined via phi
 def floatMultiChainPhi(x: Float, cond: Bool) : Float = let a1 = x * 1.0 in let a2 = a1 + 0.1 in let a3 = a2 * 1.1 in let a4 = a3 + 0.2 in let b1 = x * 2.0 in let b2 = b1 - 0.1 in let b3 = b2 * 0.9 in let b4 = b3 - 0.2 in let c1 = x * 3.0 in let c2 = c1 + 0.3 in let c3 = c2 / 1.1 in let c4 = c3 - 0.1 in if cond then a4 + b4 else b4 + c4
 floatMultiChainPhi(10.0, true) = 29.02
-floatMultiChainPhi(10.0, false) = 45.15
+floatMultiChainPhi(10.0, false) = 45.15545454545
 
 // Nested conditionals with float computations - deep phi nesting
 def floatNestedCondPhi(x: Float, a: Bool, b: Bool) : Float = let v = x * 5.0 in if a then let p = v + 1.0 in let q = p * 1.1 in if b then let r = q + 2.0 in r else let s = q - 2.0 in s else let t = v - 1.0 in let u = t * 0.9 in if b then let w = u + 3.0 in w else let z = u - 3.0 in z
 floatNestedCondPhi(2.0, true, true) = 14.1
 floatNestedCondPhi(2.0, true, false) = 14.1
-floatNestedCondPhi(2.0, false, true) = 5.09
-floatNestedCondPhi(2.0, false, false) = 5.09
+floatNestedCondPhi(2.0, false, true) = 5.09999999999
+floatNestedCondPhi(2.0, false, false) = 5.09999999999
 
 // =====================================================
 // MIR Intermediate VReg Offset Mapping (Mutation #221)
@@ -528,19 +528,19 @@ floatMirIntermediateMapping(100.0) = 191.0
 // Creates intermediates that must be correctly mapped for phi moves
 // Note: variable 'f' renamed to 'ff' to avoid conflict with function name in nested scope
 def floatMirPhiMapping(x: Float, sel: Int64) : Float = let a = x * 1.1 in let b = a * 1.2 in let c = b * 1.3 in let d = c * 1.4 in let e = d * 1.5 in let g = e * 1.6 in let h = g * 1.7 in let ii = h * 1.8 in let j = ii * 1.9 in let k = j * 2.0 in let l = k * 2.1 in let m = l * 2.2 in let n = m * 2.3 in let o = n * 2.4 in if sel == 1 then a + b else if sel == 2 then c + d else if sel == 3 then e + g else if sel == 4 then h + ii else if sel == 5 then j + k else if sel == 6 then l + m else n + o
-floatMirPhiMapping(1.0, 1) = 2.41
-floatMirPhiMapping(1.0, 2) = 4.11
-floatMirPhiMapping(1.0, 3) = 9.36
-floatMirPhiMapping(1.0, 4) = 27.44
-floatMirPhiMapping(1.0, 5) = 100.56
-floatMirPhiMapping(1.0, 6) = 450.53
-floatMirPhiMapping(1.0, 7) = 2422.2
+floatMirPhiMapping(1.0, 1) = 2.41999999999
+floatMirPhiMapping(1.0, 2) = 4.1184
+floatMirPhiMapping(1.0, 3) = 9.36936
+floatMirPhiMapping(1.0, 4) = 27.44501759999
+floatMirPhiMapping(1.0, 5) = 100.56638591999
+floatMirPhiMapping(1.0, 6) = 450.5374089216
+floatMirPhiMapping(1.0, 7) = 2422.20174471475
 
 // Test with parallel computation chains creating many MIR intermediates
 // Forces many VRegs to be allocated and resolved at phi nodes
 def floatMirParallelChains(x: Float, y: Float, cond: Bool) : Float = let ax = x * 1.1 in let bx = ax + 0.1 in let cx = bx * 1.2 in let dx = cx + 0.2 in let ex = dx * 1.3 in let fx = ex + 0.3 in let gx = fx * 1.4 in let ay = y * 2.1 in let by = ay - 0.1 in let cy = by * 2.2 in let dy = cy - 0.2 in let ey = dy * 2.3 in let fy = ey - 0.3 in let gy = fy * 2.4 in if cond then gx + gy else gx * gy
-floatMirParallelChains(1.0, 1.0, true) = 25.86
-floatMirParallelChains(1.0, 1.0, false) = 76.48
+floatMirParallelChains(1.0, 1.0, true) = 25.8688
+floatMirParallelChains(1.0, 1.0, false) = 76.48542719999
 
 // =====================================================
 // ANF-Level Float VReg Boundary Mapping (Mutation #231)
@@ -569,7 +569,7 @@ floatAnfVRegBoundary(false) = 55.0
 // If VRegs 8+ are incorrectly mapped, the sum in one branch would be wrong
 def floatAnfVReg12Bindings(cond: Bool) : Float = let a = 1.1 in let b = 2.2 in let c = 3.3 in let d = 4.4 in let e = 5.5 in let f = 6.6 in let g = 7.7 in let h = 8.8 in let i = 9.9 in let j = 10.1 in let k = 11.11 in let l = 12.12 in if cond then a + b + c + d + e + f else g + h + i + j + k + l
 floatAnfVReg12Bindings(true) = 23.1
-floatAnfVReg12Bindings(false) = 59.72
+floatAnfVReg12Bindings(false) = 59.72999999999
 
 // More than 13 bindings to exercise the modulo wraparound in the register pool
 // The pool has 13 registers, so binding 14+ wraps around
@@ -691,7 +691,7 @@ floatHighPressurePhi(false) = 126.0
 // If VRegs 8+ use wrong mapping (2 + id instead of tempRegs), sums would differ
 def floatHighPressure20(cond: Bool) : Float = let v0 = 1.1 in let v1 = 2.2 in let v2 = 3.3 in let v3 = 4.4 in let v4 = 5.5 in let v5 = 6.6 in let v6 = 7.7 in let v7 = 8.8 in let v8 = 9.9 in let v9 = 10.1 in let v10 = 11.11 in let v11 = 12.12 in let v12 = 13.13 in let v13 = 14.14 in let v14 = 15.15 in let v15 = 16.16 in let v16 = 17.17 in let v17 = 18.18 in let v18 = 19.19 in let v19 = 20.2 in if cond then v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 else v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19
 floatHighPressure20(true) = 59.6
-floatHighPressure20(false) = 156.54
+floatHighPressure20(false) = 156.54999999999
 
 // =====================================================
 // Float Liveness Fixed Point Iteration (Mutation #254)
