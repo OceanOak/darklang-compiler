@@ -544,3 +544,54 @@ def constPropWithPhi(flag: Bool) : Int64 =
 
 constPropWithPhi(true) = 43
 constPropWithPhi(false) = 100
+
+// ===================================================================
+// Domination Check in Loop Detection (mutation #153 test)
+// ===================================================================
+// This test exercises the dominates function which is used to identify
+// natural loops for LICM. The function at line 210 has:
+//   node = entry || Map.containsKey node idoms
+//
+// If || becomes &&, the entry block would fail to dominate other blocks,
+// breaking loop detection. This test creates scenarios where domination
+// must work correctly for the optimizer to behave properly.
+//
+// While LICM is an optimization, incorrect domination could affect
+// which code gets hoisted. We test that loop-invariant code is
+// correctly handled regardless of entry block domination.
+
+// Simple recursive loop with invariant computation
+// The invariant 'base * base' should produce correct results
+// whether or not it gets hoisted by LICM
+def dominationLoop(base: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let invariant = base * base in
+    dominationLoop(base, n - 1, acc + invariant)
+
+dominationLoop(3, 4, 0) = 36
+dominationLoop(5, 3, 0) = 75
+dominationLoop(2, 10, 0) = 40
+
+// Nested invariant computations that rely on domination
+// The optimizer should correctly handle invariants at different levels
+def nestedDominationLoop(a: Int64, b: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let outerInvariant = a + b in
+    let innerInvariant = outerInvariant * 2 in
+    nestedDominationLoop(a, b, n - 1, acc + innerInvariant)
+
+nestedDominationLoop(3, 4, 5, 0) = 70
+nestedDominationLoop(10, 5, 3, 0) = 90
+
+// Test where domination affects which blocks are in the loop body
+// This creates a control flow where entry domination matters
+def conditionalDominationLoop(x: Int64, flag: Bool, n: Int64) : Int64 =
+  if n <= 0 then 0
+  else
+    let value = if flag then x * x else x + x in
+    value + conditionalDominationLoop(x, flag, n - 1)
+
+conditionalDominationLoop(3, true, 4) = 36
+conditionalDominationLoop(3, false, 4) = 24
