@@ -167,3 +167,19 @@ if false then (if true then 1.0 else 2.0) else 3.0 = 3.0
 let r = (if true then (if true then 3.0 else 4.0) else 5.0) in r * 2.0 = 6.0
 // Triple nested if with float results
 (if true then (if true then (if true then 1.0 else 2.0) else 3.0) else 4.0) + 0.5 = 1.5
+
+// =====================================================
+// Multiple Float Literal Arguments (Mutation #180)
+// =====================================================
+// Tests that multiple float literal arguments are passed correctly to functions.
+// Mutation #180 changes tempFRegCounter + 1 to tempFRegCounter - 1 in the
+// float argument handling code. This is an equivalent mutant because the
+// counter direction doesn't affect correctness - each literal still gets
+// a unique temp register whether counting up or down.
+// This test exercises the code path to ensure float literals are handled.
+
+// Five float literal arguments - each needs its own temp register for loading
+def sum5Floats(a: Float, b: Float, c: Float, d: Float, e: Float) : Float = a + b + c + d + e sum5Floats(1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
+
+// Float literals with different values to verify each is loaded correctly
+def weightedSum(a: Float, b: Float, c: Float) : Float = a * 1.0 + b * 2.0 + c * 3.0 weightedSum(10.0, 20.0, 30.0) = 140.0
