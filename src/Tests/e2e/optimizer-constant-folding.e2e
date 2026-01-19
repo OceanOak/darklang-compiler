@@ -396,3 +396,47 @@ def copyPropPressure(x: Int64) : Int64 =
 
 copyPropPressure(1) = 10
 copyPropPressure(5) = 50
+
+// ===================================================================
+// Copy Propagation enabling CSE (mutation #149 test)
+// ===================================================================
+// This test specifically exercises the buildCopyMap dest <> src check.
+// When a register-to-register Mov is tracked, uses of dest can be
+// replaced with src, which enables CSE to recognize common subexpressions.
+//
+// Without copy propagation:
+//   y = x                    (Mov not tracked with mutation)
+//   temp1 = y + z            (uses y)
+//   temp2 = x + z            (uses x, looks different from temp1)
+//   result = temp1 + temp2   (no CSE possible)
+//
+// With copy propagation:
+//   y replaced with x everywhere
+//   temp1 = x + z            (after propagation)
+//   temp2 = x + z            (same as temp1!)
+//   result = temp1 + temp1   (CSE eliminates temp2)
+//
+// The test verifies correctness, and should catch any issues
+// from incorrect copy propagation behavior.
+
+def copyPropEnablesCSE(x: Int64, z: Int64) : Int64 =
+  let y = x in
+  let temp1 = y + z in
+  let temp2 = x + z in
+  temp1 + temp2
+
+copyPropEnablesCSE(10, 5) = 30
+copyPropEnablesCSE(7, 3) = 20
+copyPropEnablesCSE(-5, 2) = -6
+
+// More complex copy propagation + CSE interaction
+def copyPropCSEComplex(a: Int64, b: Int64) : Int64 =
+  let aCopy = a in
+  let bCopy = b in
+  let sum1 = aCopy + bCopy in
+  let sum2 = a + b in
+  let sum3 = aCopy + b in
+  sum1 + sum2 + sum3
+
+copyPropCSEComplex(10, 20) = 90
+copyPropCSEComplex(5, 5) = 30
