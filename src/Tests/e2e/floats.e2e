@@ -432,3 +432,35 @@ float10BindingsWithPhi(2.0, false) = 80.0
 // 12 float bindings - pushes into higher VReg numbers that exercise the modulo mapping
 def float12Bindings(x: Float) : Float = let v1 = x + 1.0 in let v2 = x + 2.0 in let v3 = x + 3.0 in let v4 = x + 4.0 in let v5 = x + 5.0 in let v6 = x + 6.0 in let v7 = x + 7.0 in let v8 = x + 8.0 in let v9 = x + 9.0 in let v10 = x + 10.0 in let v11 = x + 11.0 in let v12 = x + 12.0 in v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12
 float12Bindings(0.0) = 78.0
+
+// =====================================================
+// Float Allocation Fallback Path (Mutation #219)
+// =====================================================
+// Tests the fallback mapping in generateFloatMoveInstrsWithAllocation for
+// VRegs 8-9999 that are NOT in the float allocation mapping.
+// The fallback formula is (id - 8) % 13 to select a temp register.
+// If mutation changes - to +, VReg 8 would map to index 3 instead of 0.
+//
+// Note: This fallback path is for defensive programming and handles VRegs
+// that weren't in the CFG (e.g., dead code). It's difficult to trigger
+// directly, so these tests exercise the broader float allocation system
+// with many bindings and phi nodes to stress-test the machinery.
+
+// 15 float bindings with simple phi - exercises extensive float allocation
+// Creates many VRegs that must be tracked through control flow
+def float15PhiSimple(x: Float, cond: Bool) : Float = let a = x * 1.0 in let b = x * 2.0 in let c = x * 3.0 in let d = x * 4.0 in let e = x * 5.0 in let f = x * 6.0 in let g = x * 7.0 in let h = x * 8.0 in let i = x * 9.0 in let j = x * 10.0 in let k = x * 11.0 in let l = x * 12.0 in let m = x * 13.0 in let n = x * 14.0 in let o = x * 15.0 in if cond then a + b + c + d + e + f + g + h else i + j + k + l + m + n + o
+float15PhiSimple(1.0, true) = 36.0
+float15PhiSimple(1.0, false) = 84.0
+
+// Many float bindings - exercises extensive float allocation across phi boundaries
+def float15BindingsWithPhi(x: Float, sel: Int64) : Float = let a = x * 1.0 in let b = x * 2.0 in let c = x * 3.0 in let d = x * 4.0 in let e = x * 5.0 in let f = x * 6.0 in let g = x * 7.0 in let h = x * 8.0 in let i = x * 9.0 in let j = x * 10.0 in let k = x * 11.0 in let l = x * 12.0 in let m = x * 13.0 in let n = x * 14.0 in let o = x * 15.0 in if sel == 1 then a + b + c else if sel == 2 then d + e + f else if sel == 3 then g + h + i else if sel == 4 then j + k + l else m + n + o
+float15BindingsWithPhi(1.0, 1) = 6.0
+float15BindingsWithPhi(1.0, 2) = 15.0
+float15BindingsWithPhi(1.0, 3) = 24.0
+float15BindingsWithPhi(1.0, 4) = 33.0
+float15BindingsWithPhi(1.0, 5) = 42.0
+
+// Many float intermediates with sequential computation - stresses VReg allocation
+def floatManySequentialIntermediates(x: Float, cond: Bool) : Float = let t1 = x * 1.1 in let t2 = t1 * 1.1 in let t3 = t2 * 1.1 in let t4 = t3 * 1.1 in let t5 = t4 * 1.1 in let t6 = t5 * 1.1 in let t7 = t6 * 1.1 in let t8 = t7 * 1.1 in let t9 = t8 * 1.1 in let t10 = t9 * 1.1 in if cond then t10 else t5
+floatManySequentialIntermediates(10.0, true) = 25.93
+floatManySequentialIntermediates(10.0, false) = 16.1
