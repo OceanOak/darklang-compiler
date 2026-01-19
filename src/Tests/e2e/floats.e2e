@@ -577,3 +577,36 @@ def floatAnfVReg15Bindings(selector: Int64) : Float = let v0 = 1.0 in let v1 = 2
 floatAnfVReg15Bindings(1) = 25.0
 floatAnfVReg15Bindings(2) = 26.0
 floatAnfVReg15Bindings(3) = 36.0
+
+// =====================================================
+// Float Parameter VReg 0-6 Mapping Tests (Mutation #237)
+// =====================================================
+// Tests the boundary condition for float parameter VRegs 0-7 in the
+// fallback path of generateFloatMoveInstrsWithAllocation. The condition
+// `id <= 7` ensures VRegs 0-7 map to D2-D9 for function parameters.
+// If mutation changes <= to >=, only VReg 7 would map correctly via this
+// path; VRegs 0-6 would fall through to the wrong mapping formula:
+// tempRegs[(id - 8) % 13] would give negative indices for ids 0-6.
+//
+// This test uses multiple float parameters (VRegs 0-6) with distinct values
+// in a phi node context to expose incorrect register mapping.
+
+// 7 float parameters with phi resolution - exercises VRegs 0-6
+// Each parameter must be correctly mapped for the result to be correct
+// Note: ARM64 calling convention limits to 8 total params
+def floatParam7Phi(a: Float, b: Float, c: Float, d: Float, e: Float, f: Float, g: Float, cond: Bool) : Float = if cond then a + b + c + d else e + f + g
+floatParam7Phi(1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, true) = 10.0
+floatParam7Phi(1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, false) = 60.0
+
+// Test that uses all 7 params in different combinations
+// If VRegs 0-6 are incorrectly mapped, the sums would be wrong
+def floatParam7All(p0: Float, p1: Float, p2: Float, p3: Float, p4: Float, p5: Float, p6: Float) : Float = (p0 + p1) + (p2 + p3) + (p4 + p5) + p6
+floatParam7All(1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0) = 127.0
+
+// 6 params with nested conditionals - creates multiple phi resolution points
+// Uses 6 float params + 2 bool params = 8 total (at ARM64 limit)
+def floatParam6NestedPhi(a: Float, b: Float, c: Float, d: Float, e: Float, f: Float, c1: Bool, c2: Bool) : Float = if c1 then (if c2 then a + b else c + d) else (if c2 then e + f else a + f)
+floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, true, true) = 3.0
+floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, true, false) = 30.0
+floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, false, true) = 300.0
+floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, false, false) = 201.0
