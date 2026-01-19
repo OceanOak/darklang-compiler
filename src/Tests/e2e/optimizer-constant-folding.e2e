@@ -335,3 +335,64 @@ def licmCopyCmp(x: Int64, limit: Int64, n: Int64) : Int64 =
 
 licmCopyCmp(10, 5, 3) = 3
 licmCopyCmp(3, 5, 3) = 0
+
+// ===================================================================
+// General Copy Propagation (MIR Level - buildCopyMap)
+// ===================================================================
+// These tests verify that the optimizer correctly handles copy propagation
+// in the main optimization pass (not LICM). The buildCopyMap function tracks
+// copies like Mov(dest, Register src) where dest <> src, enabling uses of
+// dest to be replaced with src for further optimization.
+
+// Basic register-to-register copy propagation
+// Creates Mov(y, Register x) which should be tracked
+// Then y should be replaced with x, enabling constant folding
+def copyPropBasic(x: Int64) : Int64 =
+  let y = x in
+  let z = y in
+  z + 1
+
+copyPropBasic(10) = 11
+copyPropBasic(-5) = -4
+
+// Chain of copies that main copy propagation resolves
+// Creates: a = param, b = a, c = b, result = c + 1
+// Copy prop should resolve c -> b -> a -> param
+def copyPropChain(input: Int64) : Int64 =
+  let a = input in
+  let b = a in
+  let c = b in
+  c + c
+
+copyPropChain(7) = 14
+copyPropChain(100) = 200
+
+// Copy propagation across arithmetic operations
+// The copy must be propagated correctly through expressions
+def copyPropArith(x: Int64, y: Int64) : Int64 =
+  let xCopy = x in
+  let yCopy = y in
+  (xCopy * yCopy) + (xCopy - yCopy)
+
+copyPropArith(5, 3) = 17
+copyPropArith(10, 2) = 28
+
+// High register pressure with copies
+// Creates many live values through copies, testing that copy propagation
+// correctly reduces virtual register usage before register allocation
+def copyPropPressure(x: Int64) : Int64 =
+  let a = x in
+  let b = a in
+  let c = b in
+  let d = c in
+  let e = d in
+  let f = e in
+  let g = f in
+  let h = g in
+  let i = h in
+  let j = i in
+  // Use all the copies to ensure they're not dead-code eliminated
+  a + b + c + d + e + f + g + h + i + j
+
+copyPropPressure(1) = 10
+copyPropPressure(5) = 50
