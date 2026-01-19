@@ -283,3 +283,31 @@ let x1 = 1 in let x2 = 2 in let x3 = 3 in let x4 = 4 in let x5 = 5 in let x6 = 6
 // Test 24 variables to ensure stack is properly aligned to 32+ bytes
 // This tests the multiplication part of the alignment formula
 let z1 = 1 in let z2 = 2 in let z3 = 3 in let z4 = 4 in let z5 = 5 in let z6 = 6 in let z7 = 7 in let z8 = 8 in let z9 = 9 in let z10 = 10 in let z11 = 11 in let z12 = 12 in let z13 = 13 in let z14 = 14 in let z15 = 15 in let z16 = 16 in let z17 = 17 in let z18 = 18 in let z19 = 19 in let z20 = 20 in let z21 = 21 in let z22 = 22 in let z23 = 23 in let z24 = 24 in z1 + z2 + z3 + z4 + z5 + z6 + z7 + z8 + z9 + z10 + z11 + z12 + z13 + z14 + z15 + z16 + z17 + z18 + z19 + z20 + z21 + z22 + z23 + z24 = 300
+
+
+// ===================================================================
+// Alignment Division Operator Tests (Mutation #226)
+// ===================================================================
+
+// Mutation #226 also targets the alignTo16 function at line 1322:
+//   ((size + 15) / 16) * 16
+// This function is used by linearScan which is currently dead code.
+// The mutation changes / to *, which would give: ((size + 15) * 16) * 16
+// This would massively overestimate stack sizes (e.g., 32 -> 12032).
+//
+// Since linearScan is unused, we test the equivalent formula in
+// coloringToAllocation (line 1146) which IS used:
+//   ((abs nextStackSlot + 15) / 16) * 16
+//
+// If the division were changed to multiplication in the active code path,
+// stack frames would be enormous, likely causing stack overflow.
+// These tests verify stack allocation works correctly.
+
+// Test with 20 variables requiring stack spills
+// The division is crucial: (160 + 15) / 16 = 10 vs (160 + 15) * 16 = 2800
+let m1 = 1 in let m2 = 2 in let m3 = 3 in let m4 = 4 in let m5 = 5 in let m6 = 6 in let m7 = 7 in let m8 = 8 in let m9 = 9 in let m10 = 10 in let m11 = 11 in let m12 = 12 in let m13 = 13 in let m14 = 14 in let m15 = 15 in let m16 = 16 in let m17 = 17 in let m18 = 18 in let m19 = 19 in let m20 = 20 in m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10 + m11 + m12 + m13 + m14 + m15 + m16 + m17 + m18 + m19 + m20 = 210
+
+// Test with recursive function that requires spilling across many frames
+// A wrong stack size calculation would quickly overflow the stack
+def sumSpilled(n: Int64) : Int64 = if n <= 0 then 0 else let a = n in let b = n + 1 in let c = n + 2 in let d = n + 3 in let e = n + 4 in let f = n + 5 in let g = n + 6 in let h = n + 7 in let i = n + 8 in let j = n + 9 in let k = n + 10 in let l = n + 11 in let m = n + 12 in let sum = a + b + c + d + e + f + g + h + i + j + k + l + m in sum + sumSpilled(n - 1)
+sumSpilled(10) = 1495
