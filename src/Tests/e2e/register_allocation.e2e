@@ -175,3 +175,23 @@ let p1 = 100 in let p2 = 200 in let p3 = 300 in let p4 = 400 in match 1 with | 1
 
 // Variables used in both branches require interference edges
 let m = 5 in let n = 10 in let o = 15 in let p = 20 in if true then m + n else o + p = 15
+
+
+// ===================================================================
+// Phi Coalescing Color Assignment Tests (Mutation #212)
+// ===================================================================
+
+// Tests for the color assignment loop bounds in colorVertexWithPartners.
+// The loop iterates 0..numColors-1 to find available colors.
+// If mutation changes -1 to +1, it would iterate 0..numColors+1,
+// potentially assigning invalid out-of-range colors.
+
+// High register pressure with phi nodes from conditional branches
+// Creates phi nodes when variable 'result' is defined differently in each branch
+let v1 = 1 in let v2 = 2 in let v3 = 3 in let v4 = 4 in let v5 = 5 in let v6 = 6 in let v7 = 7 in let v8 = 8 in let v9 = 9 in let v10 = 10 in let v11 = 11 in let v12 = 12 in let result = if v1 > 0 then v1 + v2 + v3 + v4 + v5 + v6 else v7 + v8 + v9 + v10 + v11 + v12 in result = 21
+
+// Nested conditionals with phi coalescing under register pressure
+let a1 = 1 in let a2 = 2 in let a3 = 3 in let a4 = 4 in let a5 = 5 in let a6 = 6 in let a7 = 7 in let a8 = 8 in let a9 = 9 in let a10 = 10 in let inner = if a1 > 0 then (if a2 > 0 then a3 + a4 else a5 + a6) else a7 + a8 in inner + a9 + a10 = 26
+
+// Multiple phi nodes merged at control flow join with high pressure
+let x1 = 10 in let x2 = 20 in let x3 = 30 in let x4 = 40 in let x5 = 50 in let x6 = 60 in let x7 = 70 in let x8 = 80 in let x9 = 90 in let x10 = 100 in let x11 = 110 in let x12 = 120 in let choice = if x1 < 50 then x2 + x3 else x4 + x5 in choice + x6 + x7 + x8 + x9 + x10 + x11 + x12 = 680
