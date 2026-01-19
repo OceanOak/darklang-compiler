@@ -138,3 +138,19 @@ def nestedFloatLets(n: Int64) : Float = let a = Stdlib.Int64.toFloat(n) in let b
 
 // Float returned from deeply nested computation
 def deepNestedFloat(x: Int64) : Float = let f1 = Stdlib.Int64.toFloat(x) in let f2 = f1 + f1 in let f3 = f2 * f2 in let f4 = f3 / 2.0 in f4 deepNestedFloat(3) = 18.0
+
+// =====================================================
+// Nested if-then-else with float results
+// Regression test: ensures result register is properly marked as float
+// when either branch of an if-expression returns Float64
+// =====================================================
+
+// Simple nested if returning float - just testing the result value
+if true then (if true then 1.0 else 2.0) else 3.0 = 1.0
+if true then (if false then 1.0 else 2.0) else 3.0 = 2.0
+if false then (if true then 1.0 else 2.0) else 3.0 = 3.0
+
+// Nested if result used in float arithmetic
+(if true then (if true then 1.0 else 2.0) else 3.0) + 0.5 = 1.5
+(if true then (if false then 1.0 else 2.0) else 3.0) + 0.5 = 2.5
+(if false then (if true then 1.0 else 2.0) else 3.0) + 0.5 = 3.5
