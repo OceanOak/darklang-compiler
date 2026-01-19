@@ -270,3 +270,59 @@ def mixedMul(x: Int64) : Int64 =
   a + b
 mixedMul(1) = 18      // 7 + 11 = 18
 mixedMul(10) = 180    // 70 + 110 = 180
+
+// ===================================================================
+// Mutation #178 Tests - LOGIC_AND in commutative multiply-by-constant guard
+// ===================================================================
+// The tryMulByConstant optimization has a second pattern for the commutative case:
+//   sameReg constReg mulLeft && not (sameReg constReg mulRight)
+// This checks if the constant is on the LEFT side of the multiply.
+//
+// If && is changed to ||, the guard becomes:
+//   sameReg constReg mulLeft || not (sameReg constReg mulRight)
+//
+// This would fire when EITHER condition is true. The second condition
+// `not (sameReg constReg mulRight)` is TRUE whenever the constant register
+// is not used on the right side of the multiply - which is almost always!
+//
+// This means the optimization would incorrectly fire when:
+// - A constant 7 (or similar pattern) is defined but NOT used in a multiply
+// - A separate multiply x * y follows (where neither x nor y is the constant)
+// - The buggy optimizer would transform x * y into y * 7 because it thinks
+//   the constant applies to this multiply!
+//
+// Test: Define a strength-reduction constant (7) but DON'T use it in the multiply.
+// Then do a completely separate multiply. With the mutation, this would produce
+// wrong results because the optimizer incorrectly applies the 7 optimization.
+
+def testMutation178_separateConstant(x: Int64, y: Int64) : Int64 =
+  let seven = 7 in        // Creates: Mov tempReg, 7
+  let result = x * y in   // Creates: Mul dest, xReg, yReg (neither is tempReg!)
+  result + seven          // Use seven so it's not optimized away
+
+// With correct code:   x * y + 7 = 2*3 + 7 = 13
+// With mutation:       y * 7 + 7 = 3*7 + 7 = 28 (WRONG - applies 7 optimization to x*y)
+testMutation178_separateConstant(2, 3) = 13
+testMutation178_separateConstant(5, 4) = 27    // 5*4 + 7 = 27
+testMutation178_separateConstant(10, 10) = 107 // 10*10 + 7 = 107
+
+// Additional test with different strength-reduction constants
+def testMutation178_with15(x: Int64, y: Int64) : Int64 =
+  let fifteen = 15 in     // Creates: Mov tempReg, 15
+  let result = x * y in   // Creates: Mul dest, xReg, yReg
+  result + fifteen
+
+// With correct code:   x * y + 15 = 3*4 + 15 = 27
+// With mutation:       y * 15 + 15 = 4*15 + 15 = 75 (WRONG)
+testMutation178_with15(3, 4) = 27
+testMutation178_with15(2, 5) = 25    // 2*5 + 15 = 25
+
+// Test where x == y to ensure we're testing the right path
+def testMutation178_sameArgs(x: Int64) : Int64 =
+  let seven = 7 in
+  let result = x * x in   // Square, not multiply by 7!
+  result + seven
+
+testMutation178_sameArgs(3) = 16     // 3*3 + 7 = 16
+testMutation178_sameArgs(5) = 32     // 5*5 + 7 = 32
+testMutation178_sameArgs(10) = 107   // 10*10 + 7 = 107
