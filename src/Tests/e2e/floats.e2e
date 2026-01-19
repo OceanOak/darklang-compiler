@@ -541,3 +541,39 @@ floatMirPhiMapping(1.0, 7) = 2422.2
 def floatMirParallelChains(x: Float, y: Float, cond: Bool) : Float = let ax = x * 1.1 in let bx = ax + 0.1 in let cx = bx * 1.2 in let dx = cx + 0.2 in let ex = dx * 1.3 in let fx = ex + 0.3 in let gx = fx * 1.4 in let ay = y * 2.1 in let by = ay - 0.1 in let cy = by * 2.2 in let dy = cy - 0.2 in let ey = dy * 2.3 in let fy = ey - 0.3 in let gy = fy * 2.4 in if cond then gx + gy else gx * gy
 floatMirParallelChains(1.0, 1.0, true) = 25.86
 floatMirParallelChains(1.0, 1.0, false) = 76.48
+
+// =====================================================
+// ANF-Level Float VReg Boundary Mapping (Mutation #231)
+// =====================================================
+// Tests the boundary condition for ANF-level float VRegs (8-9999) in
+// generateFloatMoveInstrs. The function maps VRegs to physical register IDs
+// using a guard: `n when n < 10000 ->` for ANF-level VRegs.
+// If mutation changes < to >, VRegs 8-9999 would fall through to the
+// MIR intermediate case which uses a different formula:
+// Original: tempRegs[(n - 8) % 13]
+// Mutated:  tempRegs[((n - 10000) + 7) % 13]
+// For VReg 8: Original maps to D0, Mutated maps to D31
+//
+// This test creates many float local bindings (VRegs 8+) that participate
+// in phi resolution, where incorrect physical register mapping would cause
+// the wrong values to be moved.
+
+// 9 float local bindings followed by a conditional - VRegs 8+ are used in phi
+// The 9th binding gets VReg 8, the 10th gets VReg 9, etc.
+// These must be correctly mapped for phi resolution at the control flow merge
+def floatAnfVRegBoundary(cond: Bool) : Float = let f0 = 1.0 in let f1 = 2.0 in let f2 = 3.0 in let f3 = 4.0 in let f4 = 5.0 in let f5 = 6.0 in let f6 = 7.0 in let f7 = 8.0 in let f8 = 9.0 in let f9 = 10.0 in if cond then f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 else f9 + f8 + f7 + f6 + f5 + f4 + f3 + f2 + f1 + f0
+floatAnfVRegBoundary(true) = 55.0
+floatAnfVRegBoundary(false) = 55.0
+
+// 12 float bindings with different branch results to detect register mapping errors
+// If VRegs 8+ are incorrectly mapped, the sum in one branch would be wrong
+def floatAnfVReg12Bindings(cond: Bool) : Float = let a = 1.1 in let b = 2.2 in let c = 3.3 in let d = 4.4 in let e = 5.5 in let f = 6.6 in let g = 7.7 in let h = 8.8 in let i = 9.9 in let j = 10.1 in let k = 11.11 in let l = 12.12 in if cond then a + b + c + d + e + f else g + h + i + j + k + l
+floatAnfVReg12Bindings(true) = 23.1
+floatAnfVReg12Bindings(false) = 59.72
+
+// More than 13 bindings to exercise the modulo wraparound in the register pool
+// The pool has 13 registers, so binding 14+ wraps around
+def floatAnfVReg15Bindings(selector: Int64) : Float = let v0 = 1.0 in let v1 = 2.0 in let v2 = 3.0 in let v3 = 4.0 in let v4 = 5.0 in let v5 = 6.0 in let v6 = 7.0 in let v7 = 8.0 in let v8 = 9.0 in let v9 = 10.0 in let v10 = 11.0 in let v11 = 12.0 in let v12 = 13.0 in let v13 = 14.0 in let v14 = 15.0 in if selector == 1 then v0 + v8 + v14 else if selector == 2 then v1 + v9 + v13 else v7 + v12 + v14
+floatAnfVReg15Bindings(1) = 25.0
+floatAnfVReg15Bindings(2) = 26.0
+floatAnfVReg15Bindings(3) = 36.0
