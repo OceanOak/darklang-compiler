@@ -819,3 +819,71 @@ def licmHoistableChain(x: Int64, n: Int64, acc: Int64) : Int64 =
 licmHoistableChain(2, 4, 0) = 44
 // x=10: step1=11, step2=22, step3=27, 3 iterations = 81
 licmHoistableChain(10, 3, 0) = 81
+
+// ===================================================================
+// LICM Change Flag Aggregation Across Blocks (mutation #157)
+// ===================================================================
+// This test exercises the || operator in findHoistable at line 475:
+//   (invAcc', mapAcc', chAcc || blockChanged)
+//
+// The change flag aggregates across multiple basic blocks in the loop.
+// With ||: if ANY block has changes, the pass reports changed=true
+// With &&: ALL blocks must have changes for changed=true
+//
+// If || becomes &&, then:
+// - Block A has hoistable code (blockChanged=true)
+// - Block B has no hoistable code (blockChanged=false)
+// - With ||: true || false = true (correct, continue iterating)
+// - With &&: true && false = false (WRONG, stops early)
+//
+// The test creates a loop with multiple blocks via conditionals:
+// 1. Some blocks have hoistable code
+// 2. Other blocks have non-hoistable code (or no computation)
+// 3. A subsequent pass depends on the first pass's results
+//
+// With the mutation, the optimizer stops after first pass even when
+// more hoisting is possible, leading to less optimized but still
+// correct code. To catch this, we need a scenario where early stopping
+// causes observable behavior change.
+
+// Test: multiple blocks in loop, only some have hoistable code
+// The conditional creates multiple basic blocks in the CFG
+// The then-branch has hoistable code, the else-branch has runtime-dependent code
+def licmBlockChangeProp(x: Int64, flag: Bool, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let result = if flag then
+      // This block has hoistable code: x * x is loop-invariant
+      let sq = x * x in
+      sq
+    else
+      // This block has no hoistable code: n is loop-variant
+      n * 2
+    in
+    licmBlockChangeProp(x, flag, n - 1, acc + result)
+
+// flag=true: uses sq = x*x = 9, each of 4 iterations adds 9 = 36
+licmBlockChangeProp(3, true, 4, 0) = 36
+// flag=false: uses n*2 for n=4,3,2,1 = 8+6+4+2 = 20
+licmBlockChangeProp(3, false, 4, 0) = 20
+
+// More complex: chain across blocks where hoisting in one enables another
+def licmBlockChainHoist(a: Int64, b: Int64, flag: Bool, n: Int64) : Int64 =
+  if n <= 0 then 0
+  else
+    // First block: hoistable computation
+    let pre = a + b in
+    let result = if flag then
+      // This branch uses 'pre' and computes further hoistable value
+      let doubled = pre * 2 in
+      doubled
+    else
+      // This branch doesn't have additional hoisting
+      pre
+    in
+    result + licmBlockChainHoist(a, b, flag, n - 1)
+
+// flag=true: pre=3+4=7, doubled=14, 3 iterations = 42
+licmBlockChainHoist(3, 4, true, 3) = 42
+// flag=false: pre=3+4=7, 3 iterations = 21
+licmBlockChainHoist(3, 4, false, 3) = 21
