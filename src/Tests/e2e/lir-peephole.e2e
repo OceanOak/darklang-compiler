@@ -168,3 +168,44 @@ mulBy63(1) = 63
 mulBy63(2) = 126
 mulBy63(3) = 189
 mulBy63(10) = 630
+
+// ===================================================================
+// isPowerOf2 Tests (Mutation #176)
+// ===================================================================
+// The isPowerOf2 function checks if a value is a power of 2 for use in
+// TBZ/TBNZ optimization. It uses `n > 0L && (n &&& (n - 1L)) = 0L`.
+//
+// Mutation #176 changes `n > 0L` to `n < 0L`, which would cause isPowerOf2
+// to return false for all positive values. This is an "equivalent mutant"
+// because the TBZ/TBNZ optimization is purely a performance optimization -
+// when isPowerOf2 returns false, the code falls back to AND + CBZ/CBNZ
+// which produces identical results.
+//
+// The tests below exercise code paths that use isPowerOf2 through the
+// TBZ/TBNZ optimization. While they pass with or without the optimization,
+// they document the intended behavior.
+
+// Power-of-2 mask values that trigger TBZ/TBNZ when isPowerOf2 works
+// These masks are: 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024
+def checkPowerOf2Mask1(x: Int64) : Int64 =
+  if (x & 1) != 0 then 1 else 0
+checkPowerOf2Mask1(0) = 0
+checkPowerOf2Mask1(1) = 1
+checkPowerOf2Mask1(2) = 0
+checkPowerOf2Mask1(3) = 1
+
+def checkPowerOf2Mask512(x: Int64) : Int64 =
+  if (x & 512) != 0 then 1 else 0
+checkPowerOf2Mask512(0) = 0
+checkPowerOf2Mask512(511) = 0
+checkPowerOf2Mask512(512) = 1
+checkPowerOf2Mask512(1023) = 1
+checkPowerOf2Mask512(1024) = 0
+
+def checkPowerOf2Mask1024(x: Int64) : Int64 =
+  if (x & 1024) != 0 then 1 else 0
+checkPowerOf2Mask1024(0) = 0
+checkPowerOf2Mask1024(1023) = 0
+checkPowerOf2Mask1024(1024) = 1
+checkPowerOf2Mask1024(2047) = 1
+checkPowerOf2Mask1024(2048) = 0
