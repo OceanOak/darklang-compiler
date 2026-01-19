@@ -457,3 +457,33 @@ let chainA = 1 in let chainB = 2 in let chainC = 3 in let chainD = 4 in let chai
 
 // Phi with same source used in multiple branches - degenerate case for preferences
 let srcA = 100 in let srcB = 200 in let srcC = 300 in let srcD = 400 in let srcE = 500 in let srcF = 600 in let srcG = 700 in let srcH = 800 in let srcI = 900 in let srcJ = 1000 in let phiSame = if srcA > 50 then srcB else srcB in phiSame + srcC + srcD + srcE + srcF + srcG + srcH + srcI + srcJ = 5400
+
+
+// ===================================================================
+// Active List Filter Tests (Mutation #246)
+// ===================================================================
+
+// Mutation #246 targets the active list filter in linearScan (line 1372):
+//   active <- (interval, reg) :: (active |> List.filter (fun (x, _) -> x.VRegId <> i.VRegId))
+// This code removes the spilled interval from the active list when evicting
+// an active interval to free a register for the current interval.
+//
+// The linearScan function is dead code (never called). The compiler uses
+// chordalAllocation instead, which handles register allocation through
+// graph coloring rather than linear scanning.
+//
+// If the mutation were applied (<> -> =), the filter would keep only the
+// spilled interval instead of removing it, corrupting the active list.
+// Since linearScan is never called, this mutation cannot be killed by
+// E2E tests.
+//
+// These tests exercise the equivalent functionality through the active
+// code path (chordalAllocation/coloringToAllocation) which handles spills
+// through the chordal graph coloring approach.
+
+// Many variables with interleaved lifetimes - tests spill/eviction correctness
+let ev1 = 1 in let ev2 = 2 in let ev3 = 3 in let ev4 = 4 in let ev5 = 5 in let ev6 = 6 in let ev7 = 7 in let ev8 = 8 in let ev9 = 9 in let ev10 = 10 in let ev11 = 11 in let ev12 = 12 in let ev13 = 13 in let ev14 = 14 in let ev15 = 15 in let ev16 = 16 in let ev17 = 17 in let ev18 = 18 in ev1 + ev2 + ev3 + ev4 + ev5 + ev6 + ev7 + ev8 + ev9 + ev10 + ev11 + ev12 + ev13 + ev14 + ev15 + ev16 + ev17 + ev18 = 171
+
+// Early variables used late while many intermediate variables exist
+// This pattern would trigger eviction in linear scan if it were used
+let first1 = 100 in let first2 = 200 in let mid1 = 1 in let mid2 = 2 in let mid3 = 3 in let mid4 = 4 in let mid5 = 5 in let mid6 = 6 in let mid7 = 7 in let mid8 = 8 in let mid9 = 9 in let mid10 = 10 in let mid11 = 11 in let mid12 = 12 in let mid13 = 13 in let mid14 = 14 in first1 + first2 + mid1 + mid2 + mid3 + mid4 + mid5 + mid6 + mid7 + mid8 + mid9 + mid10 + mid11 + mid12 + mid13 + mid14 = 405
