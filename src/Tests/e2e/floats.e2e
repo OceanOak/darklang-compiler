@@ -370,3 +370,37 @@ floatMultiBlockLiveOut(1.0, 2.0, 3.0, true, true) = 3.0
 floatMultiBlockLiveOut(1.0, 2.0, 3.0, true, false) = 4.0
 floatMultiBlockLiveOut(1.0, 2.0, 3.0, false, true) = 5.0
 floatMultiBlockLiveOut(1.0, 2.0, 3.0, false, false) = 6.0
+
+// =====================================================
+// Float Interference Graph Instruction Processing (Mutation #207)
+// =====================================================
+// Tests the instruction-by-instruction live set processing in buildFloatInterferenceGraph.
+// When processing instructions in reverse order, the function updates the live set
+// and builds interference edges between all pairs of live floats:
+//   for i in 0 .. liveList.Length - 2 do
+//     for j in i + 1 .. liveList.Length - 1 do
+//       addEdge liveList.[i] liveList.[j]
+// If mutation changes - 1 to + 1 in the inner loop bound, it would try to access
+// invalid array indices when 2+ floats are live at an instruction.
+//
+// This test creates multiple float intermediate values that are all live at an
+// internal instruction point (not just at block boundaries). The key is having
+// several float let bindings computed before being combined, so during reverse
+// instruction processing, multiple floats are live simultaneously.
+
+// 4 float intermediates all computed before final combination
+// During reverse processing: at the final + instruction, all 4 intermediates are live
+def floatInstrLive4(x: Float) : Float = let a = x * 1.1 in let b = x * 2.2 in let c = x * 3.3 in let d = x * 4.4 in a + b + c + d
+floatInstrLive4(10.0) = 110.0
+
+// 5 float intermediates - exercises more pairs in the interference loop
+def floatInstrLive5(x: Float) : Float = let a = x + 1.0 in let b = x + 2.0 in let c = x + 3.0 in let d = x + 4.0 in let e = x + 5.0 in a + b + c + d + e
+floatInstrLive5(10.0) = 65.0
+
+// 6 float intermediates with distinct operations to ensure different values
+def floatInstrLive6(x: Float) : Float = let v1 = x * 1.0 in let v2 = x * 2.0 in let v3 = x * 3.0 in let v4 = x * 4.0 in let v5 = x * 5.0 in let v6 = x * 6.0 in v1 + v2 + v3 + v4 + v5 + v6
+floatInstrLive6(5.0) = 105.0
+
+// Float intermediates combined in a tree pattern - multiple live at each combine point
+def floatInstrLiveTree(a: Float, b: Float, c: Float, d: Float) : Float = let ab = a + b in let cd = c + d in let abcd = ab + cd in abcd * 2.0
+floatInstrLiveTree(1.0, 2.0, 3.0, 4.0) = 20.0
