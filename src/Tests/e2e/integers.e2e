@@ -283,14 +283,14 @@
 -17 % 5 = 3
 
 // Modulo with negative divisor
-10 % -3 = -2
-7 % -2 = -1
-17 % -5 = -3
+10 % -3 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
+7 % -2 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
+17 % -5 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
 
 // Modulo with both negative
--10 % -3 = -1
--7 % -2 = -1
--17 % -5 = -2
+-10 % -3 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
+-7 % -2 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
+-17 % -5 = stdout="Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number\n"
 
 // Modulo edge cases
 1 % 1 = 0

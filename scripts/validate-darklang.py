@@ -978,10 +978,8 @@ class Validator:
             return "eval:builtin_test"
 
         # === SEMANTIC BUGS (compiler produces wrong output) ===
-        # NOTE: Float precision has been fixed - Float.toString now outputs full precision
-        if re.search(r'\s%\s', expr) or re.search(r'\d+\s*%\s*\d+', expr):
-            return "semantic:modulo"
-
+        if re.search(r'-?\d+\.\d{3,}', expr):
+            return "eval:float_precision"
         # === MISSING FROM INTERPRETER ===
         # Features implemented in compiler that should be added to interpreter
         if ('<<' in expr or '>>' in expr or '^' in expr or '~' in expr or

@@ -76,7 +76,7 @@ let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
     | Div, IntLiteral (Int64 a), IntLiteral (Int64 b) when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (Atom (IntLiteral (Int64 (a / b))))
     // Skip folding INT64_MIN / -1 - F# throws but runtime handles it (returns INT64_MIN)
     | Div, IntLiteral (Int64 _), IntLiteral (Int64 _) -> None
-    | Mod, IntLiteral (Int64 a), IntLiteral (Int64 b) when b <> 0L -> Some (Atom (IntLiteral (Int64 (euclideanMod a b))))
+    | Mod, IntLiteral (Int64 a), IntLiteral (Int64 b) when b > 0L -> Some (Atom (IntLiteral (Int64 (euclideanMod a b))))
 
     // Float arithmetic
     | Add, FloatLiteral a, FloatLiteral b -> Some (Atom (FloatLiteral (a + b)))

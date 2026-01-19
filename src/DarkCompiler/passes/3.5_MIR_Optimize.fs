@@ -873,7 +873,7 @@ let tryFoldBinOp (op: BinOp) (left: Operand) (right: Operand) (opType: AST.Type)
     | Mul, Int64Const a, Int64Const b -> Some (Int64Const (truncateToType (a * b) opType))
     // Division: avoid divide by zero and INT64_MIN / -1 overflow
     | Div, Int64Const a, Int64Const b when b <> 0L && not (a = System.Int64.MinValue && b = -1L) -> Some (Int64Const (truncateToType (a / b) opType))
-    | Mod, Int64Const a, Int64Const b when b <> 0L -> Some (Int64Const (truncateToType (euclideanMod a b) opType))
+    | Mod, Int64Const a, Int64Const b when b > 0L -> Some (Int64Const (truncateToType (euclideanMod a b) opType))
 
     // Comparisons
     | Eq, Int64Const a, Int64Const b -> Some (BoolConst (a = b))
@@ -901,7 +901,6 @@ let tryFoldBinOp (op: BinOp) (left: Operand) (right: Operand) (opType: AST.Type)
     | Div, x, Int64Const 1L -> Some x
     | Div, x, y when x = y && y <> Int64Const 0L -> Some (Int64Const 1L)  // x / x = 1 (if x != 0)
     | Mod, _, Int64Const 1L -> Some (Int64Const 0L)  // x % 1 = 0
-    | Mod, x, y when x = y && y <> Int64Const 0L -> Some (Int64Const 0L)  // x % x = 0 (if x != 0)
 
     // Bitwise identities
     | BitAnd, Int64Const 0L, _ -> Some (Int64Const 0L)

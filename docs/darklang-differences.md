@@ -92,27 +92,27 @@ Different arrow syntax between compilers.
 
 Areas where compiler produces WRONG output. These need to be fixed to match Darklang.
 
-| Bug | Skip Reason | Description |
-|-----|-------------|-------------|
-| Modulo `%` | `semantic:modulo` | Negative number handling |
-| list_accessors | `stdlib:list_accessors` | head/tail/last signature diffs |
-| ~~Float precision~~ | ~~`eval:float_precision`~~ | **FIXED** - Float.toString now outputs up to 12 significant digits |
+| Bug | Skip Reason | Description | Status |
+|-----|-------------|-------------|--------|
+| Division `/` | `semantic:division` | Integer vs float division | Needs fix |
+| Modulo `%` | `semantic:modulo` | Negative divisor handling | Fixed |
+| Float precision | `eval:float_precision` | High-precision floats have different representation | Needs fix |
 
 ### 2.1 Modulo Operator (`%`)
 
 **Skip reason:** `semantic:modulo`
 
-**Concern:** Negative number handling may differ.
+**Concern:** Negative divisor handling differed.
 
 ```
 # This compiler
 -10 % 3 = 2  (truncated modulo)
 
-# Darklang - need to verify
-darklang-interpreter eval "(-10L) % 3L"
+# Darklang - negative divisor should error
+darklang-interpreter eval "10L % -3L"
 ```
 
-**Test:** Check if Darklang uses floor modulo (Python-style) or truncated modulo (C-style).
+**Status:** Fixed. Compiler now errors when the divisor is negative, matching the interpreter.
 
 ## 3. Tooling Differences
 

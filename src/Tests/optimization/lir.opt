@@ -24,8 +24,8 @@ collatzSteps:
     v10033 <- Mov(Reg v10031)
     Jump(Label "collatzSteps_body")
   Label "collatzSteps_L4":
-    v1000 <- Lsl_imm(v10021, #1)
-    v10025 <- Add(v10021, Reg v1000)
+    v10034 <- Lsl_imm(v10021, #1)
+    v10025 <- Add(v10021, Reg v10034)
     v10026 <- Add(v10025, Imm 1)
     v10027 <- Add(v10020, Imm 1)
     v10028 <- Mov(Reg v10026)
@@ -128,8 +128,8 @@ helper:
 loop:
   Label "loop_L1":
     v10065 <- Sub(v10063, Imm 1)
-    v1000 <- Lsl_imm(v10062, #1)
-    v10066 <- Add(v10062, Reg v1000)
+    v10070 <- Lsl_imm(v10062, #1)
+    v10066 <- Add(v10062, Reg v10070)
     SaveRegs([], [])
     ArgMoves(X0 <- Reg v10066)
     v10067 <- Call(helper, [Reg v10066])

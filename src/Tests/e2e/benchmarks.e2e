@@ -220,6 +220,141 @@ nqueen(8) = 92
 
 
 // ===================================================================
+// Edigits (edigits) - reduced checksum test
+// ===================================================================
+
+def divideByN(digits: List<Int64>, n: Int64, carry: Int64, idx: Int64, len: Int64) : List<Int64> =
+    if idx >= len then digits
+    else
+        let d = Stdlib.List.getAt<Int64>(digits, idx) in
+        match d with
+        | None -> digits
+        | Some(digit) ->
+            let current = carry * 10 + digit in
+            let newDigit = current / n in
+            let newCarry = current % n in
+            let updated = Stdlib.List.setAt<Int64>(digits, idx, newDigit) in
+            divideByN(updated, n, newCarry, idx + 1, len)
+
+def addWithCarry(e: List<Int64>, term: List<Int64>, carry: Int64, idx: Int64) : List<Int64> =
+    if idx < 0 then e
+    else
+        let eOpt = Stdlib.List.getAt<Int64>(e, idx) in
+        let termOpt = Stdlib.List.getAt<Int64>(term, idx) in
+        match (eOpt, termOpt) with
+        | (Some(eDigit), Some(termDigit)) ->
+            let total = eDigit + termDigit + carry in
+            let newDigit = total % 10 in
+            let newCarry = total / 10 in
+            let updated = Stdlib.List.setAt<Int64>(e, idx, newDigit) in
+            addWithCarry(updated, term, newCarry, idx - 1)
+        | _ -> e
+
+def addFactorialTerm(e: List<Int64>, term: List<Int64>, n: Int64, maxN: Int64, len: Int64) : List<Int64> =
+    if n > maxN then e
+    else
+        let newTerm = divideByN(term, n, 0, 0, len) in
+        let newE = addWithCarry(e, newTerm, 0, len - 1) in
+        addFactorialTerm(newE, newTerm, n + 1, maxN, len)
+
+def zeros(n: Int64) : List<Int64> =
+    Stdlib.List.map<Int64, Int64>(Stdlib.List.range(0, n), (x: Int64) => 0)
+
+def initDigits(n: Int64) : List<Int64> =
+    Stdlib.List.setAt<Int64>(zeros(n), 0, 1)
+
+def computeEDigits(numDigits: Int64) : List<Int64> =
+    let precision = numDigits + 10 in
+    let e = initDigits(precision) in
+    let term = initDigits(precision) in
+    addFactorialTerm(e, term, 1, 50, precision)
+
+def computeChecksum(digits: List<Int64>, idx: Int64, acc: Int64, numDigits: Int64) : Int64 =
+    if idx >= numDigits then acc
+    else
+        let d = Stdlib.List.getAt<Int64>(digits, idx) in
+        match d with
+        | None -> acc
+        | Some(digit) ->
+            let newAcc = (acc + digit * (idx + 1)) % 1000000007 in
+            computeChecksum(digits, idx + 1, newAcc, numDigits)
+
+def edigitsChecksum(numDigits: Int64) : Int64 =
+    let digits = computeEDigits(numDigits) in
+    computeChecksum(digits, 0, 0, numDigits)
+
+edigitsChecksum(5) = 61
+
+
+// ===================================================================
+// Fasta (fasta) - reduced checksum test
+// ===================================================================
+
+def getAlu(aluBytes: List<Int64>, i: Int64) : Int64 =
+    match Stdlib.List.getAt<Int64>(aluBytes, i % 287) with
+    | Some(v) -> v
+    | None -> 0
+
+def makeRepeatFasta(aluBytes: List<Int64>, n: Int64, i: Int64, checksum: Int64) : Int64 =
+    if i >= n then checksum
+    else
+        let c = getAlu(aluBytes, i) in
+        let newChecksum = (checksum + c * (i + 1)) % 1000000007 in
+        makeRepeatFasta(aluBytes, n, i + 1, newChecksum)
+
+def makeCumulative(table: List<(Int64, Float)>, running: Float) : List<(Int64, Float)> =
+    match Stdlib.List.head<(Int64, Float)>(table) with
+    | None -> []
+    | Some(item) ->
+        let c = Stdlib.Tuple2.first<Int64, Float>(item) in
+        let p = Stdlib.Tuple2.second<Int64, Float>(item) in
+        let newRunning = running + p in
+        match Stdlib.List.tail<(Int64, Float)>(table) with
+        | None -> [(c, newRunning)]
+        | Some(rest) ->
+            let restCum = makeCumulative(rest, newRunning) in
+            Stdlib.List.push<(Int64, Float)>(restCum, (c, newRunning))
+
+def selectRandom(table: List<(Int64, Float)>, r: Float, idx: Int64) : Int64 =
+    match Stdlib.List.getAt(table, idx) with
+    | None -> 0
+    | Some(item) ->
+        let c = Stdlib.Tuple2.first(item) in
+        let p = Stdlib.Tuple2.second(item) in
+        if r < p then c
+        else
+            if idx + 1 >= Stdlib.List.length(table) then c
+            else selectRandom(table, r, idx + 1)
+
+def makeRandomFasta(n: Int64, table: List<(Int64, Float)>, seed: Int64, i: Int64, checksum: Int64) : (Int64, Int64) =
+    if i >= n then (checksum, seed)
+    else
+        let newSeed = (seed * 3877 + 29573) % 139968 in
+        let r = Stdlib.Int64.toFloat(newSeed) / 139968.0 in
+        let c = selectRandom(table, r, 0) in
+        let newChecksum = (checksum + c * (i + 1)) % 1000000007 in
+        makeRandomFasta(n, table, newSeed, i + 1, newChecksum)
+
+def fastaChecksum(n: Int64) : Int64 =
+    let aluBytes = [71, 71, 67, 67, 71, 71, 71, 67, 71, 67, 71, 71, 84, 71, 71, 67, 84, 67, 65, 67, 71, 67, 67, 84, 71, 84, 65, 65, 84, 67, 67, 67, 65, 71, 67, 65, 67, 84, 84, 84, 71, 71, 71, 65, 71, 71, 67, 67, 71, 65, 71, 71, 67, 71, 71, 71, 67, 71, 71, 65, 84, 67, 65, 67, 67, 84, 71, 65, 71, 71, 84, 67, 65, 71, 71, 65, 71, 84, 84, 67, 71, 65, 71, 65, 67, 67, 65, 71, 67, 67, 84, 71, 71, 67, 67, 65, 65, 67, 65, 84, 71, 71, 84, 71, 65, 65, 65, 67, 67, 67, 67, 71, 84, 67, 84, 67, 84, 65, 67, 84, 65, 65, 65, 65, 65, 84, 65, 67, 65, 65, 65, 65, 65, 84, 84, 65, 71, 67, 67, 71, 71, 71, 67, 71, 84, 71, 71, 84, 71, 71, 67, 71, 67, 71, 67, 71, 67, 67, 84, 71, 84, 65, 65, 84, 67, 67, 67, 65, 71, 67, 84, 65, 67, 84, 67, 71, 71, 71, 65, 71, 71, 67, 84, 71, 65, 71, 71, 67, 65, 71, 71, 65, 71, 65, 65, 84, 67, 71, 67, 84, 84, 71, 65, 65, 67, 67, 67, 71, 71, 71, 65, 71, 71, 67, 71, 71, 65, 71, 71, 84, 84, 71, 67, 65, 71, 84, 71, 65, 71, 67, 67, 71, 65, 71, 65, 84, 67, 71, 67, 71, 67, 67, 65, 67, 84, 71, 67, 65, 67, 84, 67, 67, 65, 71, 67, 67, 84, 71, 71, 71, 67, 71, 65, 67, 65, 71, 65, 71, 67, 71, 65, 71, 65, 67, 84, 67, 67, 71, 84, 67, 84, 67, 65, 65, 65, 65, 65] in
+    let iub = [(97, 0.27), (99, 0.12), (103, 0.12), (116, 0.27), (66, 0.02), (68, 0.02), (72, 0.02), (75, 0.02), (77, 0.02), (78, 0.02), (82, 0.02), (83, 0.02), (86, 0.02), (87, 0.02), (89, 0.02)] in
+    let homosapiens = [(97, 0.3029549426680), (99, 0.1979883004921), (103, 0.1975473066391), (116, 0.3015094502008)] in
+    let iubCum = makeCumulative(iub, 0.0) in
+    let homoCum = makeCumulative(homosapiens, 0.0) in
+    let c1 = makeRepeatFasta(aluBytes, n * 2, 0, 0) in
+    let result2 = makeRandomFasta(n * 3, iubCum, 42, 0, 0) in
+    let c2 = Stdlib.Tuple2.first<Int64, Int64>(result2) in
+    let seed2 = Stdlib.Tuple2.second<Int64, Int64>(result2) in
+    let result3 = makeRandomFasta(n * 5, homoCum, seed2, 0, 0) in
+    let c3 = Stdlib.Tuple2.first<Int64, Int64>(result3) in
+    let total = (c1 + c2 + c3) % 1000000007 in
+    total
+
+// Reduced: n=100
+fastaChecksum(100) = 19053841
+
+
+// ===================================================================
 // Hello World (helloworld) - simplest benchmark
 // ===================================================================
 

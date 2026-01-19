@@ -1640,7 +1640,13 @@ let generateFuncWrapper (origFuncName: string) (funcParams: Map<string, (string 
         Error $"Cannot find parameters for function '{origFuncName}'"
 
 /// Lift lambdas in a program, generating new top-level functions
-let rec liftLambdasInProgram (baseTypeReg: TypeRegistry) (baseVariantLookup: VariantLookup) (program: AST.Program) : Result<AST.Program, string> =
+let rec liftLambdasInProgram
+    (baseTypeReg: TypeRegistry)
+    (baseVariantLookup: VariantLookup)
+    (baseFuncParams: Map<string, (string * AST.Type) list>)
+    (baseFuncReturnTypes: Map<string, AST.Type>)
+    (program: AST.Program)
+    : Result<AST.Program, string> =
     let (AST.Program topLevels) = program
 
     let typeRegBase : TypeRegistry =
@@ -1728,8 +1734,10 @@ let rec liftLambdasInProgram (baseTypeReg: TypeRegistry) (baseVariantLookup: Var
                 None)
         |> Map.ofList
 
-    let funcParams = Map.fold (fun acc k v -> Map.add k v acc) userFuncParams moduleFuncParams
-    let funcReturnTypes = Map.fold (fun acc k v -> Map.add k v acc) userFuncReturnTypes moduleFuncReturnTypes
+    let funcParams =
+        Map.fold (fun acc k v -> Map.add k v acc) baseFuncParams (Map.fold (fun acc k v -> Map.add k v acc) userFuncParams moduleFuncParams)
+    let funcReturnTypes =
+        Map.fold (fun acc k v -> Map.add k v acc) baseFuncReturnTypes (Map.fold (fun acc k v -> Map.add k v acc) userFuncReturnTypes moduleFuncReturnTypes)
     let genericFuncDefs = Map.fold (fun acc k v -> Map.add k v acc) userGenericFuncDefs moduleGenericFuncDefs
 
     let initialState = {
@@ -6335,7 +6343,7 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
     // Then, inline lambdas at their call sites for first-class function support
     let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
     // Then, lift non-capturing lambdas to top-level functions
-    liftLambdasInProgram Map.empty Map.empty inlinedProgram
+    liftLambdasInProgram Map.empty Map.empty Map.empty Map.empty inlinedProgram
     |> Result.bind (fun liftedProgram ->
     let (AST.Program topLevels) = liftedProgram
     let varGen = ANF.VarGen 0
@@ -6445,6 +6453,15 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
 /// Merge two maps, with overlay taking precedence on conflicts
 let private mergeMaps m1 m2 = Map.fold (fun acc k v -> Map.add k v acc) m1 m2
 
+let private funcReturnTypesFromFuncReg (funcReg: FunctionRegistry) : Map<string, AST.Type> =
+    funcReg
+    |> Map.toList
+    |> List.choose (fun (name, funcType) ->
+        match funcType with
+        | AST.TFunction (_, returnType) -> Some (name, returnType)
+        | _ -> None)
+    |> Map.ofList
+
 /// Convert user program to ANF and concatenate with pre-compiled stdlib ANF.
 /// This avoids re-processing stdlib functions during user compilation.
 /// stdlibGenericDefs: Generic function definitions from stdlib needed for specialization
@@ -6456,7 +6473,8 @@ let convertUserWithStdlib
     // 1. Run transformations on user code only (with access to stdlib generics)
     let monomorphizedProgram = monomorphizeWithExternalDefs stdlibGenericDefs userProgram
     let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
-    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup inlinedProgram
+    let baseFuncReturnTypes = funcReturnTypesFromFuncReg stdlibResult.FuncReg
+    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup stdlibResult.FuncParams baseFuncReturnTypes inlinedProgram
     |> Result.bind (fun liftedProgram ->
     let (AST.Program topLevels) = liftedProgram
     let varGen = ANF.VarGen 0
@@ -6573,7 +6591,8 @@ let convertUserOnly
     // 1. Run transformations on user code only (with access to stdlib generics)
     let monomorphizedProgram = monomorphizeWithExternalDefs stdlibGenericDefs userProgram
     let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
-    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup inlinedProgram
+    let baseFuncReturnTypes = funcReturnTypesFromFuncReg stdlibResult.FuncReg
+    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup stdlibResult.FuncParams baseFuncReturnTypes inlinedProgram
     |> Result.bind (fun liftedProgram ->
     let (AST.Program topLevels) = liftedProgram
     let varGen = ANF.VarGen 0
@@ -6696,7 +6715,8 @@ let convertUserOnlyCached
     // Use cached monomorphization to avoid re-specializing the same functions
     let (monomorphizedProgram, specializedFuncNames) = monomorphizeWithExternalDefsCached cache stdlibGenericDefs userProgram
     let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
-    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup inlinedProgram
+    let baseFuncReturnTypes = funcReturnTypesFromFuncReg stdlibResult.FuncReg
+    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup stdlibResult.FuncParams baseFuncReturnTypes inlinedProgram
     |> Result.bind (fun liftedProgram ->
     let (AST.Program topLevels) = liftedProgram
     let varGen = ANF.VarGen 0
@@ -6835,7 +6855,7 @@ let convertProgram (program: AST.Program) : Result<ANF.Program, string> =
     // Then, inline lambdas at their call sites for first-class function support
     let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
     // Then, lift non-capturing lambdas to top-level functions
-    liftLambdasInProgram Map.empty Map.empty inlinedProgram
+    liftLambdasInProgram Map.empty Map.empty Map.empty Map.empty inlinedProgram
     |> Result.bind (fun liftedProgram ->
     let (AST.Program topLevels) = liftedProgram
     let varGen = ANF.VarGen 0
