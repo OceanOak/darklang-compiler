@@ -1,0 +1,128 @@
+// LIR Peephole Optimization Tests
+//
+// These tests exercise the LIR peephole optimizer, specifically:
+// - TBZ/TBNZ fusion (AND with power-of-2 mask + branch)
+// - Multiply-by-constant strength reduction
+// - Loop invariant code motion (LICM)
+// - Bit position calculations
+
+// ===================================================================
+// Bit Position Tests (exercises bitPosition function in LIR_Peephole)
+// ===================================================================
+// The bitPosition function calculates log2 of power-of-2 values
+// and is used by TBZ/TBNZ optimization to determine which bit to test.
+// These tests verify correct bit extraction at various positions.
+
+// Test bit 0 extraction (power-of-2 mask = 1)
+def testBit0(x: Int64) : Int64 =
+  if (x & 1) == 0 then 0 else 1
+testBit0(0) = 0
+testBit0(1) = 1
+testBit0(2) = 0
+testBit0(3) = 1
+testBit0(254) = 0
+testBit0(255) = 1
+
+// Test bit 1 extraction (power-of-2 mask = 2)
+def testBit1(x: Int64) : Int64 =
+  if (x & 2) == 0 then 0 else 1
+testBit1(0) = 0
+testBit1(1) = 0
+testBit1(2) = 1
+testBit1(3) = 1
+testBit1(4) = 0
+testBit1(5) = 0
+testBit1(6) = 1
+testBit1(7) = 1
+
+// Test bit 2 extraction (power-of-2 mask = 4)
+def testBit2(x: Int64) : Int64 =
+  if (x & 4) == 0 then 0 else 1
+testBit2(0) = 0
+testBit2(3) = 0
+testBit2(4) = 1
+testBit2(7) = 1
+testBit2(8) = 0
+testBit2(12) = 1
+
+// Test bit 3 extraction (power-of-2 mask = 8)
+def testBit3(x: Int64) : Int64 =
+  if (x & 8) == 0 then 0 else 1
+testBit3(0) = 0
+testBit3(7) = 0
+testBit3(8) = 1
+testBit3(15) = 1
+testBit3(16) = 0
+testBit3(24) = 1
+
+// Test bit 4 extraction (power-of-2 mask = 16)
+def testBit4(x: Int64) : Int64 =
+  if (x & 16) == 0 then 0 else 1
+testBit4(0) = 0
+testBit4(15) = 0
+testBit4(16) = 1
+testBit4(31) = 1
+testBit4(32) = 0
+testBit4(48) = 1
+
+// Test higher bit positions
+def testBit7(x: Int64) : Int64 =
+  if (x & 128) == 0 then 0 else 1
+testBit7(0) = 0
+testBit7(127) = 0
+testBit7(128) = 1
+testBit7(255) = 1
+testBit7(256) = 0
+
+// Test bit 8 (mask = 256)
+def testBit8(x: Int64) : Int64 =
+  if (x & 256) == 0 then 0 else 1
+testBit8(0) = 0
+testBit8(255) = 0
+testBit8(256) = 1
+testBit8(511) = 1
+testBit8(512) = 0
+
+// ===================================================================
+// Combined Bit Operations
+// ===================================================================
+// These test multiple bit positions in sequence, exercising the
+// bit position calculation multiple times.
+
+// Extract multiple bits and combine them
+def extractBits(x: Int64) : Int64 =
+  let b0 = if (x & 1) == 0 then 0 else 1 in
+  let b1 = if (x & 2) == 0 then 0 else 2 in
+  let b2 = if (x & 4) == 0 then 0 else 4 in
+  b0 + b1 + b2
+
+extractBits(0) = 0
+extractBits(1) = 1
+extractBits(2) = 2
+extractBits(3) = 3
+extractBits(4) = 4
+extractBits(5) = 5
+extractBits(6) = 6
+extractBits(7) = 7
+
+// ===================================================================
+// LICM with Bit Operations
+// ===================================================================
+// These tests combine LICM with bit testing to exercise multiple
+// optimization passes together.
+
+def loopWithBitTest(mask: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    // Loop-invariant bit test on mask
+    let hasBit = if (mask & 4) == 0 then 0 else 10 in
+    loopWithBitTest(mask, n - 1, acc + hasBit)
+
+// mask=4 has bit 2 set, so hasBit=10, 5 iterations = 50
+loopWithBitTest(4, 5, 0) = 50
+// mask=3 doesn't have bit 2 set, so hasBit=0, 5 iterations = 0
+loopWithBitTest(3, 5, 0) = 0
+// mask=7 has bit 2 set, so hasBit=10, 3 iterations = 30
+loopWithBitTest(7, 3, 0) = 30
+// mask=0 doesn't have bit 2 set
+loopWithBitTest(0, 10, 0) = 0
