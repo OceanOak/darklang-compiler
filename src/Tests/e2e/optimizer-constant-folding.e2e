@@ -742,3 +742,80 @@ def licmPhiChainedOutside(x: Int64, flag: Bool, n: Int64) : Int64 =
 // x=5: step1=6, step2=12, step3=15, 4 iterations = 60
 licmPhiChainedOutside(5, true, 4) = 60
 licmPhiChainedOutside(5, false, 4) = 60
+
+// ===================================================================
+// LICM Hoistable Instruction Uses Check (mutation #156)
+// ===================================================================
+// This test exercises the || operator in findHoistable at line 461:
+//   not (Set.contains vreg loopDefs) || Set.contains vreg invs
+//
+// The usesInvariant check determines if an instruction can be hoisted.
+// An instruction is hoistable if ALL its used registers are invariant:
+//   - The register is NOT defined in the loop (not in loopDefs), OR
+//   - The register is already marked as invariant (in invs)
+//
+// If || becomes &&, BOTH conditions would need to be true:
+//   - The register must NOT be in loopDefs AND must be in invs
+//   - This breaks hoisting for instructions that use values defined
+//     outside the loop, since those won't be in invs initially
+//
+// The test creates:
+// 1. A recursive function (the "loop")
+// 2. A value computed BEFORE the loop
+// 3. An arithmetic instruction inside the loop using that value
+// 4. LICM should recognize the instruction as hoistable
+//
+// With ||: instruction using outer value is correctly hoistable
+// With &&: instruction fails check (outer value not in invs), not hoisted
+
+// Test: hoistable instruction using value defined outside loop
+// The 'base' value is defined BEFORE the recursive calls
+// Inside the loop, 'sq = base * base' uses only 'base' which is loop-invariant
+// With correct ||: base is invariant (not in loopDefs), so sq is hoistable
+// With && mutation: base wrongly fails (not in invs on first pass)
+def licmHoistableUses(base: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    // This computation uses only 'base' which is defined outside the loop
+    // LICM should detect this as hoistable since base is loop-invariant
+    let sq = base * base in
+    licmHoistableUses(base, n - 1, acc + sq)
+
+// base=4: sq = 16, each iteration adds 16, 5 iterations = 80
+licmHoistableUses(4, 5, 0) = 80
+// base=3: sq = 9, 6 iterations = 54
+licmHoistableUses(3, 6, 0) = 54
+
+// More complex: multiple invariant uses in one instruction
+// Tests that all operands of a binary operation are checked
+def licmHoistableMultiUses(a: Int64, b: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    // Both 'a' and 'b' are loop-invariant (defined outside)
+    // The instruction 'prod = a * b' should be hoistable
+    let prod = a * b in
+    licmHoistableMultiUses(a, b, n - 1, acc + prod)
+
+// a=3, b=4: prod = 12, 5 iterations = 60
+licmHoistableMultiUses(3, 4, 5, 0) = 60
+// a=5, b=7: prod = 35, 3 iterations = 105
+licmHoistableMultiUses(5, 7, 3, 0) = 105
+
+// Chain of hoistable instructions where each depends on previous
+// Tests that LICM correctly propagates invariant status through invs
+def licmHoistableChain(x: Int64, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    // step1 uses only x (invariant), so step1 is hoistable
+    // step2 uses step1 (becomes invariant after hoisting step1)
+    // step3 uses step2 (becomes invariant after hoisting step2)
+    // All three should be hoisted with iterative LICM
+    let step1 = x + 1 in
+    let step2 = step1 * 2 in
+    let step3 = step2 + 5 in
+    licmHoistableChain(x, n - 1, acc + step3)
+
+// x=2: step1=3, step2=6, step3=11, 4 iterations = 44
+licmHoistableChain(2, 4, 0) = 44
+// x=10: step1=11, step2=22, step3=27, 3 iterations = 81
+licmHoistableChain(10, 3, 0) = 81
