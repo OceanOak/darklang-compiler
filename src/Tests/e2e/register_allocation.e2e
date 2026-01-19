@@ -217,3 +217,22 @@ let t1 = 100 in let t2 = 200 in let t3 = 300 in let t4 = 400 in let t5 = 500 in 
 // 20 variables: more spills to thoroughly test stack slot allocation
 // Uses prime numbers to ensure any value corruption is detectable
 let p1 = 2 in let p2 = 3 in let p3 = 5 in let p4 = 7 in let p5 = 11 in let p6 = 13 in let p7 = 17 in let p8 = 19 in let p9 = 23 in let p10 = 29 in let p11 = 31 in let p12 = 37 in let p13 = 41 in let p14 = 43 in let p15 = 47 in let p16 = 53 in let p17 = 59 in let p18 = 61 in let p19 = 67 in let p20 = 71 in p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 = 639
+
+
+// ===================================================================
+// Linear Scan Stack Slot Tests (Mutation #215)
+// ===================================================================
+
+// Mutation #215 targets the linearScan allocator's stack slot decrement.
+// The linearScan function uses the same pattern as coloringToAllocation:
+// nextStackSlot <- nextStackSlot - 8
+// If mutated to +8, stack slots would overlap causing value corruption.
+// Note: linearScan may be unused in current code paths, but these tests
+// exercise the same pattern through coloringToAllocation for coverage.
+
+// 22 variables: forces 7+ spills with distinct values
+// Tests that each spilled variable gets a unique, non-overlapping stack slot
+let q1 = 1000 in let q2 = 2000 in let q3 = 3000 in let q4 = 4000 in let q5 = 5000 in let q6 = 6000 in let q7 = 7000 in let q8 = 8000 in let q9 = 9000 in let q10 = 10000 in let q11 = 11000 in let q12 = 12000 in let q13 = 13000 in let q14 = 14000 in let q15 = 15000 in let q16 = 16000 in let q17 = 17000 in let q18 = 18000 in let q19 = 19000 in let q20 = 20000 in let q21 = 21000 in let q22 = 22000 in q1 + q2 + q3 + q4 + q5 + q6 + q7 + q8 + q9 + q10 + q11 + q12 + q13 + q14 + q15 + q16 + q17 + q18 + q19 + q20 + q21 + q22 = 253000
+
+// Test with interleaved access patterns - spilled values accessed in different order than defined
+let r1 = 11 in let r2 = 22 in let r3 = 33 in let r4 = 44 in let r5 = 55 in let r6 = 66 in let r7 = 77 in let r8 = 88 in let r9 = 99 in let r10 = 110 in let r11 = 121 in let r12 = 132 in let r13 = 143 in let r14 = 154 in let r15 = 165 in let r16 = 176 in let r17 = 187 in let r18 = 198 in let r19 = 209 in let r20 = 220 in r20 + r1 + r19 + r2 + r18 + r3 + r17 + r4 + r16 + r5 + r15 + r6 + r14 + r7 + r13 + r8 + r12 + r9 + r11 + r10 = 2310
