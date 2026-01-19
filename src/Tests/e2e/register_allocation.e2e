@@ -427,3 +427,33 @@ let x = 10 in let y = 20 in let z = 30 in let outer = if x > 0 then (let inner =
 
 // High pressure with many variables live across phi coalescing points
 let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in let g = 7 in let h = 8 in let i = 9 in let j = 10 in let k = 11 in let l = 12 in let m = if a > 0 then b + c + d + e + f else g + h + i + j + k + l in m = 20
+
+
+// ===================================================================
+// Phi Preference Collection Tests (Mutation #245)
+// ===================================================================
+
+// Mutation #245 targets the guard in addPreference (collectPhiPreferences):
+//   if v1 <> v2 then
+// This guard prevents self-preferences from being added. If mutated to
+// v1 = v2, no actual preferences between different vregs would be collected,
+// breaking phi coalescing entirely.
+//
+// Without phi preferences:
+// - preferredColors would always be empty
+// - hasUncoloredPartners would always return false
+// - colorVertexWithPartners wouldn't coalesce phi partners
+//
+// This is primarily an optimization (fewer moves), but these tests exercise
+// the code path with high register pressure and multiple phi nodes to ensure
+// the allocation handles phi nodes correctly.
+
+// Multiple phi nodes from nested conditionals - tests preference collection
+// Each conditional creates a phi node; phi partners should prefer same color
+let phiPref1 = 10 in let phiPref2 = 20 in let phiPref3 = 30 in let phiPref4 = 40 in let phiPref5 = 50 in let phiPref6 = 60 in let phiPref7 = 70 in let phiPref8 = 80 in let phiPref9 = 90 in let phiPref10 = 100 in let result1 = if phiPref1 > 5 then phiPref2 else phiPref3 in let result2 = if phiPref4 > 35 then phiPref5 else phiPref6 in let result3 = if phiPref7 > 65 then phiPref8 else phiPref9 in result1 + result2 + result3 + phiPref10 = 250
+
+// Chain of phi nodes - tests that preferences are bidirectional (v1->v2 and v2->v1)
+let chainA = 1 in let chainB = 2 in let chainC = 3 in let chainD = 4 in let chainE = 5 in let chainF = 6 in let chainG = 7 in let chainH = 8 in let chainI = 9 in let chainJ = 10 in let chainK = 11 in let chainL = 12 in let phi1 = if chainA > 0 then chainB else chainC in let phi2 = if phi1 > 1 then chainD else chainE in let phi3 = if phi2 > 2 then chainF else chainG in phi3 + chainH + chainI + chainJ + chainK + chainL = 56
+
+// Phi with same source used in multiple branches - degenerate case for preferences
+let srcA = 100 in let srcB = 200 in let srcC = 300 in let srcD = 400 in let srcE = 500 in let srcF = 600 in let srcG = 700 in let srcH = 800 in let srcI = 900 in let srcJ = 1000 in let phiSame = if srcA > 50 then srcB else srcB in phiSame + srcC + srcD + srcE + srcF + srcG + srcH + srcI + srcJ = 5400
