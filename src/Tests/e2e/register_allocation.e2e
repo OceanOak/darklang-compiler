@@ -195,3 +195,25 @@ let a1 = 1 in let a2 = 2 in let a3 = 3 in let a4 = 4 in let a5 = 5 in let a6 = 6
 
 // Multiple phi nodes merged at control flow join with high pressure
 let x1 = 10 in let x2 = 20 in let x3 = 30 in let x4 = 40 in let x5 = 50 in let x6 = 60 in let x7 = 70 in let x8 = 80 in let x9 = 90 in let x10 = 100 in let x11 = 110 in let x12 = 120 in let choice = if x1 < 50 then x2 + x3 else x4 + x5 in choice + x6 + x7 + x8 + x9 + x10 + x11 + x12 = 680
+
+
+// ===================================================================
+// Stack Slot Allocation Direction Tests (Mutation #213)
+// ===================================================================
+
+// Tests for correct stack slot allocation direction in coloringToAllocation.
+// Stack slots should grow downward: -8, -16, -24, etc.
+// Mutation #213 changes "nextStackSlot - 8" to "nextStackSlot + 8" for spills,
+// which would cause stack slots to grow in wrong direction after first spill,
+// leading to value corruption when multiple variables are spilled.
+
+// Force multiple spills by having more live variables than allocatable registers (15)
+// Each variable has a distinct value so corruption would be detectable
+let s1 = 1 in let s2 = 2 in let s3 = 3 in let s4 = 4 in let s5 = 5 in let s6 = 6 in let s7 = 7 in let s8 = 8 in let s9 = 9 in let s10 = 10 in let s11 = 11 in let s12 = 12 in let s13 = 13 in let s14 = 14 in let s15 = 15 in let s16 = 16 in let s17 = 17 in s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 = 153
+
+// 18 variables: ensures at least 3 spills that use separate stack slots
+let t1 = 100 in let t2 = 200 in let t3 = 300 in let t4 = 400 in let t5 = 500 in let t6 = 600 in let t7 = 700 in let t8 = 800 in let t9 = 900 in let t10 = 1000 in let t11 = 1100 in let t12 = 1200 in let t13 = 1300 in let t14 = 1400 in let t15 = 1500 in let t16 = 1600 in let t17 = 1700 in let t18 = 1800 in t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9 + t10 + t11 + t12 + t13 + t14 + t15 + t16 + t17 + t18 = 17100
+
+// 20 variables: more spills to thoroughly test stack slot allocation
+// Uses prime numbers to ensure any value corruption is detectable
+let p1 = 2 in let p2 = 3 in let p3 = 5 in let p4 = 7 in let p5 = 11 in let p6 = 13 in let p7 = 17 in let p8 = 19 in let p9 = 23 in let p10 = 29 in let p11 = 31 in let p12 = 37 in let p13 = 41 in let p14 = 43 in let p15 = 47 in let p16 = 53 in let p17 = 59 in let p18 = 61 in let p19 = 67 in let p20 = 71 in p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 = 639
