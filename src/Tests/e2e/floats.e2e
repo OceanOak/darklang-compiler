@@ -248,3 +248,33 @@ product8Floats(1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0) = 16.0
 def innerFloat(a: Float, b: Float) : Float = a * b + a
 def outerFloat(x: Float, y: Float, z: Float) : Float = innerFloat(x, y) + innerFloat(y, z)
 outerFloat(2.0, 3.0, 4.0) = 23.0
+
+// =====================================================
+// Float Phi Resolution with Allocation Mapping (Mutation #197)
+// =====================================================
+// Tests float move generation using allocation-based register mapping with
+// multiple float parameters in phi nodes. The generateFloatMoveInstrsWithAllocation
+// function maps VRegs to physical registers using formulas like 2 + id for params.
+// If + becomes -, param 1 would map to register 1 instead of 3, causing incorrect values.
+
+// Multiple float params modified in branches - creates phi nodes for each param
+// Each param (a, b, c, d) has id 0-3, mapped to D2-D5 via formula 2 + id
+// With mutation (2 - id), they'd map to D2, D1, D0, D-1 (invalid!)
+def floatPhiMultipleParams(a: Float, b: Float, c: Float, d: Float, cond: Bool) : Float = if cond then a + b + c + d else (a * 2.0) + (b * 2.0) + (c * 2.0) + (d * 2.0)
+floatPhiMultipleParams(1.0, 2.0, 3.0, 4.0, true) = 10.0
+floatPhiMultipleParams(1.0, 2.0, 3.0, 4.0, false) = 20.0
+
+// Float phi with sequential params - ensures params 1,2,3 are used (not just param 0)
+// The formula 2 + id distinguishes between params; 2 - id would map param 2 to D0
+def floatPhiSequentialParams(w: Float, x: Float, y: Float, z: Float, pick: Int64) : Float = if pick == 1 then w else if pick == 2 then x else if pick == 3 then y else z
+floatPhiSequentialParams(10.0, 20.0, 30.0, 40.0, 1) = 10.0
+floatPhiSequentialParams(10.0, 20.0, 30.0, 40.0, 2) = 20.0
+floatPhiSequentialParams(10.0, 20.0, 30.0, 40.0, 3) = 30.0
+floatPhiSequentialParams(10.0, 20.0, 30.0, 40.0, 4) = 40.0
+
+// Complex phi with float params used in all branches - stresses register allocation
+def floatPhiAllBranches(a: Float, b: Float, c: Float, selector: Int64) : Float = if selector == 0 then a + b + c else if selector == 1 then a * b + c else if selector == 2 then a + b * c else a * b * c
+floatPhiAllBranches(2.0, 3.0, 4.0, 0) = 9.0
+floatPhiAllBranches(2.0, 3.0, 4.0, 1) = 10.0
+floatPhiAllBranches(2.0, 3.0, 4.0, 2) = 14.0
+floatPhiAllBranches(2.0, 3.0, 4.0, 3) = 24.0
