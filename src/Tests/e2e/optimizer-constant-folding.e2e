@@ -662,3 +662,83 @@ licmNestedPhiDest(1, 2, 3, true, false, 3) = 6
 licmNestedPhiDest(1, 2, 3, false, true, 3) = 15
 // f1=false: p1=b=2, f2=false: p2=p1=2, sum=2+2=4, 3 iters = 12
 licmNestedPhiDest(1, 2, 3, false, false, 3) = 12
+
+// ===================================================================
+// LICM Phi Invariant Detection - Outside Source Check (mutation #155)
+// ===================================================================
+// This test exercises the || operator in findInvariantPhis at line 407:
+//   not (Set.contains vreg loopDefs) || Map.containsKey vreg acc'
+//
+// The outsideInvariant check determines if a phi's outside source is
+// loop-invariant. A register is invariant if:
+//   - It's NOT defined in the loop (not in loopDefs), OR
+//   - It's already marked invariant (in acc')
+//
+// If || becomes &&, BOTH conditions would need to be true:
+//   - The register must NOT be in loopDefs AND must be in acc'
+//   - This breaks the first iteration where acc' is empty but valid
+//     outside sources exist (defined before the loop)
+//
+// The test creates:
+// 1. A recursive function (the "loop")
+// 2. A value computed BEFORE entering the recursive pattern
+// 3. A conditional inside the loop that creates a phi
+// 4. The phi's outside source is the precomputed value
+// 5. On first analysis pass, acc' is empty but the source IS invariant
+//
+// With ||: precomputed value is correctly identified as invariant
+// With &&: precomputed value fails check (not in acc' yet), phi not invariant
+
+// Test: outside source from before the loop, not yet in invariant map
+// The 'precomputed' value is computed before the recursive calls
+// Inside the loop, a conditional creates a phi with precomputed as outside source
+def licmPhiOutsideSource(x: Int64, flag: Bool, n: Int64, acc: Int64) : Int64 =
+  // precomputed is defined BEFORE the loop (recursive calls)
+  let precomputed = x * x in
+  if n <= 0 then acc
+  else
+    // This conditional creates a phi: value = phi(precomputed, precomputed)
+    // The sources from outside the loop come from precomputed
+    // With correct ||: precomputed IS invariant (not in loopDefs)
+    // With && mutation: precomputed wrongly fails (not in acc' on first pass)
+    let value = if flag then precomputed else precomputed in
+    licmPhiOutsideSource(x, flag, n - 1, acc + value)
+
+// x=3: precomputed = 9, each iteration adds 9, 5 iterations = 45
+licmPhiOutsideSource(3, true, 5, 0) = 45
+licmPhiOutsideSource(3, false, 5, 0) = 45
+
+// x=4: precomputed = 16, 4 iterations = 64
+licmPhiOutsideSource(4, true, 4, 0) = 64
+licmPhiOutsideSource(4, false, 4, 0) = 64
+
+// More complex: multiple precomputed values used in phi
+// Tests that LICM correctly handles multiple outside sources
+def licmPhiMultiOutside(a: Int64, b: Int64, flag: Bool, n: Int64) : Int64 =
+  let pre1 = a * a in
+  let pre2 = b * b in
+  if n <= 0 then 0
+  else
+    // value depends on flag, but both branches use precomputed values
+    let value = if flag then pre1 else pre2 in
+    value + licmPhiMultiOutside(a, b, flag, n - 1)
+
+// flag=true: uses pre1 = 2*2 = 4, 3 iterations = 12
+licmPhiMultiOutside(2, 3, true, 3) = 12
+// flag=false: uses pre2 = 3*3 = 9, 3 iterations = 27
+licmPhiMultiOutside(2, 3, false, 3) = 27
+
+// Chain of precomputed values where LICM must resolve correctly
+def licmPhiChainedOutside(x: Int64, flag: Bool, n: Int64) : Int64 =
+  let step1 = x + 1 in
+  let step2 = step1 * 2 in
+  let step3 = step2 + 3 in
+  if n <= 0 then 0
+  else
+    // phi with chained precomputed source
+    let value = if flag then step3 else step3 in
+    value + licmPhiChainedOutside(x, flag, n - 1)
+
+// x=5: step1=6, step2=12, step3=15, 4 iterations = 60
+licmPhiChainedOutside(5, true, 4) = 60
+licmPhiChainedOutside(5, false, 4) = 60
