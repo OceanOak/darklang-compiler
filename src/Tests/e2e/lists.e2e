@@ -760,3 +760,19 @@ def testListInBranch169(flag: Bool) : Int64 =
     else
         999
 testListInBranch169(true) = 55
+
+// =====================================================
+// List head type tracking via TFunction in convertExprToOperand (kills mutation #170)
+// =====================================================
+// Tests that the TupleGet handler for TFunction returning TList in
+// convertExprToOperand correctly uses && (not ||) when checking whether
+// to set destType to Float64. The condition at line 1398 is:
+//   if index = 1 && elemType = AST.TFloat64 then destType := AST.TFloat64
+// This path is exercised when a closure that returns List<Int64> is stored
+// as a first-class function, called, and pattern matched inside an if-branch.
+// If && were changed to ||, accessing index 1 of a List<Int64> from a
+// closure inside a branch would incorrectly mark the result as Float64.
+//
+// This test combines the closure pattern from #168 with the branch context
+// from #169 to exercise the TFunction->TList case in convertExprToOperand.
+def makeList170(n: Int64) : List<Int64> = [77 + n, 154, 231] def testBranch170(flag: Bool) : Int64 = if flag then let f = makeList170 in match f(0) with | [h, ...t] -> h | [] -> 0 else 999 testBranch170(true) = 77
