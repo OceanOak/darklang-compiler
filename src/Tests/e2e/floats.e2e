@@ -404,3 +404,31 @@ floatInstrLive6(5.0) = 105.0
 // Float intermediates combined in a tree pattern - multiple live at each combine point
 def floatInstrLiveTree(a: Float, b: Float, c: Float, d: Float) : Float = let ab = a + b in let cd = c + d in let abcd = ab + cd in abcd * 2.0
 floatInstrLiveTree(1.0, 2.0, 3.0, 4.0) = 20.0
+
+// =====================================================
+// Float Virtual Register Offset Mapping (Mutation #217)
+// =====================================================
+// Tests float register mapping for VRegs 8-9999 (ANF-level bindings beyond params 0-7).
+// The mapping formula uses (n - 8) % 13 to select from a pool of 13 temp registers.
+// If mutation changes - to +, VReg 8 would map to index 3 instead of 0, causing
+// incorrect register assignments and potential value corruption.
+//
+// Note: The primary code path in generateFloatMoveInstrs is currently unused,
+// but the same pattern exists in generateFloatMoveInstrsWithAllocation's fallback.
+// These tests exercise float operations with many bindings to stress the register
+// allocation system and ensure correct mapping of higher-numbered VRegs.
+
+// 9 float let bindings - exercises VRegs in the 8+ range (beyond direct param mapping)
+// Each binding gets a distinct VReg, with binding 9 getting VReg 8 (after params 0-7)
+def float9Bindings(x: Float) : Float = let f1 = x * 1.0 in let f2 = x * 2.0 in let f3 = x * 3.0 in let f4 = x * 4.0 in let f5 = x * 5.0 in let f6 = x * 6.0 in let f7 = x * 7.0 in let f8 = x * 8.0 in let f9 = x * 9.0 in f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9
+float9Bindings(1.0) = 45.0
+
+// 10 float bindings with phi node - tests VReg mapping across control flow
+// The conditional creates phi nodes that exercise register mapping for higher VRegs
+def float10BindingsWithPhi(x: Float, cond: Bool) : Float = let a = x * 1.0 in let b = x * 2.0 in let c = x * 3.0 in let d = x * 4.0 in let e = x * 5.0 in let f = x * 6.0 in let g = x * 7.0 in let h = x * 8.0 in let i = x * 9.0 in let j = x * 10.0 in if cond then a + b + c + d + e else f + g + h + i + j
+float10BindingsWithPhi(2.0, true) = 30.0
+float10BindingsWithPhi(2.0, false) = 80.0
+
+// 12 float bindings - pushes into higher VReg numbers that exercise the modulo mapping
+def float12Bindings(x: Float) : Float = let v1 = x + 1.0 in let v2 = x + 2.0 in let v3 = x + 3.0 in let v4 = x + 4.0 in let v5 = x + 5.0 in let v6 = x + 6.0 in let v7 = x + 7.0 in let v8 = x + 8.0 in let v9 = x + 9.0 in let v10 = x + 10.0 in let v11 = x + 11.0 in let v12 = x + 12.0 in v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12
+float12Bindings(0.0) = 78.0
