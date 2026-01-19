@@ -738,3 +738,25 @@ match makeIntList167() with | [h, ...t] -> h + 100 | [] -> 999 = 142
 // first-class function value, calls it, and accesses the head. This exercises
 // the TFunction path in TypeMap lookup.
 def makeList168(n: Int64) : List<Int64> = [55 + n, 110, 165] let f = makeList168 in match f(0) with | [h, ...t] -> h + 200 | [] -> 999 = 255
+
+// =====================================================
+// List head type tracking in convertExprToOperand (kills mutation #169)
+// =====================================================
+// Tests that the TupleGet handler for TList in convertExprToOperand correctly
+// uses && (not ||) when checking whether to set destType to Float64.
+// The condition at line 1394 is:
+//   if index = 1 && elemType = AST.TFloat64 then destType := AST.TFloat64
+// This path is exercised when a list pattern match occurs inside an if-branch,
+// because the if-branch is processed by convertExprToOperand, not convertExpr.
+// If && were changed to ||, accessing index 1 of a List<Int64> inside a branch
+// would incorrectly mark the result as Float64, causing the integer value to
+// be loaded into a float register and misinterpreted.
+//
+// This test places the list pattern match inside an if-then branch to exercise
+// the convertExprToOperand code path rather than the convertExpr path.
+def testListInBranch169(flag: Bool) : Int64 =
+    if flag then
+        let xs = [55, 110, 165] in match xs with | [h, ...t] -> h | [] -> 0
+    else
+        999
+testListInBranch169(true) = 55
