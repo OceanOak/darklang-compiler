@@ -48,6 +48,7 @@ let private emptyStdlibResult () : StdlibResult =
         StdlibANFFunctions = Map.empty
         StdlibANFCallGraph = Map.empty
         StdlibTypeMap = Map.empty
+        DependencyHashes = Map.empty
         CompiledFuncCache = createCompiledFunctionCache ()
         ANFFuncCache = ANFFunctionCache()
         PreambleCache = PreambleCache()

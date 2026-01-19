@@ -593,6 +593,8 @@ type StdlibResult = {
     StdlibANFCallGraph: Map<string, Set<string>>
     /// TypeMap from RC insertion (needed for getReachableStdlibFunctions)
     StdlibTypeMap: ANF.TypeMap
+    /// Dependency hashes for cache invalidation (function name -> hash)
+    DependencyHashes: Map<string, string>
     /// Cache for compiled functions (shared across test compilations)
     CompiledFuncCache: CompiledFunctionCache
     /// Cache for ANF-level user functions (shared across test compilations)
@@ -993,6 +995,8 @@ let compileStdlib () : Result<StdlibResult, string> =
                         |> Map.ofList
                     // Build ANF-level call graph for coverage analysis
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
+                    // Compute dependency hashes for cache invalidation
+                    let dependencyHashes = ANF_Inlining.buildDependencyHashMap stdlibFuncs ANF_Inlining.defaultConfig
                     // Convert stdlib ANF to MIR (functions only, no _start)
                     // Use FuncParams for typeReg (needed for tail call argument types)
                     // Coverage is false here since stdlib is precompiled for caching
@@ -1023,11 +1027,12 @@ let compileStdlib () : Result<StdlibResult, string> =
                             let (LIRSymbolic.Program lirFuncs) = optimizedLir
                             let compilerKey = Cache.getCompilerKey()
                             let allocateWithCache (f: LIRSymbolic.Function) =
-                                match Cache.getIntermediate compilerKey f.Name "" "lir_allocated" with
+                                let depHash = Map.tryFind f.Name dependencyHashes |> Option.defaultValue ""
+                                match Cache.getIntermediate compilerKey f.Name depHash "lir_allocated" with
                                 | Some data -> Cache.deserialize<LIRSymbolic.Function> data
                                 | None ->
                                     let allocated = RegisterAllocation.allocateRegisters f
-                                    Cache.setIntermediate compilerKey f.Name "" "lir_allocated" (Cache.serialize allocated)
+                                    Cache.setIntermediate compilerKey f.Name depHash "lir_allocated" (Cache.serialize allocated)
                                     allocated
                             let allocatedFuncs =
                                 match compileMode with
@@ -1056,6 +1061,7 @@ let compileStdlib () : Result<StdlibResult, string> =
                                     StdlibANFFunctions = stdlibFuncMap
                                     StdlibANFCallGraph = stdlibANFCallGraph
                                     StdlibTypeMap = typeMap
+                                    DependencyHashes = dependencyHashes
                                     CompiledFuncCache = createCompiledFunctionCache ()
                                     ANFFuncCache = ANFFunctionCache()
                                     PreambleCache = PreambleCache()
