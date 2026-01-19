@@ -610,3 +610,52 @@ floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, true, true) = 3.0
 floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, true, false) = 30.0
 floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, false, true) = 300.0
 floatParam6NestedPhi(1.0, 2.0, 10.0, 20.0, 100.0, 200.0, false, false) = 201.0
+
+// =====================================================
+// Float Parameter VReg >= 0 Boundary Tests (Mutation #238)
+// =====================================================
+// Tests the boundary condition for float parameter VRegs 1-7 in the
+// fallback path of generateFloatMoveInstrsWithAllocation. The condition
+// `id >= 0` ensures VRegs 0-7 all match the param mapping case.
+// If mutation changes >= to <=, only VReg 0 would map correctly via this
+// path; VRegs 1-7 would fall through to the wrong mapping formula:
+// tempRegs[(id - 8) % 13] which gives wrong register assignments.
+//
+// For VReg 1: would map to tempRegs[(1-8) % 13] = tempRegs[6] = D13
+//             instead of correct D3 (2 + 1 = 3)
+// For VReg 2: would map to tempRegs[(2-8) % 13] = tempRegs[7] = D14
+//             instead of correct D4 (2 + 2 = 4)
+//
+// These tests specifically use param 1 (second param) in isolation
+// and in phi nodes to detect incorrect register mapping.
+
+// Second float param only - tests VReg 1 mapping in isolation
+// If VReg 1 uses wrong register, the result would be corrupted
+def floatParam1Only(unused: Float, b: Float) : Float = b * 2.0
+floatParam1Only(0.0, 7.5) = 15.0
+
+// Second param in phi - VReg 1 must be correctly mapped for phi resolution
+def floatParam1Phi(unused: Float, b: Float, cond: Bool) : Float = if cond then b + 1.0 else b - 1.0
+floatParam1Phi(0.0, 10.0, true) = 11.0
+floatParam1Phi(0.0, 10.0, false) = 9.0
+
+// Third and fourth params (VRegs 2-3) in phi - tests VRegs > 1
+def floatParam23Phi(unused: Float, also_unused: Float, c: Float, d: Float, cond: Bool) : Float = if cond then c * 2.0 else d * 3.0
+floatParam23Phi(0.0, 0.0, 5.0, 7.0, true) = 10.0
+floatParam23Phi(0.0, 0.0, 5.0, 7.0, false) = 21.0
+
+// Param 1 used across multiple branches - complex phi with second param
+def floatParam1MultiBranch(unused: Float, b: Float, selector: Int64) : Float = if selector == 1 then b + 10.0 else if selector == 2 then b * 10.0 else b - 10.0
+floatParam1MultiBranch(0.0, 5.0, 1) = 15.0
+floatParam1MultiBranch(0.0, 5.0, 2) = 50.0
+floatParam1MultiBranch(0.0, 5.0, 3) = -5.0
+
+// All params 1-6 (VRegs 1-6) used in computation - bypasses param 0
+// If >= becomes <=, only param 0 would work; all others would get wrong registers
+def floatParams1to6(unused: Float, b: Float, c: Float, d: Float, e: Float, f: Float, g: Float) : Float = b + c + d + e + f + g
+floatParams1to6(0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0) = 63.0
+
+// Params 1-6 with nested phi - stresses VReg 1-6 mapping under phi resolution
+def floatParams1to6Phi(skip: Float, b: Float, c: Float, d: Float, e: Float, f: Float, g: Float, cond: Bool) : Float = if cond then b + c + d else e + f + g
+floatParams1to6Phi(999.0, 1.0, 2.0, 3.0, 100.0, 200.0, 300.0, true) = 6.0
+floatParams1to6Phi(999.0, 1.0, 2.0, 3.0, 100.0, 200.0, 300.0, false) = 600.0
