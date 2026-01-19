@@ -337,3 +337,28 @@ let longLived = 999 in let t1 = 1 + 1 in let t2 = t1 + 1 in let t3 = t2 + 1 in l
 
 // Multiple long-lived variables that all overlap with many short-lived ones
 let long1 = 100 in let long2 = 200 in let long3 = 300 in let s1 = 1 in let s2 = 2 in let s3 = 3 in let s4 = 4 in let s5 = 5 in let s6 = 6 in let s7 = 7 in let s8 = 8 in let s9 = 9 in let s10 = 10 in let s11 = 11 in let s12 = 12 in long1 + long2 + long3 + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 = 678
+
+
+// ===================================================================
+// Max Color Tracking Tests (Mutation #233)
+// ===================================================================
+
+// Mutation #233 targets the maxColor tracking in greedyColorReverse:
+//   if kvp.Value > maxColor then maxColor <- kvp.Value
+// This code iterates over precolored vertices to find the max color.
+// However, chordalGraphColor is always called with Map.empty for
+// precolored vertices, making this specific code path dead code.
+//
+// The mutation changes > to <, which would track the minimum instead
+// of maximum color from precolored vertices. Since precolored is always
+// empty, this mutation is equivalent and cannot be killed by E2E tests.
+//
+// The same > maxColor pattern is used at lines 1004, 1012, and 1081
+// for tracking maxColor from newly assigned colors - those ARE exercised.
+// These tests ensure maxColor tracking works correctly for assigned colors.
+
+// High register pressure to exercise color assignment maxColor tracking
+let c1 = 1 in let c2 = 2 in let c3 = 3 in let c4 = 4 in let c5 = 5 in let c6 = 6 in let c7 = 7 in let c8 = 8 in let c9 = 9 in let c10 = 10 in let c11 = 11 in let c12 = 12 in let c13 = 13 in let c14 = 14 in let c15 = 15 in c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13 + c14 + c15 = 120
+
+// Test with phi coalescing to exercise preferredColors maxColor update (line 1004)
+let phi1 = if true then 100 else 200 in let phi2 = if true then 10 else 20 in let phi3 = if true then 1 else 2 in phi1 + phi2 + phi3 = 111
