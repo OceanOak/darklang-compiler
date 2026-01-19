@@ -311,3 +311,29 @@ let m1 = 1 in let m2 = 2 in let m3 = 3 in let m4 = 4 in let m5 = 5 in let m6 = 6
 // A wrong stack size calculation would quickly overflow the stack
 def sumSpilled(n: Int64) : Int64 = if n <= 0 then 0 else let a = n in let b = n + 1 in let c = n + 2 in let d = n + 3 in let e = n + 4 in let f = n + 5 in let g = n + 6 in let h = n + 7 in let i = n + 8 in let j = n + 9 in let k = n + 10 in let l = n + 11 in let m = n + 12 in let sum = a + b + c + d + e + f + g + h + i + j + k + l + m in sum + sumSpilled(n - 1)
 sumSpilled(10) = 1495
+
+
+// ===================================================================
+// Interval Expiration Tests (Mutation #230)
+// ===================================================================
+
+// Mutation #230 targets the expireOldIntervals function in linearScan:
+//   active |> List.partition (fun (interval, _) -> interval.End < currentStart)
+// The linearScan function is dead code (never called), so this mutation
+// cannot be killed through E2E tests. The mutation would change < to >,
+// which would invert the logic: intervals would be "expired" when still
+// alive and kept active when they should be freed.
+//
+// These tests exercise equivalent logic in the active code path
+// (chordalAllocation) which handles interval overlaps differently
+// through interference graph construction rather than linear scanning.
+
+// Test overlapping live intervals with high register pressure
+// Variables defined early that are used late must coexist with variables defined in between
+let first = 1 in let second = 2 in let third = 3 in let fourth = 4 in let fifth = 5 in let sixth = 6 in let seventh = 7 in let eighth = 8 in let ninth = 9 in let tenth = 10 in let eleventh = 11 in let twelfth = 12 in let thirteenth = 13 in let fourteenth = 14 in let fifteenth = 15 in first + second + third + fourth + fifth + sixth + seventh + eighth + ninth + tenth + eleventh + twelfth + thirteenth + fourteenth + fifteenth = 120
+
+// Long-lived variable spanning many instructions with intervening computations
+let longLived = 999 in let t1 = 1 + 1 in let t2 = t1 + 1 in let t3 = t2 + 1 in let t4 = t3 + 1 in let t5 = t4 + 1 in let t6 = t5 + 1 in let t7 = t6 + 1 in let t8 = t7 + 1 in let t9 = t8 + 1 in let t10 = t9 + 1 in let t11 = t10 + 1 in let t12 = t11 + 1 in longLived + t12 = 1012
+
+// Multiple long-lived variables that all overlap with many short-lived ones
+let long1 = 100 in let long2 = 200 in let long3 = 300 in let s1 = 1 in let s2 = 2 in let s3 = 3 in let s4 = 4 in let s5 = 5 in let s6 = 6 in let s7 = 7 in let s8 = 8 in let s9 = 9 in let s10 = 10 in let s11 = 11 in let s12 = 12 in long1 + long2 + long3 + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 = 678
