@@ -362,3 +362,34 @@ let c1 = 1 in let c2 = 2 in let c3 = 3 in let c4 = 4 in let c5 = 5 in let c6 = 6
 
 // Test with phi coalescing to exercise preferredColors maxColor update (line 1004)
 let phi1 = if true then 100 else 200 in let phi2 = if true then 10 else 20 in let phi3 = if true then 1 else 2 in phi1 + phi2 + phi3 = 111
+
+
+// ===================================================================
+// ColorVertex For-Loop MaxColor Tracking Tests (Mutation #234)
+// ===================================================================
+
+// Mutation #234 targets the maxColor tracking in colorVertex's for-loop:
+//   if c > maxColor then maxColor <- c
+// This code assigns colors when no preferred colors are available.
+// The maxColor variable only affects the ChromaticNumber return value,
+// which is computed but never used in the actual register allocation.
+//
+// The mutation changes > to <, which would track the minimum instead
+// of maximum color. Since ChromaticNumber isn't consumed by
+// coloringToAllocation (which uses Colors and Spills only), this
+// mutation is equivalent and cannot be killed by E2E tests.
+//
+// These tests exercise the code path through colorVertex's for-loop
+// to ensure the allocation itself works correctly.
+
+// Simple case: single variable gets color 0
+let single = 42 in single = 42
+
+// Variables without phi relationships (no preferred colors) go through for-loop
+let a = 1 in let b = 2 in let c = 3 in a + b + c = 6
+
+// High pressure without phi coalescing - all through for-loop path
+let n1 = 1 in let n2 = 2 in let n3 = 3 in let n4 = 4 in let n5 = 5 in let n6 = 6 in let n7 = 7 in let n8 = 8 in let n9 = 9 in let n10 = 10 in n1 + n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9 + n10 = 55
+
+// Maximum register usage without spills - exercises full color range
+let w1 = 1 in let w2 = 2 in let w3 = 3 in let w4 = 4 in let w5 = 5 in let w6 = 6 in let w7 = 7 in let w8 = 8 in let w9 = 9 in let w10 = 10 in let w11 = 11 in let w12 = 12 in let w13 = 13 in let w14 = 14 in let w15 = 15 in w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9 + w10 + w11 + w12 + w13 + w14 + w15 = 120
