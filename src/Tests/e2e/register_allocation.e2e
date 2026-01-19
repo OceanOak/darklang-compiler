@@ -118,3 +118,13 @@ let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in le
 // Float argument must survive a call that can clobber float regs
 def floatAcrossCall(r: Float) : Float = let list = [1, 2, 3] in let _ = Stdlib.List.length<Int64>(list) in r + 1.0
 floatAcrossCall(2.0) = 3.0
+
+
+// ===================================================================
+// Live Interval Computation Tests
+// ===================================================================
+
+// Multiple variables live across several instructions - tests proper globalIdx incrementing
+// If globalIdx were decremented instead of incremented, intervals would be inverted
+// causing variables to appear non-overlapping when they actually overlap
+let a = 100 in let b = a + 1 in let c = b + 1 in let d = c + 1 in let e = d + 1 in a + e = 204
