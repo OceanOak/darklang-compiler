@@ -17,14 +17,9 @@ let getSharedStdlibResult () : Result<StdlibResult, string> =
 let compileStdlib () : Result<StdlibResult, string> =
     CompilerLibrary.compileStdlib()
 
-/// Reset caches for tests that require cold-cache behavior.
+/// No-op for backward compatibility - caching has been removed.
 let resetCaches (stdlib: StdlibResult) : StdlibResult =
-    { stdlib with
-        SpecCache = SpecializationCache()
-        CompiledFuncCache = createCompiledFunctionCache ()
-        ANFFuncCache = ANFFunctionCache()
-        PreambleCache = PreambleCache()
-        CodegenCache = CodegenCache() }
+    stdlib
 
 /// Run a test with stdlib provided by a supplied getter.
 let withStdlib

@@ -40,8 +40,6 @@
 
 module ANF_Inlining
 
-open System
-open System.Security.Cryptography
 open ANF
 
 /// Inlining configuration
@@ -462,70 +460,3 @@ let inlineProgram (config: InliningConfig) (program: Program) : Program =
 /// Inline functions with default configuration
 let inlineProgramDefault (program: Program) : Program =
     inlineProgram defaultConfig program
-
-// ============================================================================
-// Phase 5: Dependency Hashing for Cache Invalidation
-// ============================================================================
-
-/// Compute SHA256 hash of a string
-let private hashString (s: string) : string =
-    use sha256 = SHA256.Create()
-    let bytes = System.Text.Encoding.UTF8.GetBytes(s)
-    let hash = sha256.ComputeHash(bytes)
-    BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant()
-
-/// Compute a deterministic hash of an ANF function body
-/// Uses F#'s structural formatting which produces consistent output for the same values
-let hashFunctionBody (func: Function) : string =
-    let bodyStr = sprintf "%A" func.Body
-    hashString bodyStr
-
-/// Build map: function name -> body hash
-let buildBodyHashMap (funcs: Function list) : Map<string, string> =
-    funcs |> List.map (fun f -> f.Name, hashFunctionBody f) |> Map.ofList
-
-/// Get functions that would be inlined (respects shouldInline logic)
-/// This computes dependencies without actually performing inlining,
-/// used for cache key computation.
-let getInlineDependencies (funcInfoMap: Map<string, FunctionInfo>)
-                          (config: InliningConfig)
-                          (func: Function) : Set<string> =
-    let rec collect depth expr =
-        match expr with
-        | Let (_, Call (funcName, args), body) when not (funcName.StartsWith("_")) ->
-            let deps = collect depth body
-            match Map.tryFind funcName funcInfoMap with
-            | Some info when shouldInline info config depth ->
-                let allVars = args |> List.forall (function Var _ -> true | _ -> false)
-                if allVars then
-                    let transitive = collect (depth + 1) info.Func.Body
-                    Set.add funcName (Set.union deps transitive)
-                else deps
-            | _ -> deps
-        | Let (_, _, body) -> collect depth body
-        | Return _ -> Set.empty
-        | If (_, t, e) -> Set.union (collect depth t) (collect depth e)
-    collect 0 func.Body
-
-/// Compute dependency hash: own hash + all inlined dependency hashes
-let computeDependencyHash (bodyHashes: Map<string, string>)
-                          (inlineDeps: Set<string>)
-                          (funcName: string) : string =
-    let ownHash = Map.tryFind funcName bodyHashes |> Option.defaultValue ""
-    let depHashes =
-        inlineDeps |> Set.toList |> List.sort
-        |> List.choose (fun dep -> Map.tryFind dep bodyHashes)
-    let combined = ownHash :: depHashes |> String.concat "|"
-    hashString combined
-
-/// Build map: function name -> dependency hash
-/// This computes a hash for each function that includes both its own body hash
-/// and the body hashes of all functions it would inline.
-let buildDependencyHashMap (funcs: Function list) (config: InliningConfig)
-    : Map<string, string> =
-    let bodyHashes = buildBodyHashMap funcs
-    let funcInfoMap = buildFunctionInfoMap funcs
-    funcs |> List.map (fun f ->
-        let deps = getInlineDependencies funcInfoMap config f
-        f.Name, computeDependencyHash bodyHashes deps f.Name
-    ) |> Map.ofList

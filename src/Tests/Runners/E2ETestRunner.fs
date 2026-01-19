@@ -35,24 +35,12 @@ type PreambleKey = string * string
 /// Map of precompile tasks keyed by preamble
 type PreambleTaskMap = Map<PreambleKey, Task<Result<unit, string>>>
 
-/// Precompile a single preamble and populate the cache
+/// Precompile a single preamble - now compiles directly without caching
 let precompilePreamble (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<unit, string> =
-    let preambleHash = preamble.GetHashCode()
-    let cacheKey = (sourceFile, preambleHash)
     let allowInternal = isInternalTestFile sourceFile
-    if stdlib.PreambleCache.ContainsKey cacheKey then
-        Ok ()
-    else
-        let lazyCtx =
-            stdlib.PreambleCache.GetOrAdd(
-                cacheKey,
-                fun _ ->
-                    Lazy<Result<CompilerLibrary.PreambleContext, string>>(
-                        (fun () -> CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap),
-                        System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
-        match lazyCtx.Value with
-        | Error err -> Error $"Preamble precompile error ({sourceFile}): {err}"
-        | Ok _ -> Ok ()
+    match CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
+    | Error err -> Error $"Preamble precompile error ({sourceFile}): {err}"
+    | Ok _ -> Ok ()
 
 /// Start precompiling all distinct preambles (by file + preamble text)
 let startPreamblePrecompileTasks (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : PreambleTaskMap =
@@ -89,38 +77,8 @@ let precompilePreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest l
             | Ok () -> awaitAll rest
     awaitAll (tasks |> Map.toList)
 
-/// Compute a hash of the test content (source + preamble + options)
-let private hashTest (test: E2ETest) : string =
-    // Combine all relevant test data into a hash
-    let combined =
-        sprintf "%s|%s|%s|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%b|%d"
-            test.Source
-            test.Preamble
-            test.SourceFile
-            test.DisableFreeList
-            test.DisableANFOpt
-            test.DisableANFConstFolding
-            test.DisableANFConstProp
-            test.DisableANFCopyProp
-            test.DisableANFDCE
-            test.DisableANFStrengthReduction
-            test.DisableInlining
-            test.DisableTCO
-            test.DisableMIROpt
-            test.DisableMIRConstFolding
-            test.DisableMIRCSE
-            test.DisableMIRCopyProp
-            test.DisableMIRDCE
-            test.DisableMIRCFGSimplify
-            test.DisableMIRLICM
-            test.DisableLIROpt
-            test.DisableLIRPeephole
-            test.DisableFunctionTreeShaking
-            test.ExpectedExitCode
-    Cache.hashString combined
-
-/// Run E2E test without caching (internal implementation)
-let private runE2ETestUncached (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
+/// Run E2E test (internal implementation)
+let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     try
         let options : CompilerLibrary.CompilerOptions = {
             DisableFreeList = test.DisableFreeList
@@ -224,33 +182,5 @@ let private runE2ETestUncached (stdlib: CompilerLibrary.StdlibResult) (test: E2E
           RuntimeTime = TimeSpan.Zero }
 
 /// Run E2E test with pre-compiled stdlib
-/// Uses SQLite-based caching - passing tests are cached and skipped on subsequent runs
 let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
-    // Check cache first
-    let compilerKey = Cache.getCompilerKey ()
-    let testHash = hashTest test
-
-    // Only return cached results for passing tests
-    match Cache.getTestResult compilerKey testHash test.Name with
-    | Some cached when cached.Success ->
-        // Return cached success result
-        { Success = true
-          Message = "Test passed (cached)"
-          Stdout = cached.Stdout
-          Stderr = cached.Stderr
-          ExitCode = cached.ExitCode
-          CompileTime = TimeSpan.Zero  // Cached results have no compile time
-          RuntimeTime = TimeSpan.Zero }
-    | _ ->
-        // Cache miss or previous failure - run the test
-        let result = runE2ETestUncached stdlib test
-        // Only cache successful results
-        if result.Success then
-            Cache.setTestResult compilerKey testHash test.Name {
-                Success = result.Success
-                Message = result.Message
-                Stdout = result.Stdout
-                Stderr = result.Stderr
-                ExitCode = result.ExitCode
-            }
-        result
+    runE2ETestInternal stdlib test

@@ -1,6 +1,6 @@
 // StdlibTestHarnessTests.fs - Unit tests for stdlib test harness plumbing
 //
-// Exercises shared stdlib compilation and cache reset helpers.
+// Exercises shared stdlib compilation helpers.
 
 module StdlibTestHarnessTests
 
@@ -44,33 +44,20 @@ let private emptyStdlibResult () : StdlibResult =
         AllocatedFunctions = []
         CompileMode = StdlibCompileMode.Sequential
         StdlibCallGraph = Map.empty
-        SpecCache = SpecializationCache()
         StdlibANFFunctions = Map.empty
         StdlibANFCallGraph = Map.empty
         StdlibTypeMap = Map.empty
-        DependencyHashes = Map.empty
-        CompiledFuncCache = createCompiledFunctionCache ()
-        ANFFuncCache = ANFFunctionCache()
-        PreambleCache = PreambleCache()
-        CodegenCache = CodegenCache()
     }
 
-let testResetCachesCreatesFreshInstances () : TestResult =
+let testResetCachesIsNoOp () : TestResult =
     let stdlib = emptyStdlibResult ()
     let resetStdlib = StdlibTestHarness.resetCaches stdlib
-    if obj.ReferenceEquals(stdlib.SpecCache, resetStdlib.SpecCache) then
-        Error "Expected SpecCache to be reset"
-    elif obj.ReferenceEquals(stdlib.CompiledFuncCache, resetStdlib.CompiledFuncCache) then
-        Error "Expected CompiledFuncCache to be reset"
-    elif obj.ReferenceEquals(stdlib.ANFFuncCache, resetStdlib.ANFFuncCache) then
-        Error "Expected ANFFuncCache to be reset"
-    elif obj.ReferenceEquals(stdlib.PreambleCache, resetStdlib.PreambleCache) then
-        Error "Expected PreambleCache to be reset"
-    elif obj.ReferenceEquals(stdlib.CodegenCache, resetStdlib.CodegenCache) then
-        Error "Expected CodegenCache to be reset"
+    // After caching removal, resetCaches just returns the same stdlib
+    if not (obj.ReferenceEquals(stdlib, resetStdlib)) then
+        Error "Expected resetCaches to return the same stdlib instance"
     else
         Ok ()
 
 let tests : (string * (unit -> TestResult)) list = [
-    ("reset caches", testResetCachesCreatesFreshInstances)
+    ("reset caches is no-op", testResetCachesIsNoOp)
 ]

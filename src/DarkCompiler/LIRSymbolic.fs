@@ -5,8 +5,6 @@
 
 module LIRSymbolic
 
-open MessagePack
-
 /// Reuse core register and label types from LIR
 type PhysReg = LIR.PhysReg
 type PhysFPReg = LIR.PhysFPReg
@@ -27,8 +25,6 @@ type Operand =
     | FuncAddr of string
 
 /// Instructions (symbolic)
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type Instr =
     | Mov of dest:Reg * src:Operand
     | Phi of dest:Reg * sources:(Operand * Label) list * valueType:AST.Type option
@@ -127,8 +123,6 @@ type Instr =
     | CoverageHit of exprId:int
 
 /// Terminators
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type Terminator =
     | Ret
     | Branch of cond:Reg * trueLabel:Label * falseLabel:Label

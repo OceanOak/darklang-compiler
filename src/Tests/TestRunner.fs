@@ -46,43 +46,6 @@ let formatTime (elapsed: TimeSpan) =
     else
         sprintf "%.2fs" elapsed.TotalSeconds
 
-// Get optimal parallelism based on system resources
-let getOptimalParallelism () : int =
-    // Get CPU core count
-    let cpuCores = Environment.ProcessorCount
-
-    // Get available memory in GB
-    let gcMemoryInfo = System.GC.GetGCMemoryInfo()
-    let totalMemoryGB = float gcMemoryInfo.TotalAvailableMemoryBytes / (1024.0 * 1024.0 * 1024.0)
-
-    // Each E2E test needs roughly:
-    // - Minimal CPU (tests are mostly I/O bound - compile + exec)
-    // - ~100MB memory (compiler + generated binary + test overhead)
-    let optimal = calculateOptimalParallelism cpuCores totalMemoryGB
-    optimal
-
-// Parallel map with limited degree of parallelism
-let parallelMapWithLimit (maxDegree: int) (f: 'a -> 'b) (array: 'a array) : 'b array =
-    let results = Array.zeroCreate array.Length
-    let options = System.Threading.Tasks.ParallelOptions()
-    options.MaxDegreeOfParallelism <- maxDegree
-
-    System.Threading.Tasks.Parallel.For(
-        0,
-        array.Length,
-        options,
-        fun i ->
-            results.[i] <- f array.[i]
-    ) |> ignore
-
-    results
-
-// Parse command line for --parallel=N option
-let parseParallelArg (args: string array) : int option =
-    args
-    |> Array.tryFind (fun arg -> arg.StartsWith("--parallel="))
-    |> Option.map (fun arg -> arg.Substring(11) |> int)
-
 // Parse command line for --filter=PATTERN option
 let parseFilterArg (args: string array) : string option =
     args
@@ -113,7 +76,6 @@ let printHelp () =
     println ""
     println "Options:"
     println "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
-    println "  --parallel=N       Run with N parallel test workers"
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
     println "  --help, -h         Show this help message"
@@ -122,7 +84,6 @@ let printHelp () =
     println "  Tests                      Run all tests"
     println "  Tests --filter=tuple       Run tests with 'tuple' in the name"
     println "  Tests --filter=string      Run tests with 'string' in the name"
-    println "  Tests --parallel=4         Run with 4 parallel workers"
     println "  Tests --coverage           Run tests and show coverage percentage"
     println "  Tests --verification       Run verification/stress tests"
 
@@ -135,9 +96,6 @@ let main args =
     else
 
     let totalTimer = Stopwatch.StartNew()
-
-    // Check for --parallel=N argument
-    let overrideParallel = parseParallelArg args
 
     // Check for --filter=PATTERN argument
     let filter = parseFilterArg args
@@ -232,12 +190,6 @@ let main args =
     let stdlibWarmupPlan = decideStdlibWarmupPlan shouldCompileStdlib
 
     let enableVerification = verificationEnabled
-    let hasUnitTests =
-        unitTestNames |> Array.exists (matchesFilter filter)
-    let hasE2EOrVerification =
-        hasE2ETests || (enableVerification && hasVerificationTests)
-    let runUnitAndE2EInParallel =
-        shouldRunUnitAndE2EInParallel hasUnitTests hasE2EOrVerification
 
     let compileStdlibWithTiming () : Result<CompilerLibrary.StdlibResult, string> * TimeSpan =
         let timer = Stopwatch.StartNew()
@@ -251,35 +203,31 @@ let main args =
     let mutable failed = 0
     let failedTests = ResizeArray<FailedTestInfo>()
     let allTimings = ResizeArray<TestTiming>()
-    let resultsLock = obj()
 
     let recordTiming (timing: TestTiming) : unit =
-        lock resultsLock (fun () -> allTimings.Add timing)
+        allTimings.Add timing
 
     let recordResults (passedDelta: int) (failedDelta: int) (failedTestsDelta: FailedTestInfo list) : unit =
-        lock resultsLock (fun () ->
-            passed <- passed + passedDelta
-            failed <- failed + failedDelta
-            for test in failedTestsDelta do
-                failedTests.Add test)
+        passed <- passed + passedDelta
+        failed <- failed + failedDelta
+        for test in failedTestsDelta do
+            failedTests.Add test
 
-    let stdlibLock = obj()
     let mutable stdlibCompileResult : Result<CompilerLibrary.StdlibResult, string> option = None
     let mutable stdlibCompileElapsed : TimeSpan option = None
 
     let tryGetStdlibCompileElapsed () : TimeSpan option =
-        lock stdlibLock (fun () -> stdlibCompileElapsed)
+        stdlibCompileElapsed
 
     let recordStdlibCompile
         (result: Result<CompilerLibrary.StdlibResult, string>)
         (elapsed: TimeSpan)
         : unit =
-        lock stdlibLock (fun () ->
-            stdlibCompileResult <- Some result
-            stdlibCompileElapsed <- Some elapsed
-            match result with
-            | Ok stdlib -> e2eStdlib <- Some stdlib
-            | Error _ -> ())
+        stdlibCompileResult <- Some result
+        stdlibCompileElapsed <- Some elapsed
+        match result with
+        | Ok stdlib -> e2eStdlib <- Some stdlib
+        | Error _ -> ()
         recordTiming { Name = "Stdlib Compile"; TotalTime = elapsed; CompileTime = None; RuntimeTime = None }
 
     match stdlibWarmupPlan with
@@ -292,7 +240,7 @@ let main args =
         match e2eStdlib with
         | Some stdlib -> Ok stdlib
         | None ->
-            match lock stdlibLock (fun () -> stdlibCompileResult) with
+            match stdlibCompileResult with
             | Some cached -> cached
             | None -> Error "Stdlib was not compiled before tests"
 
@@ -385,39 +333,27 @@ let main args =
             let precompileTasks = TestDSL.E2ETestRunner.startPreamblePrecompileTasks stdlib testsArray
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
-            let lockObj = obj()
             let progress = ProgressBar.create progressLabel numTests
             ProgressBar.update progress
 
-            let maxParallel = overrideParallel |> Option.defaultWith getOptimalParallelism
-
-            let options = System.Threading.Tasks.ParallelOptions()
-            options.MaxDegreeOfParallelism <- maxParallel
-            System.Threading.Tasks.Parallel.For(
-                0,
-                numTests,
-                options,
-                fun i ->
-                    let test = testsArray.[i]
-                    let preambleResult = TestDSL.E2ETestRunner.awaitPreamblePrecompile precompileTasks test
-                    let result =
-                        match preambleResult with
-                        | Ok () -> runE2ETest stdlib test
-                        | Error err ->
-                            { Success = false
-                              Message = $"Preamble precompile failed: {err}"
-                              Stdout = None
-                              Stderr = None
-                              ExitCode = Some 1
-                              CompileTime = TimeSpan.Zero
-                              RuntimeTime = TimeSpan.Zero }
-                    let totalTime = result.CompileTime + result.RuntimeTime
-                    lock lockObj (fun () ->
-                        results.[i] <- Some (test, result)
-                        recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some result.CompileTime; RuntimeTime = Some result.RuntimeTime }
-                        ProgressBar.increment progress result.Success
-                    )
-            ) |> ignore
+            for i in 0 .. numTests - 1 do
+                let test = testsArray.[i]
+                let preambleResult = TestDSL.E2ETestRunner.awaitPreamblePrecompile precompileTasks test
+                let result =
+                    match preambleResult with
+                    | Ok () -> runE2ETest stdlib test
+                    | Error err ->
+                        { Success = false
+                          Message = $"Preamble precompile failed: {err}"
+                          Stdout = None
+                          Stderr = None
+                          ExitCode = Some 1
+                          CompileTime = TimeSpan.Zero
+                          RuntimeTime = TimeSpan.Zero }
+                let totalTime = result.CompileTime + result.RuntimeTime
+                results.[i] <- Some (test, result)
+                recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some result.CompileTime; RuntimeTime = Some result.RuntimeTime }
+                ProgressBar.increment progress result.Success
 
             ProgressBar.finish progress
 
@@ -861,13 +797,9 @@ let main args =
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
                 println ""
 
-    if runUnitAndE2EInParallel then
-        let unitTask = System.Threading.Tasks.Task.Run(fun () -> runUnitTests ())
-        let e2eTask = System.Threading.Tasks.Task.Run(fun () -> runE2EAndVerification ())
-        System.Threading.Tasks.Task.WaitAll [| unitTask; e2eTask |]
-    else
-        runUnitTests ()
-        runE2EAndVerification ()
+    // Run tests sequentially
+    runUnitTests ()
+    runE2EAndVerification ()
 
     // Compute stdlib coverage only if --coverage flag is set
     let coveragePercent =

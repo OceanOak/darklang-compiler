@@ -17,11 +17,7 @@
 
 module AST
 
-open MessagePack
-
 /// Type system - will be used for type checking in Phase 0+
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type Type =
     // Signed integers
     | TInt8

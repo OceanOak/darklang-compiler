@@ -473,65 +473,6 @@ let private generateBinary
             Ok binary
 
 
-/// Cache for specialized (monomorphized) functions - thread-safe for parallel test execution
-/// Key: (funcName, typeArgs as strings), Value: specialized AST.FunctionDef (lazy for concurrency)
-type SpecializationCache = ConcurrentDictionary<string * string list, Lazy<AST.FunctionDef>>
-
-/// Cached fully-compiled user function (after all passes through register allocation)
-/// Stored in symbolic form so pool indices can be resolved late.
-type CachedUserFunction = {
-    /// The compiled function in symbolic LIR form
-    SymbolicFunction: LIRSymbolic.Function
-}
-
-/// Unique key for a compiled function entry
-type CompiledFunctionKey =
-    | Stdlib of name:string
-    | Preamble of sourceFile:string * name:string
-    | User of sourceFile:string * lineNumber:int * name:string
-
-/// Cache for compiled functions - avoids recompiling same function across tests
-/// Key: CompiledFunctionKey, Value: Lazy compiled entry
-type CompiledFunctionCache = ConcurrentDictionary<CompiledFunctionKey, Lazy<Result<CachedUserFunction, string>>>
-
-/// Create a new compiled function cache
-let createCompiledFunctionCache () : CompiledFunctionCache =
-    CompiledFunctionCache()
-
-/// Get or add a compiled function entry, ensuring the build runs at most once per key
-let getOrAddCompiledFunctionLazy
-    (cache: CompiledFunctionCache)
-    (key: CompiledFunctionKey)
-    (build: unit -> Result<CachedUserFunction, string>)
-    : Lazy<Result<CachedUserFunction, string>> =
-    cache.GetOrAdd(
-        key,
-        fun _ ->
-            Lazy<Result<CachedUserFunction, string>>(
-                build,
-                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
-
-/// Try to get a compiled function entry from the cache
-let private tryGetCompiledFunction
-    (cache: CompiledFunctionCache)
-    (key: CompiledFunctionKey)
-    : Result<CachedUserFunction option, string> =
-    match cache.TryGetValue key with
-    | true, lazyEntry ->
-        match lazyEntry.Value with
-        | Ok entry -> Ok (Some entry)
-        | Error err -> Error err
-    | false, _ -> Ok None
-
-/// Cache for codegen output (ARM64 instruction lists) per function
-/// Key: (function name, disableFreeList flag)
-type CodegenCache = ConcurrentDictionary<LIR.Function * bool * bool, Lazy<Result<ARM64.Instr list, string>>>
-
-/// Cache for ANF-level user functions - avoids re-converting same function across tests
-/// Key: (filename, line_number, function_name)
-/// Value: (ANF.Function, ANF.VarGen) - VarGen tracks next available TempId after this function
-type ANFFunctionCache = ConcurrentDictionary<string * int * string, ANF.Function * ANF.VarGen>
-
 /// Compiled preamble context - extends stdlib for a test file
 /// Preamble functions are compiled ONCE per file, then reused for all tests in that file
 type PreambleContext = {
@@ -550,10 +491,6 @@ type PreambleContext = {
     /// Names of specialized stdlib functions needed by the preamble
     StdlibSpecializedNames: Set<string>
 }
-
-/// Cache for compiled preambles - thread-safe for parallel test execution
-/// Key: (sourceFile, preambleHash), Value: compiled PreambleContext
-type PreambleCache = ConcurrentDictionary<string * int, Lazy<Result<PreambleContext, string>>>
 
 /// Indicates how stdlib was compiled (sequential or parallel)
 type StdlibCompileMode =
@@ -585,168 +522,14 @@ type StdlibResult = {
     CompileMode: StdlibCompileMode
     /// Call graph for dead code elimination (which stdlib funcs call which other funcs)
     StdlibCallGraph: Map<string, Set<string>>
-    /// Cache for specialized functions (shared across test compilations)
-    SpecCache: SpecializationCache
     /// Stdlib ANF functions indexed by name (for coverage analysis)
     StdlibANFFunctions: Map<string, ANF.Function>
     /// Call graph at ANF level (for coverage analysis reachability)
     StdlibANFCallGraph: Map<string, Set<string>>
     /// TypeMap from RC insertion (needed for getReachableStdlibFunctions)
     StdlibTypeMap: ANF.TypeMap
-    /// Dependency hashes for cache invalidation (function name -> hash)
-    DependencyHashes: Map<string, string>
-    /// Cache for compiled functions (shared across test compilations)
-    CompiledFuncCache: CompiledFunctionCache
-    /// Cache for ANF-level user functions (shared across test compilations)
-    ANFFuncCache: ANFFunctionCache
-    /// Cache for compiled preambles (shared across test compilations)
-    PreambleCache: PreambleCache
-    /// Cache for codegen output (shared across test compilations)
-    CodegenCache: CodegenCache
 }
 
-/// Generate binary with codegen caching for selected functions
-let private generateBinaryWithCodegenCache
-    (verbosity: int)
-    (options: CompilerOptions)
-    (sw: Stopwatch)
-    (codegenLabel: string)
-    (encodeLabel: string)
-    (binaryLabel: string)
-    (dumpAsm: bool)
-    (dumpMachineCode: bool)
-    (codegenCache: CodegenCache)
-    (cacheableNames: Set<string>)
-    (allocatedProgram: LIR.Program)
-    : Result<byte array, string> =
-
-    let (LIR.Program (functions, stringPool, _floatPool)) = allocatedProgram
-    if verbosity >= 1 then println codegenLabel
-    let codegenStart = sw.Elapsed.TotalMilliseconds
-    let coverageExprCount = if options.EnableCoverage then LIR.countCoverageHits allocatedProgram else 0
-    let codegenOptions : CodeGen.CodeGenOptions = {
-        DisableFreeList = options.DisableFreeList
-        EnableCoverage = options.EnableCoverage
-        CoverageExprCount = coverageExprCount
-        EnableLeakCheck = options.EnableLeakCheck
-    }
-    let ctx : CodeGenContext = {
-        Options = codegenOptions
-        StringPool = stringPool
-        StackSize = 0
-        UsedCalleeSaved = []
-    }
-    let sortedFunctions : LIR.Function list =
-        match List.tryFind (fun (f: LIR.Function) -> f.Name = "_start") functions with
-        | Some startFunc ->
-            let otherFuncs = List.filter (fun (f: LIR.Function) -> f.Name <> "_start") functions
-            startFunc :: otherFuncs
-        | None -> functions
-    let rec buildInstrs
-        (acc: ARM64.Instr list list)
-        (remaining: LIR.Function list)
-        : Result<ARM64.Instr list, string> =
-        match remaining with
-        | [] -> Ok (acc |> List.rev |> List.collect id |> CodeGen.peepholeOptimize)
-        | func :: rest ->
-            if func.Name <> "_start" && cacheableNames.Contains func.Name && not options.EnableCoverage then
-                let key = (func, options.DisableFreeList, options.EnableLeakCheck)
-                let lazyResult =
-                    codegenCache.GetOrAdd(
-                        key,
-                        fun _ ->
-                            Lazy<Result<ARM64.Instr list, string>>(
-                                (fun () ->
-                                    match CodeGen.convertFunction ctx func with
-                                    | Error err -> Error err
-                                    | Ok instrs -> Ok instrs),
-                                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
-                match lazyResult.Value with
-                | Error err -> Error err
-                | Ok newInstrs -> buildInstrs (newInstrs :: acc) rest
-            else
-                match CodeGen.convertFunction ctx func with
-                | Error err -> Error err
-                | Ok newInstrs -> buildInstrs (newInstrs :: acc) rest
-
-    let codegenResult = buildInstrs [] sortedFunctions
-    match codegenResult with
-    | Error err -> Error $"Code generation error: {err}"
-    | Ok arm64Instructions ->
-        if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - codegenStart, 1)
-            println $"        {t}ms"
-
-        if dumpAsm && verbosity >= 3 then
-            println "=== ARM64 Assembly Instructions ==="
-            for (i, instr) in List.indexed arm64Instructions do
-                println $"  {i}: {instr}"
-            println ""
-
-        match Platform.detectOS () with
-        | Error err -> Error $"Platform detection error: {err}"
-        | Ok os ->
-            if verbosity >= 1 then println encodeLabel
-            let encodeStart = sw.Elapsed.TotalMilliseconds
-            let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
-            let codeFileOffset = computeCodeFileOffset os stringPool floatPool options.EnableLeakCheck
-            let machineCode =
-                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset options.EnableLeakCheck
-            if verbosity >= 2 then
-                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - encodeStart, 1)
-                println $"        {t}ms"
-
-            if dumpMachineCode && verbosity >= 3 then
-                println "=== Machine Code (hex) ==="
-                for i in 0 .. 4 .. (machineCode.Length - 1) do
-                    if i + 3 < machineCode.Length then
-                        let bytes = sprintf "%02x %02x %02x %02x" machineCode.[i] machineCode.[i+1] machineCode.[i+2] machineCode.[i+3]
-                        println $"  {i:X4}: {bytes}"
-                println $"Total: {machineCode.Length} bytes\n"
-
-            let formatName = match os with | Platform.MacOS -> "Mach-O" | Platform.Linux -> "ELF"
-            if verbosity >= 1 then println (binaryLabel.Replace("{format}", formatName))
-            let binaryStart = sw.Elapsed.TotalMilliseconds
-            let binary =
-                match os with
-                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
-                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
-            if verbosity >= 2 then
-                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - binaryStart, 1)
-                println $"        {t}ms"
-
-            Ok binary
-
-/// Cache for lazily compiled LIR functions - thread-safe for parallel test execution
-/// Uses Lazy<T> to ensure each function is compiled exactly once even under contention
-type LIRCache = ConcurrentDictionary<string, Lazy<LIRSymbolic.Function option>>
-
-/// Lazy stdlib result - defers expensive compilation until we know what's needed
-/// Only compiles stdlib functions that user code actually calls
-type LazyStdlibResult = {
-    /// Type checking environment (registries for types, variants, functions)
-    TypeCheckEnv: TypeChecking.TypeCheckEnv
-    /// Generic function definitions for on-demand monomorphization
-    GenericFuncDefs: AST_to_ANF.GenericFuncDefs
-    /// Module registry for stdlib intrinsics
-    ModuleRegistry: AST.ModuleRegistry
-    /// ANF conversion result (for registries used in user conversion)
-    ANFResult: AST_to_ANF.ConversionResult
-    /// Stdlib ANF functions after RC insertion, indexed by name for lazy compilation
-    StdlibANFFunctions: Map<string, ANF.Function>
-    /// Call graph at ANF level for early tree shaking
-    StdlibANFCallGraph: Map<string, Set<string>>
-    /// TypeMap from RC insertion - needed for MIR conversion (tail call arg types, etc.)
-    StdlibTypeMap: ANF.TypeMap
-    /// Cache for specialized functions (shared across test compilations)
-    SpecCache: SpecializationCache
-    /// Cache for ANF-level user functions (shared across test compilations)
-    ANFFuncCache: ANFFunctionCache
-    /// Stdlib MIR functions (after SSA + optimization), indexed by name for lazy LIR compilation
-    StdlibMIRFunctions: Map<string, MIR.Function>
-    /// Lazy cache for compiled LIR functions (compiled on-demand, thread-safe)
-    LIRCache: LIRCache
-}
 
 /// Helper: map a function returning Result over a list, returning Error on first failure
 let private mapResults (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'b list, string> =
@@ -758,31 +541,6 @@ let private mapResults (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'
             | Error err -> Error err
             | Ok result -> loop (result :: acc) rest
     loop [] items
-
-/// Cache a symbolic function using the shared compiled function cache
-let private cacheSymbolicFunction
-    (stdlib: StdlibResult)
-    (cacheKey: CompiledFunctionKey)
-    (func: LIRSymbolic.Function)
-    : Result<unit, string> =
-    let build () : Result<CachedUserFunction, string> =
-        Ok { SymbolicFunction = func }
-    let lazyEntry = getOrAddCompiledFunctionLazy stdlib.CompiledFuncCache cacheKey build
-    match lazyEntry.Value with
-    | Ok _ -> Ok ()
-    | Error err -> Error err
-
-/// Cache a specialized function using the shared compiled function cache
-let private cacheSpecializedFunction (stdlib: StdlibResult) (func: LIRSymbolic.Function) : Result<unit, string> =
-    cacheSymbolicFunction stdlib (CompiledFunctionKey.Stdlib func.Name) func
-
-/// Cache a preamble function using the shared compiled function cache
-let private cachePreambleFunction
-    (stdlib: StdlibResult)
-    (sourceFile: string)
-    (func: LIRSymbolic.Function)
-    : Result<unit, string> =
-    cacheSymbolicFunction stdlib (CompiledFunctionKey.Preamble (sourceFile, func.Name)) func
 
 // Helper functions for exception-to-Result conversion (Darklang compatibility)
 
@@ -995,10 +753,6 @@ let compileStdlib () : Result<StdlibResult, string> =
                         |> Map.ofList
                     // Build ANF-level call graph for coverage analysis
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
-                    // Compute dependency hashes for cache invalidation
-                    let dependencyHashes = ANF_Inlining.buildDependencyHashMap stdlibFuncs ANF_Inlining.defaultConfig
-
-                    let compilerKey = Cache.getCompilerKey()
 
                     // Build shared registries (computed once)
                     let externalReturnTypes = extractReturnTypes anfResult.FuncReg
@@ -1006,44 +760,33 @@ let compileStdlib () : Result<StdlibResult, string> =
                     let variantRegistry = ANF_to_MIR.buildVariantRegistry anfResult.VariantLookup
                     let recordRegistry = ANF_to_MIR.buildRecordRegistry Map.empty  // stdlib has no user records
 
-                    // Per-function compilation with caching
-                    // Check cache BEFORE running pipeline (ANF→MIR→SSA→opt→LIR→peephole→RA)
+                    // Per-function compilation
                     let compileStdlibFunc (anfFunc: ANF.Function) : Result<LIRSymbolic.Function, string> =
-                        let depHash = Map.tryFind anfFunc.Name dependencyHashes |> Option.defaultValue ""
+                        match ANF_to_MIR.convertANFFunction anfFunc typeMap anfResult.FuncParams returnTypeReg false with
+                        | Error e -> Error e
+                        | Ok mirFunc ->
+                            let ssaFunc = SSA_Construction.convertFunctionToSSA mirFunc
+                            let optFunc = MIR_Optimize.optimizeFunction ssaFunc
 
-                        // Check cache FIRST - skip entire pipeline if cached
-                        match Cache.getIntermediate compilerKey anfFunc.Name depHash "lir_allocated" with
-                        | Some data -> Ok (Cache.deserialize<LIRSymbolic.Function> data)
-                        | None ->
-                            // Cache miss - run full pipeline
-                            match ANF_to_MIR.convertANFFunction anfFunc typeMap anfResult.FuncParams returnTypeReg false with
+                            // MIR → LIR (inline the conversion)
+                            match MIR_to_LIR.selectCFG optFunc.CFG variantRegistry recordRegistry optFunc.ReturnType optFunc.FloatRegs with
                             | Error e -> Error e
-                            | Ok mirFunc ->
-                                let ssaFunc = SSA_Construction.convertFunctionToSSA mirFunc
-                                let optFunc = MIR_Optimize.optimizeFunction ssaFunc
-
-                                // MIR → LIR (inline the conversion)
-                                match MIR_to_LIR.selectCFG optFunc.CFG variantRegistry recordRegistry optFunc.ReturnType optFunc.FloatRegs with
-                                | Error e -> Error e
-                                | Ok lirCFG ->
-                                    let lirTypedParams =
-                                        optFunc.TypedParams
-                                        |> List.map (fun tp ->
-                                            let (MIR.VReg id) = tp.Reg
-                                            { LIR.Reg = LIR.Virtual id; LIR.Type = tp.Type })
-                                    let lirFunc : LIRSymbolic.Function = {
-                                        Name = optFunc.Name
-                                        TypedParams = lirTypedParams
-                                        CFG = lirCFG
-                                        StackSize = 0
-                                        UsedCalleeSaved = []
-                                    }
-                                    let peepholed = LIR_Peephole.optimizeFunction lirFunc
-                                    let allocated = RegisterAllocation.allocateRegisters peepholed
-
-                                    // Cache the result
-                                    Cache.setIntermediate compilerKey anfFunc.Name depHash "lir_allocated" (Cache.serialize allocated)
-                                    Ok allocated
+                            | Ok lirCFG ->
+                                let lirTypedParams =
+                                    optFunc.TypedParams
+                                    |> List.map (fun tp ->
+                                        let (MIR.VReg id) = tp.Reg
+                                        { LIR.Reg = LIR.Virtual id; LIR.Type = tp.Type })
+                                let lirFunc : LIRSymbolic.Function = {
+                                    Name = optFunc.Name
+                                    TypedParams = lirTypedParams
+                                    CFG = lirCFG
+                                    StackSize = 0
+                                    UsedCalleeSaved = []
+                                }
+                                let peepholed = LIR_Peephole.optimizeFunction lirFunc
+                                let allocated = RegisterAllocation.allocateRegisters peepholed
+                                Ok allocated
 
                     // Compile all stdlib functions in parallel
                     match ParallelUtils.mapResultsParallel compileStdlibFunc stdlibFuncs with
@@ -1070,89 +813,10 @@ let compileStdlib () : Result<StdlibResult, string> =
                                     AllocatedFunctions = resolvedFuncs
                                     CompileMode = compileMode
                                     StdlibCallGraph = stdlibCallGraph
-                                    SpecCache = SpecializationCache()
                                     StdlibANFFunctions = stdlibFuncMap
                                     StdlibANFCallGraph = stdlibANFCallGraph
                                     StdlibTypeMap = typeMap
-                                    DependencyHashes = dependencyHashes
-                                    CompiledFuncCache = createCompiledFunctionCache ()
-                                    ANFFuncCache = ANFFunctionCache()
-                                    PreambleCache = PreambleCache()
-                                    CodegenCache = CodegenCache()
                                 }
-
-/// Prepare stdlib for lazy compilation - stops at MIR level
-/// LIR conversion and register allocation are done lazily when functions are needed
-let private prepareStdlibForLazyCompile () : Result<LazyStdlibResult, string> =
-    match loadStdlib() with
-    | Error e -> Error e
-    | Ok stdlibAst ->
-        // Add dummy main expression for type checking (stdlib has no main)
-        let (AST.Program items) = stdlibAst
-        let withMain = AST.Program (items @ [AST.Expression AST.UnitLiteral])
-
-        match TypeChecking.checkProgramWithEnv withMain with
-        | Error e -> Error (TypeChecking.typeErrorToString e)
-        | Ok (_, typedStdlib, typeCheckEnv) ->
-            // Extract generic function definitions for on-demand monomorphization
-            let genericFuncDefs = AST_to_ANF.extractGenericFuncDefs typedStdlib
-            // Build module registry once (reused across all compilations)
-            let moduleRegistry = Stdlib.buildModuleRegistry ()
-            match AST_to_ANF.convertProgramWithTypes typedStdlib with
-            | Error e -> Error e
-            | Ok anfResult ->
-                // Run RC insertion on stdlib ANF
-                match RefCountInsertion.insertRCInProgram anfResult with
-                | Error e -> Error e
-                | Ok (anfAfterRC, typeMap) ->
-                    // Pass 2.7: Tail Call Detection
-                    let anfAfterTCO = TailCallDetection.detectTailCallsInProgram anfAfterRC
-                    // Extract stdlib functions into a map for lazy lookup
-                    let (ANF.Program (stdlibFuncs, _)) = anfAfterTCO
-                    let stdlibFuncMap =
-                        stdlibFuncs
-                        |> List.map (fun f -> f.Name, f)
-                        |> Map.ofList
-                    // Build call graph at ANF level for early tree shaking
-                    let stdlibCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
-
-                    // Convert ALL stdlib to MIR (LIR conversion is deferred until needed)
-                    let stdlibAnfProgram = ANF.Program (stdlibFuncs, ANF.Return ANF.UnitLiteral)
-                    let stdlibTypeReg = anfResult.FuncParams
-                    let stdlibVariantLookup = anfResult.VariantLookup
-
-                    // Convert stdlib to MIR
-                    let stdlibExternalReturnTypes = extractReturnTypes anfResult.FuncReg
-                    match ANF_to_MIR.toMIRFunctionsOnly stdlibAnfProgram typeMap stdlibTypeReg stdlibVariantLookup Map.empty false stdlibExternalReturnTypes with
-                    | Error e -> Error $"Stdlib MIR error: {e}"
-                    | Ok (stdlibMirFuncs, stdlibVariants, stdlibRecords) ->
-                        // SSA Construction
-                        let stdlibMirProgram = MIR.Program (stdlibMirFuncs, stdlibVariants, stdlibRecords)
-                        let stdlibSsaProgram = SSA_Construction.convertToSSA stdlibMirProgram
-
-                        // MIR Optimizations
-                        let stdlibOptimized = MIR_Optimize.optimizeProgram stdlibSsaProgram
-
-                        // Extract optimized MIR functions into a map for lazy LIR compilation
-                        let (MIR.Program (optimizedMirFuncs, _, _)) = stdlibOptimized
-                        let stdlibMirMap =
-                            optimizedMirFuncs
-                            |> List.map (fun f -> f.Name, f)
-                            |> Map.ofList
-
-                        Ok {
-                            TypeCheckEnv = typeCheckEnv
-                            GenericFuncDefs = genericFuncDefs
-                            ModuleRegistry = moduleRegistry
-                            ANFResult = anfResult
-                            StdlibANFFunctions = stdlibFuncMap
-                            StdlibANFCallGraph = stdlibCallGraph
-                            StdlibTypeMap = typeMap
-                            SpecCache = SpecializationCache()
-                            ANFFuncCache = ANFFunctionCache()
-                            StdlibMIRFunctions = stdlibMirMap
-                            LIRCache = LIRCache()
-                        }
 
 let private parseSourceWithInternal (allowInternal: bool) (source: string) : Result<AST.Program, string> =
     if allowInternal then
@@ -1191,7 +855,7 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                 let mergedGenericDefs = Map.fold (fun acc k v -> Map.add k v acc) stdlib.GenericFuncDefs preambleGenericDefs
 
                 // Convert preamble to ANF (mono → inline → lift → ANF)
-                match AST_to_ANF.convertUserOnlyCached stdlib.SpecCache stdlib.ANFFuncCache sourceFile funcLineMap mergedGenericDefs stdlib.ANFResult typedPreambleAst with
+                match AST_to_ANF.convertUserOnly mergedGenericDefs stdlib.ANFResult typedPreambleAst with
                 | Error err -> Error $"Preamble ANF conversion error: {err}"
                 | Ok preambleUserOnly ->
                     // ANF Optimization (preamble functions)
@@ -1243,44 +907,18 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                                 let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                                 let preambleSymbolicFuncs = preambleOnlyFuncs
 
-                                let rec cachePreambleFuncs (remaining: LIRSymbolic.Function list) : Result<unit, string> =
-                                    match remaining with
-                                    | [] -> Ok ()
-                                    | func :: rest ->
-                                        if isStdlibSpecialized func.Name then
-                                            match cacheSpecializedFunction stdlib func with
-                                            | Error err -> Error $"Cached preamble function {func.Name}: {err}"
-                                            | Ok () -> cachePreambleFuncs rest
-                                        else
-                                            cachePreambleFuncs rest
+                                // Merge TypeMaps (stdlib + preamble)
+                                let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
 
-                                let rec cachePreambleUserFuncs (remaining: LIRSymbolic.Function list) : Result<unit, string> =
-                                    match remaining with
-                                    | [] -> Ok ()
-                                    | func :: rest ->
-                                        match cachePreambleFunction stdlib sourceFile func with
-                                        | Error err -> Error $"Cached preamble user function {func.Name}: {err}"
-                                        | Ok () -> cachePreambleUserFuncs rest
-
-                                match cachePreambleFuncs allocatedFuncs with
-                                | Error err -> Error err
-                                | Ok () ->
-                                    match cachePreambleUserFuncs preambleSymbolicFuncs with
-                                    | Error err -> Error err
-                                    | Ok () ->
-
-                                    // Merge TypeMaps (stdlib + preamble)
-                                    let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
-
-                                    Ok {
-                                        TypeCheckEnv = preambleTypeCheckEnv
-                                        GenericFuncDefs = mergedGenericDefs
-                                        ANFFunctions = preambleFunctions
-                                        TypeMap = mergedTypeMap
-                                        ANFResult = preambleConvResult
-                                        SymbolicFunctions = preambleSymbolicFuncs
-                                        StdlibSpecializedNames = preambleUserOnly.SpecializedFuncNames
-                                    }
+                                Ok {
+                                    TypeCheckEnv = preambleTypeCheckEnv
+                                    GenericFuncDefs = mergedGenericDefs
+                                    ANFFunctions = preambleFunctions
+                                    TypeMap = mergedTypeMap
+                                    ANFResult = preambleConvResult
+                                    SymbolicFunctions = preambleSymbolicFuncs
+                                    StdlibSpecializedNames = preambleUserOnly.SpecializedFuncNames
+                                }
 
 /// Compile preamble with stdlib as base (user code defaults)
 let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
@@ -1321,11 +959,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                 // Pass 2: AST → ANF (test expr only, with preamble's generics and registries)
                 if verbosity >= 1 then println "  [2/8] AST → ANF (test expr only)..."
                 let testOnlyResult =
-                    AST_to_ANF.convertUserOnlyCached
-                        stdlib.SpecCache
-                        stdlib.ANFFuncCache
-                        ""  // No source file for test expr
-                        Map.empty  // No function line map for test expr
+                    AST_to_ANF.convertUserOnly
                         preambleCtx.GenericFuncDefs
                         preambleCtx.ANFResult
                         typedTestAst
@@ -1337,54 +971,17 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                 match testOnlyResult with
                 | Error err -> Error $"ANF conversion error: {err}"
                 | Ok testOnly ->
-                    // With per-function RegGen, all functions are compiled fresh (no caching needed
-                    // for determinism). Specialized stdlib functions get deterministic VRegs.
-                    //
-                    // NOTE: There's a known pre-existing compiler bug that causes crashes with:
-                    // - (String, Int64) tuples extracted via Tuple2.first/second
-                    // - Both values passed to Dict.set
-                    // - Result passed to tail call
-                    // See the Dict.fromList tests that are expected to fail until this is fixed.
-                    let isStdlibSpecialized (name: string) : bool =
-                        name.StartsWith("Stdlib.") || name.StartsWith("__")
-                    let stdlibSpecializedNames =
-                        testOnly.SpecializedFuncNames
-                        |> Set.filter isStdlibSpecialized
-                    let preambleSpecializedNames =
-                        preambleCtx.StdlibSpecializedNames
-                        |> Set.filter isStdlibSpecialized
-                    let allStdlibSpecializedNames =
-                        Set.union stdlibSpecializedNames preambleSpecializedNames
                     let preambleFuncs = preambleCtx.SymbolicFunctions
                     let preambleFuncNameSet =
                         preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
-                    let preambleCachedNameSet =
-                        preambleFuncNameSet
-                        |> Set.filter (fun name ->
-                            stdlib.CompiledFuncCache.ContainsKey (CompiledFunctionKey.Preamble (sourceFile, name)))
-                    let cachedFuncNameSet =
-                        allStdlibSpecializedNames
-                        |> Set.filter (fun name ->
-                            stdlib.CompiledFuncCache.ContainsKey (CompiledFunctionKey.Stdlib name))
                     let functionsToCompile =
                         testOnly.UserFunctions
-                        |> List.filter (fun f ->
-                            not (Set.contains f.Name cachedFuncNameSet)
-                            && not (Set.contains f.Name preambleFuncNameSet))
-                    let cachedFuncNames : string list =
-                        cachedFuncNameSet
-                        |> Set.filter (fun name -> not (Set.contains name preambleFuncNameSet))
-                        |> Set.toList
+                        |> List.filter (fun f -> not (Set.contains f.Name preambleFuncNameSet))
 
                     if verbosity >= 3 then
                         println $"  [COMPILE] {functionsToCompile.Length} user functions compiled fresh"
                         for f in functionsToCompile do
                             println $"    - {f.Name}"
-
-                    // No cached functions, so no cached return types needed
-                    let specializedNeedingCache =
-                        allStdlibSpecializedNames
-                        |> Set.filter (fun name -> not (Set.contains name cachedFuncNameSet))
 
                     let anfResult =
                         buildAnfProgram
@@ -1425,146 +1022,61 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                                 let allocatedUserFuncs: LIRSymbolic.Function list =
                                     userFuncs |> List.map RegisterAllocation.allocateRegisters
 
-                                // Cache newly-compiled specialized functions using symbolic refs.
-                                let rec cacheSpecializedFuncs (remaining: LIRSymbolic.Function list) : Result<unit, string> =
-                                    match remaining with
-                                    | [] -> Ok ()
-                                    | func :: rest ->
-                                        if Set.contains func.Name specializedNeedingCache then
-                                            match cacheSpecializedFunction stdlib func with
-                                            | Error err -> Error $"Cached function {func.Name}: {err}"
-                                            | Ok () ->
-                                                if verbosity >= 3 then
-                                                    let blockCount = func.CFG.Blocks.Count
-                                                    let instrCount =
-                                                        func.CFG.Blocks
-                                                        |> Map.toList
-                                                        |> List.sumBy (fun (_, b) -> b.Instrs.Length)
-                                                    println $"  [CACHE STORE] {func.Name}: {blockCount} blocks, {instrCount} instrs"
-                                                cacheSpecializedFuncs rest
+                                // Combine preamble and user functions
+                                let allSymbolicUserFuncs = preambleFuncs @ allocatedUserFuncs
+
+                                match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
+                                | Error err -> Error $"LIR pool resolution error: {err}"
+                                | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
+                                    if verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
+                                    // Prune unused user functions (keeps `_start` and anything reachable from it).
+                                    let reachableUserFuncs =
+                                        if options.DisableFunctionTreeShaking then allUserFuncs
+                                        else FunctionTreeShaking.filterUserFunctions allUserFuncs
+
+                                    if verbosity >= 3 then
+                                        println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
+                                        for f in allUserFuncs do
+                                            println $"    - {f.Name}"
+                                        println $"  [TreeShaking] user funcs: {reachableUserFuncs.Length}"
+
+                                    // Filter stdlib functions to only include reachable ones (dead code elimination)
+                                    let reachableStdlib =
+                                        if options.DisableFunctionTreeShaking then stdlib.AllocatedFunctions
                                         else
-                                            cacheSpecializedFuncs rest
+                                            FunctionTreeShaking.filterStdlibFunctions
+                                                stdlib.StdlibCallGraph
+                                                reachableUserFuncs
+                                                stdlib.AllocatedFunctions
 
-                                match cacheSpecializedFuncs allocatedUserFuncs with
-                                | Error err -> Error err
-                                | Ok () ->
-                                    let cachedKeys =
-                                        let stdlibKeys =
-                                            cachedFuncNames
-                                            |> List.map (fun name -> (name, CompiledFunctionKey.Stdlib name))
-                                        let preambleKeys =
-                                            preambleCachedNameSet
-                                            |> Set.toList
-                                            |> List.map (fun name -> (name, CompiledFunctionKey.Preamble (sourceFile, name)))
-                                        stdlibKeys @ preambleKeys
+                                    // Combine reachable stdlib functions with user functions
+                                    let allFuncs = reachableStdlib @ reachableUserFuncs
+                                    let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
+                                    if shouldDumpIR verbosity options.DumpLIR then
+                                        printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
 
-                                    let rec collectCachedEntries acc remaining =
-                                        match remaining with
-                                        | [] -> Ok (List.rev acc)
-                                        | (name, key) :: rest ->
-                                            match tryGetCompiledFunction stdlib.CompiledFuncCache key with
-                                            | Error err -> Error err
-                                            | Ok None -> collectCachedEntries acc rest
-                                            | Ok (Some cached) -> collectCachedEntries ((name, cached.SymbolicFunction) :: acc) rest
+                                    if verbosity >= 2 then
+                                        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                                        println $"        {t}ms"
 
-                                    match collectCachedEntries [] cachedKeys with
+                                    let binaryResult =
+                                        generateBinary
+                                            verbosity
+                                            options
+                                            sw
+                                            "  [6/8] Code Generation..."
+                                            "  [7/7] ARM64 Encoding..."
+                                            "  [7/7] Binary Generation ({format})..."
+                                            false
+                                            false
+                                            allocatedProgram
+                                    match binaryResult with
                                     | Error err -> Error err
-                                    | Ok cachedEntries ->
-                                        if verbosity >= 3 then
-                                            for (name, func) in cachedEntries do
-                                                let blockCount = func.CFG.Blocks.Count
-                                                let instrCount =
-                                                    func.CFG.Blocks
-                                                    |> Map.toList
-                                                    |> List.sumBy (fun (_, b) -> b.Instrs.Length)
-                                                println $"  [CACHE HIT] {name}: {blockCount} blocks, {instrCount} instrs"
-
-                                        let preambleSymbolicFuncs =
-                                            preambleFuncs
-                                            |> List.filter (fun f -> not (Set.contains f.Name preambleCachedNameSet))
-                                        let cachedSymbolicFuncs =
-                                            cachedEntries |> List.map snd
-                                        let allSymbolicUserFuncs =
-                                            preambleSymbolicFuncs @ cachedSymbolicFuncs @ allocatedUserFuncs
-
-                                        match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
-                                        | Error err -> Error $"LIR pool resolution error: {err}"
-                                        | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
-                                            if verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
-                                            // Prune unused user functions (keeps `_start` and anything reachable from it).
-                                            let reachableUserFuncs =
-                                                if options.DisableFunctionTreeShaking then allUserFuncs
-                                                else FunctionTreeShaking.filterUserFunctions allUserFuncs
-
-                                            if verbosity >= 3 then
-                                                println $"  [COMBINED] cached: {cachedSymbolicFuncs.Length}, fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
-                                                for f in allUserFuncs do
-                                                    println $"    - {f.Name}"
-                                                println $"  [TreeShaking] user funcs: {reachableUserFuncs.Length}"
-
-                                            // Filter stdlib functions to only include reachable ones (dead code elimination)
-                                            let reachableStdlib =
-                                                if options.DisableFunctionTreeShaking then stdlib.AllocatedFunctions
-                                                else
-                                                    FunctionTreeShaking.filterStdlibFunctions
-                                                        stdlib.StdlibCallGraph
-                                                        reachableUserFuncs
-                                                        stdlib.AllocatedFunctions
-
-                                            // Combine reachable stdlib functions with user functions
-                                            let allFuncs = reachableStdlib @ reachableUserFuncs
-                                            let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
-                                            if shouldDumpIR verbosity options.DumpLIR then
-                                                printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
-
-                                            if verbosity >= 2 then
-                                                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
-                                                println $"        {t}ms"
-
-                                            let binaryResult =
-                                                let cacheableNames =
-                                                    let stdlibNames =
-                                                        reachableStdlib
-                                                        |> List.map (fun f -> f.Name)
-                                                    let preambleNames =
-                                                        reachableUserFuncs
-                                                        |> List.choose (fun f ->
-                                                            if Set.contains f.Name preambleFuncNameSet then Some f.Name else None)
-                                                    let allNames = stdlibNames @ preambleNames @ cachedFuncNames
-                                                    allNames
-                                                    |> List.filter (fun name -> name <> "_start")
-                                                    |> Set.ofList
-                                                if cacheableNames.IsEmpty then
-                                                    generateBinary
-                                                        verbosity
-                                                        options
-                                                        sw
-                                                        "  [6/8] Code Generation..."
-                                                        "  [7/7] ARM64 Encoding..."
-                                                        "  [7/7] Binary Generation ({format})..."
-                                                        false
-                                                        false
-                                                        allocatedProgram
-                                                else
-                                                    generateBinaryWithCodegenCache
-                                                        verbosity
-                                                        options
-                                                        sw
-                                                        "  [6/8] Code Generation..."
-                                                        "  [7/7] ARM64 Encoding..."
-                                                        "  [7/7] Binary Generation ({format})..."
-                                                        false
-                                                        false
-                                                        stdlib.CodegenCache
-                                                        cacheableNames
-                                                        allocatedProgram
-                                            match binaryResult with
-                                            | Error err -> Error err
-                                            | Ok binary ->
-                                                sw.Stop()
-                                                if verbosity >= 1 then
-                                                    println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
-                                                Ok binary
+                                    | Ok binary ->
+                                        sw.Stop()
+                                        if verbosity >= 1 then
+                                            println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
+                                        Ok binary
     with
     | ex ->
         Error $"Compilation failed: {ex.Message}"
@@ -1574,45 +1086,9 @@ let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib:
                             (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
     compileTestWithPreambleWithOptions false verbosity options stdlib preambleCtx sourceFile testExpr
 
-                /// Compile a single MIR function to LIR (used by cache factory)
-let private compileMIRToLIR (_stdlib: LazyStdlibResult) (mirFunc: MIR.Function) : LIRSymbolic.Function option =
-    // Create a mini MIR program with just this function
-    let miniProgram = MIR.Program ([mirFunc], Map.empty, Map.empty)
-
-    // Convert to symbolic LIR
-    match MIR_to_LIR.toLIR miniProgram with
-    | Error _ -> None  // Conversion failed
-    | Ok lirProgram ->
-        // LIR Optimizations
-        let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
-        let (LIRSymbolic.Program lirFuncs) = optimizedLir
-
-        // Register allocation
-        match lirFuncs with
-        | [lirFunc] -> Some (RegisterAllocation.allocateRegisters lirFunc)
-        | _ -> None
-
-/// Lazily compile a stdlib function from MIR to LIR with caching
-/// Returns the compiled LIR function (from cache if available, or compiles and caches)
-/// Uses Lazy<T> to ensure compilation happens exactly once even under parallel contention
-let private getOrCompileStdlibLIR (stdlib: LazyStdlibResult) (funcName: string) : LIRSymbolic.Function option =
-    match Map.tryFind funcName stdlib.StdlibMIRFunctions with
-    | None -> None  // Function not found in stdlib
-    | Some mirFunc ->
-        // GetOrAdd with Lazy ensures the factory is called at most once per key
-        // Even if multiple threads call GetOrAdd simultaneously, only one Lazy is stored
-        // and its Value is computed exactly once
-        let lazyResult = stdlib.LIRCache.GetOrAdd(funcName, fun _ ->
-            lazy (compileMIRToLIR stdlib mirFunc))
-        lazyResult.Value
-
-/// Get multiple stdlib functions, lazily compiling as needed
-let private getStdlibLIRFunctions (stdlib: LazyStdlibResult) (funcNames: string list) : LIRSymbolic.Function list =
-    funcNames |> List.choose (getOrCompileStdlibLIR stdlib)
-
-/// Compile user code with lazy stdlib - only compiles stdlib functions that are actually called
+/// Compile user code with pre-compiled stdlib - only compiles stdlib functions that are actually called
 /// This avoids compiling unused stdlib functions through expensive passes (MIR, LIR, RegAlloc)
-let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (stdlib: LazyStdlibResult) (source: string) : CompileResult =
+let private compileWithEagerStdlib (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (source: string) : CompileResult =
     let sw = Stopwatch.StartNew()
     try
         // Pass 1: Parse user code only
@@ -1642,14 +1118,9 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                     println ""
 
                 // Pass 2: AST → ANF (user only)
-                // Use cached version to avoid re-monomorphizing same generic functions.
                 if verbosity >= 1 then println "  [2/8] AST → ANF (user only)..."
                 let userOnlyResult =
-                    AST_to_ANF.convertUserOnlyCached
-                        stdlib.SpecCache
-                        stdlib.ANFFuncCache
-                        ""  // No source file for non-test compilation
-                        Map.empty  // No function line map
+                    AST_to_ANF.convertUserOnly
                         stdlib.GenericFuncDefs
                         stdlib.ANFResult
                         typedUserAst
@@ -1675,21 +1146,6 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                     match anfResult with
                     | Error err -> Error err
                     | Ok (userAnfProgram, typeMap, userConvResult) ->
-                        // Early tree shaking: Determine which stdlib functions are actually needed
-                        // Lazily compile needed functions from MIR to LIR (cached for future use)
-                        let allocatedStdlibFuncs =
-                            if options.DisableFunctionTreeShaking then
-                                let allNames = stdlib.StdlibMIRFunctions |> Map.keys |> List.ofSeq
-                                let allFuncs = getStdlibLIRFunctions stdlib allNames
-                                allFuncs
-                            else
-                                let reachableStdlibNames =
-                                    FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
-                                if verbosity >= 2 then
-                                    println $"        TreeShaking: {reachableStdlibNames.Count} stdlib functions needed"
-                                let reachableFuncs = getStdlibLIRFunctions stdlib (Set.toList reachableStdlibNames)
-                                reachableFuncs
-
                         let externalReturnTypes = extractReturnTypes userOnly.FuncReg
                         let userLirResult =
                             compileAnfToLir
@@ -1709,19 +1165,30 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
                             if verbosity >= 1 then println "  [5/8] Register Allocation..."
                             let allocStart = sw.Elapsed.TotalMilliseconds
                             let (LIRSymbolic.Program userFuncs) = userOptimizedLirProgram
+                            let (LIR.Program (_, stdlibStrings, stdlibFloats)) = stdlib.LIRProgram
 
                             let allocatedUserFuncs = userFuncs |> List.map RegisterAllocation.allocateRegisters
-                            let allocatedSymbolic = LIRSymbolic.Program (allocatedStdlibFuncs @ allocatedUserFuncs)
-                            if shouldDumpIR verbosity options.DumpLIR then
-                                printLIRSymbolicProgram "=== LIR (After Register Allocation) ===" allocatedSymbolic
-
-                            if verbosity >= 2 then
-                                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
-                                println $"        {t}ms"
-
-                            match LIRSymbolic.toLIR allocatedSymbolic with
+                            match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allocatedUserFuncs with
                             | Error err -> Error $"LIR pool resolution error: {err}"
-                            | Ok allocatedProgram ->
+                            | Ok (LIR.Program (userLirFuncs, mergedStrings, mergedFloats)) ->
+                                if verbosity >= 2 then
+                                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                                    println $"        {t}ms"
+
+                                // Function tree-shaking on pre-compiled stdlib
+                                let reachableStdlib =
+                                    if options.DisableFunctionTreeShaking then stdlib.AllocatedFunctions
+                                    else
+                                        FunctionTreeShaking.filterStdlibFunctions
+                                            stdlib.StdlibCallGraph
+                                            userLirFuncs
+                                            stdlib.AllocatedFunctions
+
+                                let allFuncs = reachableStdlib @ userLirFuncs
+                                let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
+                                if shouldDumpIR verbosity options.DumpLIR then
+                                    printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
+
                                 let binaryResult =
                                     generateBinary
                                         verbosity
@@ -1745,33 +1212,11 @@ let private compileWithLazyStdlib (verbosity: int) (options: CompilerOptions) (s
         Error $"Compilation failed: {ex.Message}"
 
 /// Compile source code to binary (in-memory, no file I/O)
-/// Uses lazy stdlib compilation - only compiles stdlib functions that are actually called
-/// Also uses SQLite-based caching - if the same source/options/platform was compiled before,
-/// returns the cached binary instead of recompiling
 let compileWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : CompileResult =
-    // Compute cache keys
-    let compilerKey = Cache.getCompilerKey ()
-    let sourceHash = Cache.hashString source
-    let optionsHash = Cache.hashData options
-    let platform = Cache.getPlatform ()
-
-    // Try to get cached binary first (fastest path)
-    match Cache.getGeneratedCode compilerKey sourceHash optionsHash platform with
-    | Some binary ->
-        if verbosity >= 1 then println "  [CACHE HIT] Returning cached binary"
-        Ok binary
-    | None ->
-        // Cache miss - compile and cache the result
-        if verbosity >= 2 then println "  [CACHE MISS] Compiling..."
-        match prepareStdlibForLazyCompile() with
-        | Error err -> Error err
-        | Ok lazyStdlib ->
-            match compileWithLazyStdlib verbosity options lazyStdlib source with
-            | Error err -> Error err
-            | Ok binary ->
-                // Cache the compiled binary for future use
-                Cache.setGeneratedCode compilerKey sourceHash optionsHash platform binary
-                Ok binary
+    match compileStdlib() with
+    | Error err -> Error err
+    | Ok stdlib ->
+        compileWithEagerStdlib verbosity options stdlib source
 
 /// Compile source code to binary (uses default options)
 /// Execute compiled binary and capture output
@@ -1898,7 +1343,7 @@ let private compileResultToExecution (verbosity: int) (compileResult: CompileRes
     | Ok binary ->
         execute verbosity binary
 
-let private getOrCompilePreambleContextWithOptions
+let private compilePreambleContextWithOptions
     (allowInternal: bool)
     (verbosity: int)
     (stdlib: StdlibResult)
@@ -1906,30 +1351,16 @@ let private getOrCompilePreambleContextWithOptions
     (sourceFile: string)
     (funcLineMap: Map<string, int>)
     : Result<PreambleContext, string> =
-    let preambleHash = preamble.GetHashCode()
-    let cacheKey = (sourceFile, preambleHash)
+    compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap
 
-    let cacheHit = stdlib.PreambleCache.ContainsKey cacheKey
-    if verbosity >= 2 then
-        let status = if cacheHit then "hit" else "miss"
-        println $"  [Preamble cache {status} for {sourceFile}]"
-    let lazyCtx =
-        stdlib.PreambleCache.GetOrAdd(
-            cacheKey,
-            fun _ ->
-                Lazy<Result<PreambleContext, string>>(
-                    (fun () -> compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap),
-                    System.Threading.LazyThreadSafetyMode.ExecutionAndPublication))
-    lazyCtx.Value
-
-let private getOrCompilePreambleContext
+let private compilePreambleContextDefault
     (verbosity: int)
     (stdlib: StdlibResult)
     (preamble: string)
     (sourceFile: string)
     (funcLineMap: Map<string, int>)
     : Result<PreambleContext, string> =
-    getOrCompilePreambleContextWithOptions false verbosity stdlib preamble sourceFile funcLineMap
+    compilePreambleContextWithOptions false verbosity stdlib preamble sourceFile funcLineMap
 
 /// Compile and run source code with options
 let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
@@ -1937,7 +1368,7 @@ let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source
 
 /// Compile and run with timing breakdown (for test output)
 let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    match getOrCompilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
+    match compilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
     | Error err ->
         { ExitCode = 1
           Stdout = ""
@@ -1971,48 +1402,6 @@ let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosi
 let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
     compileAndRunWithStdlibCachedTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
 
-/// Get the set of stdlib function names reachable from user code
-/// Used for coverage analysis without full compilation
-let getReachableStdlibFunctions (stdlib: LazyStdlibResult) (source: string) : Result<Set<string>, string> =
-    // Parse user code
-    match Parser.parseString source with
-    | Error err -> Error $"Parse error: {err}"
-    | Ok userAst ->
-        // Type check with stdlib environment
-        match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv userAst with
-        | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
-        | Ok (programType, typedUserAst, _) ->
-            // Convert to ANF
-            match AST_to_ANF.convertUserOnlyCached stdlib.SpecCache stdlib.ANFFuncCache "" Map.empty stdlib.GenericFuncDefs stdlib.ANFResult typedUserAst with
-            | Error err -> Error $"ANF conversion error: {err}"
-            | Ok userOnly ->
-                // Create ConversionResult for RC insertion
-                let userConvResult : AST_to_ANF.ConversionResult = {
-                    Program = ANF.Program (userOnly.UserFunctions, userOnly.MainExpr)
-                    TypeReg = userOnly.TypeReg
-                    VariantLookup = userOnly.VariantLookup
-                    FuncReg = userOnly.FuncReg
-                    FuncParams = userOnly.FuncParams
-                    ModuleRegistry = userOnly.ModuleRegistry
-                }
-                // RC insertion to get full ANF
-                match RefCountInsertion.insertRCInProgram userConvResult with
-                | Error err -> Error $"RC insertion error: {err}"
-                | Ok (userAnfAfterRC, _typeMap) ->
-                    // Tail call detection
-                    let userAnfAfterTCO = TailCallDetection.detectTailCallsInProgram userAnfAfterRC
-                    // Print insertion
-                    let (ANF.Program (userFunctions, userMainExpr)) = userAnfAfterTCO
-                    let userAnfProgram = PrintInsertion.insertPrint userFunctions userMainExpr programType
-                    // Extract reachable stdlib functions using tree-shaking infrastructure
-                    let reachableStdlibNames =
-                        FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
-                    Ok reachableStdlibNames
-
-/// Get all stdlib function names from the lazy stdlib
-let getAllStdlibFunctionNames (stdlib: LazyStdlibResult) : Set<string> =
-    stdlib.StdlibANFFunctions |> Map.keys |> Set.ofSeq
-
 /// Get all stdlib function names from the pre-compiled stdlib
 let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =
     stdlib.StdlibANFFunctions |> Map.keys |> Set.ofSeq
@@ -2029,7 +1418,7 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
         | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
         | Ok (programType, typedUserAst, _) ->
             // Convert to ANF
-            match AST_to_ANF.convertUserOnlyCached stdlib.SpecCache stdlib.ANFFuncCache "" Map.empty stdlib.GenericFuncDefs stdlib.ANFResult typedUserAst with
+            match AST_to_ANF.convertUserOnly stdlib.GenericFuncDefs stdlib.ANFResult typedUserAst with
             | Error err -> Error $"ANF conversion error: {err}"
             | Ok userOnly ->
                 // Create ConversionResult for RC insertion
