@@ -326,3 +326,59 @@ def testMutation178_sameArgs(x: Int64) : Int64 =
 testMutation178_sameArgs(3) = 16     // 3*3 + 7 = 16
 testMutation178_sameArgs(5) = 32     // 5*5 + 7 = 32
 testMutation178_sameArgs(10) = 107   // 10*10 + 7 = 107
+
+// ===================================================================
+// Mutation #179 Tests - LOGIC_AND in MUL+ADD fusion guard
+// ===================================================================
+// The tryFuseMulAdd optimization fuses MUL temp, a, b; ADD dest, temp, c
+// into MADD dest, a, b, c. The guard condition is:
+//   sameReg mulDest addLeft && not (sameReg mulDest addRight)
+// This ensures the MUL result (temp) is on the LEFT of the ADD.
+//
+// If && is changed to ||, the guard becomes:
+//   sameReg mulDest addLeft || not (sameReg mulDest addRight)
+//
+// This would fire when EITHER:
+// - The MUL result is on the left of ADD, OR
+// - The MUL result is NOT on the right of ADD
+//
+// The second condition is true for almost any MUL+ADD pair!
+// This means the optimization would incorrectly transform:
+//   MUL temp, a, b      // temp = a * b
+//   ADD dest, x, Reg y  // dest = x + y (where x,y != temp)
+// into:
+//   MADD dest, a, b, y  // dest = a*b + y (WRONG! should be x + y)
+//
+// Test: Create a MUL followed by an ADD that uses different registers.
+// The MUL result should NOT influence the ADD result.
+
+def testMutation179_independentMulAdd(a: Int64, b: Int64, x: Int64, y: Int64) : Int64 =
+  let mulResult = a * b in   // Creates: MUL temp, aReg, bReg
+  let addResult = x + y in   // Creates: ADD dest, xReg, yReg (NOT temp!)
+  addResult + mulResult      // Use both to prevent dead code elimination
+
+// With correct code:   (x + y) + (a * b) = (3 + 4) + (2 * 5) = 7 + 10 = 17
+// With mutation:       (a*b + y) + (a * b) = (10 + 4) + 10 = 24 (WRONG)
+testMutation179_independentMulAdd(2, 5, 3, 4) = 17
+testMutation179_independentMulAdd(3, 7, 10, 20) = 51    // (10+20) + (3*7) = 30 + 21 = 51
+testMutation179_independentMulAdd(1, 1, 100, 200) = 301 // (100+200) + (1*1) = 300 + 1 = 301
+
+// Additional test with larger values to make the difference more obvious
+def testMutation179_largeValues(a: Int64, b: Int64, x: Int64, y: Int64) : Int64 =
+  let product = a * b in
+  let sum = x + y in
+  sum * 2 + product      // Use both results
+
+// With correct code:   (x + y) * 2 + (a * b) = (5 + 3) * 2 + (4 * 6) = 16 + 24 = 40
+testMutation179_largeValues(4, 6, 5, 3) = 40
+testMutation179_largeValues(10, 10, 1, 2) = 106  // (1+2)*2 + 10*10 = 6 + 100 = 106
+
+// Test where the MUL result is used elsewhere but not in the immediate ADD
+def testMutation179_delayedUse(a: Int64, b: Int64, x: Int64, y: Int64) : Int64 =
+  let mul1 = a * b in      // MUL temp1, a, b
+  let add1 = x + y in      // ADD dest1, x, y (independent of mul1!)
+  let add2 = add1 + mul1 in // Now use both
+  add2
+
+testMutation179_delayedUse(2, 3, 10, 20) = 36   // (10+20) + (2*3) = 30 + 6 = 36
+testMutation179_delayedUse(5, 5, 7, 8) = 40     // (7+8) + (5*5) = 15 + 25 = 40
