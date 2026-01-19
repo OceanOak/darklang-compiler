@@ -887,3 +887,106 @@ def licmBlockChainHoist(a: Int64, b: Int64, flag: Bool, n: Int64) : Int64 =
 licmBlockChainHoist(3, 4, true, 3) = 42
 // flag=false: pre=3+4=7, 3 iterations = 21
 licmBlockChainHoist(3, 4, false, 3) = 21
+
+// ===================================================================
+// DCE Change Flag Aggregation Across Blocks (mutation #158)
+// ===================================================================
+// This test exercises the || operator in eliminateDeadCode at line 544:
+//   (Map.add label block' acc, ch || instrChanged)
+//
+// The change flag aggregates across multiple basic blocks in the CFG.
+// With ||: if ANY block has dead code removed, the pass reports changed=true
+// With &&: ALL blocks must have dead code removed for changed=true
+//
+// If || becomes &&, then:
+// - Block A has dead code (instrChanged=true after removal)
+// - Block B has no dead code (instrChanged=false)
+// - With ||: ch = true || false = true (correct, enables more optimization passes)
+// - With &&: ch = true && false = false (WRONG, optimization stops early)
+//
+// Actually with &&:
+// - Start: ch = false
+// - After Block A: ch = false && true = false
+// - After Block B: ch = false && false = false
+// - Result: always false regardless of actual changes!
+//
+// The test creates a function with:
+// 1. Dead code in some blocks (unused let bindings)
+// 2. Live code in other blocks
+// 3. A chain of optimizations where DCE enables further constant folding
+//
+// The DCE pass removing dead code enables subsequent passes to see simpler
+// code patterns and optimize further. If DCE reports no changes (with mutation),
+// the optimizer might stop early, leaving less optimized code.
+
+// Test: dead code in one branch, live code in another
+// The 'unused' variable is dead code in the then-branch
+// The else-branch has no dead code
+// DCE should remove 'unused' and report changed=true
+// With mutation: DCE reports false, but still removes the code (just doesn't iterate more)
+def dceMultiBlock(flag: Bool, x: Int64) : Int64 =
+  if flag then
+    let unused = x * x in  // dead code - unused
+    let result = x + 1 in
+    result
+  else
+    x + 2
+
+dceMultiBlock(true, 5) = 6
+dceMultiBlock(false, 5) = 7
+dceMultiBlock(true, 10) = 11
+dceMultiBlock(false, 10) = 12
+
+// More complex: chain of dead code removal enabling constant propagation
+// Pass 1: DCE removes 'dead1' (unused)
+// This simplifies the code, potentially enabling more optimizations
+// If DCE's change flag is wrong, fewer passes run
+def dceChainOptimization(flag: Bool, x: Int64) : Int64 =
+  if flag then
+    let dead1 = x * x * x in  // unused - dead code
+    let dead2 = dead1 + 1 in  // depends on dead1, also becomes dead
+    let live = x + 10 in
+    live
+  else
+    let alsoLive = x + 20 in
+    alsoLive
+
+dceChainOptimization(true, 3) = 13
+dceChainOptimization(false, 3) = 23
+dceChainOptimization(true, 7) = 17
+dceChainOptimization(false, 7) = 27
+
+// Test where DCE in multiple blocks should all report changes
+// Every branch has dead code, but with && mutation this would still fail
+// because ch starts as false and && with anything keeps it false
+def dceAllBlocksHaveDead(choice: Int64) : Int64 =
+  if choice == 1 then
+    let dead = 100 in  // unused
+    1
+  else if choice == 2 then
+    let dead = 200 in  // unused
+    2
+  else
+    let dead = 300 in  // unused
+    3
+
+dceAllBlocksHaveDead(1) = 1
+dceAllBlocksHaveDead(2) = 2
+dceAllBlocksHaveDead(3) = 3
+dceAllBlocksHaveDead(0) = 3
+
+// Recursive function where DCE iterates
+// Each recursive call creates dead code patterns
+// The optimizer should iterate until no more dead code exists
+def dceRecursive(n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    let dead = n * n in  // unused - dead code
+    let next = n - 1 in
+    dceRecursive(next, acc + n)
+
+// Sum of 1..5 = 15
+dceRecursive(5, 0) = 15
+dceRecursive(10, 0) = 55
+dceRecursive(1, 0) = 1
+dceRecursive(0, 0) = 0
