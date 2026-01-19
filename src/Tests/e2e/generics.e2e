@@ -225,3 +225,39 @@ Stdlib.Dict.getOrDefault(dictWithGenericKey(42, 100), 42, -1) = 100
 
 // Using the function with String key - different instantiation
 Stdlib.Dict.getOrDefault(dictWithGenericKey("hello", 200), "hello", -1) = 200
+
+// =====================================================
+// Mutation #218: consolidateBindings TVar preference order
+// =====================================================
+// Tests the consolidateBindings function which merges type variable bindings
+// during generic type inference. When the same type variable is bound multiple
+// times, the function must correctly choose between bindings.
+//
+// Line 582 checks: containsTVar existingType && not (containsTVar typ)
+// This means: if existing binding has TVars and new binding is concrete, prefer new.
+// The mutation changes && to ||, which would incorrectly enter this branch when
+// both bindings contain TVars (since || returns true when either condition holds).
+//
+// The test exercises scenarios where type bindings are consolidated correctly.
+
+// Generic function with explicit type application that exercises binding consolidation
+// The identity function is specialized with explicit type, then used with concrete value
+def genId218<t>(x: t) : t = x
+genId218<Int64>(42) + 8 = 50
+
+// Generic wrapper that exercises type bindings with List
+def wrapList218<t>(x: t) : List<t> = [x]
+match wrapList218(42) with | [v] -> v | _ -> 0 = 42
+
+// Type inference with generic Option - binding TVar to concrete type via pattern match
+type Opt218<t> = None218 | Some218 of t
+def unwrapOpt218<t>(opt: Opt218<t>, default: t) : t = match opt with | Some218(v) -> v | None218 -> default
+unwrapOpt218(Some218(42), 0) = 42
+
+// Two type parameters with different concrete types
+def pair218<a, b>(x: a, y: b) : (a, b) = (x, y)
+let p = pair218(42, true) in p.0 = 42
+
+// Type inference where TVar is bound from multiple sources (argument and return)
+def returnFirst218<a, b>(x: a, y: b) : a = x
+returnFirst218(50, "ignored") - 8 = 42
