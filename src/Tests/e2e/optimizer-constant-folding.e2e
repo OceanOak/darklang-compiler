@@ -486,3 +486,61 @@ phiCopyPropNested(true, true, 10) = 22
 phiCopyPropNested(true, false, 10) = 22
 phiCopyPropNested(false, true, 10) = 0
 phiCopyPropNested(false, false, 10) = 0
+
+// ===================================================================
+// Int64Const Copy Propagation with existing map entries (mutation #152)
+// ===================================================================
+// This test exercises the buildCopyMap function at line 586, specifically
+// testing the case where Int64Const propagation should respect existing
+// map entries and type constraints.
+//
+// The mutation changes && to || in the condition:
+//   if Set.contains dest phiDests || Map.containsKey dest m || not isIntOrBoolType then m
+//
+// If && were used instead of ||, the behavior would change for cases where
+// dest is already in the map but the type IS int/bool (isIntOrBoolType=true).
+// With &&: (already in map) && (not int/bool) = false when type is int, so would ADD
+// With ||: (already in map) = true, so correctly SKIPs adding
+//
+// This test creates a scenario where a variable is used in multiple contexts
+// to ensure constant propagation correctly tracks and optimizes Int64 constants.
+
+// Multiple constant assignments that should all propagate correctly
+def multiConstProp(x: Int64) : Int64 =
+  let a = 10 in
+  let b = 20 in
+  let c = a + b in  // c = 30 after constant folding
+  x + c
+
+multiConstProp(5) = 35
+multiConstProp(0) = 30
+multiConstProp(-10) = 20
+
+// Chain of constant propagation with conditionals
+// Tests that Int64Const propagation works correctly through branches
+def constPropThroughBranch(flag: Bool, x: Int64) : Int64 =
+  let base = 100 in
+  let result = if flag then
+    let adjusted = base + x in  // 100 + x
+    adjusted
+  else
+    let adjusted = base - x in  // 100 - x
+    adjusted
+  in
+  result + base  // result + 100
+
+constPropThroughBranch(true, 5) = 205
+constPropThroughBranch(false, 5) = 195
+constPropThroughBranch(true, 0) = 200
+constPropThroughBranch(false, 0) = 200
+
+// Test that constant propagation respects phi destinations
+// When a variable is assigned in multiple branches, it becomes a phi dest
+// and should NOT be propagated to avoid incorrect optimizations
+def constPropWithPhi(flag: Bool) : Int64 =
+  let x = if flag then 42 else 99 in
+  let y = x + 1 in  // x is phi dest, y should use x (not constant)
+  y
+
+constPropWithPhi(true) = 43
+constPropWithPhi(false) = 100
