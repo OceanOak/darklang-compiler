@@ -595,3 +595,70 @@ def conditionalDominationLoop(x: Int64, flag: Bool, n: Int64) : Int64 =
 
 conditionalDominationLoop(3, true, 4) = 36
 conditionalDominationLoop(3, false, 4) = 24
+
+// ===================================================================
+// LICM buildCopyMapForLicm Phi Destination Check (mutation #154)
+// ===================================================================
+// This test exercises the || operator in buildCopyMapForLicm at line 305:
+//   if Set.contains dest phiDests || Map.containsKey dest mapAcc then mapAcc
+//
+// If || becomes &&, phi destinations would be incorrectly added to the
+// copy map when they're not already in the map. This could cause LICM
+// to incorrectly resolve operands, treating phi results as simple copies.
+//
+// The test creates a scenario with:
+// 1. A loop (recursive function)
+// 2. A conditional inside the loop creating a phi node
+// 3. A copy of the phi result used in subsequent computation
+// 4. LICM analysis of the copied value
+//
+// With the mutation, the copy map might incorrectly track the phi result,
+// leading to wrong operand resolution during invariant detection.
+
+// Test with phi result used in loop-invariant computation
+// The 'selected' variable is a phi dest (from if-then-else)
+// The copy 'copy = selected' creates a Mov
+// LICM should correctly handle this without treating selected as a simple copy
+def licmPhiDestCheck(x: Int64, y: Int64, flag: Bool, n: Int64, acc: Int64) : Int64 =
+  if n <= 0 then acc
+  else
+    // 'selected' is a phi destination (comes from different branches)
+    let selected = if flag then x else y in
+    // Create a copy of the phi result
+    let copy = selected in
+    // Use the copy in a computation that LICM might analyze
+    let result = copy * copy in
+    licmPhiDestCheck(x, y, flag, n - 1, acc + result)
+
+// When flag is true: selected = x = 3, result = 9, sum over 5 iterations = 45
+licmPhiDestCheck(3, 7, true, 5, 0) = 45
+// When flag is false: selected = y = 7, result = 49, sum over 5 iterations = 245
+licmPhiDestCheck(3, 7, false, 5, 0) = 245
+// Mixed values to ensure correct behavior
+licmPhiDestCheck(2, 5, true, 4, 0) = 16
+licmPhiDestCheck(2, 5, false, 4, 0) = 100
+
+// More complex: nested conditionals with multiple phi nodes
+// This creates multiple phi destinations that copy propagation must respect
+def licmNestedPhiDest(a: Int64, b: Int64, c: Int64, f1: Bool, f2: Bool, n: Int64) : Int64 =
+  if n <= 0 then 0
+  else
+    // First phi: p1 = phi(a, b)
+    let p1 = if f1 then a else b in
+    // Second phi: p2 = phi(c, p1)
+    let p2 = if f2 then c else p1 in
+    // Copies of phi results
+    let copy1 = p1 in
+    let copy2 = p2 in
+    // Computation using both
+    let sum = copy1 + copy2 in
+    sum + licmNestedPhiDest(a, b, c, f1, f2, n - 1)
+
+// f1=true: p1=a=1, f2=true: p2=c=3, sum=1+3=4, 3 iters = 12
+licmNestedPhiDest(1, 2, 3, true, true, 3) = 12
+// f1=true: p1=a=1, f2=false: p2=p1=1, sum=1+1=2, 3 iters = 6
+licmNestedPhiDest(1, 2, 3, true, false, 3) = 6
+// f1=false: p1=b=2, f2=true: p2=c=3, sum=2+3=5, 3 iters = 15
+licmNestedPhiDest(1, 2, 3, false, true, 3) = 15
+// f1=false: p1=b=2, f2=false: p2=p1=2, sum=2+2=4, 3 iters = 12
+licmNestedPhiDest(1, 2, 3, false, false, 3) = 12
