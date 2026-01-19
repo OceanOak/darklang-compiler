@@ -257,3 +257,29 @@ let early1 = 1 in let early2 = 2 in let early3 = 3 in let early4 = 4 in let earl
 // Test with interleaved lifetimes - some variables needed early, some late
 // This creates overlapping live ranges that stress the eviction logic
 let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in let g = 7 in let h = 8 in let i = 9 in let j = 10 in let k = 11 in let l = 12 in let m = 13 in let n = 14 in let o = 15 in let p = 16 in let sum1 = a + c + e + g + i + k + m + o in let sum2 = b + d + f + h + j + l + n + p in sum1 + sum2 = 136
+
+
+// ===================================================================
+// Alignment Function Tests (Mutation #223)
+// ===================================================================
+
+// Mutation #223 targets the alignTo16 function at line 1322:
+//   ((size + 15) / 16) * 16
+// This function is used by linearScan which is currently dead code.
+// The mutation changes * to /, which would give: ((size + 15) / 16) / 16
+// This would severely underestimate stack sizes (e.g., 32 -> 0).
+//
+// Since linearScan is unused, we test the equivalent formula in
+// coloringToAllocation (line 1146) which IS used:
+//   ((abs nextStackSlot + 15) / 16) * 16
+//
+// These tests exercise high-register-pressure scenarios to ensure
+// stack alignment is computed correctly in the active code path.
+
+// Force stack alignment with exactly 17 bytes needed (1 spill beyond threshold)
+// Should align to 16 (not 0 if mutation applied)
+let x1 = 1 in let x2 = 2 in let x3 = 3 in let x4 = 4 in let x5 = 5 in let x6 = 6 in let x7 = 7 in let x8 = 8 in let x9 = 9 in let x10 = 10 in let x11 = 11 in let x12 = 12 in let x13 = 13 in let x14 = 14 in let x15 = 15 in let x16 = 16 in x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10 + x11 + x12 + x13 + x14 + x15 + x16 = 136
+
+// Test 24 variables to ensure stack is properly aligned to 32+ bytes
+// This tests the multiplication part of the alignment formula
+let z1 = 1 in let z2 = 2 in let z3 = 3 in let z4 = 4 in let z5 = 5 in let z6 = 6 in let z7 = 7 in let z8 = 8 in let z9 = 9 in let z10 = 10 in let z11 = 11 in let z12 = 12 in let z13 = 13 in let z14 = 14 in let z15 = 15 in let z16 = 16 in let z17 = 17 in let z18 = 18 in let z19 = 19 in let z20 = 20 in let z21 = 21 in let z22 = 22 in let z23 = 23 in let z24 = 24 in z1 + z2 + z3 + z4 + z5 + z6 + z7 + z8 + z9 + z10 + z11 + z12 + z13 + z14 + z15 + z16 + z17 + z18 + z19 + z20 + z21 + z22 + z23 + z24 = 300
