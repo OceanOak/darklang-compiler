@@ -458,3 +458,34 @@ let sub = (x: Float, y: Float) => x - y in let result = sub(10.0, 3.0) in result
 
 // Five float literal args to a closure - many temp registers
 let sum5 = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in sum5(1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
+
+// =====================================================
+// Closure Tail Call with Multiple Float Literal Arguments (Mutation #183)
+// =====================================================
+// Tests that multiple float literal arguments are passed correctly to closures
+// when the closure is called in TAIL position from a function.
+// Mutation #183 changes tempFRegCounter + 1 to tempFRegCounter - 1 in the
+// ClosureTailCall float argument handling code (line 796 in 4_MIR_to_LIR.fs).
+// With the mutation, multiple float literals would get assigned conflicting
+// temp registers, causing incorrect values to be passed to the closure.
+//
+// This differs from mutation #182 (regular ClosureCall) because it specifically
+// tests the ClosureTailCall code path, which is used when a closure is called
+// in tail position from within a function.
+
+// Helper function that tail-calls a closure with float arguments
+def tailCallClosure2F(f: (Float, Float) -> Float, a: Float, b: Float): Float = f(a, b)
+
+// Two float literal args passed via closure tail call
+let addFloats = (x: Float, y: Float) => x + y in tailCallClosure2F(addFloats, 3.5, 2.5) = 6.0
+
+// Three float args via closure tail call
+def tailCallClosure3F(f: (Float, Float, Float) -> Float, a: Float, b: Float, c: Float): Float = f(a, b, c)
+let sum3 = (x: Float, y: Float, z: Float) => x + y + z in tailCallClosure3F(sum3, 1.0, 2.0, 3.0) = 6.0
+
+// Closure with capture AND multiple float args in tail call
+let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in tailCallClosure2F(addWithOffset, 1.5, 2.5) = 14.0
+
+// Five float args via closure tail call - many temp registers needed
+def tailCallClosure5F(f: (Float, Float, Float, Float, Float) -> Float, a: Float, b: Float, c: Float, d: Float, e: Float): Float = f(a, b, c, d, e)
+let sum5f = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in tailCallClosure5F(sum5f, 1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
