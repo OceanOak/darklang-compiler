@@ -152,3 +152,26 @@ let a1 = 1 in let b1 = 2 in let c1 = 3 in let d1 = 4 in let e1 = 5 in let f1 = 6
 
 // 15 values: more pressure on alignment
 let v1 = 1 in let v2 = 2 in let v3 = 3 in let v4 = 4 in let v5 = 5 in let v6 = 6 in let v7 = 7 in let v8 = 8 in let v9 = 9 in let v10 = 10 in let v11 = 11 in let v12 = 12 in let v13 = 13 in let v14 = 14 in let v15 = 15 in v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15 = 120
+
+
+// ===================================================================
+// Interference Graph Building Tests (Mutation #201)
+// ===================================================================
+
+// Tests for interference edge generation at terminators.
+// The buildInterferenceGraph function builds edges between all pairs
+// of live variables at each program point. Mutation #201 affects the
+// loop bounds for generating these pairwise edges.
+
+// Multiple variables live at conditional branch terminator
+// Variables a,b,c,d,e are all live at the if condition check
+let a = 10 in let b = 20 in let c = 30 in let d = 40 in let e = 50 in if a > 0 then b + c + d + e else a = 140
+
+// Many variables live at nested conditionals
+let x1 = 1 in let x2 = 2 in let x3 = 3 in let x4 = 4 in let x5 = 5 in let x6 = 6 in if x1 > 0 then if x2 > 0 then x3 + x4 + x5 + x6 else 0 else 0 = 18
+
+// Pattern match with multiple outer variables live at terminator
+let p1 = 100 in let p2 = 200 in let p3 = 300 in let p4 = 400 in match 1 with | 1 -> p1 + p2 + p3 + p4 | _ -> 0 = 1000
+
+// Variables used in both branches require interference edges
+let m = 5 in let n = 10 in let o = 15 in let p = 20 in if true then m + n else o + p = 15
