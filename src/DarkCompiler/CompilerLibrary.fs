@@ -997,51 +997,64 @@ let compileStdlib () : Result<StdlibResult, string> =
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
                     // Compute dependency hashes for cache invalidation
                     let dependencyHashes = ANF_Inlining.buildDependencyHashMap stdlibFuncs ANF_Inlining.defaultConfig
-                    // Convert stdlib ANF to MIR (functions only, no _start)
-                    // Use FuncParams for typeReg (needed for tail call argument types)
-                    // Coverage is false here since stdlib is precompiled for caching
+
+                    let compilerKey = Cache.getCompilerKey()
+
+                    // Build shared registries (computed once)
                     let externalReturnTypes = extractReturnTypes anfResult.FuncReg
-                    match ANF_to_MIR.toMIRFunctionsOnly anfAfterTCO typeMap anfResult.FuncParams anfResult.VariantLookup Map.empty false externalReturnTypes with
+                    let returnTypeReg = ANF_to_MIR.buildReturnTypeReg stdlibFuncs typeMap anfResult.FuncParams externalReturnTypes
+                    let variantRegistry = ANF_to_MIR.buildVariantRegistry anfResult.VariantLookup
+                    let recordRegistry = ANF_to_MIR.buildRecordRegistry Map.empty  // stdlib has no user records
+
+                    // Per-function compilation with caching
+                    // Check cache BEFORE running pipeline (ANF→MIR→SSA→opt→LIR→peephole→RA)
+                    let compileStdlibFunc (anfFunc: ANF.Function) : Result<LIRSymbolic.Function, string> =
+                        let depHash = Map.tryFind anfFunc.Name dependencyHashes |> Option.defaultValue ""
+
+                        // Check cache FIRST - skip entire pipeline if cached
+                        match Cache.getIntermediate compilerKey anfFunc.Name depHash "lir_allocated" with
+                        | Some data -> Ok (Cache.deserialize<LIRSymbolic.Function> data)
+                        | None ->
+                            // Cache miss - run full pipeline
+                            match ANF_to_MIR.convertANFFunction anfFunc typeMap anfResult.FuncParams returnTypeReg false with
+                            | Error e -> Error e
+                            | Ok mirFunc ->
+                                let ssaFunc = SSA_Construction.convertFunctionToSSA mirFunc
+                                let optFunc = MIR_Optimize.optimizeFunction ssaFunc
+
+                                // MIR → LIR (inline the conversion)
+                                match MIR_to_LIR.selectCFG optFunc.CFG variantRegistry recordRegistry optFunc.ReturnType optFunc.FloatRegs with
+                                | Error e -> Error e
+                                | Ok lirCFG ->
+                                    let lirTypedParams =
+                                        optFunc.TypedParams
+                                        |> List.map (fun tp ->
+                                            let (MIR.VReg id) = tp.Reg
+                                            { LIR.Reg = LIR.Virtual id; LIR.Type = tp.Type })
+                                    let lirFunc : LIRSymbolic.Function = {
+                                        Name = optFunc.Name
+                                        TypedParams = lirTypedParams
+                                        CFG = lirCFG
+                                        StackSize = 0
+                                        UsedCalleeSaved = []
+                                    }
+                                    let peepholed = LIR_Peephole.optimizeFunction lirFunc
+                                    let allocated = RegisterAllocation.allocateRegisters peepholed
+
+                                    // Cache the result
+                                    Cache.setIntermediate compilerKey anfFunc.Name depHash "lir_allocated" (Cache.serialize allocated)
+                                    Ok allocated
+
+                    // Compile all stdlib functions in parallel
+                    match ParallelUtils.mapResultsParallel compileStdlibFunc stdlibFuncs with
                     | Error e -> Error e
-                    | Ok (mirFuncs, variantRegistry, recordRegistry) ->
-                        // Wrap in MIR.Program for LIR conversion
-                        let mirProgram = MIR.Program (mirFuncs, variantRegistry, recordRegistry)
-                        // SSA construction + MIR optimizations for stdlib (keeps RA assumptions consistent)
-                        let stdlibSsaProgram =
-                            let (MIR.Program (functions, variants, records)) = mirProgram
-                            let functions' = ParallelUtils.mapListParallel functions SSA_Construction.convertFunctionToSSA
-                            MIR.Program (functions', variants, records)
-                        let stdlibOptimizedProgram =
-                            let (MIR.Program (functions, variants, records)) = stdlibSsaProgram
-                            let functions' = ParallelUtils.mapListParallel functions MIR_Optimize.optimizeFunction
-                            MIR.Program (functions', variants, records)
-                        // Convert stdlib MIR to LIR (cached for reuse)
-                        match MIR_to_LIR.toLIR stdlibOptimizedProgram with
-                        | Error e -> Error e
-                        | Ok lirProgram ->
-                            let optimizedLir =
-                                let (LIRSymbolic.Program functions) = lirProgram
-                                let functions' = ParallelUtils.mapListParallel functions LIR_Peephole.optimizeFunction
-                                LIRSymbolic.Program functions'
-                            // Pre-allocate stdlib functions (with SQLite caching)
-                            let (LIRSymbolic.Program lirFuncs) = optimizedLir
-                            let compilerKey = Cache.getCompilerKey()
-                            let allocateWithCache (f: LIRSymbolic.Function) =
-                                let depHash = Map.tryFind f.Name dependencyHashes |> Option.defaultValue ""
-                                match Cache.getIntermediate compilerKey f.Name depHash "lir_allocated" with
-                                | Some data -> Cache.deserialize<LIRSymbolic.Function> data
-                                | None ->
-                                    let allocated = RegisterAllocation.allocateRegisters f
-                                    Cache.setIntermediate compilerKey f.Name depHash "lir_allocated" (Cache.serialize allocated)
-                                    allocated
-                            let allocatedFuncs =
-                                match compileMode with
-                                | StdlibCompileMode.Sequential -> List.map allocateWithCache lirFuncs
-                                | StdlibCompileMode.Parallel -> ParallelUtils.mapListParallel lirFuncs allocateWithCache
-                            let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
-                            match LIRSymbolic.toLIR allocatedSymbolic with
-                            | Error err -> Error err
-                            | Ok allocatedProgram ->
+                    | Ok allocatedFuncs ->
+                        let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
+                        // MIRProgram is not used anywhere - set to empty placeholder
+                        let mirProgram = MIR.Program ([], variantRegistry, recordRegistry)
+                        match LIRSymbolic.toLIR allocatedSymbolic with
+                        | Error err -> Error err
+                        | Ok allocatedProgram ->
                                 let (LIR.Program (resolvedFuncs, _, _)) = allocatedProgram
                                 // Build call graph for dead code elimination
                                 let stdlibCallGraph = DeadCodeElimination.buildCallGraph resolvedFuncs
