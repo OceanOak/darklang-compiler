@@ -236,3 +236,24 @@ let q1 = 1000 in let q2 = 2000 in let q3 = 3000 in let q4 = 4000 in let q5 = 500
 
 // Test with interleaved access patterns - spilled values accessed in different order than defined
 let r1 = 11 in let r2 = 22 in let r3 = 33 in let r4 = 44 in let r5 = 55 in let r6 = 66 in let r7 = 77 in let r8 = 88 in let r9 = 99 in let r10 = 110 in let r11 = 121 in let r12 = 132 in let r13 = 143 in let r14 = 154 in let r15 = 165 in let r16 = 176 in let r17 = 187 in let r18 = 198 in let r19 = 209 in let r20 = 220 in r20 + r1 + r19 + r2 + r18 + r3 + r17 + r4 + r16 + r5 + r15 + r6 + r14 + r7 + r13 + r8 + r12 + r9 + r11 + r10 = 2310
+
+
+// ===================================================================
+// Active Interval Eviction Stack Slot Tests (Mutation #216)
+// ===================================================================
+
+// Mutation #216 targets linearScan's stack slot decrement when evicting an
+// active interval (line 1370). This code path is triggered when:
+// 1. All registers are in use (freeRegs is empty)
+// 2. The interval ending latest is an already-active interval (not current)
+// 3. That interval is evicted/spilled to make room for the current interval
+// Note: linearScan may be unused; these tests exercise similar patterns
+// through coloringToAllocation which handles the same spill scenarios.
+
+// Force multiple spills with early variables used late (forces eviction pattern)
+// Variables defined early but used at end require their registers across the computation
+let early1 = 1 in let early2 = 2 in let early3 = 3 in let early4 = 4 in let early5 = 5 in let early6 = 6 in let early7 = 7 in let early8 = 8 in let early9 = 9 in let early10 = 10 in let early11 = 11 in let early12 = 12 in let early13 = 13 in let early14 = 14 in let early15 = 15 in let late1 = 100 in let late2 = 200 in let late3 = 300 in early1 + early2 + early3 + early4 + early5 + early6 + early7 + early8 + early9 + early10 + early11 + early12 + early13 + early14 + early15 + late1 + late2 + late3 = 720
+
+// Test with interleaved lifetimes - some variables needed early, some late
+// This creates overlapping live ranges that stress the eviction logic
+let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in let g = 7 in let h = 8 in let i = 9 in let j = 10 in let k = 11 in let l = 12 in let m = 13 in let n = 14 in let o = 15 in let p = 16 in let sum1 = a + c + e + g + i + k + m + o in let sum2 = b + d + f + h + j + l + n + p in sum1 + sum2 = 136
