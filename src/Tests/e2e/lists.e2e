@@ -705,3 +705,19 @@ checkGuardFirst120([]) = 400
 // The variable xs must be recognized as used; otherwise the compiler would
 // eliminate the let binding and produce incorrect code.
 let xs = [42] in match [1, ...xs] with | [a, b] -> a + b | _ -> 0 = 43
+
+// =====================================================
+// List head type tracking test (kills mutation #167)
+// =====================================================
+// Tests that the TupleGet handler for TList correctly uses && (not ||)
+// when checking whether to set destType to Float64. The condition is:
+//   if index = 1 && elemType = AST.TFloat64 then destType := AST.TFloat64
+// If && were changed to ||, accessing index 1 of a List<Int64> would
+// incorrectly mark the result as Float64, causing the integer value to
+// be loaded into a float register and misinterpreted.
+//
+// This test creates a List<Int64> via a function and accesses the head.
+// If the head is incorrectly typed as Float64, the integer bit pattern
+// would be interpreted as a float, giving a wrong result.
+def makeIntList167() : List<Int64> = [42, 84, 126]
+match makeIntList167() with | [h, ...t] -> h + 100 | [] -> 999 = 142
