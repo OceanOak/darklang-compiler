@@ -183,3 +183,25 @@ def sum5Floats(a: Float, b: Float, c: Float, d: Float, e: Float) : Float = a + b
 
 // Float literals with different values to verify each is loaded correctly
 def weightedSum(a: Float, b: Float, c: Float) : Float = a * 1.0 + b * 2.0 + c * 3.0 weightedSum(10.0, 20.0, 30.0) = 140.0
+
+// =====================================================
+// MIR Float Intermediate Register Mapping (Mutation #195)
+// =====================================================
+// Tests float register allocation for MIR intermediates (VRegs >= 10000).
+// The fallback mapping uses ((id - 10000) + 7) % 13 to select a temp register.
+// If mutation changes + to -, the modulo result would be negative,
+// causing array index out of bounds or wrong register selection.
+
+// Complex float computation with many intermediates
+// Each intermediate gets a unique VReg >= 10000, exercising the mapping formula
+def manyFloatIntermediates(a: Float, b: Float) : Float = let t1 = a + b in let t2 = a - b in let t3 = a * b in let t4 = t1 + t2 in let t5 = t3 + t4 in let t6 = t5 * 2.0 in let t7 = t6 + t1 in t7
+manyFloatIntermediates(3.0, 2.0) = 29.0
+
+// Float phi nodes with intermediates - tests register allocation across control flow
+def floatPhiWithIntermediates(x: Float, cond: Bool) : Float = let a = x + 1.0 in let b = x * 2.0 in if cond then a + b + x else a - b + x
+floatPhiWithIntermediates(5.0, true) = 21.0
+floatPhiWithIntermediates(5.0, false) = 1.0
+
+// Deeply nested float operations - many MIR intermediates in sequence
+def deepFloatChain(x: Float) : Float = let a = x + 1.0 in let b = a * 2.0 in let c = b + 3.0 in let d = c * 4.0 in let e = d + 5.0 in let f = e * 6.0 in let g = f + 7.0 in let h = g * 8.0 in h
+deepFloatChain(1.0) = 1640.0
