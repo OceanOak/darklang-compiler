@@ -431,3 +431,30 @@ let h = (x: Int64) => x + 100 in if 1 > 2 then 0 else h(42) = 142
 
 // Closure that returns a Float, then add a float literal to the result
 let toFloat = (x: Int64) => Stdlib.Int64.toFloat(x) in let result = toFloat(5) + 1.0 in result = 6.0
+
+// =====================================================
+// Closure Call with Multiple Float Literal Arguments (Mutation #182)
+// =====================================================
+// Tests that multiple float literal arguments are passed correctly to closures.
+// Mutation #182 changes tempFRegCounter + 1 to tempFRegCounter - 1 in the
+// ClosureCall float argument handling code (line 717 in 4_MIR_to_LIR.fs).
+// With the mutation, multiple float literals would get assigned conflicting
+// temp registers, causing incorrect values to be passed to the closure.
+//
+// This differs from mutation #180 (regular function calls) and #181 (tail calls)
+// because it specifically tests the ClosureCall code path.
+
+// Two float literal args to a closure - tests temp register uniqueness
+let addFloats = (a: Float, b: Float) => a + b in addFloats(3.5, 2.5) = 6.0
+
+// Three float literal args - more registers needed
+let sumThreeFloats = (a: Float, b: Float, c: Float) => a + b + c in sumThreeFloats(1.0, 2.0, 3.0) = 6.0
+
+// Closure with capture AND multiple float args - tests interaction
+let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in addWithOffset(1.5, 2.5) = 14.0
+
+// Closure stored in variable then called with multiple float literals
+let sub = (x: Float, y: Float) => x - y in let result = sub(10.0, 3.0) in result = 7.0
+
+// Five float literal args to a closure - many temp registers
+let sum5 = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in sum5(1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
