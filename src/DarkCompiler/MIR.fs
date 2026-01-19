@@ -213,9 +213,10 @@ type StringPool = {
 }
 
 /// Float pool for late constant resolution (used by LIR/codegen)
+/// Uses int64 bit representation as key to distinguish -0.0 from 0.0
 type FloatPool = {
     Floats: Map<int, float>
-    FloatToId: Map<float, int>
+    FloatBitsToId: Map<int64, int>  // Use bit representation as key (not float) to handle -0.0 vs 0.0
     NextId: int
 }
 
@@ -229,7 +230,7 @@ let emptyStringPool : StringPool = {
 /// Empty float pool
 let emptyFloatPool : FloatPool = {
     Floats = Map.empty
-    FloatToId = Map.empty
+    FloatBitsToId = Map.empty
     NextId = 0
 }
 
@@ -245,13 +246,15 @@ let addString (pool: StringPool) (value: string) : int * StringPool =
         let pool' = { pool with Strings = strings; StringToId = stringToId; NextId = idx + 1 }
         (idx, pool')
 
-/// Add a float to the pool (deduplicated), returning index and updated pool
+/// Add a float to the pool (deduplicated by bit pattern), returning index and updated pool
+/// Uses bit-level comparison to distinguish -0.0 from 0.0 (they're equal in IEEE 754 comparison)
 let addFloat (pool: FloatPool) (value: float) : int * FloatPool =
-    match Map.tryFind value pool.FloatToId with
+    let bits = System.BitConverter.DoubleToInt64Bits(value)
+    match Map.tryFind bits pool.FloatBitsToId with
     | Some idx -> (idx, pool)
     | None ->
         let idx = pool.NextId
         let floats = Map.add idx value pool.Floats
-        let floatToId = Map.add value idx pool.FloatToId
-        let pool' = { pool with Floats = floats; FloatToId = floatToId; NextId = idx + 1 }
+        let floatBitsToId = Map.add bits idx pool.FloatBitsToId
+        let pool' = { pool with Floats = floats; FloatBitsToId = floatBitsToId; NextId = idx + 1 }
         (idx, pool')

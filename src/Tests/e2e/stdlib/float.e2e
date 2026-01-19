@@ -18,8 +18,8 @@ Float.abs(-123.456) = 123.456
 // negate
 Float.negate(3.14) = -3.14
 Float.negate(-3.14) = 3.14
-// Note: Float.negate(0.0) produces -0.0 but displays as "0.0"
-Float.negate(0.0) = 0.0
+// Float.negate(0.0) correctly displays as -0.0 (IEEE 754 signed zero)
+Float.negate(0.0) = -0.0
 
 // toInt (truncates toward zero)
 Float.toInt(3.7) = 3
@@ -52,6 +52,6 @@ Float64.toBits(-1.0) = -4616189618054758400
 Float64.toBits(0.0) = 0
 
 // Float64.toString - special cases
-// Note: -0.0 displays as "0.0" (this is common behavior, though IEEE 754 distinguishes them)
+// -0.0 correctly displays as "-0.0" (IEEE 754 signed zero)
 Float64.toString(0.0) = "0.0"
-Float64.toString(-0.0) = "0.0"
+Float64.toString(-0.0) = "-0.0"

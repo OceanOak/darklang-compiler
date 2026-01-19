@@ -177,6 +177,12 @@ def Stdlib.Float64.__stripZeros(s: String, minLen: Int64) : String =
         else
             s
 
+// Helper: Check if float is negative using sign bit (handles -0.0 correctly)
+def Stdlib.Float64.__isNegative(f: Float) : Bool =
+    let bits = Stdlib.Float64.toBits(f) in
+    let signBit = bits >> 63UL in
+    signBit == 1UL
+
 // Convert Float to String with up to 12 significant digits
 def Stdlib.Float64.toString(f: Float) : String =
     // Use Float.abs which is an intrinsic (no if-else)
@@ -185,8 +191,8 @@ def Stdlib.Float64.toString(f: Float) : String =
     let intStr = Stdlib.Int64.toString(intPart) in
     let intPartFloat = Stdlib.Int64.toFloat(intPart) in
     let fracPart = absF - intPartFloat in
-    // Check sign at the end
-    let isNeg = f < 0.0 in
+    // Check sign using bit pattern (handles -0.0 correctly)
+    let isNeg = Stdlib.Float64.__isNegative(f) in
     let signStr = if isNeg then "-" else "" in
     if fracPart == 0.0 then
         signStr ++ intStr ++ ".0"

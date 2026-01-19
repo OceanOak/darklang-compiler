@@ -63,7 +63,8 @@ let testSymbolizeResolveRoundTrip () : TestResult =
                     match Map.tryFind stringValue resolvedStrings.StringToId with
                     | None -> Error "Resolved string pool missing expected value"
                     | Some strIdx ->
-                        match Map.tryFind floatValue resolvedFloats.FloatToId with
+                        let floatBits = System.BitConverter.DoubleToInt64Bits(floatValue)
+                        match Map.tryFind floatBits resolvedFloats.FloatBitsToId with
                         | None -> Error "Resolved float pool missing expected value"
                         | Some floatIdx ->
                             match resolvedFuncs with
