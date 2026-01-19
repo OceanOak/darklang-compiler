@@ -167,3 +167,41 @@ def funcY(n: Int64): Int64 =
     n * 2
 
 funcX(5) = 9
+
+// =====================================================
+// Return Type Fixpoint Computation (mutation #162)
+// =====================================================
+// These tests exercise the buildReturnTypeReg fixpoint algorithm in 3_ANF_to_MIR.fs
+// The algorithm iterates until the return type map stabilizes.
+// With mutation #162 (iterations + 1 -> iterations - 1), the iteration counter
+// goes negative instead of positive, but the algorithm still converges correctly
+// because termination is based on type stability, not iteration count.
+//
+// Test: deeply nested mutual recursion requiring multiple fixpoint iterations
+// The return types depend on each other in a chain:
+//   chain1 -> chain2 -> chain3 -> chain4 -> base case
+// Each function's return type depends on the callee's return type being computed first.
+
+def chain4(n: Int64): Int64 =
+    if n <= 0 then 1000 else n + chain4(n - 1)
+
+def chain3(n: Int64): Int64 =
+    if n <= 0 then chain4(5) else n + chain3(n - 1)
+
+def chain2(n: Int64): Int64 =
+    if n <= 0 then chain3(5) else n + chain2(n - 1)
+
+def chain1(n: Int64): Int64 =
+    if n <= 0 then chain2(5) else n + chain1(n - 1)
+
+// chain4(5) = 5+4+3+2+1+1000 = 1015
+chain4(5) = 1015
+// chain3(0) = chain4(5) = 1015
+// chain3(5) = 5+4+3+2+1+chain4(5) = 15+1015 = 1030
+chain3(5) = 1030
+// chain2(0) = chain3(5) = 1030
+// chain2(5) = 5+4+3+2+1+chain3(5) = 15+1030 = 1045
+chain2(5) = 1045
+// chain1(0) = chain2(5) = 1045
+// chain1(5) = 5+4+3+2+1+chain2(5) = 15+1045 = 1060
+chain1(5) = 1060
