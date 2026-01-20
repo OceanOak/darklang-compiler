@@ -89,9 +89,9 @@ Why ref counting?
 
 - `compileWithOptions` for in-memory compilation with explicit options
 - `compileAndRunWithOptions` for compile+execute with explicit options
-- `compileStdlib` for test harnesses and tooling that cache stdlib
+- `compileStdlib` for test harnesses and tooling that prebuild stdlib
 - `compilePreamble` and `compileTestWithPreamble` for preamble reuse in tests
-- `compileAndRunWithStdlibCachedTimed` for E2E tests with timing breakdown
+- `compileAndRunWithPreambleTimed` for E2E tests with timing breakdown
 
 ## Key Invariants
 

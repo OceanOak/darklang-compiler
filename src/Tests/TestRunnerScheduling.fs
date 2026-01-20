@@ -1,10 +1,8 @@
 // TestRunnerScheduling.fs - Helpers for test runner scheduling decisions
 //
-// Provides deterministic ordering and stdlib-related scheduling helpers.
+// Provides stdlib-related scheduling helpers and formatting.
 
 module TestRunnerScheduling
-
-open TestDSL.E2EFormat
 
 type UnitTestCase = string * (unit -> Result<unit, string>)
 
@@ -17,17 +15,8 @@ type StdlibWarmupPlan =
     | CompileStdlibBeforeTests
     | SkipStdlibWarmup
 
-let estimateE2ETestCost (test: E2ETest) : int =
-    test.Source.Length + test.Preamble.Length
-
 let formatUnitTestName (suiteName: string) (testName: string) : string =
     $"{suiteName}: {testName}"
-
-let orderE2ETestsByEstimatedCost (tests: E2ETest array) : E2ETest array =
-    tests
-    |> Array.map (fun test -> test, estimateE2ETestCost test)
-    |> Array.sortBy (fun (test, cost) -> (-cost, test.SourceFile, test.Name))
-    |> Array.map fst
 
 let splitUnitTestsByStdlibNeed
     (needsStdlib: string list)

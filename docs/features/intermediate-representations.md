@@ -168,7 +168,7 @@ LIR: X12 <- Mov(Imm 1000000)  // Load large immediate
 
 Some compiler paths store functions in a symbolic LIR variant where string/float
 constants are referenced by value instead of pool index. This avoids remapping
-pool indices when merging cached functions (stdlib, preamble, user code).
+pool indices when merging prebuilt functions (stdlib, preamble, user code).
 
 Key differences from indexed LIR:
 - `StringSymbol "hello"` and `FloatSymbol 1.5` replace `StringRef`/`FloatRef`.

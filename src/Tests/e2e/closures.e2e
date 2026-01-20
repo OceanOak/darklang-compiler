@@ -271,7 +271,7 @@ let addFive = (x: Int64) => x + 5 in let addTwenty = (x: Int64) => x + 20 in app
 // check is a heuristic to avoid inlining complex functions, not a
 // correctness requirement. Closures work correctly when inlined.
 
-// Closure in then-branch only (single-line to avoid preamble caching issue)
+// Closure in then-branch only (single-line to avoid preamble build issue)
 def ifWithClosureInThen(flag: Bool, val: Int64): Int64 = if flag then let f = (n: Int64) => n + val in f(10) else val * 2 ifWithClosureInThen(true, 5) = 15
 def ifWithClosureInThen(flag: Bool, val: Int64): Int64 = if flag then let f = (n: Int64) => n + val in f(10) else val * 2 ifWithClosureInThen(false, 5) = 10
 

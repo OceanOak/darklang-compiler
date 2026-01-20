@@ -5,7 +5,6 @@
 #
 # Options:
 #   --filter=PATTERN   Run only tests matching PATTERN (case-insensitive)
-#   --parallel=N       Run with N parallel test workers
 #   --verification     Enable verification/stress tests
 #   --build-only       Only build, don't run tests
 #   --quiet            Quiet mode: print "success" or list failed tests
@@ -16,14 +15,12 @@
 #   ./run-tests                      Run all tests
 #   ./run-tests --filter=tuple       Run tests with 'tuple' in the name
 #   ./run-tests --filter=string      Run tests with 'string' in the name
-#   ./run-tests --parallel=4         Run with 4 parallel workers
-#   ./run-tests --filter=list --parallel=8
+#   ./run-tests --filter=list
 
 set -e
 
 # Parse arguments
 FILTER=""
-PARALLEL=""
 BUILD_ONLY=false
 QUIET=false
 HELP=false
@@ -34,11 +31,6 @@ while [[ $# -gt 0 ]]; do
         --filter=*)
             FILTER="${1#*=}"
             TEST_ARGS+=("--filter=$FILTER")
-            shift
-            ;;
-        --parallel=*)
-            PARALLEL="${1#*=}"
-            TEST_ARGS+=("--parallel=$PARALLEL")
             shift
             ;;
         --verification)
@@ -77,7 +69,6 @@ if [ "$HELP" = true ]; then
     echo ""
     echo "Options:"
     echo "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
-    echo "  --parallel=N       Run with N parallel test workers"
     echo "  --verification     Enable verification/stress tests"
     echo "  --build-only       Only build, don't run tests"
     echo "  --quiet            Quiet mode: print 'success' or list failed tests"
@@ -89,8 +80,7 @@ if [ "$HELP" = true ]; then
     echo "  ./run-tests --filter=tuple           Run tests with 'tuple' in the name"
     echo "  ./run-tests --filter=string          Run tests with 'string' in the name"
     echo "  ./run-tests --filter=List.map        Run List.map tests"
-    echo "  ./run-tests --parallel=4             Run with 4 parallel workers"
-    echo "  ./run-tests --filter=list --parallel=8"
+    echo "  ./run-tests --filter=list"
     echo ""
     echo "Test categories matched by filter:"
     echo "  tuple, record, list, string, float, int, bool"

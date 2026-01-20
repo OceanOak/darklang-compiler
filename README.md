@@ -113,11 +113,8 @@ dotnet clean && dotnet build
 ./run-tests --filter=string      # Run string tests
 ./run-tests --filter=List.map    # Run List.map tests
 
-# Parallel execution
-./run-tests --parallel=8         # Use 8 parallel workers
-
 # Combine options
-./run-tests --filter=list --parallel=4
+./run-tests --filter=list
 
 # Other options
 ./run-tests --help               # Show all options
@@ -139,9 +136,9 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 
 - `compileWithOptions` for in-memory compilation with explicit `CompilerOptions`
 - `compileAndRunWithOptions` for compile+execute with explicit `CompilerOptions`
-- `compileStdlib` to precompile stdlib for tests and tooling
-- `compilePreamble` and `compileTestWithPreamble` for test preamble caching
-- `compileAndRunWithStdlibCachedTimed` for E2E test execution with timing
+- `compileStdlib` to prebuild stdlib for tests and tooling
+- `compilePreamble` and `compileTestWithPreamble` for test preamble build/reuse
+- `compileAndRunWithPreambleTimed` for E2E test execution with timing
 
 ## Docker Development (with Codex + Claude Code Integration)
 

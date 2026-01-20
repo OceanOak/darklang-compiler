@@ -1,62 +1,12 @@
 // TestRunnerSchedulingTests.fs - Unit tests for test runner scheduling and CLI helpers
 //
-// Validates E2E ordering, stdlib scheduling decisions, and basic CLI arg parsing.
+// Validates stdlib scheduling decisions and basic CLI arg parsing.
 
 module TestRunnerSchedulingTests
 
-open TestDSL.E2EFormat
 open TestRunnerScheduling
 
 type TestResult = Result<unit, string>
-
-let private makeE2ETest (name: string) (source: string) (preamble: string) (sourceFile: string) : E2ETest =
-    {
-        Name = name
-        Source = source
-        Preamble = preamble
-        ExpectedStdout = None
-        ExpectedStderr = None
-        ExpectedExitCode = 0
-        ExpectCompileError = false
-        ExpectedErrorMessage = None
-        DisableFreeList = false
-        DisableANFOpt = false
-        DisableANFConstFolding = false
-        DisableANFConstProp = false
-        DisableANFCopyProp = false
-        DisableANFDCE = false
-        DisableANFStrengthReduction = false
-        DisableInlining = false
-        DisableTCO = false
-        DisableMIROpt = false
-        DisableMIRConstFolding = false
-        DisableMIRCSE = false
-        DisableMIRCopyProp = false
-        DisableMIRDCE = false
-        DisableMIRCFGSimplify = false
-        DisableMIRLICM = false
-        DisableLIROpt = false
-        DisableLIRPeephole = false
-        DisableFunctionTreeShaking = false
-        DisableLeakCheck = false
-        SourceFile = sourceFile
-        FunctionLineMap = Map.empty
-    }
-
-let testOrderE2ETestsByEstimatedCost () : TestResult =
-    let highCost = makeE2ETest "high" "aaaa" "p" "c.e2e"
-    let tieAlpha = makeE2ETest "alpha" "abc" "" "b.e2e"
-    let tieBeta = makeE2ETest "beta" "def" "" "a.e2e"
-    let lowCost = makeE2ETest "low" "x" "" "z.e2e"
-    let ordered =
-        [| tieAlpha; lowCost; highCost; tieBeta |]
-        |> orderE2ETestsByEstimatedCost
-    let orderedNames = ordered |> Array.map (fun test -> test.Name) |> Array.toList
-    let expected = [ "high"; "beta"; "alpha"; "low" ]
-    if orderedNames = expected then
-        Ok ()
-    else
-        Error $"Expected E2E order {expected}, got {orderedNames}"
 
 let testSplitUnitTestsByStdlibNeed () : TestResult =
     let suites : UnitTestSuite array = [|
@@ -125,7 +75,6 @@ let testHasVerboseArg () : TestResult =
         Error "Expected --verbose to be detected only when provided"
 
 let tests = [
-    ("E2E ordering", testOrderE2ETestsByEstimatedCost)
     ("Unit test split", testSplitUnitTestsByStdlibNeed)
     ("Stdlib compile decision", testShouldStartStdlibCompile)
     ("Stdlib warmup plan", testStdlibWarmupPlan)

@@ -25,7 +25,7 @@ type E2ETestResult = {
 }
 
 /// Compile stdlib once (call at test startup, pass result to runE2ETest)
-/// Uses pre-compiled stdlib - all functions compiled to LIR upfront for maximum speed
+/// Uses prebuilt stdlib - all functions compiled to LIR upfront for maximum speed
 let compileStdlib () : Result<CompilerLibrary.StdlibResult, string> =
     StdlibTestHarness.compileStdlib()
 
@@ -240,7 +240,7 @@ let runE2ETestWithPreambleContext
         emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
         result
 
-/// Run E2E test with pre-compiled stdlib
+/// Run E2E test with prebuilt stdlib
 let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     runE2ETestInternal stdlib test
 

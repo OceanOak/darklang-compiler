@@ -6224,7 +6224,7 @@ type ConversionResult = {
 }
 
 /// Result type for user-only ANF conversion (functions not merged with stdlib)
-/// Used for compiling user code separately from the precompiled stdlib
+/// Used for compiling user code separately from the prebuilt stdlib
 type UserOnlyResult = {
     UserFunctions: ANF.Function list   // Only user functions, not merged with stdlib
     MainExpr: ANF.AExpr                // User's main expression
@@ -6233,7 +6233,6 @@ type UserOnlyResult = {
     FuncReg: FunctionRegistry
     FuncParams: Map<string, (string * AST.Type) list>
     ModuleRegistry: AST.ModuleRegistry
-    SpecializedFuncNames: Set<string>  // Names of specialized stdlib functions from monomorphization
 }
 
 /// Convert a program to ANF with type information for reference counting
@@ -6362,7 +6361,7 @@ let private funcReturnTypesFromFuncReg (funcReg: FunctionRegistry) : Map<string,
         | _ -> None)
     |> Map.ofList
 
-/// Convert user program to ANF and concatenate with pre-compiled stdlib ANF.
+/// Convert user program to ANF and concatenate with prebuilt stdlib ANF.
 /// This avoids re-processing stdlib functions during user compilation.
 /// stdlibGenericDefs: Generic function definitions from stdlib needed for specialization
 /// when user code calls generic stdlib functions like Stdlib.List.length<Int64>.
@@ -6593,8 +6592,7 @@ let convertUserOnly
                   VariantLookup = mergedVariantLookup
                   FuncReg = mergedFuncReg
                   FuncParams = mergedFuncParams
-                  ModuleRegistry = moduleRegistry
-                  SpecializedFuncNames = Set.empty })  // Specialization tracking not currently collected
+                  ModuleRegistry = moduleRegistry })
         | [] ->
             Error "Program must have a main expression"
         | _ ->

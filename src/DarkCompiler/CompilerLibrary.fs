@@ -488,8 +488,6 @@ type PreambleContext = {
     ANFResult: AST_to_ANF.ConversionResult
     /// Preamble's symbolic LIR functions after register allocation
     SymbolicFunctions: LIRSymbolic.Function list
-    /// Names of specialized stdlib functions needed by the preamble
-    StdlibSpecializedNames: Set<string>
 }
 
 /// Result of compiling stdlib - can be reused across compilations
@@ -792,7 +790,6 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
             TypeMap = stdlib.StdlibTypeMap
             ANFResult = stdlib.ANFResult
             SymbolicFunctions = []
-            StdlibSpecializedNames = Set.empty
         }
         emit "preamble.compile.finish" [("source", sourceFile); ("functions", "0")]
         Ok emptyContext
@@ -896,7 +893,6 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                                     TypeMap = mergedTypeMap
                                     ANFResult = preambleConvResult
                                     SymbolicFunctions = preambleSymbolicFuncs
-                                    StdlibSpecializedNames = preambleUserOnly.SpecializedFuncNames
                                 }
                                 emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
                                 Ok context
@@ -1072,9 +1068,9 @@ let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib:
                             (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
     compileTestWithPreambleWithOptions false verbosity options stdlib preambleCtx sourceFile testExpr
 
-/// Compile user code with pre-compiled stdlib - only compiles stdlib functions that are actually called
-/// This avoids compiling unused stdlib functions through expensive passes (MIR, LIR, RegAlloc)
-let private compileWithEagerStdlib (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (source: string) : CompileResult =
+/// Compile user code with prebuilt stdlib and tree-shake unused functions
+/// This keeps expensive passes focused on user code while reusing stdlib output
+let private compileWithStdlib (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (source: string) : CompileResult =
     let sw = Stopwatch.StartNew()
     try
         // Pass 1: Parse user code only
@@ -1089,7 +1085,7 @@ let private compileWithEagerStdlib (verbosity: int) (options: CompilerOptions) (
         | Error err -> Error $"Parse error: {err}"
         | Ok userAst ->
             // Pass 1.5: Type Checking (user code with stdlib's TypeCheckEnv)
-            if verbosity >= 1 then println "  [1.5/8] Type Checking (incremental)..."
+            if verbosity >= 1 then println "  [1.5/8] Type Checking (with stdlib env)..."
             let typeCheckResult = TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv userAst
             let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
             if verbosity >= 2 then
@@ -1161,7 +1157,7 @@ let private compileWithEagerStdlib (verbosity: int) (options: CompilerOptions) (
                                     let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
                                     println $"        {t}ms"
 
-                                // Function tree-shaking on pre-compiled stdlib
+                                // Function tree-shaking on prebuilt stdlib
                                 let reachableStdlib =
                                     if options.DisableFunctionTreeShaking then stdlib.AllocatedFunctions
                                     else
@@ -1202,7 +1198,7 @@ let compileWithOptions (verbosity: int) (options: CompilerOptions) (source: stri
     match compileStdlib() with
     | Error err -> Error err
     | Ok stdlib ->
-        compileWithEagerStdlib verbosity options stdlib source
+        compileWithStdlib verbosity options stdlib source
 
 /// Compile source code to binary (uses default options)
 /// Execute compiled binary and capture output
@@ -1329,16 +1325,6 @@ let private compileResultToExecution (verbosity: int) (compileResult: CompileRes
     | Ok binary ->
         execute verbosity binary
 
-let private compilePreambleContextWithOptions
-    (allowInternal: bool)
-    (verbosity: int)
-    (stdlib: StdlibResult)
-    (preamble: string)
-    (sourceFile: string)
-    (funcLineMap: Map<string, int>)
-    : Result<PreambleContext, string> =
-    compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap
-
 /// Compile and run source code with options
 let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
     compileWithOptions verbosity options source |> compileResultToExecution verbosity
@@ -1378,7 +1364,7 @@ let compileAndRunWithPreambleContextTimedWithOptions
 
 /// Compile and run with timing breakdown, building a preamble context for each test
 let compileAndRunWithPreambleTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    match compilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
+    match compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
     | Error err ->
         { ExitCode = 1
           Stdout = ""
@@ -1392,11 +1378,11 @@ let compileAndRunWithPreambleTimedWithOptions (allowInternal: bool) (verbosity: 
 let compileAndRunWithPreambleTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
     compileAndRunWithPreambleTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
 
-/// Get all stdlib function names from the pre-compiled stdlib
+/// Get all stdlib function names from the prebuilt stdlib
 let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =
     stdlib.StdlibANFFunctions |> Map.keys |> Set.ofSeq
 
-/// Get the set of stdlib function names reachable from user code (using pre-compiled stdlib)
+/// Get the set of stdlib function names reachable from user code (using prebuilt stdlib)
 /// Used for coverage analysis without re-compiling stdlib
 let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string) : Result<Set<string>, string> =
     // Parse user code

@@ -1,8 +1,7 @@
 // ANFDeadCodeElimination.fs - ANF-level Dead Code Elimination
 //
 // Extracts call graph from ANF functions and determines reachability.
-// This enables lazy compilation by identifying which stdlib functions
-// are actually called before running expensive passes (MIR, LIR, RegAlloc).
+// Used for stdlib tree-shaking and coverage without re-compiling stdlib.
 
 module ANFDeadCodeElimination
 

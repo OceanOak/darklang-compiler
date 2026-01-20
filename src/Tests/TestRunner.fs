@@ -774,7 +774,6 @@ let main args =
                     let testsArray =
                         allE2ETests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
-                        |> orderE2ETestsByEstimatedCost
                     if testsArray.Length > 0 then
                         match getStdlibResult () with
                         | Error e ->
@@ -803,7 +802,6 @@ let main args =
                     let testsArray =
                         allVerifTests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
-                        |> orderE2ETestsByEstimatedCost
                     if testsArray.Length > 0 then
                         match getStdlibResult () with
                         | Error err ->
