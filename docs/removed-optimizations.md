@@ -31,18 +31,18 @@ The decision was made to prioritize simplicity over compilation speed.
 - `AST.fs`, `LIRSymbolic.fs` - Removed `[<MessagePackObject>]` attributes
 - `ANF_Inlining.fs` - Removed `buildDependencyHashMap`, `computeDependencyHash` functions
 
-### 2. Parallelization (`ParallelUtils.fs`)
+### 2. Parallelization (`ResultList.fs`)
 
 **What it was**: Infrastructure for parallel compilation of stdlib functions and parallel test execution.
 
 **How it worked**:
-- `mapResultsParallel`: Parallel map over lists collecting `Result` types
+- `mapResults` (formerly `mapResultsParallel`): Parallel map over lists collecting `Result` types (now sequential)
 - `Parallel.For` in test runner for concurrent test execution
 - Lock objects (`stdlibLock`, `compileLock`) for thread safety
 - `getOptimalParallelism`: Computed thread pool size based on CPU cores
 
 **Files affected**:
-- `ParallelUtils.fs` - Simplified to sequential-only operations
+- `ResultList.fs` (renamed from `ParallelUtils.fs`) - Simplified to sequential-only operations
 - `TestRunner.fs` - Replaced `Parallel.For` with sequential `for` loop, removed all lock objects
 - `ANF_to_MIR.fs`, `MIR_to_LIR.fs` - Now use sequential mapping
 
@@ -103,7 +103,7 @@ If compilation speed becomes a problem again, consider:
 | File | Change |
 |------|--------|
 | `src/DarkCompiler/Cache.fs` | Deleted |
-| `src/DarkCompiler/ParallelUtils.fs` | Simplified to sequential |
+| `src/DarkCompiler/ResultList.fs` | Simplified to sequential (renamed from `ParallelUtils.fs`) |
 | `src/DarkCompiler/CompilerLibrary.fs` | Major simplification |
 | `src/DarkCompiler/Stdlib.fs` | Removed lazy singleton |
 | `src/DarkCompiler/AST.fs` | Removed MessagePack attributes |

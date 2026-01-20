@@ -126,7 +126,7 @@ let main args =
         "IR Symbol Tests"
         "IR Printer Tests"
         "Pass Test Runner Tests"
-        "Parallel Utils Tests"
+        "Result List Tests"
         "Encoding Tests"
         "Binary Tests"
         "Type Checking Tests"
@@ -696,7 +696,7 @@ let main args =
         { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
-        { Name = "Parallel Utils Tests"; Tests = ParallelUtilsTests.tests }
+        { Name = "Result List Tests"; Tests = ResultListTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
         { Name = "Trace Tests"; Tests = TraceTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }

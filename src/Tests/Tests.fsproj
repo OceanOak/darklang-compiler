@@ -43,7 +43,7 @@
     <Compile Include="MIROptimizeTests.fs" />
     <Compile Include="ScriptHelperTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
-    <Compile Include="ParallelUtilsTests.fs" />
+    <Compile Include="ResultListTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
     <Compile Include="TraceTests.fs" />
     <Compile Include="EncodingTests.fs" />

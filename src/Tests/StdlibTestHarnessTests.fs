@@ -43,7 +43,6 @@ let private emptyStdlibResult () : StdlibResult =
         MIRProgram = emptyMirProgram
         LIRProgram = emptyLirProgram
         AllocatedFunctions = []
-        CompileMode = StdlibCompileMode.Sequential
         StdlibCallGraph = Map.empty
         StdlibANFFunctions = Map.empty
         StdlibANFCallGraph = Map.empty

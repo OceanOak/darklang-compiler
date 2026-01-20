@@ -14,7 +14,7 @@
 
 module MIR_to_LIR
 
-open ParallelUtils
+open ResultList
 
 let moduloNegativeDivisorErrorMessage =
     "Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number"
@@ -1699,7 +1699,7 @@ let toLIR (program: MIR.Program) : Result<LIRSymbolic.Program, string> =
                   StackSize = 0  // Will be determined by register allocation
                   UsedCalleeSaved = [] }  // Will be determined by register allocation
 
-    match mapResultsParallel convertFunc mirFuncs with
+    match mapResults convertFunc mirFuncs with
     | Error err -> Error err
     | Ok lirFuncs ->
         Ok (LIRSymbolic.Program lirFuncs)

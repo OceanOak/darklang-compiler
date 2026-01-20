@@ -1,24 +1,24 @@
-// ParallelUtilsTests.fs - Unit tests for parallel list/result helpers
+// ResultListTests.fs - Unit tests for sequential list/result helpers
 //
-// Verifies parallel mapping helpers preserve order and error semantics.
+// Verifies list/result mapping helpers preserve order and error semantics.
 
-module ParallelUtilsTests
+module ResultListTests
 
-open ParallelUtils
+open ResultList
 
 type TestResult = Result<unit, string>
 
-let testMapResultsParallelPreservesOrder () : TestResult =
+let testMapResultsPreservesOrder () : TestResult =
     let input = [ 1; 2; 3; 4 ]
-    match mapResultsParallel (fun x -> Ok (x * 2)) input with
+    match mapResults (fun x -> Ok (x * 2)) input with
     | Ok output when output = [ 2; 4; 6; 8 ] -> Ok ()
     | Ok output -> Error $"Expected [2; 4; 6; 8], got {output}"
     | Error err -> Error $"Unexpected error: {err}"
 
-let testMapResultsParallelReturnsFirstError () : TestResult =
+let testMapResultsReturnsFirstError () : TestResult =
     let input = [ 1; 2; 3 ]
     let result =
-        mapResultsParallel
+        mapResults
             (fun x ->
                 if x = 2 then
                     Error "bad 2"
@@ -33,8 +33,8 @@ let testMapResultsParallelReturnsFirstError () : TestResult =
     | Ok _ -> Error "Expected error but got Ok"
 
 let tests = [
-    ("order preserved", testMapResultsParallelPreservesOrder)
-    ("first error", testMapResultsParallelReturnsFirstError)
+    ("order preserved", testMapResultsPreservesOrder)
+    ("first error", testMapResultsReturnsFirstError)
 ]
 
 let runAll () : TestResult =

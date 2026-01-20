@@ -493,11 +493,6 @@ type PreambleContext = {
     StdlibSpecializedNames: Set<string>
 }
 
-/// Indicates how stdlib was compiled (sequential or parallel)
-type StdlibCompileMode =
-    | Sequential
-    | Parallel
-
 /// Result of compiling stdlib - can be reused across compilations
 type StdlibResult = {
     /// Parsed stdlib AST (for merging with user AST)
@@ -519,8 +514,6 @@ type StdlibResult = {
     LIRProgram: LIR.Program
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
     AllocatedFunctions: LIR.Function list
-    /// Compile mode used for stdlib allocation
-    CompileMode: StdlibCompileMode
     /// Call graph for dead code elimination (which stdlib funcs call which other funcs)
     StdlibCallGraph: Map<string, Set<string>>
     /// Stdlib ANF functions indexed by name (for coverage analysis)
@@ -728,7 +721,6 @@ let compileStdlib () : Result<StdlibResult, string> =
         emit "stdlib.compile.error" [("message", e)]
         Error e
     | Ok stdlibAst ->
-        let compileMode = StdlibCompileMode.Parallel
         // Add dummy main expression for type checking (stdlib has no main)
         let (AST.Program items) = stdlibAst
         let withMain = AST.Program (items @ [AST.Expression AST.UnitLiteral])
@@ -801,8 +793,8 @@ let compileStdlib () : Result<StdlibResult, string> =
                                 let allocated = RegisterAllocation.allocateRegisters peepholed
                                 Ok allocated
 
-                    // Compile all stdlib functions in parallel
-                    match ParallelUtils.mapResultsParallel compileStdlibFunc stdlibFuncs with
+                    // Compile all stdlib functions sequentially
+                    match mapResults compileStdlibFunc stdlibFuncs with
                     | Error e ->
                         emit "stdlib.compile.error" [("message", e)]
                         Error e
@@ -829,7 +821,6 @@ let compileStdlib () : Result<StdlibResult, string> =
                                     MIRProgram = mirProgram
                                     LIRProgram = allocatedProgram
                                     AllocatedFunctions = resolvedFuncs
-                                    CompileMode = compileMode
                                     StdlibCallGraph = stdlibCallGraph
                                     StdlibANFFunctions = stdlibFuncMap
                                     StdlibANFCallGraph = stdlibANFCallGraph
