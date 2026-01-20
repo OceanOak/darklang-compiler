@@ -203,10 +203,6 @@ let buildModuleRegistry () : ModuleRegistry =
     (moduleFuncs @ rawMemFuncs)
     |> Map.ofList
 
-/// Get a function from the registry by its full qualified name
-let tryGetFunction (registry: ModuleRegistry) (qualifiedName: string) : ModuleFunc option =
-    Map.tryFind qualifiedName registry
-
 /// Get a function, trying with Stdlib prefix if not found
 /// This allows writing Option.isSome instead of Stdlib.Option.isSome
 /// Returns both the function and the resolved name (which may differ from the input)
@@ -226,24 +222,3 @@ let tryGetFunctionWithFallback (registry: ModuleRegistry) (qualifiedName: string
 /// Get the type of a module function as an AST.Type
 let getFunctionType (func: ModuleFunc) : Type =
     TFunction (func.ParamTypes, func.ReturnType)
-
-/// Check if a function name is a file I/O intrinsic
-/// These are special-cased in the compiler to generate syscalls
-let isFileIntrinsic (qualifiedName: string) : bool =
-    qualifiedName = "Stdlib.File.readText" ||
-    qualifiedName = "Stdlib.File.exists" ||
-    qualifiedName = "Stdlib.File.writeText" ||
-    qualifiedName = "Stdlib.File.appendText" ||
-    qualifiedName = "Stdlib.File.delete" ||
-    qualifiedName = "Stdlib.File.setExecutable" ||
-    qualifiedName = "Stdlib.File.writeFromPtr"
-
-/// Check if a function name is a random intrinsic
-/// These are special-cased in the compiler to generate syscalls
-let isRandomIntrinsic (qualifiedName: string) : bool =
-    qualifiedName = "Stdlib.Random.int64"
-
-/// Check if a function name is a date intrinsic
-/// These are special-cased in the compiler to generate syscalls
-let isDateIntrinsic (qualifiedName: string) : bool =
-    qualifiedName = "Stdlib.Date.now"

@@ -1545,38 +1545,6 @@ let selectBlocksWithModuloChecks
                 }
             Ok (List.rev (finalBlock :: blocksRev), nextState)
 
-/// Convert MIR basic block to LIR basic block
-let selectBlock
-    (block: MIR.BasicBlock)
-    (variantRegistry: MIR.VariantRegistry)
-    (recordRegistry: MIR.RecordRegistry)
-    (returnType: AST.Type)
-    (floatRegs: Set<int>)
-    (state: TempState)
-    : Result<LIRSymbolic.BasicBlock * TempState, string> =
-    let lirLabel = convertLabel block.Label
-
-    let rec selectInstrs instrs currentState acc =
-        match instrs with
-        | [] -> Ok (List.rev acc |> List.concat, currentState)
-        | instr :: rest ->
-            match selectInstr instr variantRegistry recordRegistry floatRegs currentState with
-            | Error err -> Error err
-            | Ok (lirInstrs, nextState) ->
-                selectInstrs rest nextState (lirInstrs :: acc)
-
-    match selectInstrs block.Instrs state [] with
-    | Error err -> Error err
-    | Ok (lirInstrs, stateAfterInstrs) ->
-        match selectTerminator block.Terminator returnType stateAfterInstrs with
-        | Error err -> Error err
-        | Ok (termInstrs, lirTerm, nextState) ->
-            Ok ({
-                Label = lirLabel
-                Instrs = lirInstrs @ termInstrs
-                Terminator = lirTerm
-            }, nextState)
-
 /// Convert MIR CFG to LIR CFG
 let selectCFG
     (cfg: MIR.CFG)

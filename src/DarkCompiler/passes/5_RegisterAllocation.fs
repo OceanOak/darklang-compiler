@@ -626,83 +626,6 @@ let computeFloatInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Se
     livenessListReversed
 
 // ============================================================================
-// Live Interval Construction
-// ============================================================================
-
-/// Build live intervals from CFG and liveness information
-/// Uses a simpler approach: for each vreg, find first definition and last use
-let buildLiveIntervals (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, BlockLiveness>) : LiveInterval list =
-    let mutable intervals : Map<int, int * int> = Map.empty  // VRegId -> (start, end)
-    let mutable globalIdx = 0
-
-    // Process blocks in BFS order from entry
-    let mutable visited = Set.empty
-    let mutable queue = [cfg.Entry]
-
-    while not (List.isEmpty queue) do
-        match queue with
-        | [] -> ()
-        | label :: rest ->
-            queue <- rest
-            if not (Set.contains label visited) then
-                visited <- Set.add label visited
-                match Map.tryFind label cfg.Blocks with
-                | Some block ->
-                    let blockStart = globalIdx
-                    let blockLiveness = Map.find label liveness
-
-                    // Variables live-in extend their intervals to this block
-                    for vregId in blockLiveness.LiveIn do
-                        match Map.tryFind vregId intervals with
-                        | Some (s, e) -> intervals <- Map.add vregId (min s blockStart, max e blockStart) intervals
-                        | None -> intervals <- Map.add vregId (blockStart, blockStart) intervals
-
-                    // Process each instruction
-                    for instr in block.Instrs do
-                        globalIdx <- globalIdx + 1
-                        let used = getUsedVRegs instr
-                        let defined = getDefinedVReg instr
-
-                        // Uses extend the interval
-                        for vregId in used do
-                            match Map.tryFind vregId intervals with
-                            | Some (s, e) -> intervals <- Map.add vregId (s, max e globalIdx) intervals
-                            | None -> intervals <- Map.add vregId (globalIdx, globalIdx) intervals
-
-                        // Definitions start or extend the interval
-                        match defined with
-                        | Some vregId ->
-                            match Map.tryFind vregId intervals with
-                            | Some (s, e) -> intervals <- Map.add vregId (min s globalIdx, max e globalIdx) intervals
-                            | None -> intervals <- Map.add vregId (globalIdx, globalIdx) intervals
-                        | None -> ()
-
-                    // Terminator position
-                    globalIdx <- globalIdx + 1
-                    let termUses = getTerminatorUsedVRegs block.Terminator
-                    for vregId in termUses do
-                        match Map.tryFind vregId intervals with
-                        | Some (s, e) -> intervals <- Map.add vregId (s, max e globalIdx) intervals
-                        | None -> intervals <- Map.add vregId (globalIdx, globalIdx) intervals
-
-                    // Variables live-out extend their intervals to block end
-                    for vregId in blockLiveness.LiveOut do
-                        match Map.tryFind vregId intervals with
-                        | Some (s, e) -> intervals <- Map.add vregId (s, max e globalIdx) intervals
-                        | None -> intervals <- Map.add vregId (globalIdx, globalIdx) intervals
-
-                    // Add successors to queue
-                    let succs = getSuccessors block.Terminator
-                    queue <- queue @ succs
-                | None -> ()
-
-    // Convert to list sorted by start position
-    intervals
-    |> Map.toList
-    |> List.map (fun (vregId, (s, e)) -> { VRegId = vregId; Start = s; End = e })
-    |> List.sortBy (fun i -> i.Start)
-
-// ============================================================================
 // Register Definitions
 // ============================================================================
 
@@ -721,13 +644,6 @@ let calleeSavedRegs = [
     LIR.X19; LIR.X20; LIR.X21; LIR.X22; LIR.X23
     LIR.X24; LIR.X25; LIR.X26
 ]
-
-/// All allocatable registers - caller-saved first (preferred), then callee-saved
-let allocatableRegs = callerSavedRegs @ calleeSavedRegs
-
-/// Check if a register is callee-saved
-let isCalleeSaved (reg: LIR.PhysReg) : bool =
-    List.contains reg calleeSavedRegs
 
 /// Check if an instruction is a non-tail call (requires SaveRegs/RestoreRegs)
 let isNonTailCall (instr: LIRSymbolic.Instr) : bool =
@@ -1152,13 +1068,6 @@ let coloringToAllocation (colorResult: ColoringResult) (registers: LIR.PhysReg l
       StackSize = stackSize
       UsedCalleeSaved = usedCalleeSaved |> Set.toList |> List.sort }
 
-/// Run chordal graph coloring register allocation
-let chordalAllocation (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, BlockLiveness>) : AllocationResult =
-    let graph = buildInterferenceGraph cfg liveness
-    let preferences = collectPhiPreferences cfg
-    let colorResult = chordalGraphColor graph Map.empty (List.length allocatableRegs) preferences
-    coloringToAllocation colorResult allocatableRegs
-
 // ============================================================================
 // Float Register Allocation
 // ============================================================================
@@ -1320,81 +1229,6 @@ let getLiveCallerSavedFloatRegs (liveFVRegs: Set<int>) (floatAllocation: FAlloca
     |> List.filter (fun reg -> List.contains reg floatCallerSavedRegs)
     |> List.distinct
     |> List.sort
-
-/// Align to 16-byte boundary
-let alignTo16 (size: int) : int =
-    ((size + 15) / 16) * 16
-
-/// Linear scan register allocation
-let linearScan (intervals: LiveInterval list) : AllocationResult =
-    let mutable active : (LiveInterval * LIR.PhysReg) list = []
-    let mutable freeRegs = Set.ofList allocatableRegs
-    let mutable nextStackSlot = -8
-    let mutable mapping = Map.empty
-    let mutable usedCalleeSaved = Set.empty
-
-    /// Expire old intervals that are no longer active
-    let expireOldIntervals (currentStart: int) =
-        let (expired, stillActive) =
-            active |> List.partition (fun (interval, _) -> interval.End < currentStart)
-
-        for (_, reg) in expired do
-            freeRegs <- Set.add reg freeRegs
-
-        active <- stillActive
-
-    /// Spill an interval to stack
-    let spillToStack (vregId: int) =
-        let slot = nextStackSlot
-        nextStackSlot <- nextStackSlot - 8
-        mapping <- Map.add vregId (StackSlot slot) mapping
-        slot
-
-    /// Track callee-saved register usage
-    let trackCalleeSaved (reg: LIR.PhysReg) =
-        if isCalleeSaved reg then
-            usedCalleeSaved <- Set.add reg usedCalleeSaved
-
-    // Process intervals in order of start position
-    for interval in intervals do
-        expireOldIntervals interval.Start
-
-        if Set.isEmpty freeRegs then
-            // Need to spill - spill the interval that ends latest
-            let allCandidates = (interval, None) :: (active |> List.map (fun (i, r) -> (i, Some r)))
-            let toSpill = allCandidates |> List.maxBy (fun (i, _) -> i.End)
-
-            match toSpill with
-            | (i, None) when i.VRegId = interval.VRegId ->
-                // Spill current interval
-                spillToStack interval.VRegId |> ignore
-            | (i, Some reg) ->
-                // Spill the one with latest end, reassign its register to current
-                mapping <- Map.add i.VRegId (StackSlot nextStackSlot) mapping
-                nextStackSlot <- nextStackSlot - 8
-                mapping <- Map.add interval.VRegId (PhysReg reg) mapping
-                active <- (interval, reg) :: (active |> List.filter (fun (x, _) -> x.VRegId <> i.VRegId))
-                trackCalleeSaved reg
-            | _ ->
-                spillToStack interval.VRegId |> ignore
-        else
-            // Allocate a free register
-            let reg = Set.minElement freeRegs
-            freeRegs <- Set.remove reg freeRegs
-            mapping <- Map.add interval.VRegId (PhysReg reg) mapping
-            active <- (interval, reg) :: active
-            trackCalleeSaved reg
-
-    // Compute stack size (16-byte aligned)
-    let stackSize =
-        if nextStackSlot = -8 then 0
-        else alignTo16 (abs nextStackSlot)
-
-    {
-        Mapping = mapping
-        StackSize = stackSize
-        UsedCalleeSaved = Set.toList usedCalleeSaved
-    }
 
 // ============================================================================
 // Apply Allocation to LIR
@@ -2299,14 +2133,6 @@ let applyToBlockWithLiveness
       Instrs = allocatedInstrs @ termLoads
       Terminator = allocatedTerm }
 
-/// Apply allocation to a basic block (legacy - no liveness info)
-let applyToBlock (mapping: Map<int, Allocation>) (block: LIRSymbolic.BasicBlock) : LIRSymbolic.BasicBlock =
-    let allocatedInstrs = block.Instrs |> List.collect (applyToInstr mapping)
-    let (termLoads, allocatedTerm) = applyToTerminator mapping block.Terminator
-    { Label = block.Label
-      Instrs = allocatedInstrs @ termLoads
-      Terminator = allocatedTerm }
-
 /// Apply allocation to CFG with liveness info
 let applyToCFGWithLiveness
     (mapping: Map<int, Allocation>)
@@ -2326,78 +2152,9 @@ let applyToCFGWithLiveness
                 | None -> { LiveIn = Set.empty; LiveOut = Set.empty }
             applyToBlockWithLiveness mapping floatAllocation blockLiveness.LiveOut floatBlockLiveness.LiveOut block) }
 
-/// Apply allocation to CFG (legacy - no liveness info)
-let applyToCFG (mapping: Map<int, Allocation>) (cfg: LIRSymbolic.CFG) : LIRSymbolic.CFG =
-    { Entry = cfg.Entry
-      Blocks = cfg.Blocks |> Map.map (fun _ block -> applyToBlock mapping block) }
-
 // ============================================================================
 // Float Move Generation (used by both phi resolution and param copies)
 // ============================================================================
-
-/// Generate float move instructions with parallel move resolution.
-/// Uses ParallelMoves.resolve to handle cycles like D0←D1, D1←D2, D2←D0.
-/// IMPORTANT: We must work with PHYSICAL register IDs, not FVirtual IDs,
-/// because multiple FVirtual IDs can map to the same physical register.
-let generateFloatMoveInstrs (moves: (LIR.FReg * LIR.FReg) list) : LIRSymbolic.Instr list =
-    if List.isEmpty moves then []
-    else
-        // Map FVirtual to a canonical integer representing the physical register
-        // This mirrors the logic in CodeGen.lirFRegToARM64FReg
-        let fregToPhysId (freg: LIR.FReg) : int =
-            match freg with
-            | LIR.FPhysical p ->
-                match p with
-                | LIR.D0 -> 0 | LIR.D1 -> 1 | LIR.D2 -> 2 | LIR.D3 -> 3
-                | LIR.D4 -> 4 | LIR.D5 -> 5 | LIR.D6 -> 6 | LIR.D7 -> 7
-                | LIR.D8 -> 8 | LIR.D9 -> 9 | LIR.D10 -> 10 | LIR.D11 -> 11
-                | LIR.D12 -> 12 | LIR.D13 -> 13 | LIR.D14 -> 14 | LIR.D15 -> 15
-            | LIR.FVirtual 1000 -> 18  // D18 (left temp for binary ops)
-            | LIR.FVirtual 1001 -> 17  // D17 (right temp for binary ops)
-            | LIR.FVirtual 2000 -> 16  // D16 (cycle resolution temp)
-            | LIR.FVirtual n when n >= 3000 && n < 4000 -> 19 + ((n - 3000) % 8)  // D19-D26
-            | LIR.FVirtual n when n >= 0 && n <= 7 -> 2 + n  // D2-D9 for params 0-7
-            | LIR.FVirtual n when n < 10000 ->
-                // ANF-level VRegs (8-9999): params and local bindings beyond 0-7
-                // Pool: D0, D1, D10-D15, D27-D31 (13 registers)
-                // Must match CodeGen.fs lirFRegToARM64FReg
-                let tempRegs = [| 0; 1; 10; 11; 12; 13; 14; 15; 27; 28; 29; 30; 31 |]
-                tempRegs[(n - 8) % 13]
-            | LIR.FVirtual n ->
-                // MIR intermediates (VRegs 10000+): computation temps
-                // Same pool with offset 7 to reduce collisions
-                // Must match CodeGen.fs lirFRegToARM64FReg
-                let tempRegs = [| 0; 1; 10; 11; 12; 13; 14; 15; 27; 28; 29; 30; 31 |]
-                tempRegs[((n - 10000) + 7) % 13]
-
-        // Convert moves to physical register IDs for cycle detection
-        let physMoves = moves |> List.map (fun (dest, src) -> (fregToPhysId dest, fregToPhysId src))
-
-        let getSrcPhysId (src: int) : int option = Some src
-
-        let actions = ParallelMoves.resolve physMoves getSrcPhysId
-
-        // Convert actions back to FMov instructions using original FRegs
-        // Build a map from physical ID to original FReg for destinations
-        let destMap = moves |> List.map (fun (dest, _) -> (fregToPhysId dest, dest)) |> Map.ofList
-        let srcMap = moves |> List.map (fun (_, src) -> (fregToPhysId src, src)) |> Map.ofList
-
-        actions
-        |> List.collect (fun action ->
-            match action with
-            | ParallelMoves.SaveToTemp physId ->
-                // Save the source FReg to D16 temp
-                match Map.tryFind physId srcMap with
-                | Some srcFreg -> [LIRSymbolic.FMov (LIR.FVirtual 2000, srcFreg)]
-                | None -> []
-            | ParallelMoves.Move (destPhysId, srcPhysId) ->
-                match Map.tryFind destPhysId destMap, Map.tryFind srcPhysId srcMap with
-                | Some destFreg, Some srcFreg -> [LIRSymbolic.FMov (destFreg, srcFreg)]
-                | _ -> []
-            | ParallelMoves.MoveFromTemp destPhysId ->
-                match Map.tryFind destPhysId destMap with
-                | Some destFreg -> [LIRSymbolic.FMov (destFreg, LIR.FVirtual 2000)]
-                | None -> [])
 
 /// Generate float move instructions using allocation-based register mapping.
 /// Uses the float allocation result instead of modulo-based mapping.

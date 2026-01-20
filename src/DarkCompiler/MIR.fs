@@ -188,19 +188,12 @@ type RegGen = RegGen of int
 let freshReg (RegGen n) : VReg * RegGen =
     (VReg n, RegGen (n + 1))
 
-/// Initial register generator
-let initialRegGen = RegGen 0
-
 /// Fresh label generator
 type LabelGen = LabelGen of int
 
 /// Generate a fresh label with optional function prefix (for uniqueness across functions)
 let freshLabelWithPrefix (prefix: string) (LabelGen n) : Label * LabelGen =
     (Label $"{prefix}_L{n}", LabelGen (n + 1))
-
-/// Generate a fresh label (backward compatible - uses empty prefix)
-let freshLabel (LabelGen n) : Label * LabelGen =
-    (Label $"L{n}", LabelGen (n + 1))
 
 /// Initial label generator
 let initialLabelGen = LabelGen 0

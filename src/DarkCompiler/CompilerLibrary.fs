@@ -591,36 +591,6 @@ let tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     try Ok (Process.Start(info))
     with ex -> Error ex.Message
 
-/// Locate a .dark file from possible paths
-let tryFindDarkFile (filename: string) : string option =
-    let exePath = Assembly.GetExecutingAssembly().Location
-    let exeDir = Path.GetDirectoryName(exePath)
-    let possiblePaths = [
-        Path.Combine(exeDir, filename)
-        Path.Combine(exeDir, "..", "..", "..", "..", "src", "DarkCompiler", filename)
-        Path.Combine(Environment.CurrentDirectory, "src", "DarkCompiler", filename)
-    ]
-    possiblePaths |> List.tryFind File.Exists
-
-/// Load a .dark file from possible paths
-let loadDarkFile (filename: string) : Result<AST.Program, string> =
-    let exePath = Assembly.GetExecutingAssembly().Location
-    let exeDir = Path.GetDirectoryName(exePath)
-    let possiblePaths = [
-        Path.Combine(exeDir, filename)
-        Path.Combine(exeDir, "..", "..", "..", "..", "src", "DarkCompiler", filename)
-        Path.Combine(Environment.CurrentDirectory, "src", "DarkCompiler", filename)
-    ]
-    let filePath = possiblePaths |> List.tryFind File.Exists
-    match filePath with
-    | None ->
-        let pathsStr = String.Join(", ", possiblePaths)
-        Error $"Could not find {filename} in any of: {pathsStr}"
-    | Some path ->
-        let source = File.ReadAllText(path)
-        Parser.parseString source
-        |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
-
 /// Load a .dark file allowing internal identifiers (for stdlib sources)
 let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
     let exePath = Assembly.GetExecutingAssembly().Location
@@ -696,15 +666,6 @@ let loadStdlib () : Result<AST.Program, string> =
         | Ok (AST.Program unicodeItems) ->
             // Merge stdlib and unicode data
             Ok (AST.Program (stdlibItems @ unicodeItems))
-
-/// Merge typed stdlib with typed user program for ANF conversion
-/// Excludes stdlib's dummy expression - only user's main expression is kept
-let mergeTypedPrograms (stdlibTyped: AST.Program) (userTyped: AST.Program) : AST.Program =
-    let (AST.Program stdlibItems) = stdlibTyped
-    let (AST.Program userItems) = userTyped
-    // Filter out any Expression items from stdlib (dummy main)
-    let stdlibDefsOnly = stdlibItems |> List.filter (function AST.Expression _ -> false | _ -> true)
-    AST.Program (stdlibDefsOnly @ userItems)
 
 /// Compile stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
@@ -1091,10 +1052,6 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                             emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
                             Ok context
 
-/// Compile preamble with stdlib as base (user code defaults)
-let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
-    compilePreambleWithOptions false stdlib preamble sourceFile funcLineMap
-
 /// Compile test expression with a prebuilt preamble context
 /// Only the tiny test expression is parsed/compiled - preamble functions are merged in
 let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
@@ -1125,11 +1082,6 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
         Source = testExpr
     }
     compileUserWithPlan plan
-
-/// Compile test expression with a prebuilt preamble context (user code defaults)
-let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
-                            (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
-    compileTestWithPreambleWithOptions false verbosity options stdlib preambleCtx sourceFile testExpr
 
 /// Compile user code with prebuilt stdlib and tree-shake unused functions
 /// This keeps expensive passes focused on user code while reusing stdlib output
@@ -1338,10 +1290,6 @@ let compileAndRunWithPreambleTimedWithOptions (allowInternal: bool) (verbosity: 
           RuntimeTime = TimeSpan.Zero }
     | Ok preambleCtx ->
         compileAndRunWithPreambleContextTimedWithOptions allowInternal verbosity options stdlib preambleCtx testExpr sourceFile
-
-/// Compile and run with timing breakdown, building a preamble context for each test
-let compileAndRunWithPreambleTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    compileAndRunWithPreambleTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
 
 /// Get all stdlib function names from the prebuilt stdlib
 let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =

@@ -334,34 +334,6 @@ let storeStackSlot (src: ARM64.Reg) (offset: int) : Result<ARM64.Instr list, str
     else
         Error $"Stack offset {offset} exceeds supported range (-4095 to +4095)"
 
-/// Convert LIR operand to ARM64 register, loading from stack if needed
-/// Returns (register, instruction list to load it)
-/// Uses X9 as temporary register for stack slots
-let operandToReg (operand: LIR.Operand) : Result<ARM64.Reg * ARM64.Instr list, string> =
-    match operand with
-    | LIR.Reg reg ->
-        lirRegToARM64Reg reg
-        |> Result.map (fun r -> (r, []))
-    | LIR.Imm value ->
-        // Load immediate into X9
-        Ok (ARM64.X9, loadImmediate ARM64.X9 value)
-    | LIR.FloatImm _ ->
-        // Float support not yet implemented - will be added in later milestone
-        Error "Float code generation not yet implemented"
-    | LIR.StackSlot offset ->
-        // Load stack slot into X9
-        loadStackSlot ARM64.X9 offset
-        |> Result.map (fun instrs -> (ARM64.X9, instrs))
-    | LIR.StringRef _ ->
-        // String address loading handled by PrintString instruction
-        Error "StringRef cannot be directly used as register operand"
-    | LIR.FloatRef _ ->
-        // Float address loading handled by FLoad instruction
-        Error "FloatRef cannot be directly used as register operand"
-    | LIR.FuncAddr funcName ->
-        // Load function address into X9 using ADR instruction
-        Ok (ARM64.X9, [ARM64.ADR (ARM64.X9, funcName)])
-
 /// Generate STP instructions to save callee-saved register pairs
 /// Returns instructions and total bytes pushed
 let generateCalleeSavedSaves (regs: LIR.PhysReg list) : ARM64.Instr list * int =

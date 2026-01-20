@@ -732,10 +732,6 @@ let parseParamWithContext (typeParams: Set<string>) (tokens: Token list) : Resul
         |> Result.map (fun (ty, remaining) -> ((name, ty), remaining))
     | _ -> Error "Expected parameter (name : type)"
 
-/// Parse a single parameter: IDENT : type (no type parameters in scope)
-let parseParam (tokens: Token list) : Result<(string * Type) * Token list, string> =
-    parseParamWithContext Set.empty tokens
-
 /// Parse parameter list: param (, param)* (with type parameter context)
 let rec parseParamsWithContext (typeParams: Set<string>) (tokens: Token list) (acc: (string * Type) list) : Result<(string * Type) list * Token list, string> =
     match tokens with

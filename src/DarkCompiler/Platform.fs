@@ -83,9 +83,3 @@ let requiresCodeSigning (os: OS) : bool =
     match os with
     | MacOS -> true
     | Linux -> false
-
-/// Get a human-readable platform name
-let platformName (os: OS) : string =
-    match os with
-    | MacOS -> "macOS ARM64"
-    | Linux -> "Linux ARM64"

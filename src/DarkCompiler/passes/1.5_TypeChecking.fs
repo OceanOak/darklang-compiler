@@ -537,10 +537,6 @@ let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list,
         | TVar varName -> Ok [(varName, pattern)]  // Bind TVar to Dict type
         | _ -> Error $"Expected Dict<...>, got {typeToString actual}"
 
-/// Check if a type is a type variable
-let private isTypeVar (t: Type) : bool =
-    match t with TVar _ -> true | _ -> false
-
 /// Check if a type contains type variables
 let rec containsTVar (typ: Type) : bool =
     match typ with

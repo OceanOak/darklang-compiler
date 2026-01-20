@@ -1118,17 +1118,6 @@ let optimizeConstFolding (program: Program) : Program =
             EnableLICM = false }
         program
 
-let optimizeCSE (program: Program) : Program =
-    optimizeProgramWithOptions
-        { defaultOptimizeOptions with
-            EnableConstFolding = false
-            EnableCSE = true
-            EnableCopyProp = false
-            EnableDCE = false
-            EnableCFGSimplify = false
-            EnableLICM = false }
-        program
-
 let optimizeCopyProp (program: Program) : Program =
     optimizeProgramWithOptions
         { defaultOptimizeOptions with
@@ -1149,26 +1138,4 @@ let optimizeDCE (program: Program) : Program =
             EnableDCE = true
             EnableCFGSimplify = false
             EnableLICM = false }
-        program
-
-let optimizeCFGSimplify (program: Program) : Program =
-    optimizeProgramWithOptions
-        { defaultOptimizeOptions with
-            EnableConstFolding = false
-            EnableCSE = false
-            EnableCopyProp = false
-            EnableDCE = false
-            EnableCFGSimplify = true
-            EnableLICM = false }
-        program
-
-let optimizeLICM (program: Program) : Program =
-    optimizeProgramWithOptions
-        { defaultOptimizeOptions with
-            EnableConstFolding = false
-            EnableCSE = false
-            EnableCopyProp = false
-            EnableDCE = false
-            EnableCFGSimplify = false
-            EnableLICM = true }
         program

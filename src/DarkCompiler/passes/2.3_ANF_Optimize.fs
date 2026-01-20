@@ -50,21 +50,6 @@ let euclideanMod (a: int64) (b: int64) : int64 =
     elif (remainder > 0L && b < 0L) || (remainder < 0L && b > 0L) then remainder + b
     else remainder
 
-/// Check if an atom is a constant (literal or known value)
-let isConstant (atom: Atom) : bool =
-    match atom with
-    | UnitLiteral | IntLiteral _ | BoolLiteral _ | StringLiteral _ | FloatLiteral _ -> true
-    | Var _ | FuncRef _ -> false
-
-/// Try to get a constant from an atom (resolving through env)
-let resolveAtom (env: ConstEnv) (atom: Atom) : Atom =
-    match atom with
-    | Var tid ->
-        match Map.tryFind tid env with
-        | Some constAtom -> constAtom
-        | None -> atom
-    | _ -> atom
-
 /// Fold a binary operation on constants
 /// Only folds Int64 for now - other integer types need proper overflow handling at runtime
 let foldBinOp (op: BinOp) (left: Atom) (right: Atom) : CExpr option =
@@ -482,16 +467,6 @@ let optimizeConstFolding (program: Program) : Program =
             EnableStrengthReduction = false }
         program
 
-let optimizeConstProp (program: Program) : Program =
-    optimizeProgramWithOptions
-        { defaultOptimizeOptions with
-            EnableConstFolding = false
-            EnableConstProp = true
-            EnableCopyProp = false
-            EnableDCE = false
-            EnableStrengthReduction = false }
-        program
-
 let optimizeCopyProp (program: Program) : Program =
     optimizeProgramWithOptions
         { defaultOptimizeOptions with
@@ -510,14 +485,4 @@ let optimizeDCE (program: Program) : Program =
             EnableCopyProp = false
             EnableDCE = true
             EnableStrengthReduction = false }
-        program
-
-let optimizeStrengthReduction (program: Program) : Program =
-    optimizeProgramWithOptions
-        { defaultOptimizeOptions with
-            EnableConstFolding = false
-            EnableConstProp = false
-            EnableCopyProp = false
-            EnableDCE = false
-            EnableStrengthReduction = true }
         program

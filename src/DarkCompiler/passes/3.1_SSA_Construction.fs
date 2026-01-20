@@ -531,19 +531,6 @@ let createInitialRenamingState (cfg: CFG) (floatRegs: Set<int>) : RenamingState 
         FloatRegs = floatRegs  // Start with original floatRegs, will be extended
     }
 
-/// Get current version of a VReg, creating version 0 if not seen
-let getCurrentVersion (state: RenamingState) (vreg: VReg) : int * RenamingState =
-    match Map.tryFind vreg state.CurrentVersion with
-    | Some v -> (v, state)
-    | None ->
-        // First use - create version 0
-        let state' = {
-            state with
-                CurrentVersion = Map.add vreg 0 state.CurrentVersion
-                VersionStack = Map.add vreg [0] state.VersionStack
-        }
-        (0, state')
-
 /// Create new version for a definition
 let newVersion (state: RenamingState) (vreg: VReg) : int * VReg * RenamingState =
     let version = state.NextVersion

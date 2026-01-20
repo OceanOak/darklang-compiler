@@ -334,16 +334,6 @@ type CFGBuilder = {
     CoverageMapping: ANF.CoverageMapping
 }
 
-/// Get payload size for an atom used in reference counting
-/// Returns Error if type lookup fails
-let getPayloadSizeForAtom (builder: CFGBuilder) (atom: ANF.Atom) : Result<int, string> =
-    match atom with
-    | ANF.Var tid ->
-        match Map.tryFind tid builder.TypeMap with
-        | Some typ -> Ok (ANF.payloadSize typ builder.TypeReg)
-        | None -> Error $"Internal error: type not found for {tid} in TypeMap"
-    | _ -> Error "Internal error: RefCount operation on non-variable atom"
-
 /// Convert ANF Atom to MIR Operand using lookups from builder
 /// Returns Error if float/string lookup fails (internal invariant violation)
 let atomToOperand (builder: CFGBuilder) (atom: ANF.Atom) : Result<MIR.Operand, string> =

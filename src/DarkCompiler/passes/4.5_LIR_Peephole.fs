@@ -18,18 +18,6 @@ open LIRSymbolic
    3) Hoist loop-invariant Mov(Imm ...) for virtual regs into the preheader and remove from loop blocks.
    4) Run LICM alongside existing peephole passes in optimizeCFGOnce. *)
 
-/// Check if an operand is an immediate with value 0
-let isZero (op: Operand) : bool =
-    match op with
-    | Imm 0L -> true
-    | _ -> false
-
-/// Check if an operand is an immediate with value 1
-let isOne (op: Operand) : bool =
-    match op with
-    | Imm 1L -> true
-    | _ -> false
-
 /// Check if two registers are the same
 let sameReg (r1: Reg) (r2: Reg) : bool =
     match r1, r2 with
