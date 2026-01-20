@@ -187,34 +187,6 @@ let printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : uni
     println (formatLIRSymbolic program)
     println ""
 
-/// Compute the platform-specific code file offset for encoding
-let private computeCodeFileOffset (os: Platform.OS) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (enableLeakCheck: bool) : int =
-    match os with
-    | Platform.Linux ->
-        // ELF: header (64) + 1 program header (56) = 120
-        64 + 56
-    | Platform.MacOS ->
-        // Mach-O: header (32) + load commands + padding
-        // Must match 8_Binary_Generation_MachO.fs calculation
-        let headerSize = 32
-        let pageZeroCommandSize = 72
-        let hasData =
-            not stringPool.Strings.IsEmpty
-            || not floatPool.Floats.IsEmpty
-            || enableLeakCheck
-        let numTextSections = if hasData then 2 else 1
-        let textSegmentCommandSize = 72 + (80 * numTextSections)
-        let linkeditSegmentCommandSize = 72
-        let dylinkerCommandSize = 32
-        let dylibCommandSize = 56
-        let symtabCommandSize = 24
-        let dysymtabCommandSize = 80
-        let uuidCommandSize = 24
-        let buildVersionCommandSize = 24
-        let mainCommandSize = 24
-        let commandsSize = pageZeroCommandSize + textSegmentCommandSize + linkeditSegmentCommandSize + dylinkerCommandSize + dylibCommandSize + symtabCommandSize + dysymtabCommandSize + uuidCommandSize + buildVersionCommandSize + mainCommandSize
-        (headerSize + commandsSize + 200 + 7) &&& (~~~7)
-
 /// Run SSA + MIR/LIR optimizations, returning an optimized LIR program
 let private compileMirToLir
     (verbosity: int)
@@ -521,9 +493,8 @@ let private generateBinary
             if verbosity >= 1 then println encodeLabel
             let encodeStart = sw.Elapsed.TotalMilliseconds
             let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
-            let codeFileOffset = computeCodeFileOffset os stringPool floatPool options.EnableLeakCheck
             let machineCode =
-                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool codeFileOffset options.EnableLeakCheck
+                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool os options.EnableLeakCheck
             if verbosity >= 2 then
                 let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - encodeStart, 1)
                 println $"        {t}ms"

@@ -1259,6 +1259,40 @@ let getCoverageDataSize (coverageExprCount: int) : int =
     if coverageExprCount <= 0 then 0
     else ((coverageExprCount * 8 + 7) / 8) * 8
 
+/// Compute the platform-specific code file offset for encoding
+let private computeCodeFileOffset
+    (os: Platform.OS)
+    (stringPool: MIR.StringPool)
+    (floatPool: MIR.FloatPool)
+    (enableLeakCheck: bool)
+    : int =
+    match os with
+    | Platform.Linux ->
+        // ELF: header (64) + 1 program header (56) = 120
+        64 + 56
+    | Platform.MacOS ->
+        // Mach-O: header (32) + load commands + padding
+        // Must match 8_Binary_Generation_MachO.fs calculation
+        let headerSize = 32
+        let pageZeroCommandSize = 72
+        let hasData =
+            not stringPool.Strings.IsEmpty
+            || not floatPool.Floats.IsEmpty
+            || enableLeakCheck
+        let numTextSections = if hasData then 2 else 1
+        let textSegmentCommandSize = 72 + (80 * numTextSections)
+        let linkeditSegmentCommandSize = 72
+        let dylinkerCommandSize = 32
+        let dylibCommandSize = 56
+        let symtabCommandSize = 24
+        let dysymtabCommandSize = 80
+        let uuidCommandSize = 24
+        let buildVersionCommandSize = 24
+        let mainCommandSize = 24
+        let commandsSize =
+            pageZeroCommandSize + textSegmentCommandSize + linkeditSegmentCommandSize + dylinkerCommandSize + dylibCommandSize + symtabCommandSize + dysymtabCommandSize + uuidCommandSize + buildVersionCommandSize + mainCommandSize
+        (headerSize + commandsSize + 200 + 7) &&& (~~~7)
+
 /// Compute leak counter label position
 /// Returns map with "_leak_count" label after all other data, 8-byte aligned
 let computeLeakCounterLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize: int) (stringPoolSize: int) : Map<string, int> =
@@ -1278,14 +1312,14 @@ let computeCoverageLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize: i
 
 /// Encoding with string and float pool support
 /// Computes label positions and encodes ADRP/ADD_label correctly
-/// codeFileOffset: where code will be placed in the final binary (for correct PC-relative addressing)
 let encodeAllWithPools
     (instructions: ARM64.Instr list)
     (stringPool: MIR.StringPool)
     (floatPool: MIR.FloatPool)
-    (codeFileOffset: int)
+    (os: Platform.OS)
     (enableLeakCheck: bool)
     : ARM64.MachineCode list =
+    let codeFileOffset = computeCodeFileOffset os stringPool floatPool enableLeakCheck
     // Step 1: Compute code size
     let codeSize = getCodeSize instructions
 
@@ -1326,13 +1360,12 @@ let encodeAllWithPools
     encodeLoop instructions codeFileOffset []
 
 /// Backwards-compatible version for code with only strings (no floats)
-let encodeAllWithStrings (instructions: ARM64.Instr list) (stringPool: MIR.StringPool) (codeFileOffset: int) : ARM64.MachineCode list =
-    encodeAllWithPools instructions stringPool MIR.emptyFloatPool codeFileOffset false
+let encodeAllWithStrings (instructions: ARM64.Instr list) (stringPool: MIR.StringPool) (os: Platform.OS) : ARM64.MachineCode list =
+    encodeAllWithPools instructions stringPool MIR.emptyFloatPool os false
 
 /// Main encoding entry point with two-pass label resolution (for code without strings)
-let encodeAll (instructions: ARM64.Instr list) : ARM64.MachineCode list =
-    // Use version with empty pools and 0 offset for backwards compatibility
-    encodeAllWithPools instructions MIR.emptyStringPool MIR.emptyFloatPool 0 false
+let encodeAll (instructions: ARM64.Instr list) (os: Platform.OS) : ARM64.MachineCode list =
+    encodeAllWithPools instructions MIR.emptyStringPool MIR.emptyFloatPool os false
 
 /// Encoding with coverage support
 /// Adds _coverage_data label pointing to BSS section after all data
