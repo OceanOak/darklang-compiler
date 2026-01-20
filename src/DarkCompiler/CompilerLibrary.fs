@@ -363,18 +363,21 @@ let private allocateRegistersForFunctions
     : LIRSymbolic.Function list =
     functions |> List.map RegisterAllocation.allocateRegisters
 
-/// Run ANF optimization + RC/TCO/print insertion, returning a final ANF program and type map
-let private buildAnfProgram
+type private AnfPipelineResult = {
+    Program: ANF.Program
+    TypeMap: ANF.TypeMap
+    ConvResult: AST_to_ANF.ConversionResult
+}
+
+/// Run ANF optimization + RC/TCO, returning a final ANF program and type map
+let private buildAnfProgramCore
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
-    (programType: AST.Type)
     (userFunctions: ANF.Function list)
     (mainExpr: ANF.AExpr)
     (userOnly: AST_to_ANF.UserOnlyResult)
-    (extraFunctions: ANF.Function list)
-    (extraTypeMap: ANF.TypeMap)
-    : Result<ANF.Program * ANF.TypeMap * AST_to_ANF.ConversionResult, string> =
+    : Result<AnfPipelineResult, string> =
 
     let anfOptions = buildANFOptimizeOptions options
     let anfPassLabel =
@@ -443,9 +446,27 @@ let private buildAnfProgram
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after Tail Call Detection) ===" anfAfterTCO
 
-        let (ANF.Program (postTcoFunctions, postTcoMain)) = anfAfterTCO
+        Ok { Program = anfAfterTCO; TypeMap = typeMap; ConvResult = convResult }
+
+/// Run ANF optimization + RC/TCO/print insertion, returning a final ANF program and type map
+let private buildAnfProgram
+    (verbosity: int)
+    (options: CompilerOptions)
+    (sw: Stopwatch)
+    (programType: AST.Type)
+    (userFunctions: ANF.Function list)
+    (mainExpr: ANF.AExpr)
+    (userOnly: AST_to_ANF.UserOnlyResult)
+    (extraFunctions: ANF.Function list)
+    (extraTypeMap: ANF.TypeMap)
+    : Result<ANF.Program * ANF.TypeMap * AST_to_ANF.ConversionResult, string> =
+
+    match buildAnfProgramCore verbosity options sw userFunctions mainExpr userOnly with
+    | Error err -> Error err
+    | Ok pipeline ->
+        let (ANF.Program (postTcoFunctions, postTcoMain)) = pipeline.Program
         let mergedFunctions = extraFunctions @ postTcoFunctions
-        let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) extraTypeMap typeMap
+        let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) extraTypeMap pipeline.TypeMap
 
         if verbosity >= 1 then println "  [2.8/8] Print Insertion..."
         let printStart = sw.Elapsed.TotalMilliseconds
@@ -456,7 +477,7 @@ let private buildAnfProgram
             println $"        {t}ms"
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after Print insertion) ===" mergedProgram
-        Ok (mergedProgram, mergedTypeMap, convResult)
+        Ok (mergedProgram, mergedTypeMap, pipeline.ConvResult)
 
 /// Run codegen, encoding, and binary generation
 let private generateBinary
@@ -1035,46 +1056,33 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                     emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                     Error msg
                 | Ok preambleUserOnly ->
-                    // ANF Optimization (preamble functions)
-                    let preambleProgram = ANF.Program (preambleUserOnly.UserFunctions, preambleUserOnly.MainExpr)
-                    let anfOptimized = ANF_Optimize.optimizeProgram preambleProgram
-
-                    // ANF Inlining (keep functions separate for now, can inline later)
-                    let anfInlined = ANF_Inlining.inlineProgramDefault anfOptimized
-
-                    // Create ConversionResult for RC insertion
-                    let preambleConvResult : AST_to_ANF.ConversionResult = {
-                        Program = anfInlined
-                        TypeReg = preambleUserOnly.TypeReg
-                        VariantLookup = preambleUserOnly.VariantLookup
-                        FuncReg = preambleUserOnly.FuncReg
-                        FuncParams = preambleUserOnly.FuncParams
-                        ModuleRegistry = preambleUserOnly.ModuleRegistry
-                    }
-
-                    // RC Insertion
-                    match RefCountInsertion.insertRCInProgram preambleConvResult with
+                    let preambleOptions = defaultOptions
+                    let anfSw = Stopwatch.StartNew()
+                    match buildAnfProgramCore 0 preambleOptions anfSw preambleUserOnly.UserFunctions preambleUserOnly.MainExpr preambleUserOnly with
                     | Error err ->
-                        let msg = $"Preamble RC insertion error: {err}"
+                        let rcPrefix = "Reference count insertion error: "
+                        let msg =
+                            if err.StartsWith(rcPrefix) then
+                                let suffix = err.Substring(rcPrefix.Length)
+                                $"Preamble RC insertion error: {suffix}"
+                            else
+                                $"Preamble {err}"
                         emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                         Error msg
-                    | Ok (preambleAnfAfterRC, typeMap) ->
-                        // Tail Call Detection
-                        let preambleAnfAfterTCO = TailCallDetection.detectTailCallsInProgram preambleAnfAfterRC
-
+                    | Ok pipeline ->
                         // Extract just the functions (ignore main expr which is dummy `0`)
-                        let (ANF.Program (preambleFunctions, _dummyMainExpr)) = preambleAnfAfterTCO
+                        let (ANF.Program (preambleFunctions, _dummyMainExpr)) = pipeline.Program
 
+                        let preambleConvResult = pipeline.ConvResult
                         let preambleExternalReturnTypes = extractReturnTypes preambleConvResult.FuncReg
-                        let preambleOptions = defaultOptions
                         let sw = Stopwatch.StartNew()
                         match compileAnfFunctionsOnlyToLir
                             0
                             preambleOptions
                             sw
                             "preamble"
-                            preambleAnfAfterTCO
-                            typeMap
+                            pipeline.Program
+                            pipeline.TypeMap
                             preambleConvResult.FuncParams
                             preambleConvResult.VariantLookup
                             Map.empty
@@ -1099,7 +1107,7 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                             let preambleSymbolicFuncs = preambleOnlyFuncs
 
                             // Merge TypeMaps (stdlib + preamble)
-                            let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
+                            let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap pipeline.TypeMap
 
                             let context = {
                                 TypeCheckEnv = preambleTypeCheckEnv

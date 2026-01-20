@@ -137,36 +137,39 @@ let private buildE2EResult (test: E2ETest) (execResult: CompilerLibrary.TimedExe
           CompileTime = execResult.CompileTime
           RuntimeTime = execResult.RuntimeTime }
 
+let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptions =
+    { CompilerLibrary.defaultOptions with
+        DisableFreeList = test.DisableFreeList
+        DisableANFOpt = test.DisableANFOpt
+        DisableANFConstFolding = test.DisableANFConstFolding
+        DisableANFConstProp = test.DisableANFConstProp
+        DisableANFCopyProp = test.DisableANFCopyProp
+        DisableANFDCE = test.DisableANFDCE
+        DisableANFStrengthReduction = test.DisableANFStrengthReduction
+        DisableInlining = test.DisableInlining
+        DisableTCO = test.DisableTCO
+        DisableMIROpt = test.DisableMIROpt
+        DisableMIRConstFolding = test.DisableMIRConstFolding
+        DisableMIRCSE = test.DisableMIRCSE
+        DisableMIRCopyProp = test.DisableMIRCopyProp
+        DisableMIRDCE = test.DisableMIRDCE
+        DisableMIRCFGSimplify = test.DisableMIRCFGSimplify
+        DisableMIRLICM = test.DisableMIRLICM
+        DisableLIROpt = test.DisableLIROpt
+        DisableLIRPeephole = test.DisableLIRPeephole
+        DisableFunctionTreeShaking = test.DisableFunctionTreeShaking
+        EnableCoverage = false
+        EnableLeakCheck = not test.DisableLeakCheck
+        DumpANF = false
+        DumpMIR = false
+        DumpLIR = false
+    }
+
 /// Run E2E test (internal implementation)
 let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     try
         emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
-        let options : CompilerLibrary.CompilerOptions = {
-            DisableFreeList = test.DisableFreeList
-            DisableANFOpt = test.DisableANFOpt
-            DisableANFConstFolding = test.DisableANFConstFolding
-            DisableANFConstProp = test.DisableANFConstProp
-            DisableANFCopyProp = test.DisableANFCopyProp
-            DisableANFDCE = test.DisableANFDCE
-            DisableANFStrengthReduction = test.DisableANFStrengthReduction
-            DisableInlining = test.DisableInlining
-            DisableTCO = test.DisableTCO
-            DisableMIROpt = test.DisableMIROpt
-            DisableMIRConstFolding = test.DisableMIRConstFolding
-            DisableMIRCSE = test.DisableMIRCSE
-            DisableMIRCopyProp = test.DisableMIRCopyProp
-            DisableMIRDCE = test.DisableMIRDCE
-            DisableMIRCFGSimplify = test.DisableMIRCFGSimplify
-            DisableMIRLICM = test.DisableMIRLICM
-            DisableLIROpt = test.DisableLIROpt
-            DisableLIRPeephole = test.DisableLIRPeephole
-            DisableFunctionTreeShaking = test.DisableFunctionTreeShaking
-            EnableCoverage = false  // Coverage integration handled separately
-            EnableLeakCheck = not test.DisableLeakCheck
-            DumpANF = false
-            DumpMIR = false
-            DumpLIR = false
-        }
+        let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
             CompilerLibrary.compileAndRunWithPreambleTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
@@ -195,32 +198,7 @@ let runE2ETestWithPreambleContext
     : E2ETestResult =
     try
         emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
-        let options : CompilerLibrary.CompilerOptions = {
-            DisableFreeList = test.DisableFreeList
-            DisableANFOpt = test.DisableANFOpt
-            DisableANFConstFolding = test.DisableANFConstFolding
-            DisableANFConstProp = test.DisableANFConstProp
-            DisableANFCopyProp = test.DisableANFCopyProp
-            DisableANFDCE = test.DisableANFDCE
-            DisableANFStrengthReduction = test.DisableANFStrengthReduction
-            DisableInlining = test.DisableInlining
-            DisableTCO = test.DisableTCO
-            DisableMIROpt = test.DisableMIROpt
-            DisableMIRConstFolding = test.DisableMIRConstFolding
-            DisableMIRCSE = test.DisableMIRCSE
-            DisableMIRCopyProp = test.DisableMIRCopyProp
-            DisableMIRDCE = test.DisableMIRDCE
-            DisableMIRCFGSimplify = test.DisableMIRCFGSimplify
-            DisableMIRLICM = test.DisableMIRLICM
-            DisableLIROpt = test.DisableLIROpt
-            DisableLIRPeephole = test.DisableLIRPeephole
-            DisableFunctionTreeShaking = test.DisableFunctionTreeShaking
-            EnableCoverage = false
-            EnableLeakCheck = not test.DisableLeakCheck
-            DumpANF = false
-            DumpMIR = false
-            DumpLIR = false
-        }
+        let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
             CompilerLibrary.compileAndRunWithPreambleContextTimedWithOptions allowInternal 0 options stdlib preambleCtx test.Source test.SourceFile
