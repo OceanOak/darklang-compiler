@@ -36,8 +36,8 @@
     <Compile Include="TestRunnerSchedulingTests.fs" />
     <Compile Include="CompilerLibraryTests.fs" />
     <Compile Include="StdlibTestHarnessTests.fs" />
-    <Compile Include="CompilerCachingTests.fs" />
-    <Compile Include="PreamblePrecompileTests.fs" />
+    <Compile Include="StdlibCompileTests.fs" />
+    <Compile Include="PreambleBuildTests.fs" />
     <Compile Include="IRSymbolTests.fs" />
     <Compile Include="IRPrinterTests.fs" />
     <Compile Include="MIROptimizeTests.fs" />

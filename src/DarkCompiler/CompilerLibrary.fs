@@ -12,7 +12,6 @@ open System
 open System.IO
 open System.Diagnostics
 open System.Reflection
-open System.Collections.Concurrent
 open Output
 open Trace
 
@@ -508,9 +507,7 @@ type StdlibResult = {
     GenericFuncDefs: AST_to_ANF.GenericFuncDefs
     /// Module registry for stdlib intrinsics (built once, reused)
     ModuleRegistry: AST.ModuleRegistry
-    /// Cached MIR program (avoids re-converting stdlib ANF to MIR each compilation)
-    MIRProgram: MIR.Program
-    /// Cached LIR program (avoids re-converting stdlib MIR to LIR each compilation)
+    /// Precompiled LIR program (used for string/float pools)
     LIRProgram: LIR.Program
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
     AllocatedFunctions: LIR.Function list
@@ -525,56 +522,7 @@ type StdlibResult = {
 }
 
 
-/// Helper: map a function returning Result over a list, returning Error on first failure
-let private mapResults (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'b list, string> =
-    let rec loop acc remaining =
-        match remaining with
-        | [] -> Ok (List.rev acc)
-        | item :: rest ->
-            match f item with
-            | Error err -> Error err
-            | Ok result -> loop (result :: acc) rest
-    loop [] items
-
 // Helper functions for exception-to-Result conversion (Darklang compatibility)
-
-/// Compare two LIR functions and return differences
-let compareLIRFunctions (name: string) (cached: LIR.Function) (fresh: LIR.Function) : string list =
-    let differences = ResizeArray<string>()
-
-    // Compare basic properties
-    if cached.Name <> fresh.Name then
-        differences.Add($"Name: cached={cached.Name}, fresh={fresh.Name}")
-    if cached.StackSize <> fresh.StackSize then
-        differences.Add($"StackSize: cached={cached.StackSize}, fresh={fresh.StackSize}")
-    if cached.UsedCalleeSaved <> fresh.UsedCalleeSaved then
-        differences.Add($"UsedCalleeSaved: cached={cached.UsedCalleeSaved}, fresh={fresh.UsedCalleeSaved}")
-    if cached.TypedParams <> fresh.TypedParams then
-        differences.Add($"TypedParams: cached={cached.TypedParams}, fresh={fresh.TypedParams}")
-
-    // Compare CFG
-    let cachedBlocks = cached.CFG.Blocks |> Map.toList |> List.sortBy fst
-    let freshBlocks = fresh.CFG.Blocks |> Map.toList |> List.sortBy fst
-
-    if cached.CFG.Entry <> fresh.CFG.Entry then
-        differences.Add($"CFG.Entry: cached={cached.CFG.Entry}, fresh={fresh.CFG.Entry}")
-
-    if cachedBlocks.Length <> freshBlocks.Length then
-        differences.Add($"Block count: cached={cachedBlocks.Length}, fresh={freshBlocks.Length}")
-    else
-        for ((cLabel, cBlock), (fLabel, fBlock)) in List.zip cachedBlocks freshBlocks do
-            if cLabel <> fLabel then
-                differences.Add($"Block label mismatch: cached={cLabel}, fresh={fLabel}")
-            if cBlock.Terminator <> fBlock.Terminator then
-                differences.Add($"Block {cLabel} terminator: cached={cBlock.Terminator}, fresh={fBlock.Terminator}")
-            if cBlock.Instrs.Length <> fBlock.Instrs.Length then
-                differences.Add($"Block {cLabel} instr count: cached={cBlock.Instrs.Length}, fresh={fBlock.Instrs.Length}")
-            else
-                for i, (cInstr, fInstr) in List.indexed (List.zip cBlock.Instrs fBlock.Instrs) do
-                    if cInstr <> fInstr then
-                        differences.Add($"Block {cLabel} instr {i}: cached={cInstr}, fresh={fInstr}")
-
-    differences |> Seq.toList
 
 /// Extract return types from a FuncReg (FunctionRegistry maps func name -> full type)
 /// This is needed because buildReturnTypeReg only includes functions in the current program,
@@ -794,14 +742,12 @@ let compileStdlib () : Result<StdlibResult, string> =
                                 Ok allocated
 
                     // Compile all stdlib functions sequentially
-                    match mapResults compileStdlibFunc stdlibFuncs with
+                    match ResultList.mapResults compileStdlibFunc stdlibFuncs with
                     | Error e ->
                         emit "stdlib.compile.error" [("message", e)]
                         Error e
                     | Ok allocatedFuncs ->
                         let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
-                        // MIRProgram is not used anywhere - set to empty placeholder
-                        let mirProgram = MIR.Program ([], variantRegistry, recordRegistry)
                         match LIRSymbolic.toLIR allocatedSymbolic with
                         | Error err ->
                             emit "stdlib.compile.error" [("message", err)]
@@ -818,7 +764,6 @@ let compileStdlib () : Result<StdlibResult, string> =
                                     ANFResult = anfResult
                                     GenericFuncDefs = genericFuncDefs
                                     ModuleRegistry = moduleRegistry
-                                    MIRProgram = mirProgram
                                     LIRProgram = allocatedProgram
                                     AllocatedFunctions = resolvedFuncs
                                     StdlibCallGraph = stdlibCallGraph
@@ -835,7 +780,7 @@ let private parseSourceWithInternal (allowInternal: bool) (source: string) : Res
 
 /// Compile preamble with stdlib as base, returning extended context for test compilation
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
-/// The result is cached and reused for all tests in the same file
+/// The result is built once per file and reused for all tests in that file
 let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
     emit "preamble.compile.start" [("source", sourceFile); ("length", string preamble.Length)]
     // Handle empty preamble - return a context that just wraps stdlib
@@ -960,7 +905,7 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
 let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
     compilePreambleWithOptions false stdlib preamble sourceFile funcLineMap
 
-/// Compile test expression with pre-compiled preamble context
+/// Compile test expression with a prebuilt preamble context
 /// Only the tiny test expression is parsed/compiled - preamble functions are merged in
 let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
                                        (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
@@ -1122,7 +1067,7 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
     | ex ->
         Error $"Compilation failed: {ex.Message}"
 
-/// Compile test expression with pre-compiled preamble context (user code defaults)
+/// Compile test expression with a prebuilt preamble context (user code defaults)
 let compileTestWithPreamble (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
                             (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
     compileTestWithPreambleWithOptions false verbosity options stdlib preambleCtx sourceFile testExpr
@@ -1325,7 +1270,7 @@ let private execute (verbosity: int) (binary: byte array) : ExecutionResult =
               Stderr = errorMsg }
         | None ->
             // Execute (with retry for "Text file busy" race condition)
-            // Even with flush, kernel may not have fully synced file/permissions in parallel tests
+            // Even with flush, kernel may not have fully synced file/permissions in fast test runs
             if verbosity >= 1 then println "    • Running binary..."
             let execStart = sw.Elapsed.TotalMilliseconds
             let execInfo = ProcessStartInfo(tempPath)
@@ -1394,20 +1339,11 @@ let private compilePreambleContextWithOptions
     : Result<PreambleContext, string> =
     compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap
 
-let private compilePreambleContextDefault
-    (verbosity: int)
-    (stdlib: StdlibResult)
-    (preamble: string)
-    (sourceFile: string)
-    (funcLineMap: Map<string, int>)
-    : Result<PreambleContext, string> =
-    compilePreambleContextWithOptions false verbosity stdlib preamble sourceFile funcLineMap
-
 /// Compile and run source code with options
 let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
     compileWithOptions verbosity options source |> compileResultToExecution verbosity
 
-/// Compile and run with timing breakdown using a precompiled preamble context
+/// Compile and run with timing breakdown using a prebuilt preamble context
 let compileAndRunWithPreambleContextTimedWithOptions
     (allowInternal: bool)
     (verbosity: int)
@@ -1440,8 +1376,8 @@ let compileAndRunWithPreambleContextTimedWithOptions
           CompileTime = compileTime
           RuntimeTime = runtimeTimer.Elapsed }
 
-/// Compile and run with timing breakdown (for test output)
-let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
+/// Compile and run with timing breakdown, building a preamble context for each test
+let compileAndRunWithPreambleTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
     match compilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
     | Error err ->
         { ExitCode = 1
@@ -1452,9 +1388,9 @@ let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosi
     | Ok preambleCtx ->
         compileAndRunWithPreambleContextTimedWithOptions allowInternal verbosity options stdlib preambleCtx testExpr sourceFile
 
-/// Compile and run with timing breakdown (for test output)
-let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    compileAndRunWithStdlibCachedTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
+/// Compile and run with timing breakdown, building a preamble context for each test
+let compileAndRunWithPreambleTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
+    compileAndRunWithPreambleTimedWithOptions false verbosity options stdlib testExpr preamble sourceFile funcLineMap
 
 /// Get all stdlib function names from the pre-compiled stdlib
 let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =

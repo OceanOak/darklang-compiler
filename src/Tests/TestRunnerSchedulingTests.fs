@@ -61,14 +61,14 @@ let testOrderE2ETestsByEstimatedCost () : TestResult =
 let testSplitUnitTestsByStdlibNeed () : TestResult =
     let suites : UnitTestSuite array = [|
         { Name = "CLI Flags Tests"; Tests = [] }
-        { Name = "Compiler Caching Tests"; Tests = [] }
+        { Name = "Stdlib Compile Tests"; Tests = [] }
         { Name = "Parallel Move Tests"; Tests = [] }
     |]
     let (noStdlib, needsStdlib) =
-        splitUnitTestsByStdlibNeed [ "Compiler Caching Tests" ] suites
+        splitUnitTestsByStdlibNeed [ "Stdlib Compile Tests" ] suites
     let noStdlibNames = noStdlib |> Array.map (fun suite -> suite.Name) |> Array.toList
     let needsStdlibNames = needsStdlib |> Array.map (fun suite -> suite.Name) |> Array.toList
-    if noStdlibNames = [ "CLI Flags Tests"; "Parallel Move Tests" ] && needsStdlibNames = [ "Compiler Caching Tests" ] then
+    if noStdlibNames = [ "CLI Flags Tests"; "Parallel Move Tests" ] && needsStdlibNames = [ "Stdlib Compile Tests" ] then
         Ok ()
     else
         Error $"Unexpected unit test split: no-stdlib={noStdlibNames}, stdlib={needsStdlibNames}"
@@ -102,40 +102,15 @@ let testShouldStartStdlibCompile () : TestResult =
                     $"Expected shouldStartStdlibCompile({hasE2E}, {hasVerification}, {needsUnitStdlib}, {hasMatchingE2E}, {hasMatchingVerification}, {needsOptimizationStdlib}) to be {expected}, got {actual}"
     checkCases cases
 
-let testShouldRunUnitAndE2EInParallel () : TestResult =
-    let cases = [
-        (true, true, true)
-        (true, false, false)
-        (false, true, false)
-        (false, false, false)
-    ]
-    let rec checkCases remaining =
-        match remaining with
-        | [] -> Ok ()
-        | (hasUnit, hasE2E, expected) :: rest ->
-            let actual = shouldRunUnitAndE2EInParallel hasUnit hasE2E
-            if actual = expected then
-                checkCases rest
-            else
-                Error $"Expected shouldRunUnitAndE2EInParallel({hasUnit}, {hasE2E}) to be {expected}, got {actual}"
-    checkCases cases
-
 let testStdlibWarmupPlan () : TestResult =
     match decideStdlibWarmupPlan true, decideStdlibWarmupPlan false with
     | CompileStdlibBeforeTests, SkipStdlibWarmup -> Ok ()
     | actual ->
         Error $"Expected CompileStdlibBeforeTests/SkipStdlibWarmup, got {actual}"
 
-let testCalculateOptimalParallelism () : TestResult =
-    let actual = calculateOptimalParallelism 8 64.0
-    if actual = 14 then
-        Ok ()
-    else
-        Error $"Expected calculateOptimalParallelism to return 14, got {actual}"
-
 let testFormatUnitTestName () : TestResult =
-    let actual = formatUnitTestName "Compiler Caching Tests" "specialized function caching"
-    let expected = "Compiler Caching Tests: specialized function caching"
+    let actual = formatUnitTestName "Stdlib Compile Tests" "stdlib compile succeeds"
+    let expected = "Stdlib Compile Tests: stdlib compile succeeds"
     if actual = expected then
         Ok ()
     else
@@ -153,9 +128,7 @@ let tests = [
     ("E2E ordering", testOrderE2ETestsByEstimatedCost)
     ("Unit test split", testSplitUnitTestsByStdlibNeed)
     ("Stdlib compile decision", testShouldStartStdlibCompile)
-    ("Parallel suite decision", testShouldRunUnitAndE2EInParallel)
     ("Stdlib warmup plan", testStdlibWarmupPlan)
-    ("Parallelism calculation", testCalculateOptimalParallelism)
     ("Unit test name format", testFormatUnitTestName)
     ("verbose flag parsing", testHasVerboseArg)
 ]

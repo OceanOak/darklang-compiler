@@ -29,27 +29,27 @@ type E2ETestResult = {
 let compileStdlib () : Result<CompilerLibrary.StdlibResult, string> =
     StdlibTestHarness.compileStdlib()
 
-/// Preamble cache key: (source file, preamble text)
+/// Preamble identity: (source file, preamble text)
 type PreambleKey = string * string
 
-/// Map of precompiled preamble contexts keyed by preamble
+/// Map of built preamble contexts keyed by preamble identity
 type PreambleContextMap = Map<PreambleKey, CompilerLibrary.PreambleContext>
 
-/// Compile a single preamble context
+/// Build a single preamble context
 let compilePreambleContext (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<CompilerLibrary.PreambleContext, string> =
     let allowInternal = isInternalTestFile sourceFile
-    emit "preamble.precompile.start" [("source", sourceFile)]
+    emit "preamble.build.start" [("source", sourceFile)]
     match CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
     | Error err ->
-        let msg = $"Preamble precompile error ({sourceFile}): {err}"
-        emit "preamble.precompile.error" [("source", sourceFile); ("message", msg)]
+        let msg = $"Preamble build error ({sourceFile}): {err}"
+        emit "preamble.build.error" [("source", sourceFile); ("message", msg)]
         Error msg
     | Ok ctx ->
-        emit "preamble.precompile.finish" [("source", sourceFile)]
+        emit "preamble.build.finish" [("source", sourceFile)]
         Ok ctx
 
-/// Compile all distinct preambles (by file + preamble text) and return contexts
-let compilePreambleContexts (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : Result<PreambleContextMap, string> =
+/// Build all distinct preambles (by file + preamble text) and return contexts
+let buildPreambleContexts (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : Result<PreambleContextMap, string> =
     let grouped =
         tests
         |> Array.toList
@@ -69,9 +69,9 @@ let compilePreambleContexts (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETe
                 compileAll rest (((sourceFile, preamble), ctx) :: acc)
     compileAll grouped []
 
-/// Compile all distinct preambles (by file + preamble text) and discard contexts
-let precompilePreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) : Result<unit, string> =
-    match compilePreambleContexts stdlib (List.toArray tests) with
+/// Build all distinct preambles (by file + preamble text) and discard contexts
+let buildPreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) : Result<unit, string> =
+    match buildPreambleContexts stdlib (List.toArray tests) with
     | Error err -> Error err
     | Ok _ -> Ok ()
 
@@ -169,7 +169,7 @@ let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2E
         }
         let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
-            CompilerLibrary.compileAndRunWithStdlibCachedTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
+            CompilerLibrary.compileAndRunWithPreambleTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
 
         let result = buildE2EResult test execResult
         emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
@@ -187,7 +187,7 @@ let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2E
         emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
         result
 
-/// Run E2E test using a precompiled preamble context
+/// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
     (stdlib: CompilerLibrary.StdlibResult)
     (preambleCtx: CompilerLibrary.PreambleContext)
@@ -244,12 +244,12 @@ let runE2ETestWithPreambleContext
 let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     runE2ETestInternal stdlib test
 
-/// Run E2E tests with precompiled preambles
-let runE2ETestsWithCompiledPreambles
+/// Run E2E tests with built preamble contexts
+let runE2ETestsWithPreambleContexts
     (stdlib: CompilerLibrary.StdlibResult)
     (tests: E2ETest array)
     : Result<(E2ETest * E2ETestResult) array, string> =
-    match compilePreambleContexts stdlib tests with
+    match buildPreambleContexts stdlib tests with
     | Error err -> Error err
     | Ok preambleContexts ->
         let rec runAll remaining acc =
@@ -258,7 +258,7 @@ let runE2ETestsWithCompiledPreambles
             | test :: rest ->
                 let key = (test.SourceFile, test.Preamble)
                 match Map.tryFind key preambleContexts with
-                | None -> Error $"Missing precompiled preamble for {test.SourceFile}"
+                | None -> Error $"Missing built preamble context for {test.SourceFile}"
                 | Some ctx ->
                     let result = runE2ETestWithPreambleContext stdlib ctx test
                     runAll rest ((test, result) :: acc)

@@ -1,8 +1,8 @@
-// PreamblePrecompileTests.fs - Unit tests for precompiling E2E preambles
+// PreambleBuildTests.fs - Unit tests for building E2E preamble contexts
 //
-// Ensures precompilation populates the stdlib preamble cache.
+// Ensures preamble contexts are built once per file and reused during tests.
 
-module PreamblePrecompileTests
+module PreambleBuildTests
 
 open System
 open System.IO
@@ -48,20 +48,20 @@ let private makeTest (name: string) (source: string) (preamble: string) (sourceF
         FunctionLineMap = Map.empty
     }
 
-let testPrecompileSucceeds (sharedStdlib: StdlibResult) : TestResult =
-    let stdlib = StdlibTestHarness.resetCaches sharedStdlib
+let testPreambleBuildSucceeds (sharedStdlib: StdlibResult) : TestResult =
+    let stdlib = sharedStdlib
     let preamble = "def add(x: Int64, y: Int64) : Int64 = x + y"
     let tests = [
-        makeTest "precompile-1" "add(1, 2)" preamble "precompile.e2e"
-        makeTest "precompile-2" "add(3, 4)" preamble "precompile.e2e"
+        makeTest "preamble-build-1" "add(1, 2)" preamble "preamble-build.e2e"
+        makeTest "preamble-build-2" "add(3, 4)" preamble "preamble-build.e2e"
     ]
 
-    match precompilePreambles stdlib tests with
-    | Error err -> Error $"Precompile failed: {err}"
+    match buildPreambles stdlib tests with
+    | Error err -> Error $"Preamble build failed: {err}"
     | Ok () -> Ok ()
 
-let testPreambleCompiledOnce (sharedStdlib: StdlibResult) : TestResult =
-    let stdlib = StdlibTestHarness.resetCaches sharedStdlib
+let testPreambleBuiltOnce (sharedStdlib: StdlibResult) : TestResult =
+    let stdlib = sharedStdlib
     let preamble = "def add(x: Int64, y: Int64) : Int64 = x + y"
     let tests = [
         makeTest "preamble-once-1" "add(1, 2)" preamble "preamble-once.e2e"
@@ -75,7 +75,7 @@ let testPreambleCompiledOnce (sharedStdlib: StdlibResult) : TestResult =
     Console.SetError(writer)
     let result =
         try
-            match runE2ETestsWithCompiledPreambles stdlib (tests |> List.toArray) with
+            match runE2ETestsWithPreambleContexts stdlib (tests |> List.toArray) with
             | Error err -> Error err
             | Ok _ -> Ok ()
         finally
@@ -96,14 +96,14 @@ let testPreambleCompiledOnce (sharedStdlib: StdlibResult) : TestResult =
             Error $"Expected preamble to compile once, but saw {count} compilations"
 
 let tests : (string * (StdlibResult -> TestResult)) list = [
-    ("precompile succeeds", testPrecompileSucceeds)
-    ("preamble compiled once", testPreambleCompiledOnce)
+    ("preamble build succeeds", testPreambleBuildSucceeds)
+    ("preamble built once", testPreambleBuiltOnce)
 ]
 
 let testsWithStdlib (sharedStdlib: StdlibResult) : (string * (unit -> TestResult)) list =
     tests |> List.map (fun (name, test) -> (name, fun () -> test sharedStdlib))
 
-/// Run all precompile tests
+/// Run all preamble build tests
 let runAllWithStdlib (sharedStdlib: StdlibResult) : TestResult =
     let rec runTests = function
         | [] -> Ok ()

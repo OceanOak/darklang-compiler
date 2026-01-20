@@ -282,7 +282,7 @@ let computeReturnTypeWithReg (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typ
 
 /// Build a map from function name to return type for all functions
 /// Uses iterative fixpoint algorithm since functions may call each other
-/// externalReturnTypes: return types for functions not in `functions` (e.g., cached specialized functions)
+/// externalReturnTypes: return types for functions not in `functions` (e.g., specialized functions compiled elsewhere)
 let buildReturnTypeReg (functions: ANF.Function list) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (externalReturnTypes: Map<string, AST.Type>) : Map<string, AST.Type> =
     // Iterate until the map stabilizes (handles mutual recursion and call dependencies)
     let rec fixpoint (currentReg: Map<string, AST.Type>) (iterations: int) =
@@ -1803,7 +1803,7 @@ let convertANFFunction (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typeReg: 
 /// mainExprType: the type of the main expression (used for _start's return type)
 /// variantLookup: mapping from variant names to type info (for enum printing)
 /// typeReg: mapping from record type names to field info (for record printing, converted to RecordRegistry)
-/// externalReturnTypes: return types for functions not in the program (e.g., cached specialized functions)
+/// externalReturnTypes: return types for functions not in the program (e.g., specialized functions compiled elsewhere)
 /// Each function gets its own RegGen for deterministic VReg assignment.
 let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (mainExprType: AST.Type) (variantLookup: AST_to_ANF.VariantLookup) (typeRegForRecords: Map<string, (string * AST.Type) list>) (enableCoverage: bool) (externalReturnTypes: Map<string, AST.Type>) : Result<MIR.Program, string> =
     let (ANF.Program (functions, mainExpr)) = program
@@ -1866,7 +1866,7 @@ let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (s
 /// Convert ANF program to MIR (functions only, no _start)
 /// Use for stdlib where there's no real main expression to convert.
 /// Returns just the function list, variant registry, and record registry without wrapping in MIR.Program.
-/// externalReturnTypes: return types for functions not in the program (e.g., cached specialized functions)
+/// externalReturnTypes: return types for functions not in the program (e.g., specialized functions compiled elsewhere)
 /// Each function gets its own RegGen for deterministic VReg assignment.
 let toMIRFunctionsOnly (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (variantLookup: AST_to_ANF.VariantLookup) (typeRegForRecords: Map<string, (string * AST.Type) list>) (enableCoverage: bool) (externalReturnTypes: Map<string, AST.Type>) : Result<MIR.Function list * MIR.VariantRegistry * MIR.RecordRegistry, string> =
     let (ANF.Program (functions, _mainExpr)) = program

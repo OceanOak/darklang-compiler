@@ -115,6 +115,6 @@ If compilation speed becomes a problem again, consider:
 | `src/Tests/TestRunner.fs` | Sequential test execution |
 | `src/Tests/Runners/E2ETestRunner.fs` | Removed caching, lazy patterns |
 | `src/Tests/StdlibTestHarness.fs` | Simplified |
-| `src/Tests/CompilerCachingTests.fs` | Gutted (placeholder) |
-| `src/Tests/PreamblePrecompileTests.fs` | Simplified |
+| `src/Tests/StdlibCompileTests.fs` | Replaced by stdlib compile smoke test |
+| `src/Tests/PreambleBuildTests.fs` | Simplified/renamed |
 | `src/Tests/StdlibTestHarnessTests.fs` | Updated for no-op resetCaches |

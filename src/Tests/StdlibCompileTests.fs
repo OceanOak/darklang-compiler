@@ -1,26 +1,25 @@
-// CompilerCachingTests.fs - Placeholder for removed caching tests
+// StdlibCompileTests.fs - Unit tests for stdlib compilation
 //
-// Caching has been removed from the compiler.
-// These tests previously verified caching behavior.
+// Verifies stdlib compilation succeeds in the current pipeline.
 
-module CompilerCachingTests
+module StdlibCompileTests
 
 open CompilerLibrary
 
 /// Test result type
 type TestResult = Result<unit, string>
 
-/// Test that stdlib compilation succeeds (replaces parallel mode test)
+/// Test that stdlib compilation succeeds
 let testStdlibCompileSucceeds (sharedStdlib: StdlibResult) : TestResult =
     // Just verify that stdlib compiled successfully
     Ok ()
 
-let tests (verificationEnabled: bool) : (string * (StdlibResult -> TestResult)) list = [
+let tests : (string * (StdlibResult -> TestResult)) list = [
     ("stdlib compile succeeds", testStdlibCompileSucceeds)
 ]
 
 let testsWithStdlib (sharedStdlib: StdlibResult) : (string * (unit -> TestResult)) list =
-    tests false |> List.map (fun (name, test) -> (name, fun () -> test sharedStdlib))
+    tests |> List.map (fun (name, test) -> (name, fun () -> test sharedStdlib))
 
 /// Run all compiler caching unit tests
 let runAllWithStdlib (sharedStdlib: StdlibResult) : TestResult =

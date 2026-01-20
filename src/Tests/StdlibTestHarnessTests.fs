@@ -30,7 +30,6 @@ let private emptyStdlibResult () : StdlibResult =
         FuncParams = Map.empty
         ModuleRegistry = Map.empty
     }
-    let emptyMirProgram = MIR.Program ([], Map.empty, Map.empty)
     let emptyLirProgram = LIR.Program ([], MIR.emptyStringPool, MIR.emptyFloatPool)
 
     {
@@ -40,7 +39,6 @@ let private emptyStdlibResult () : StdlibResult =
         ANFResult = emptyAnfResult
         GenericFuncDefs = Map.empty
         ModuleRegistry = Map.empty
-        MIRProgram = emptyMirProgram
         LIRProgram = emptyLirProgram
         AllocatedFunctions = []
         StdlibCallGraph = Map.empty
@@ -48,15 +46,6 @@ let private emptyStdlibResult () : StdlibResult =
         StdlibANFCallGraph = Map.empty
         StdlibTypeMap = Map.empty
     }
-
-let testResetCachesIsNoOp () : TestResult =
-    let stdlib = emptyStdlibResult ()
-    let resetStdlib = StdlibTestHarness.resetCaches stdlib
-    // After caching removal, resetCaches just returns the same stdlib
-    if not (obj.ReferenceEquals(stdlib, resetStdlib)) then
-        Error "Expected resetCaches to return the same stdlib instance"
-    else
-        Ok ()
 
 let testNoSharedStdlibGetter () : TestResult =
     let asm = Assembly.GetExecutingAssembly()
@@ -78,6 +67,5 @@ let testNoSharedStdlibGetter () : TestResult =
             Ok ()
 
 let tests : (string * (unit -> TestResult)) list = [
-    ("reset caches is no-op", testResetCachesIsNoOp)
     ("no shared stdlib getter", testNoSharedStdlibGetter)
 ]

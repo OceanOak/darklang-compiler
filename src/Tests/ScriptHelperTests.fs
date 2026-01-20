@@ -102,8 +102,8 @@ let testRunnerDoesNotUseEnvVar () : TestResult =
     | Ok text ->
         requireNotContains path "ENABLE_VERIFICATION_TESTS" text
 
-let testCompilerCachingDoesNotUseEnvVar () : TestResult =
-    let path = Path.Combine(repoRoot, "src", "Tests", "CompilerCachingTests.fs")
+let testStdlibCompileTestsDoesNotUseEnvVar () : TestResult =
+    let path = Path.Combine(repoRoot, "src", "Tests", "StdlibCompileTests.fs")
     match readFile path with
     | Error msg -> Error msg
     | Ok text ->
@@ -129,7 +129,7 @@ let tests = [
     ("run-verification-tests uses test-common", testRunVerificationUsesCommonHelper)
     ("run-verification-tests avoids env vars", testRunVerificationDoesNotUseEnvVar)
     ("test runner avoids env vars", testRunnerDoesNotUseEnvVar)
-    ("compiler caching tests avoid env vars", testCompilerCachingDoesNotUseEnvVar)
+    ("stdlib compile tests avoid env vars", testStdlibCompileTestsDoesNotUseEnvVar)
     ("run-dark-coverage uses test-common", testRunDarkCoverageUsesCommonHelper)
     ("Tests project avoids copying test data", testTestsProjectDoesNotCopyTestData)
 ]

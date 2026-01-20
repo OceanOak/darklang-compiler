@@ -115,13 +115,13 @@ let main args =
         else
             [||]
 
-    let unitStdlibSuites = [ "Compiler Caching Tests"; "Preamble Precompile Tests" ]
+    let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let needsUnitStdlib = unitStdlibSuites |> List.exists (matchesFilter filter)
     let unitTestNames = [|
         "CLI Flags Tests"
         "Test Runner Scheduling Tests"
-        "Compiler Caching Tests"
-        "Preamble Precompile Tests"
+        "Stdlib Compile Tests"
+        "Preamble Build Tests"
         "Stdlib Test Harness Tests"
         "IR Symbol Tests"
         "IR Printer Tests"
@@ -231,7 +231,7 @@ let main args =
         | Some stdlib -> Ok stdlib
         | None ->
             match stdlibCompileResult with
-            | Some cached -> cached
+            | Some compiled -> compiled
             | None -> Error "Stdlib was not compiled before tests"
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
@@ -320,7 +320,7 @@ let main args =
         : unit =
         let numTests = testsArray.Length
         if numTests > 0 then
-            let preambleContextsResult = TestDSL.E2ETestRunner.compilePreambleContexts stdlib testsArray
+            let preambleContextsResult = TestDSL.E2ETestRunner.buildPreambleContexts stdlib testsArray
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
             let progress = ProgressBar.create progressLabel numTests
@@ -366,7 +366,7 @@ let main args =
                     match preambleContextsResult with
                     | Error err ->
                         { Success = false
-                          Message = $"Preamble precompile failed: {err}"
+                          Message = $"Preamble build failed: {err}"
                           Stdout = None
                           Stderr = None
                           ExitCode = Some 1
@@ -377,7 +377,7 @@ let main args =
                         match Map.tryFind key preambleContexts with
                         | None ->
                             { Success = false
-                              Message = $"Missing precompiled preamble for {test.SourceFile}"
+                              Message = $"Missing built preamble context for {test.SourceFile}"
                               Stdout = None
                               Stderr = None
                               ExitCode = Some 1
@@ -689,8 +689,8 @@ let main args =
         { Name = "Test Runner Scheduling Tests"; Tests = TestRunnerSchedulingTests.tests }
         { Name = "Compiler Library Tests"; Tests = CompilerLibraryTests.tests }
         { Name = "Stdlib Test Harness Tests"; Tests = StdlibTestHarnessTests.tests }
-        { Name = "Compiler Caching Tests"; Tests = wrapStdlibTests "Compiler Caching Tests" (CompilerCachingTests.tests verificationEnabled) }
-        { Name = "Preamble Precompile Tests"; Tests = wrapStdlibTests "Preamble Precompile Tests" PreamblePrecompileTests.tests }
+        { Name = "Stdlib Compile Tests"; Tests = wrapStdlibTests "Stdlib Compile Tests" StdlibCompileTests.tests }
+        { Name = "Preamble Build Tests"; Tests = wrapStdlibTests "Preamble Build Tests" PreambleBuildTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
         { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
