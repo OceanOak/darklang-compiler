@@ -1,6 +1,6 @@
-// TestRunnerSchedulingTests.fs - Unit tests for test runner scheduling helpers
+// TestRunnerSchedulingTests.fs - Unit tests for test runner scheduling and CLI helpers
 //
-// Validates E2E ordering and stdlib scheduling decisions for faster runs.
+// Validates E2E ordering, stdlib scheduling decisions, and basic CLI arg parsing.
 
 module TestRunnerSchedulingTests
 
@@ -139,6 +139,14 @@ let testFormatUnitTestName () : TestResult =
     else
         Error $"Expected formatted name '{expected}', got '{actual}'"
 
+let testHasVerboseArg () : TestResult =
+    let argsWithVerbose = [| "--verbose" |]
+    let argsWithoutVerbose = [| "--filter=tuple" |]
+    if TestRunnerArgs.hasVerboseArg argsWithVerbose && not (TestRunnerArgs.hasVerboseArg argsWithoutVerbose) then
+        Ok ()
+    else
+        Error "Expected --verbose to be detected only when provided"
+
 let tests = [
     ("E2E ordering", testOrderE2ETestsByEstimatedCost)
     ("Unit test split", testSplitUnitTestsByStdlibNeed)
@@ -147,6 +155,7 @@ let tests = [
     ("Stdlib warmup plan", testStdlibWarmupPlan)
     ("Parallelism calculation", testCalculateOptimalParallelism)
     ("Unit test name format", testFormatUnitTestName)
+    ("verbose flag parsing", testHasVerboseArg)
 ]
 
 let runAll () : TestResult =

@@ -30,6 +30,7 @@
     <Compile Include="ProgressBar.fs" />
 
     <!-- Unit tests -->
+    <Compile Include="TestRunnerArgs.fs" />
     <Compile Include="CliFlagTests.fs" />
     <Compile Include="TestRunnerScheduling.fs" />
     <Compile Include="TestRunnerSchedulingTests.fs" />

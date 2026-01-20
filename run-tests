@@ -9,6 +9,7 @@
 #   --verification     Enable verification/stress tests
 #   --build-only       Only build, don't run tests
 #   --quiet            Quiet mode: print "success" or list failed tests
+#   --verbose          Print failing tests as soon as they occur
 #   -h, --help         Show this help message
 #
 # Examples:
@@ -52,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             QUIET=true
             shift
             ;;
+        --verbose)
+            TEST_ARGS+=("--verbose")
+            shift
+            ;;
         -h|--help)
             HELP=true
             shift
@@ -76,6 +81,7 @@ if [ "$HELP" = true ]; then
     echo "  --verification     Enable verification/stress tests"
     echo "  --build-only       Only build, don't run tests"
     echo "  --quiet            Quiet mode: print 'success' or list failed tests"
+    echo "  --verbose          Print failing tests as soon as they occur"
     echo "  -h, --help         Show this help message"
     echo ""
     echo "Examples:"

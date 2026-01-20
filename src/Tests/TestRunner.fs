@@ -15,6 +15,7 @@ open TestDSL.OptimizationFormat
 open TestDSL.OptimizationTestRunner
 open TestRunnerScheduling
 open StdlibTestHarness
+open TestRunnerArgs
 
 // Failed test info for summary at end
 type FailedTestInfo = {
@@ -46,30 +47,6 @@ let formatTime (elapsed: TimeSpan) =
     else
         sprintf "%.2fs" elapsed.TotalSeconds
 
-// Parse command line for --filter=PATTERN option
-let parseFilterArg (args: string array) : string option =
-    args
-    |> Array.tryFind (fun arg -> arg.StartsWith("--filter="))
-    |> Option.map (fun arg -> arg.Substring(9))
-
-// Check if --coverage flag is present (show inline coverage after tests)
-let hasCoverageArg (args: string array) : bool =
-    args |> Array.exists (fun arg -> arg = "--coverage")
-
-// Check if --verification flag is present (enable verification/stress tests)
-let hasVerificationArg (args: string array) : bool =
-    args |> Array.exists (fun arg -> arg = "--verification")
-
-// Check if a test name matches the filter (case-insensitive substring match)
-let matchesFilter (filter: string option) (testName: string) : bool =
-    match filter with
-    | None -> true
-    | Some pattern -> testName.ToLowerInvariant().Contains(pattern.ToLowerInvariant())
-
-// Check if --help flag is present
-let hasHelpArg (args: string array) : bool =
-    args |> Array.exists (fun arg -> arg = "--help" || arg = "-h")
-
 // Print help message
 let printHelp () =
     println "Usage: Tests [OPTIONS]"
@@ -78,6 +55,7 @@ let printHelp () =
     println "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
+    println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
     println "Examples:"
@@ -105,6 +83,9 @@ let main args =
 
     // Check for --verification flag (enable verification/stress tests)
     let verificationEnabled = hasVerificationArg args
+
+    // Check for --verbose flag (print failing tests immediately)
+    let verbose = hasVerboseArg args
 
     println $"{Colors.bold}{Colors.cyan}🧪 Running DSL-based Tests{Colors.reset}"
     match filter with
@@ -336,6 +317,40 @@ let main args =
             let progress = ProgressBar.create progressLabel numTests
             ProgressBar.update progress
 
+            let collectExitCodeDetails (test: E2ETest) (testResult: E2ETestResult) : string list =
+                let details = ResizeArray<string>()
+                match testResult.ExitCode with
+                | Some code when code <> test.ExpectedExitCode ->
+                    details.Add($"Expected exit code: {test.ExpectedExitCode}, Actual: {code}")
+                | _ -> ()
+                details |> Seq.toList
+
+            let printE2EFailure (test: E2ETest) (testResult: E2ETestResult) : string list =
+                let cleanName = test.Name.Replace("Stdlib.", "")
+                let displayName = if cleanName.Length > 60 then cleanName.Substring(0, 57) + "..." else cleanName
+                println $"  {displayName}... {Colors.red}✗ FAIL{Colors.reset} {Colors.gray}(compile: {formatTime testResult.CompileTime}, run: {formatTime testResult.RuntimeTime}){Colors.reset}"
+                println $"    {testResult.Message}"
+
+                let details = collectExitCodeDetails test testResult
+                for detail in details do
+                    println $"    {detail}"
+
+                match test.ExpectedStdout, testResult.Stdout with
+                | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
+                    let expectedDisp = expected.Replace("\n", "\\n")
+                    let actualDisp = actual.Replace("\n", "\\n")
+                    println $"    Expected stdout: {expectedDisp}"
+                    println $"    Actual stdout: {actualDisp}"
+                | _ -> ()
+                match test.ExpectedStderr, testResult.Stderr with
+                | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
+                    let expectedDisp = expected.Replace("\n", "\\n")
+                    let actualDisp = actual.Replace("\n", "\\n")
+                    println $"    Expected stderr: {expectedDisp}"
+                    println $"    Actual stderr: {actualDisp}"
+                | _ -> ()
+                details
+
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
                 let preambleResult = TestDSL.E2ETestRunner.awaitPreamblePrecompile precompileTasks test
@@ -354,6 +369,10 @@ let main args =
                 results.[i] <- Some (test, result)
                 recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some result.CompileTime; RuntimeTime = Some result.RuntimeTime }
                 ProgressBar.increment progress result.Success
+                if verbose && not result.Success then
+                    ProgressBar.finish progress
+                    let _ = printE2EFailure test result
+                    ProgressBar.update progress
 
             ProgressBar.finish progress
 
@@ -366,33 +385,10 @@ let main args =
                     if testResult.Success then
                         sectionPassed <- sectionPassed + 1
                     else
-                        let cleanName = test.Name.Replace("Stdlib.", "")
-                        let displayName = if cleanName.Length > 60 then cleanName.Substring(0, 57) + "..." else cleanName
-                        println $"  {displayName}... {Colors.red}✗ FAIL{Colors.reset} {Colors.gray}(compile: {formatTime testResult.CompileTime}, run: {formatTime testResult.RuntimeTime}){Colors.reset}"
-                        println $"    {testResult.Message}"
-
-                        let details = ResizeArray<string>()
-                        match testResult.ExitCode with
-                        | Some code when code <> test.ExpectedExitCode ->
-                            println $"    Expected exit code: {test.ExpectedExitCode}, Actual: {code}"
-                            details.Add($"Expected exit code: {test.ExpectedExitCode}, Actual: {code}")
-                        | _ -> ()
-                        match test.ExpectedStdout, testResult.Stdout with
-                        | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
-                            let expectedDisp = expected.Replace("\n", "\\n")
-                            let actualDisp = actual.Replace("\n", "\\n")
-                            println $"    Expected stdout: {expectedDisp}"
-                            println $"    Actual stdout: {actualDisp}"
-                        | _ -> ()
-                        match test.ExpectedStderr, testResult.Stderr with
-                        | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
-                            let expectedDisp = expected.Replace("\n", "\\n")
-                            let actualDisp = actual.Replace("\n", "\\n")
-                            println $"    Expected stderr: {expectedDisp}"
-                            println $"    Actual stderr: {actualDisp}"
-                        | _ -> ()
-
-                        failedTestsLocal.Add({ File = test.SourceFile; Name = $"{suiteName}: {test.Name}"; Message = testResult.Message; Details = details |> Seq.toList })
+                        let details =
+                            if verbose then collectExitCodeDetails test testResult
+                            else printE2EFailure test testResult
+                        failedTestsLocal.Add({ File = test.SourceFile; Name = $"{suiteName}: {test.Name}"; Message = testResult.Message; Details = details })
                         sectionFailed <- sectionFailed + 1
                 | None -> ()
 

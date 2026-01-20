@@ -897,13 +897,17 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                             | Ok lirProgram ->
                                 let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                                 let (LIRSymbolic.Program lirFuncs) = optimizedLir
-                                let isStdlibSpecialized (name: string) : bool =
-                                    Set.contains name preambleUserOnly.SpecializedFuncNames
+                                let stdlibFuncNames =
+                                    stdlib.AllocatedFunctions
+                                    |> List.map (fun func -> func.Name)
+                                    |> Set.ofList
+                                let isStdlibFunction (name: string) : bool =
+                                    Set.contains name stdlibFuncNames
                                 let allocatedFuncs: LIRSymbolic.Function list =
                                     lirFuncs |> List.map RegisterAllocation.allocateRegisters
                                 let preambleOnlyFuncs =
                                     allocatedFuncs
-                                    |> List.filter (fun func -> not (isStdlibSpecialized func.Name))
+                                    |> List.filter (fun func -> not (isStdlibFunction func.Name))
                                 let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                                 let preambleSymbolicFuncs = preambleOnlyFuncs
 
