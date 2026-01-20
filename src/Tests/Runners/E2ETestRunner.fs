@@ -5,9 +5,9 @@
 module TestDSL.E2ETestRunner
 
 open System
-open System.Threading.Tasks
 open TestDSL.E2EFormat
 open StdlibTestHarness
+open Trace
 
 let private isInternalTestFile (sourceFile: string) : bool =
     let normalized = sourceFile.Replace('\\', '/')
@@ -32,54 +32,115 @@ let compileStdlib () : Result<CompilerLibrary.StdlibResult, string> =
 /// Preamble cache key: (source file, preamble text)
 type PreambleKey = string * string
 
-/// Map of precompile tasks keyed by preamble
-type PreambleTaskMap = Map<PreambleKey, Task<Result<unit, string>>>
+/// Map of precompiled preamble contexts keyed by preamble
+type PreambleContextMap = Map<PreambleKey, CompilerLibrary.PreambleContext>
 
-/// Precompile a single preamble - now compiles directly without caching
-let precompilePreamble (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<unit, string> =
+/// Compile a single preamble context
+let compilePreambleContext (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<CompilerLibrary.PreambleContext, string> =
     let allowInternal = isInternalTestFile sourceFile
+    emit "preamble.precompile.start" [("source", sourceFile)]
     match CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
-    | Error err -> Error $"Preamble precompile error ({sourceFile}): {err}"
+    | Error err ->
+        let msg = $"Preamble precompile error ({sourceFile}): {err}"
+        emit "preamble.precompile.error" [("source", sourceFile); ("message", msg)]
+        Error msg
+    | Ok ctx ->
+        emit "preamble.precompile.finish" [("source", sourceFile)]
+        Ok ctx
+
+/// Compile all distinct preambles (by file + preamble text) and return contexts
+let compilePreambleContexts (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : Result<PreambleContextMap, string> =
+    let grouped =
+        tests
+        |> Array.toList
+        |> List.groupBy (fun test -> (test.SourceFile, test.Preamble))
+    let rec compileAll remaining acc =
+        match remaining with
+        | [] -> Ok (Map.ofList acc)
+        | ((sourceFile, preamble), group) :: rest ->
+            let funcLineMap =
+                group
+                |> List.tryHead
+                |> Option.map (fun test -> test.FunctionLineMap)
+                |> Option.defaultValue Map.empty
+            match compilePreambleContext stdlib sourceFile preamble funcLineMap with
+            | Error err -> Error err
+            | Ok ctx ->
+                compileAll rest (((sourceFile, preamble), ctx) :: acc)
+    compileAll grouped []
+
+/// Compile all distinct preambles (by file + preamble text) and discard contexts
+let precompilePreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) : Result<unit, string> =
+    match compilePreambleContexts stdlib (List.toArray tests) with
+    | Error err -> Error err
     | Ok _ -> Ok ()
 
-/// Start precompiling all distinct preambles (by file + preamble text)
-let startPreamblePrecompileTasks (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : PreambleTaskMap =
-    tests
-    |> Array.toList
-    |> List.groupBy (fun test -> (test.SourceFile, test.Preamble))
-    |> List.map (fun ((sourceFile, preamble), group) ->
-        let funcLineMap =
-            group
-            |> List.tryHead
-            |> Option.map (fun test -> test.FunctionLineMap)
-            |> Option.defaultValue Map.empty
-        let task =
-            Task.Run(fun () ->
-                precompilePreamble stdlib sourceFile preamble funcLineMap)
-        ((sourceFile, preamble), task))
-    |> Map.ofList
+let private buildE2EResult (test: E2ETest) (execResult: CompilerLibrary.TimedExecutionResult) : E2ETestResult =
+    if test.ExpectCompileError then
+        let gotError = execResult.ExitCode <> 0
+        if not gotError then
+            { Success = false
+              Message = "Expected compilation error but compilation succeeded"
+              Stdout = Some execResult.Stdout
+              Stderr = Some execResult.Stderr
+              ExitCode = Some execResult.ExitCode
+              CompileTime = execResult.CompileTime
+              RuntimeTime = execResult.RuntimeTime }
+        else
+            match test.ExpectedErrorMessage with
+            | Some expectedMsg ->
+                let output = execResult.Stderr
+                if output.Contains(expectedMsg) then
+                    { Success = true
+                      Message = "Compilation failed with expected error message"
+                      Stdout = Some execResult.Stdout
+                      Stderr = Some execResult.Stderr
+                      ExitCode = Some execResult.ExitCode
+                      CompileTime = execResult.CompileTime
+                      RuntimeTime = execResult.RuntimeTime }
+                else
+                    { Success = false
+                      Message = $"Expected error message '{expectedMsg}' not found in stderr"
+                      Stdout = Some execResult.Stdout
+                      Stderr = Some execResult.Stderr
+                      ExitCode = Some execResult.ExitCode
+                      CompileTime = execResult.CompileTime
+                      RuntimeTime = execResult.RuntimeTime }
+            | None ->
+                { Success = true
+                  Message = "Compilation failed as expected"
+                  Stdout = Some execResult.Stdout
+                  Stderr = Some execResult.Stderr
+                  ExitCode = Some execResult.ExitCode
+                  CompileTime = execResult.CompileTime
+                  RuntimeTime = execResult.RuntimeTime }
+    else
+        let stdoutMatches =
+            match test.ExpectedStdout with
+            | None -> true
+            | Some expected -> execResult.Stdout.Trim() = expected.Trim()
 
-/// Await precompile result for a single test's preamble (or Ok if none)
-let awaitPreamblePrecompile (tasks: PreambleTaskMap) (test: E2ETest) : Result<unit, string> =
-    match Map.tryFind (test.SourceFile, test.Preamble) tasks with
-    | None -> Ok ()
-    | Some task -> task.Result
+        let stderrMatches =
+            match test.ExpectedStderr with
+            | None -> true
+            | Some expected -> execResult.Stderr.Trim() = expected.Trim()
 
-/// Precompile all distinct preambles (by file + preamble text) and populate the cache
-let precompilePreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) : Result<unit, string> =
-    let tasks = startPreamblePrecompileTasks stdlib (List.toArray tests)
-    let rec awaitAll (remaining: (PreambleKey * Task<Result<unit, string>>) list) =
-        match remaining with
-        | [] -> Ok ()
-        | (_, task) :: rest ->
-            match task.Result with
-            | Error err -> Error err
-            | Ok () -> awaitAll rest
-    awaitAll (tasks |> Map.toList)
+        let exitCodeMatches = execResult.ExitCode = test.ExpectedExitCode
+
+        let success = stdoutMatches && stderrMatches && exitCodeMatches
+
+        { Success = success
+          Message = if success then "Test passed" else "Output mismatch"
+          Stdout = Some execResult.Stdout
+          Stderr = Some execResult.Stderr
+          ExitCode = Some execResult.ExitCode
+          CompileTime = execResult.CompileTime
+          RuntimeTime = execResult.RuntimeTime }
 
 /// Run E2E test (internal implementation)
 let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     try
+        emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
         let options : CompilerLibrary.CompilerOptions = {
             DisableFreeList = test.DisableFreeList
             DisableANFOpt = test.DisableANFOpt
@@ -110,77 +171,95 @@ let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2E
         let execResult =
             CompilerLibrary.compileAndRunWithStdlibCachedTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
 
-        // Handle error expectation
-        if test.ExpectCompileError then
-            let gotError = execResult.ExitCode <> 0
-            if not gotError then
-                { Success = false
-                  Message = "Expected compilation error but compilation succeeded"
-                  Stdout = Some execResult.Stdout
-                  Stderr = Some execResult.Stderr
-                  ExitCode = Some execResult.ExitCode
-                  CompileTime = execResult.CompileTime
-                  RuntimeTime = execResult.RuntimeTime }
-            else
-                match test.ExpectedErrorMessage with
-                | Some expectedMsg ->
-                    let output = execResult.Stderr
-                    if output.Contains(expectedMsg) then
-                        { Success = true
-                          Message = "Compilation failed with expected error message"
-                          Stdout = Some execResult.Stdout
-                          Stderr = Some execResult.Stderr
-                          ExitCode = Some execResult.ExitCode
-                          CompileTime = execResult.CompileTime
-                          RuntimeTime = execResult.RuntimeTime }
-                    else
-                        { Success = false
-                          Message = $"Expected error message '{expectedMsg}' not found in stderr"
-                          Stdout = Some execResult.Stdout
-                          Stderr = Some execResult.Stderr
-                          ExitCode = Some execResult.ExitCode
-                          CompileTime = execResult.CompileTime
-                          RuntimeTime = execResult.RuntimeTime }
-                | None ->
-                    { Success = true
-                      Message = "Compilation failed as expected"
-                      Stdout = Some execResult.Stdout
-                      Stderr = Some execResult.Stderr
-                      ExitCode = Some execResult.ExitCode
-                      CompileTime = execResult.CompileTime
-                      RuntimeTime = execResult.RuntimeTime }
-        else
-            let stdoutMatches =
-                match test.ExpectedStdout with
-                | None -> true
-                | Some expected -> execResult.Stdout.Trim() = expected.Trim()
-
-            let stderrMatches =
-                match test.ExpectedStderr with
-                | None -> true
-                | Some expected -> execResult.Stderr.Trim() = expected.Trim()
-
-            let exitCodeMatches = execResult.ExitCode = test.ExpectedExitCode
-
-            let success = stdoutMatches && stderrMatches && exitCodeMatches
-
-            { Success = success
-              Message = if success then "Test passed" else "Output mismatch"
-              Stdout = Some execResult.Stdout
-              Stderr = Some execResult.Stderr
-              ExitCode = Some execResult.ExitCode
-              CompileTime = execResult.CompileTime
-              RuntimeTime = execResult.RuntimeTime }
+        let result = buildE2EResult test execResult
+        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
+        result
     with
     | ex ->
-        { Success = false
-          Message = $"Test execution failed: {ex.Message}"
-          Stdout = None
-          Stderr = None
-          ExitCode = None
-          CompileTime = TimeSpan.Zero
-          RuntimeTime = TimeSpan.Zero }
+        let result =
+            { Success = false
+              Message = $"Test execution failed: {ex.Message}"
+              Stdout = None
+              Stderr = None
+              ExitCode = None
+              CompileTime = TimeSpan.Zero
+              RuntimeTime = TimeSpan.Zero }
+        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
+        result
+
+/// Run E2E test using a precompiled preamble context
+let runE2ETestWithPreambleContext
+    (stdlib: CompilerLibrary.StdlibResult)
+    (preambleCtx: CompilerLibrary.PreambleContext)
+    (test: E2ETest)
+    : E2ETestResult =
+    try
+        emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
+        let options : CompilerLibrary.CompilerOptions = {
+            DisableFreeList = test.DisableFreeList
+            DisableANFOpt = test.DisableANFOpt
+            DisableANFConstFolding = test.DisableANFConstFolding
+            DisableANFConstProp = test.DisableANFConstProp
+            DisableANFCopyProp = test.DisableANFCopyProp
+            DisableANFDCE = test.DisableANFDCE
+            DisableANFStrengthReduction = test.DisableANFStrengthReduction
+            DisableInlining = test.DisableInlining
+            DisableTCO = test.DisableTCO
+            DisableMIROpt = test.DisableMIROpt
+            DisableMIRConstFolding = test.DisableMIRConstFolding
+            DisableMIRCSE = test.DisableMIRCSE
+            DisableMIRCopyProp = test.DisableMIRCopyProp
+            DisableMIRDCE = test.DisableMIRDCE
+            DisableMIRCFGSimplify = test.DisableMIRCFGSimplify
+            DisableMIRLICM = test.DisableMIRLICM
+            DisableLIROpt = test.DisableLIROpt
+            DisableLIRPeephole = test.DisableLIRPeephole
+            DisableFunctionTreeShaking = test.DisableFunctionTreeShaking
+            EnableCoverage = false
+            EnableLeakCheck = not test.DisableLeakCheck
+            DumpANF = false
+            DumpMIR = false
+            DumpLIR = false
+        }
+        let allowInternal = isInternalTestFile test.SourceFile
+        let execResult =
+            CompilerLibrary.compileAndRunWithPreambleContextTimedWithOptions allowInternal 0 options stdlib preambleCtx test.Source test.SourceFile
+        let result = buildE2EResult test execResult
+        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
+        result
+    with
+    | ex ->
+        let result =
+            { Success = false
+              Message = $"Test execution failed: {ex.Message}"
+              Stdout = None
+              Stderr = None
+              ExitCode = None
+              CompileTime = TimeSpan.Zero
+              RuntimeTime = TimeSpan.Zero }
+        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
+        result
 
 /// Run E2E test with pre-compiled stdlib
 let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     runE2ETestInternal stdlib test
+
+/// Run E2E tests with precompiled preambles
+let runE2ETestsWithCompiledPreambles
+    (stdlib: CompilerLibrary.StdlibResult)
+    (tests: E2ETest array)
+    : Result<(E2ETest * E2ETestResult) array, string> =
+    match compilePreambleContexts stdlib tests with
+    | Error err -> Error err
+    | Ok preambleContexts ->
+        let rec runAll remaining acc =
+            match remaining with
+            | [] -> Ok (List.rev acc |> List.toArray)
+            | test :: rest ->
+                let key = (test.SourceFile, test.Preamble)
+                match Map.tryFind key preambleContexts with
+                | None -> Error $"Missing precompiled preamble for {test.SourceFile}"
+                | Some ctx ->
+                    let result = runE2ETestWithPreambleContext stdlib ctx test
+                    runAll rest ((test, result) :: acc)
+        runAll (tests |> Array.toList) []

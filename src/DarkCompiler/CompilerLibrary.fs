@@ -14,6 +14,7 @@ open System.Diagnostics
 open System.Reflection
 open System.Collections.Concurrent
 open Output
+open Trace
 
 /// Result of compilation
 type CompileResult = Result<byte array, string>
@@ -721,8 +722,11 @@ let mergeTypedPrograms (stdlibTyped: AST.Program) (userTyped: AST.Program) : AST
 /// Compile stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
 let compileStdlib () : Result<StdlibResult, string> =
+    emit "stdlib.compile.start" []
     match loadStdlib() with
-    | Error e -> Error e
+    | Error e ->
+        emit "stdlib.compile.error" [("message", e)]
+        Error e
     | Ok stdlibAst ->
         let compileMode = StdlibCompileMode.Parallel
         // Add dummy main expression for type checking (stdlib has no main)
@@ -730,18 +734,25 @@ let compileStdlib () : Result<StdlibResult, string> =
         let withMain = AST.Program (items @ [AST.Expression AST.UnitLiteral])
 
         match TypeChecking.checkProgramWithEnv withMain with
-        | Error e -> Error (TypeChecking.typeErrorToString e)
+        | Error e ->
+            let msg = TypeChecking.typeErrorToString e
+            emit "stdlib.compile.error" [("message", msg)]
+            Error msg
         | Ok (_, typedStdlib, typeCheckEnv) ->
             // Extract generic function definitions for on-demand monomorphization
             let genericFuncDefs = AST_to_ANF.extractGenericFuncDefs typedStdlib
             // Build module registry once (reused across all compilations)
             let moduleRegistry = Stdlib.buildModuleRegistry ()
             match AST_to_ANF.convertProgramWithTypes typedStdlib with
-            | Error e -> Error e
+            | Error e ->
+                emit "stdlib.compile.error" [("message", e)]
+                Error e
             | Ok anfResult ->
                 // Run RC insertion on stdlib ANF (stdlib functions need ref counting too)
                 match RefCountInsertion.insertRCInProgram anfResult with
-                | Error e -> Error e
+                | Error e ->
+                    emit "stdlib.compile.error" [("message", e)]
+                    Error e
                 | Ok (anfAfterRC, typeMap) ->
                     // Pass 2.7: Tail Call Detection
                     let anfAfterTCO = TailCallDetection.detectTailCallsInProgram anfAfterRC
@@ -769,7 +780,9 @@ let compileStdlib () : Result<StdlibResult, string> =
                             let optFunc = MIR_Optimize.optimizeFunction ssaFunc
 
                             // MIR → LIR (inline the conversion)
-                            match MIR_to_LIR.selectCFG optFunc.CFG variantRegistry recordRegistry optFunc.ReturnType optFunc.FloatRegs with
+                            let errorLabel = LIR.Label $"__modulo_negative_divisor_error_{optFunc.Name}"
+                            let tempState = MIR_to_LIR.initTempState optFunc
+                            match MIR_to_LIR.selectCFG optFunc.CFG variantRegistry recordRegistry optFunc.ReturnType optFunc.FloatRegs errorLabel tempState with
                             | Error e -> Error e
                             | Ok lirCFG ->
                                 let lirTypedParams =
@@ -790,17 +803,22 @@ let compileStdlib () : Result<StdlibResult, string> =
 
                     // Compile all stdlib functions in parallel
                     match ParallelUtils.mapResultsParallel compileStdlibFunc stdlibFuncs with
-                    | Error e -> Error e
+                    | Error e ->
+                        emit "stdlib.compile.error" [("message", e)]
+                        Error e
                     | Ok allocatedFuncs ->
                         let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                         // MIRProgram is not used anywhere - set to empty placeholder
                         let mirProgram = MIR.Program ([], variantRegistry, recordRegistry)
                         match LIRSymbolic.toLIR allocatedSymbolic with
-                        | Error err -> Error err
+                        | Error err ->
+                            emit "stdlib.compile.error" [("message", err)]
+                            Error err
                         | Ok allocatedProgram ->
                                 let (LIR.Program (resolvedFuncs, _, _)) = allocatedProgram
                                 // Build call graph for dead code elimination
                                 let stdlibCallGraph = DeadCodeElimination.buildCallGraph resolvedFuncs
+                                emit "stdlib.compile.finish" [("functions", string resolvedFuncs.Length)]
                                 Ok {
                                     AST = stdlibAst
                                     TypedAST = typedStdlib
@@ -828,9 +846,10 @@ let private parseSourceWithInternal (allowInternal: bool) (source: string) : Res
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is cached and reused for all tests in the same file
 let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
+    emit "preamble.compile.start" [("source", sourceFile); ("length", string preamble.Length)]
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
-        Ok {
+        let emptyContext = {
             TypeCheckEnv = stdlib.TypeCheckEnv
             GenericFuncDefs = stdlib.GenericFuncDefs
             ANFFunctions = []
@@ -839,15 +858,23 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
             SymbolicFunctions = []
             StdlibSpecializedNames = Set.empty
         }
+        emit "preamble.compile.finish" [("source", sourceFile); ("functions", "0")]
+        Ok emptyContext
     else
         // Parse preamble with dummy expression (parser requires a main expression)
         let preambleSource = preamble + "\n0"
         match parseSourceWithInternal allowInternal preambleSource with
-        | Error err -> Error $"Preamble parse error: {err}"
+        | Error err ->
+            let msg = $"Preamble parse error: {err}"
+            emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+            Error msg
         | Ok preambleAst ->
             // Type-check preamble with stdlib.TypeCheckEnv
             match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv preambleAst with
-            | Error typeErr -> Error $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
+            | Error typeErr ->
+                let msg = $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
+                emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+                Error msg
             | Ok (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
                 // Extract generic function definitions from preamble
                 let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
@@ -856,7 +883,10 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
 
                 // Convert preamble to ANF (mono → inline → lift → ANF)
                 match AST_to_ANF.convertUserOnly mergedGenericDefs stdlib.ANFResult typedPreambleAst with
-                | Error err -> Error $"Preamble ANF conversion error: {err}"
+                | Error err ->
+                    let msg = $"Preamble ANF conversion error: {err}"
+                    emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+                    Error msg
                 | Ok preambleUserOnly ->
                     // ANF Optimization (preamble functions)
                     let preambleProgram = ANF.Program (preambleUserOnly.UserFunctions, preambleUserOnly.MainExpr)
@@ -877,7 +907,10 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
 
                     // RC Insertion
                     match RefCountInsertion.insertRCInProgram preambleConvResult with
-                    | Error err -> Error $"Preamble RC insertion error: {err}"
+                    | Error err ->
+                        let msg = $"Preamble RC insertion error: {err}"
+                        emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+                        Error msg
                     | Ok (preambleAnfAfterRC, typeMap) ->
                         // Tail Call Detection
                         let preambleAnfAfterTCO = TailCallDetection.detectTailCallsInProgram preambleAnfAfterRC
@@ -887,13 +920,19 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
 
                         let preambleExternalReturnTypes = extractReturnTypes preambleConvResult.FuncReg
                         match ANF_to_MIR.toMIRFunctionsOnly preambleAnfAfterTCO typeMap preambleConvResult.FuncParams preambleConvResult.VariantLookup Map.empty false preambleExternalReturnTypes with
-                        | Error err -> Error $"Preamble MIR conversion error: {err}"
+                        | Error err ->
+                            let msg = $"Preamble MIR conversion error: {err}"
+                            emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+                            Error msg
                         | Ok (mirFuncs, variantRegistry, recordRegistry) ->
                             let mirProgram = MIR.Program (mirFuncs, variantRegistry, recordRegistry)
                             let ssaProgram = SSA_Construction.convertToSSA mirProgram
                             let optimizedProgram = MIR_Optimize.optimizeProgram ssaProgram
                             match MIR_to_LIR.toLIR optimizedProgram with
-                            | Error err -> Error $"Preamble LIR conversion error: {err}"
+                            | Error err ->
+                                let msg = $"Preamble LIR conversion error: {err}"
+                                emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
+                                Error msg
                             | Ok lirProgram ->
                                 let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                                 let (LIRSymbolic.Program lirFuncs) = optimizedLir
@@ -914,7 +953,7 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                                 // Merge TypeMaps (stdlib + preamble)
                                 let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
 
-                                Ok {
+                                let context = {
                                     TypeCheckEnv = preambleTypeCheckEnv
                                     GenericFuncDefs = mergedGenericDefs
                                     ANFFunctions = preambleFunctions
@@ -923,6 +962,8 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                                     SymbolicFunctions = preambleSymbolicFuncs
                                     StdlibSpecializedNames = preambleUserOnly.SpecializedFuncNames
                                 }
+                                emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
+                                Ok context
 
 /// Compile preamble with stdlib as base (user code defaults)
 let compilePreamble (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
@@ -981,6 +1022,11 @@ let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (o
                     let functionsToCompile =
                         testOnly.UserFunctions
                         |> List.filter (fun f -> not (Set.contains f.Name preambleFuncNameSet))
+
+                    if isEnabled () then
+                        emit "test.compile.functions" [("source", sourceFile); ("count", string functionsToCompile.Length)]
+                        for func in functionsToCompile do
+                            emit "test.compile.function" [("source", sourceFile); ("function", func.Name)]
 
                     if verbosity >= 3 then
                         println $"  [COMPILE] {functionsToCompile.Length} user functions compiled fresh"
@@ -1370,6 +1416,39 @@ let private compilePreambleContextDefault
 let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
     compileWithOptions verbosity options source |> compileResultToExecution verbosity
 
+/// Compile and run with timing breakdown using a precompiled preamble context
+let compileAndRunWithPreambleContextTimedWithOptions
+    (allowInternal: bool)
+    (verbosity: int)
+    (options: CompilerOptions)
+    (stdlib: StdlibResult)
+    (preambleCtx: PreambleContext)
+    (testExpr: string)
+    (sourceFile: string)
+    : TimedExecutionResult =
+    let compileTimer = Stopwatch.StartNew()
+    let compileResult =
+        compileTestWithPreambleWithOptions allowInternal verbosity options stdlib preambleCtx sourceFile testExpr
+    compileTimer.Stop()
+    let compileTime = compileTimer.Elapsed
+
+    match compileResult with
+    | Error err ->
+        { ExitCode = 1
+          Stdout = ""
+          Stderr = err
+          CompileTime = compileTime
+          RuntimeTime = TimeSpan.Zero }
+    | Ok binary ->
+        let runtimeTimer = Stopwatch.StartNew()
+        let execResult = execute verbosity binary
+        runtimeTimer.Stop()
+        { ExitCode = execResult.ExitCode
+          Stdout = execResult.Stdout
+          Stderr = execResult.Stderr
+          CompileTime = compileTime
+          RuntimeTime = runtimeTimer.Elapsed }
+
 /// Compile and run with timing breakdown (for test output)
 let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
     match compilePreambleContextWithOptions allowInternal verbosity stdlib preamble sourceFile funcLineMap with
@@ -1380,27 +1459,7 @@ let compileAndRunWithStdlibCachedTimedWithOptions (allowInternal: bool) (verbosi
           CompileTime = TimeSpan.Zero
           RuntimeTime = TimeSpan.Zero }
     | Ok preambleCtx ->
-        let compileTimer = Stopwatch.StartNew()
-        let compileResult = compileTestWithPreambleWithOptions allowInternal verbosity options stdlib preambleCtx sourceFile testExpr
-        compileTimer.Stop()
-        let compileTime = compileTimer.Elapsed
-
-        match compileResult with
-        | Error err ->
-            { ExitCode = 1
-              Stdout = ""
-              Stderr = err
-              CompileTime = compileTime
-              RuntimeTime = TimeSpan.Zero }
-        | Ok binary ->
-            let runtimeTimer = Stopwatch.StartNew()
-            let execResult = execute verbosity binary
-            runtimeTimer.Stop()
-            { ExitCode = execResult.ExitCode
-              Stdout = execResult.Stdout
-              Stderr = execResult.Stderr
-              CompileTime = compileTime
-              RuntimeTime = runtimeTimer.Elapsed }
+        compileAndRunWithPreambleContextTimedWithOptions allowInternal verbosity options stdlib preambleCtx testExpr sourceFile
 
 /// Compile and run with timing breakdown (for test output)
 let compileAndRunWithStdlibCachedTimed (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =

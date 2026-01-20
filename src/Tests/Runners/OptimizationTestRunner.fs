@@ -9,7 +9,6 @@ open System
 open AST
 open TestDSL.OptimizationFormat
 open IRPrinter
-open StdlibTestHarness
 
 /// Result of running an optimization test
 type OptimizationTestResult = {
@@ -33,13 +32,10 @@ let private externalReturnTypes : Map<string, AST.Type> =
         ("__string_eq", TBool)
     ]
 
-let private typeCheckWithStdlib (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
-    match getSharedStdlibResult () with
-    | Error err -> Error $"Stdlib compile error: {err}"
-    | Ok stdlib ->
-        match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv ast with
-        | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
-        | Ok (programType, typedAst, _env) -> Ok (programType, typedAst)
+let private typeCheckWithStdlib (stdlib: CompilerLibrary.StdlibResult) (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
+    match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv ast with
+    | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
+    | Ok (programType, typedAst, _env) -> Ok (programType, typedAst)
 
 /// Normalize IR output for comparison
 /// - Trim whitespace
@@ -52,13 +48,13 @@ let normalizeIR (ir: string) : string =
     |> String.concat "\n"
 
 /// Compile source and get ANF after optimization
-let getOptimizedANF (source: string) : Result<string, string> =
+let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match typeCheckWithStdlib ast with
+        match typeCheckWithStdlib stdlib ast with
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
@@ -72,13 +68,13 @@ let getOptimizedANF (source: string) : Result<string, string> =
                 Ok (formatANF optimized)
 
 /// Compile source and get MIR after optimization
-let getOptimizedMIR (source: string) : Result<string, string> =
+let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match typeCheckWithStdlib ast with
+        match typeCheckWithStdlib stdlib ast with
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
@@ -112,13 +108,13 @@ let getOptimizedMIR (source: string) : Result<string, string> =
                         Ok (formatMIR optimizedMir)
 
 /// Compile source and get LIR after optimization
-let getOptimizedLIR (source: string) : Result<string, string> =
+let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseStringAllowInternal source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
-        match typeCheckWithStdlib ast with
+        match typeCheckWithStdlib stdlib ast with
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
@@ -159,12 +155,12 @@ let getOptimizedLIR (source: string) : Result<string, string> =
                                 Ok (formatLIR resolved)
 
 /// Run a single optimization test
-let runOptimizationTest (test: OptimizationTest) : OptimizationTestResult =
+let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult) (test: OptimizationTest) : OptimizationTestResult =
     let irResult =
         match test.Stage with
-        | ANF -> getOptimizedANF test.Source
-        | MIR -> getOptimizedMIR test.Source
-        | LIR -> getOptimizedLIR test.Source
+        | ANF -> getOptimizedANF stdlib test.Source
+        | MIR -> getOptimizedMIR stdlib test.Source
+        | LIR -> getOptimizedLIR stdlib test.Source
 
     match irResult with
     | Error e ->
@@ -188,9 +184,9 @@ let runOptimizationTest (test: OptimizationTest) : OptimizationTestResult =
               Actual = Some normalizedActual }
 
 /// Load and run tests from a file
-let runTestFile (stage: IRStage) (path: string) : Result<(OptimizationTest * OptimizationTestResult) list, string> =
+let runTestFile (stdlib: CompilerLibrary.StdlibResult) (stage: IRStage) (path: string) : Result<(OptimizationTest * OptimizationTestResult) list, string> =
     match parseTestFile stage path with
     | Error e -> Error e
     | Ok tests ->
-        let results = tests |> List.map (fun test -> (test, runOptimizationTest test))
+        let results = tests |> List.map (fun test -> (test, runOptimizationTest stdlib test))
         Ok results

@@ -45,8 +45,9 @@ let shouldStartStdlibCompile
     (needsUnitStdlib: bool)
     (hasMatchingE2E: bool)
     (hasMatchingVerification: bool)
+    (needsOptimizationStdlib: bool)
     : bool =
-    needsUnitStdlib || hasMatchingE2E || hasMatchingVerification
+    needsUnitStdlib || hasMatchingE2E || hasMatchingVerification || needsOptimizationStdlib
 
 let shouldRunUnitAndE2EInParallel (hasUnit: bool) (hasE2E: bool) : bool =
     hasUnit && hasE2E

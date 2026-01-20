@@ -75,17 +75,18 @@ let testSplitUnitTestsByStdlibNeed () : TestResult =
 
 let testShouldStartStdlibCompile () : TestResult =
     let cases = [
-        (false, false, false, false, false, false)
-        (true, false, false, false, false, false)
-        (true, false, false, true, false, true)
-        (false, true, false, false, false, false)
-        (false, true, false, false, true, true)
-        (false, false, true, false, false, true)
+        (false, false, false, false, false, false, false)
+        (true, false, false, false, false, false, false)
+        (true, false, false, true, false, false, true)
+        (false, true, false, false, false, false, false)
+        (false, true, false, false, true, false, true)
+        (false, false, true, false, false, false, true)
+        (false, false, false, false, false, true, true)
     ]
     let rec checkCases remaining =
         match remaining with
         | [] -> Ok ()
-        | (hasE2E, hasVerification, needsUnitStdlib, hasMatchingE2E, hasMatchingVerification, expected) :: rest ->
+        | (hasE2E, hasVerification, needsUnitStdlib, hasMatchingE2E, hasMatchingVerification, needsOptimizationStdlib, expected) :: rest ->
             let actual =
                 shouldStartStdlibCompile
                     hasE2E
@@ -93,11 +94,12 @@ let testShouldStartStdlibCompile () : TestResult =
                     needsUnitStdlib
                     hasMatchingE2E
                     hasMatchingVerification
+                    needsOptimizationStdlib
             if actual = expected then
                 checkCases rest
             else
                 Error
-                    $"Expected shouldStartStdlibCompile({hasE2E}, {hasVerification}, {needsUnitStdlib}, {hasMatchingE2E}, {hasMatchingVerification}) to be {expected}, got {actual}"
+                    $"Expected shouldStartStdlibCompile({hasE2E}, {hasVerification}, {needsUnitStdlib}, {hasMatchingE2E}, {hasMatchingVerification}, {needsOptimizationStdlib}) to be {expected}, got {actual}"
     checkCases cases
 
 let testShouldRunUnitAndE2EInParallel () : TestResult =

@@ -6,6 +6,7 @@ module StdlibTestHarnessTests
 
 open CompilerLibrary
 open TypeChecking
+open System.Reflection
 
 /// Test result type
 type TestResult = Result<unit, string>
@@ -58,6 +59,26 @@ let testResetCachesIsNoOp () : TestResult =
     else
         Ok ()
 
+let testNoSharedStdlibGetter () : TestResult =
+    let asm = Assembly.GetExecutingAssembly()
+    match asm.GetType("StdlibTestHarness") with
+    | null -> Error "Could not locate StdlibTestHarness module type."
+    | moduleType ->
+        let methods =
+            moduleType.GetMethods(
+                BindingFlags.Static
+                ||| BindingFlags.NonPublic
+                ||| BindingFlags.Public
+                ||| BindingFlags.DeclaredOnly
+            )
+        let hasMethod =
+            methods |> Array.exists (fun methodInfo -> methodInfo.Name = "getSharedStdlibResult")
+        if hasMethod then
+            Error "StdlibTestHarness still exposes getSharedStdlibResult; remove shared stdlib accessor."
+        else
+            Ok ()
+
 let tests : (string * (unit -> TestResult)) list = [
     ("reset caches is no-op", testResetCachesIsNoOp)
+    ("no shared stdlib getter", testNoSharedStdlibGetter)
 ]

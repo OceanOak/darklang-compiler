@@ -45,6 +45,7 @@
     <Compile Include="PassTestRunnerTests.fs" />
     <Compile Include="ParallelUtilsTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
+    <Compile Include="TraceTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />

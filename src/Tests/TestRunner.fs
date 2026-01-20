@@ -108,6 +108,12 @@ let main args =
             Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories)
         else
             [||]
+    let optDir = Path.Combine(testDataRoot, "optimization")
+    let optTestFiles =
+        if Directory.Exists optDir then
+            Directory.GetFiles(optDir, "*.opt", SearchOption.AllDirectories)
+        else
+            [||]
 
     let unitStdlibSuites = [ "Compiler Caching Tests"; "Preamble Precompile Tests" ]
     let needsUnitStdlib = unitStdlibSuites |> List.exists (matchesFilter filter)
@@ -160,6 +166,8 @@ let main args =
                     | Error _ -> false
                     | Ok tests -> tests |> List.exists (fun test -> matchesFilter filter test.Name))
 
+    let needsOptimizationStdlib = optTestFiles.Length > 0
+
     let shouldCompileStdlib =
         shouldStartStdlibCompile
             hasE2ETests
@@ -167,6 +175,7 @@ let main args =
             needsUnitStdlib
             hasMatchingE2ETests
             (verificationEnabled && hasMatchingVerificationTests)
+            needsOptimizationStdlib
 
     let stdlibWarmupPlan = decideStdlibWarmupPlan shouldCompileStdlib
 
@@ -311,7 +320,7 @@ let main args =
         : unit =
         let numTests = testsArray.Length
         if numTests > 0 then
-            let precompileTasks = TestDSL.E2ETestRunner.startPreamblePrecompileTasks stdlib testsArray
+            let preambleContextsResult = TestDSL.E2ETestRunner.compilePreambleContexts stdlib testsArray
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
             let progress = ProgressBar.create progressLabel numTests
@@ -353,10 +362,8 @@ let main args =
 
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
-                let preambleResult = TestDSL.E2ETestRunner.awaitPreamblePrecompile precompileTasks test
                 let result =
-                    match preambleResult with
-                    | Ok () -> runE2ETest stdlib test
+                    match preambleContextsResult with
                     | Error err ->
                         { Success = false
                           Message = $"Preamble precompile failed: {err}"
@@ -365,6 +372,19 @@ let main args =
                           ExitCode = Some 1
                           CompileTime = TimeSpan.Zero
                           RuntimeTime = TimeSpan.Zero }
+                    | Ok preambleContexts ->
+                        let key = (test.SourceFile, test.Preamble)
+                        match Map.tryFind key preambleContexts with
+                        | None ->
+                            { Success = false
+                              Message = $"Missing precompiled preamble for {test.SourceFile}"
+                              Stdout = None
+                              Stderr = None
+                              ExitCode = Some 1
+                              CompileTime = TimeSpan.Zero
+                              RuntimeTime = TimeSpan.Zero }
+                        | Some ctx ->
+                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext stdlib ctx test
                 let totalTime = result.CompileTime + result.RuntimeTime
                 results.[i] <- Some (test, result)
                 recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some result.CompileTime; RuntimeTime = Some result.RuntimeTime }
@@ -582,17 +602,19 @@ let main args =
             handleTypecheckError
 
     // Run Optimization Tests (ANF, MIR, LIR)
-    let optDir = Path.Combine(testDataRoot, "optimization")
-    if Directory.Exists optDir then
-        let optTestFiles = Directory.GetFiles(optDir, "*.opt", SearchOption.AllDirectories)
+    if optTestFiles.Length > 0 then
+        let stdlibForOptimization = getStdlibResult ()
         let runOptimizationFile testFile =
-            let fileName = Path.GetFileNameWithoutExtension (testFile: string)
-            let stage =
-                if fileName.ToLower().Contains("anf") then TestDSL.OptimizationFormat.ANF
-                elif fileName.ToLower().Contains("mir") then TestDSL.OptimizationFormat.MIR
-                elif fileName.ToLower().Contains("lir") then TestDSL.OptimizationFormat.LIR
-                else TestDSL.OptimizationFormat.ANF
-            TestDSL.OptimizationTestRunner.runTestFile stage testFile
+            match stdlibForOptimization with
+            | Error err -> Error $"Stdlib compile failed: {err}"
+            | Ok stdlib ->
+                let fileName = Path.GetFileNameWithoutExtension (testFile: string)
+                let stage =
+                    if fileName.ToLower().Contains("anf") then TestDSL.OptimizationFormat.ANF
+                    elif fileName.ToLower().Contains("mir") then TestDSL.OptimizationFormat.MIR
+                    elif fileName.ToLower().Contains("lir") then TestDSL.OptimizationFormat.LIR
+                    else TestDSL.OptimizationFormat.ANF
+                TestDSL.OptimizationTestRunner.runTestFile stdlib stage testFile
         let handleOptimizationSuccess
             (progress: ProgressBar.State)
             (testPath: string)
@@ -676,6 +698,7 @@ let main args =
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Parallel Utils Tests"; Tests = ParallelUtilsTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
+        { Name = "Trace Tests"; Tests = TraceTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
