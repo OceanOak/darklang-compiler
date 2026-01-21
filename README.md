@@ -134,11 +134,10 @@ file <binary>               # Check file type
 
 The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally small:
 
-- `compileWithOptions` for in-memory compilation with explicit `CompilerOptions`
-- `compileAndRunWithOptions` for compile+execute with explicit `CompilerOptions`
-- `compileStdlib` to prebuild stdlib for tests and tooling
-- `compilePreamble` and `compileTestWithPreamble` for test preamble build/reuse
-- `compileAndRunWithPreambleTimed` for E2E test execution with timing
+- `buildStdlib` to prebuild stdlib for tests and tooling
+- `buildPreambleContext` for test preamble build/reuse
+- `compile` for in-memory compilation via `CompileRequest` (`CompileContext` + `CompileMode`)
+- `execute` for running compiled binaries with timing
 
 ## Docker Development (with Codex + Claude Code Integration)
 

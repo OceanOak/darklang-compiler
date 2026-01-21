@@ -15,24 +15,24 @@ open System.Reflection
 open Output
 open Trace
 
-/// Result of compilation
-type CompileResult = Result<byte array, string>
-
-/// Result of execution
-type ExecutionResult = {
-    ExitCode: int
-    Stdout: string
-    Stderr: string
+/// Result of compilation with timing
+type CompileReport = {
+    Result: Result<byte array, string>
+    CompileTime: TimeSpan
 }
 
-/// Result of execution with timing breakdown
-type TimedExecutionResult = {
+/// Result of execution with timing
+type ExecutionOutput = {
     ExitCode: int
     Stdout: string
     Stderr: string
-    CompileTime: TimeSpan
     RuntimeTime: TimeSpan
 }
+
+/// Compilation mode for labeling and test behavior
+type CompileMode =
+    | FullProgram
+    | TestExpression
 
 /// Compiler options for controlling optimization behavior
 type CompilerOptions = {
@@ -115,7 +115,7 @@ let defaultOptions : CompilerOptions = {
 }
 
 /// Determine whether to dump a specific IR, based on verbosity or explicit option
-let shouldDumpIR (verbosity: int) (enabled: bool) : bool =
+let private shouldDumpIR (verbosity: int) (enabled: bool) : bool =
     verbosity >= 3 || enabled
 
 let private buildANFOptimizeOptions (options: CompilerOptions) : ANF_Optimize.OptimizeOptions =
@@ -164,25 +164,25 @@ let private formatPassGroup (label: string) (passes: (string * bool) list) : str
     | _ -> $"{label} ({enabledNames})"
 
 /// Print ANF program in a consistent, human-readable format
-let printANFProgram (title: string) (program: ANF.Program) : unit =
+let private printANFProgram (title: string) (program: ANF.Program) : unit =
     println title
     println (formatANF program)
     println ""
 
 /// Print MIR program (with CFG) in a consistent format
-let printMIRProgram (title: string) (program: MIR.Program) : unit =
+let private printMIRProgram (title: string) (program: MIR.Program) : unit =
     println title
     println (formatMIR program)
     println ""
 
 /// Print LIR program (with CFG) in a consistent format
-let printLIRProgram (title: string) (program: LIR.Program) : unit =
+let private printLIRProgram (title: string) (program: LIR.Program) : unit =
     println title
     println (formatLIR program)
     println ""
 
 /// Print symbolic LIR program (with CFG) in a consistent format
-let printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : unit =
+let private printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : unit =
     println title
     println (formatLIRSymbolic program)
     println ""
@@ -567,13 +567,29 @@ type StdlibResult = {
     StdlibTypeMap: ANF.TypeMap
 }
 
+/// Context for compiling user code
+type CompileContext =
+    | StdlibOnly of StdlibResult
+    | StdlibWithPreamble of StdlibResult * PreambleContext
+
+/// Request for compiling source code
+type CompileRequest = {
+    Context: CompileContext
+    Mode: CompileMode
+    Source: string
+    SourceFile: string
+    AllowInternal: bool
+    Verbosity: int
+    Options: CompilerOptions
+}
+
 
 // Helper functions for exception-to-Result conversion (Darklang compatibility)
 
 /// Extract return types from a FuncReg (FunctionRegistry maps func name -> full type)
 /// This is needed because buildReturnTypeReg only includes functions in the current program,
 /// but we need return types for all callable functions (including stdlib)
-let extractReturnTypes (funcReg: Map<string, AST.Type>) : Map<string, AST.Type> =
+let private extractReturnTypes (funcReg: Map<string, AST.Type>) : Map<string, AST.Type> =
     funcReg
     |> Map.toSeq
     |> Seq.choose (fun (name, typ) ->
@@ -583,16 +599,16 @@ let extractReturnTypes (funcReg: Map<string, AST.Type>) : Map<string, AST.Type> 
     |> Map.ofSeq
 
 /// Try to delete a file, ignoring any errors
-let tryDeleteFile (path: string) : unit =
+let private tryDeleteFile (path: string) : unit =
     try File.Delete(path) with _ -> ()
 
 /// Try to start a process, returning Result instead of throwing
-let tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
+let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     try Ok (Process.Start(info))
     with ex -> Error ex.Message
 
 /// Load a .dark file allowing internal identifiers (for stdlib sources)
-let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
+let private loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
     let exePath = Assembly.GetExecutingAssembly().Location
     let exeDir = Path.GetDirectoryName(exePath)
     let possiblePaths = [
@@ -612,7 +628,7 @@ let loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
 
 /// Load the stdlib and unicode_data.dark files
 /// Returns the merged stdlib AST or an error message
-let loadStdlib () : Result<AST.Program, string> =
+let private loadStdlib () : Result<AST.Program, string> =
     let stdlibFiles = [
         "stdlib/Int8.dark"
         "stdlib/Int16.dark"
@@ -667,9 +683,9 @@ let loadStdlib () : Result<AST.Program, string> =
             // Merge stdlib and unicode data
             Ok (AST.Program (stdlibItems @ unicodeItems))
 
-/// Compile stdlib in isolation, returning reusable result
+/// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
-let compileStdlib () : Result<StdlibResult, string> =
+let buildStdlib () : Result<StdlibResult, string> =
     emit "stdlib.compile.start" []
     match loadStdlib() with
     | Error e ->
@@ -789,164 +805,168 @@ type private UserCompilePlan = {
 }
 
 /// Compile a user/test program against a prebuilt stdlib/preamble context
-let private compileUserWithPlan (plan: UserCompilePlan) : CompileResult =
+let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
     let sw = Stopwatch.StartNew()
-    try
-        // Pass 1: Parse user code only
-        if plan.Verbosity >= 1 then println plan.Labels.Parse
-        let parseResult = parseSourceWithInternal plan.AllowInternal plan.Source
-        let parseTime = sw.Elapsed.TotalMilliseconds
-        if plan.Verbosity >= 2 then
-            let t = System.Math.Round(parseTime, 1)
-            println $"        {t}ms"
-
-        match parseResult with
-        | Error err -> Error $"Parse error: {err}"
-        | Ok userAst ->
-            // Pass 1.5: Type Checking (user code with base TypeCheckEnv)
-            if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
-            let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseTypeCheckEnv userAst
-            let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
+    let result =
+        try
+            // Pass 1: Parse user code only
+            if plan.Verbosity >= 1 then println plan.Labels.Parse
+            let parseResult = parseSourceWithInternal plan.AllowInternal plan.Source
+            let parseTime = sw.Elapsed.TotalMilliseconds
             if plan.Verbosity >= 2 then
-                let t = System.Math.Round(typeCheckTime, 1)
+                let t = System.Math.Round(parseTime, 1)
                 println $"        {t}ms"
 
-            match typeCheckResult with
-            | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
-            | Ok (programType, typedUserAst, _userEnv) ->
-                if plan.Verbosity >= 3 then
-                    println $"Program type: {TypeChecking.typeToString programType}"
-                    println ""
-
-                // Pass 2: AST → ANF (user only)
-                if plan.Verbosity >= 1 then println plan.Labels.Anf
-                let userOnlyResult =
-                    AST_to_ANF.convertUserOnly
-                        plan.BaseGenericFuncDefs
-                        plan.BaseANFResult
-                        typedUserAst
-                let anfTime = sw.Elapsed.TotalMilliseconds - parseTime - typeCheckTime
+            match parseResult with
+            | Error err -> Error $"Parse error: {err}"
+            | Ok userAst ->
+                // Pass 1.5: Type Checking (user code with base TypeCheckEnv)
+                if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
+                let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseTypeCheckEnv userAst
+                let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
                 if plan.Verbosity >= 2 then
-                    let t = System.Math.Round(anfTime, 1)
+                    let t = System.Math.Round(typeCheckTime, 1)
                     println $"        {t}ms"
 
-                match userOnlyResult with
-                | Error err -> Error $"ANF conversion error: {err}"
-                | Ok userOnly ->
-                    let functionsToCompile =
-                        userOnly.UserFunctions
-                        |> List.filter (fun f -> not (Set.contains f.Name plan.SkipFunctionNames))
+                match typeCheckResult with
+                | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
+                | Ok (programType, typedUserAst, _userEnv) ->
+                    if plan.Verbosity >= 3 then
+                        println $"Program type: {TypeChecking.typeToString programType}"
+                        println ""
 
-                    if plan.EmitFunctionEvents && isEnabled () then
-                        emit "test.compile.functions" [("source", plan.SourceFile); ("count", string functionsToCompile.Length)]
-                        for func in functionsToCompile do
-                            emit "test.compile.function" [("source", plan.SourceFile); ("function", func.Name)]
+                    // Pass 2: AST → ANF (user only)
+                    if plan.Verbosity >= 1 then println plan.Labels.Anf
+                    let userOnlyResult =
+                        AST_to_ANF.convertUserOnly
+                            plan.BaseGenericFuncDefs
+                            plan.BaseANFResult
+                            typedUserAst
+                    let anfTime = sw.Elapsed.TotalMilliseconds - parseTime - typeCheckTime
+                    if plan.Verbosity >= 2 then
+                        let t = System.Math.Round(anfTime, 1)
+                        println $"        {t}ms"
 
-                    if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
-                        println $"  [COMPILE] {functionsToCompile.Length} user functions compiled fresh"
-                        for f in functionsToCompile do
-                            println $"    - {f.Name}"
+                    match userOnlyResult with
+                    | Error err -> Error $"ANF conversion error: {err}"
+                    | Ok userOnly ->
+                        let functionsToCompile =
+                            userOnly.UserFunctions
+                            |> List.filter (fun f -> not (Set.contains f.Name plan.SkipFunctionNames))
 
-                    let anfResult =
-                        buildAnfProgram
-                            plan.Verbosity
-                            plan.Options
-                            sw
-                            programType
-                            functionsToCompile
-                            userOnly.MainExpr
-                            userOnly
-                            []
-                            Map.empty
-                    match anfResult with
-                    | Error err -> Error err
-                    | Ok (userAnfProgram, typeMap, userConvResult) ->
-                        let externalReturnTypes = extractReturnTypes userOnly.FuncReg
-                        let userLirResult =
-                            compileAnfToLir
+                        if plan.EmitFunctionEvents && isEnabled () then
+                            emit "test.compile.functions" [("source", plan.SourceFile); ("count", string functionsToCompile.Length)]
+                            for func in functionsToCompile do
+                                emit "test.compile.function" [("source", plan.SourceFile); ("function", func.Name)]
+
+                        if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
+                            println $"  [COMPILE] {functionsToCompile.Length} user functions compiled fresh"
+                            for f in functionsToCompile do
+                                println $"    - {f.Name}"
+
+                        let anfResult =
+                            buildAnfProgram
                                 plan.Verbosity
                                 plan.Options
                                 sw
-                                plan.Labels.StageSuffix
-                                userAnfProgram
-                                typeMap
-                                userConvResult
                                 programType
-                                externalReturnTypes
-                        match userLirResult with
+                                functionsToCompile
+                                userOnly.MainExpr
+                                userOnly
+                                []
+                                Map.empty
+                        match anfResult with
                         | Error err -> Error err
-                        | Ok userOptimizedLirProgram ->
-                            // Pass 5: Register Allocation
-                            if plan.Verbosity >= 1 then println "  [5/8] Register Allocation..."
-                            let allocStart = sw.Elapsed.TotalMilliseconds
-                            let (LIRSymbolic.Program userFuncs) = userOptimizedLirProgram
-                            let (LIR.Program (_, stdlibStrings, stdlibFloats)) = plan.Stdlib.LIRProgram
+                        | Ok (userAnfProgram, typeMap, userConvResult) ->
+                            let externalReturnTypes = extractReturnTypes userOnly.FuncReg
+                            let userLirResult =
+                                compileAnfToLir
+                                    plan.Verbosity
+                                    plan.Options
+                                    sw
+                                    plan.Labels.StageSuffix
+                                    userAnfProgram
+                                    typeMap
+                                    userConvResult
+                                    programType
+                                    externalReturnTypes
+                            match userLirResult with
+                            | Error err -> Error err
+                            | Ok userOptimizedLirProgram ->
+                                // Pass 5: Register Allocation
+                                if plan.Verbosity >= 1 then println "  [5/8] Register Allocation..."
+                                let allocStart = sw.Elapsed.TotalMilliseconds
+                                let (LIRSymbolic.Program userFuncs) = userOptimizedLirProgram
+                                let (LIR.Program (_, stdlibStrings, stdlibFloats)) = plan.Stdlib.LIRProgram
 
-                            let allocatedUserFuncs = allocateRegistersForFunctions userFuncs
-                            let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
+                                let allocatedUserFuncs = allocateRegistersForFunctions userFuncs
+                                let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
 
-                            match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
-                            | Error err -> Error $"LIR pool resolution error: {err}"
-                            | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
-                                if plan.Verbosity >= 2 then
-                                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
-                                    println $"        {t}ms"
+                                match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
+                                | Error err -> Error $"LIR pool resolution error: {err}"
+                                | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
+                                    if plan.Verbosity >= 2 then
+                                        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                                        println $"        {t}ms"
 
-                                let finalUserFuncs =
-                                    if plan.TreeShakeUserFunctions then
-                                        if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
-                                        if plan.Options.DisableFunctionTreeShaking then allUserFuncs
-                                        else FunctionTreeShaking.filterUserFunctions allUserFuncs
-                                    else
-                                        allUserFuncs
+                                    let finalUserFuncs =
+                                        if plan.TreeShakeUserFunctions then
+                                            if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
+                                            if plan.Options.DisableFunctionTreeShaking then allUserFuncs
+                                            else FunctionTreeShaking.filterUserFunctions allUserFuncs
+                                        else
+                                            allUserFuncs
 
-                                if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
-                                    println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
-                                    for f in allUserFuncs do
-                                        println $"    - {f.Name}"
-                                    println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
+                                    if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
+                                        println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
+                                        for f in allUserFuncs do
+                                            println $"    - {f.Name}"
+                                        println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
 
-                                // Filter stdlib functions to only include reachable ones (dead code elimination)
-                                let reachableStdlib =
-                                    if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
-                                    else
-                                        FunctionTreeShaking.filterStdlibFunctions
-                                            plan.Stdlib.StdlibCallGraph
-                                            finalUserFuncs
-                                            plan.Stdlib.AllocatedFunctions
+                                    // Filter stdlib functions to only include reachable ones (dead code elimination)
+                                    let reachableStdlib =
+                                        if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
+                                        else
+                                            FunctionTreeShaking.filterStdlibFunctions
+                                                plan.Stdlib.StdlibCallGraph
+                                                finalUserFuncs
+                                                plan.Stdlib.AllocatedFunctions
 
-                                // Combine reachable stdlib functions with user functions
-                                let allFuncs = reachableStdlib @ finalUserFuncs
-                                let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
-                                if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
-                                    printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
+                                    // Combine reachable stdlib functions with user functions
+                                    let allFuncs = reachableStdlib @ finalUserFuncs
+                                    let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
+                                    if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
+                                        printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
 
-                                let binaryResult =
-                                    generateBinary
-                                        plan.Verbosity
-                                        plan.Options
-                                        sw
-                                        "  [6/8] Code Generation..."
-                                        "  [7/7] ARM64 Encoding..."
-                                        "  [7/7] Binary Generation ({format})..."
-                                        false
-                                        false
-                                        allocatedProgram
-                                match binaryResult with
-                                | Error err -> Error err
-                                | Ok binary ->
-                                    sw.Stop()
-                                    if plan.Verbosity >= 1 then
-                                        println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
-                                    Ok binary
-    with
-    | ex ->
-        Error $"Compilation failed: {ex.Message}"
+                                    let binaryResult =
+                                        generateBinary
+                                            plan.Verbosity
+                                            plan.Options
+                                            sw
+                                            "  [6/8] Code Generation..."
+                                            "  [7/7] ARM64 Encoding..."
+                                            "  [7/7] Binary Generation ({format})..."
+                                            false
+                                            false
+                                            allocatedProgram
+                                    match binaryResult with
+                                    | Error err -> Error err
+                                    | Ok binary ->
+                                        Ok binary
+        with
+        | ex ->
+            Error $"Compilation failed: {ex.Message}"
+    sw.Stop()
+    match result with
+    | Ok _ when plan.Verbosity >= 1 ->
+        println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
+    | _ -> ()
+    { Result = result; CompileTime = sw.Elapsed }
 
-/// Compile preamble with stdlib as base, returning extended context for test compilation
+/// Build preamble with stdlib as base, returning extended context for test compilation
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is built once per file and reused for all tests in that file
-let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
+let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
     emit "preamble.compile.start" [("source", sourceFile); ("length", string preamble.Length)]
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
@@ -1052,75 +1072,69 @@ let compilePreambleWithOptions (allowInternal: bool) (stdlib: StdlibResult) (pre
                             emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
                             Ok context
 
-/// Compile test expression with a prebuilt preamble context
-/// Only the tiny test expression is parsed/compiled - preamble functions are merged in
-let compileTestWithPreambleWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult)
-                                       (preambleCtx: PreambleContext) (sourceFile: string) (testExpr: string) : CompileResult =
-    let preambleFuncs = preambleCtx.SymbolicFunctions
-    let preambleFuncNameSet =
-        preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
-    let labels = {
-        Parse = "  [1/8] Parse (test expr only)..."
-        TypeCheck = "  [1.5/8] Type Checking (with preamble env)..."
-        Anf = "  [2/8] AST → ANF (test expr only)..."
-        StageSuffix = ""
-    }
-    let plan = {
-        AllowInternal = allowInternal
-        Verbosity = verbosity
-        Options = options
-        Stdlib = stdlib
-        BaseTypeCheckEnv = preambleCtx.TypeCheckEnv
-        BaseGenericFuncDefs = preambleCtx.GenericFuncDefs
-        BaseANFResult = preambleCtx.ANFResult
-        PrebuiltSymbolicFunctions = preambleFuncs
-        SkipFunctionNames = preambleFuncNameSet
-        EmitFunctionEvents = true
-        TreeShakeUserFunctions = true
-        Labels = labels
-        SourceFile = sourceFile
-        Source = testExpr
-    }
-    compileUserWithPlan plan
+let private labelsForMode (mode: CompileMode) : UserCompileLabels =
+    match mode with
+    | FullProgram ->
+        {
+            Parse = "  [1/8] Parse..."
+            TypeCheck = "  [1.5/8] Type Checking (with stdlib env)..."
+            Anf = "  [2/8] AST → ANF (user only)..."
+            StageSuffix = "user only"
+        }
+    | TestExpression ->
+        {
+            Parse = "  [1/8] Parse (test expr only)..."
+            TypeCheck = "  [1.5/8] Type Checking (with preamble env)..."
+            Anf = "  [2/8] AST → ANF (test expr only)..."
+            StageSuffix = ""
+        }
 
-/// Compile user code with prebuilt stdlib and tree-shake unused functions
-/// This keeps expensive passes focused on user code while reusing stdlib output
-let private compileWithStdlib (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (source: string) : CompileResult =
-    let labels = {
-        Parse = "  [1/8] Parse..."
-        TypeCheck = "  [1.5/8] Type Checking (with stdlib env)..."
-        Anf = "  [2/8] AST → ANF (user only)..."
-        StageSuffix = "user only"
-    }
-    let plan = {
-        AllowInternal = false
-        Verbosity = verbosity
-        Options = options
+let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
+    let (stdlib, baseTypeCheckEnv, baseGenericDefs, baseAnfResult, prebuiltSymbolic, skipNames) =
+        match request.Context with
+        | StdlibOnly stdlib ->
+            stdlib, stdlib.TypeCheckEnv, stdlib.GenericFuncDefs, stdlib.ANFResult, [], Set.empty
+        | StdlibWithPreamble (stdlib, preambleCtx) ->
+            let preambleFuncs = preambleCtx.SymbolicFunctions
+            let preambleFuncNameSet =
+                preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
+            stdlib, preambleCtx.TypeCheckEnv, preambleCtx.GenericFuncDefs, preambleCtx.ANFResult, preambleFuncs, preambleFuncNameSet
+
+    let emitFunctionEvents, treeShakeUserFunctions =
+        match request.Mode with
+        | FullProgram -> false, false
+        | TestExpression -> true, true
+
+    {
+        AllowInternal = request.AllowInternal
+        Verbosity = request.Verbosity
+        Options = request.Options
         Stdlib = stdlib
-        BaseTypeCheckEnv = stdlib.TypeCheckEnv
-        BaseGenericFuncDefs = stdlib.GenericFuncDefs
-        BaseANFResult = stdlib.ANFResult
-        PrebuiltSymbolicFunctions = []
-        SkipFunctionNames = Set.empty
-        EmitFunctionEvents = false
-        TreeShakeUserFunctions = false
-        Labels = labels
-        SourceFile = ""
-        Source = source
+        BaseTypeCheckEnv = baseTypeCheckEnv
+        BaseGenericFuncDefs = baseGenericDefs
+        BaseANFResult = baseAnfResult
+        PrebuiltSymbolicFunctions = prebuiltSymbolic
+        SkipFunctionNames = skipNames
+        EmitFunctionEvents = emitFunctionEvents
+        TreeShakeUserFunctions = treeShakeUserFunctions
+        Labels = labelsForMode request.Mode
+        SourceFile = request.SourceFile
+        Source = request.Source
     }
-    compileUserWithPlan plan
 
 /// Compile source code to binary (in-memory, no file I/O)
-let compileWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : CompileResult =
-    match compileStdlib() with
-    | Error err -> Error err
-    | Ok stdlib ->
-        compileWithStdlib verbosity options stdlib source
+let compile (request: CompileRequest) : CompileReport =
+    request |> buildCompilePlan |> compileUserWithPlan
 
-/// Compile source code to binary (uses default options)
 /// Execute compiled binary and capture output
-let private execute (verbosity: int) (binary: byte array) : ExecutionResult =
+let execute (verbosity: int) (binary: byte array) : ExecutionOutput =
     let sw = Stopwatch.StartNew()
+    let finish (exitCode: int) (stdout: string) (stderr: string) : ExecutionOutput =
+        sw.Stop()
+        { ExitCode = exitCode
+          Stdout = stdout
+          Stderr = stderr
+          RuntimeTime = sw.Elapsed }
 
     if verbosity >= 1 then println ""
     if verbosity >= 1 then println "  Execution:"
@@ -1138,158 +1152,94 @@ let private execute (verbosity: int) (binary: byte array) : ExecutionResult =
     let writeTime = sw.Elapsed.TotalMilliseconds
     if verbosity >= 2 then println $"      {System.Math.Round(writeTime, 1)}ms"
 
-    try
-        // Make executable using Unix file mode
-        if verbosity >= 1 then println "    • Setting executable permissions..."
-        let permissions = File.GetUnixFileMode(tempPath)
-        File.SetUnixFileMode(tempPath, permissions ||| IO.UnixFileMode.UserExecute)
-        let chmodTime = sw.Elapsed.TotalMilliseconds - writeTime
-        if verbosity >= 2 then println $"      {System.Math.Round(chmodTime, 1)}ms"
+    let result =
+        try
+            // Make executable using Unix file mode
+            if verbosity >= 1 then println "    • Setting executable permissions..."
+            let permissions = File.GetUnixFileMode(tempPath)
+            File.SetUnixFileMode(tempPath, permissions ||| IO.UnixFileMode.UserExecute)
+            let chmodTime = sw.Elapsed.TotalMilliseconds - writeTime
+            if verbosity >= 2 then println $"      {System.Math.Round(chmodTime, 1)}ms"
 
-        // Code sign with adhoc signature (required for macOS only)
-        let codesignResult =
-            match Platform.detectOS () with
-            | Error err ->
-                // Platform detection failed
-                Some $"Platform detection failed: {err}"
-            | Ok os ->
-                if Platform.requiresCodeSigning os then
-                    if verbosity >= 1 then println "    • Code signing (adhoc)..."
-                    let codesignStart = sw.Elapsed.TotalMilliseconds
-                    let codesignInfo = ProcessStartInfo("codesign")
-                    codesignInfo.Arguments <- $"-s - \"{tempPath}\""
-                    codesignInfo.UseShellExecute <- false
-                    codesignInfo.RedirectStandardOutput <- true
-                    codesignInfo.RedirectStandardError <- true
-                    let codesignProc = Process.Start(codesignInfo)
-                    codesignProc.WaitForExit()
+            // Code sign with adhoc signature (required for macOS only)
+            let codesignResult =
+                match Platform.detectOS () with
+                | Error err ->
+                    // Platform detection failed
+                    Some $"Platform detection failed: {err}"
+                | Ok os ->
+                    if Platform.requiresCodeSigning os then
+                        if verbosity >= 1 then println "    • Code signing (adhoc)..."
+                        let codesignStart = sw.Elapsed.TotalMilliseconds
+                        let codesignInfo = ProcessStartInfo("codesign")
+                        codesignInfo.Arguments <- $"-s - \"{tempPath}\""
+                        codesignInfo.UseShellExecute <- false
+                        codesignInfo.RedirectStandardOutput <- true
+                        codesignInfo.RedirectStandardError <- true
+                        let codesignProc = Process.Start(codesignInfo)
+                        codesignProc.WaitForExit()
 
-                    if codesignProc.ExitCode <> 0 then
-                        let stderr = codesignProc.StandardError.ReadToEnd()
-                        Some $"Code signing failed: {stderr}"
+                        if codesignProc.ExitCode <> 0 then
+                            let stderr = codesignProc.StandardError.ReadToEnd()
+                            Some $"Code signing failed: {stderr}"
+                        else
+                            let codesignTime = sw.Elapsed.TotalMilliseconds - codesignStart
+                            if verbosity >= 2 then println $"      {System.Math.Round(codesignTime, 1)}ms"
+                            None
                     else
-                        let codesignTime = sw.Elapsed.TotalMilliseconds - codesignStart
-                        if verbosity >= 2 then println $"      {System.Math.Round(codesignTime, 1)}ms"
+                        if verbosity >= 1 then println "    • Code signing skipped (not required on Linux)"
                         None
-                else
-                    if verbosity >= 1 then println "    • Code signing skipped (not required on Linux)"
-                    None
 
-        match codesignResult with
-        | Some errorMsg ->
-            // Code signing or platform detection failed - return error
-            { ExitCode = -1
-              Stdout = ""
-              Stderr = errorMsg }
-        | None ->
-            // Execute (with retry for "Text file busy" race condition)
-            // Even with flush, kernel may not have fully synced file/permissions in fast test runs
-            if verbosity >= 1 then println "    • Running binary..."
-            let execStart = sw.Elapsed.TotalMilliseconds
-            let execInfo = ProcessStartInfo(tempPath)
-            execInfo.RedirectStandardOutput <- true
-            execInfo.RedirectStandardError <- true
-            execInfo.UseShellExecute <- false
+            match codesignResult with
+            | Some errorMsg ->
+                // Code signing or platform detection failed - return error
+                finish -1 "" errorMsg
+            | None ->
+                // Execute (with retry for "Text file busy" race condition)
+                // Even with flush, kernel may not have fully synced file/permissions in fast test runs
+                if verbosity >= 1 then println "    • Running binary..."
+                let execStart = sw.Elapsed.TotalMilliseconds
+                let execInfo = ProcessStartInfo(tempPath)
+                execInfo.RedirectStandardOutput <- true
+                execInfo.RedirectStandardError <- true
+                execInfo.UseShellExecute <- false
 
-            // Retry up to 3 times with small delay if we get "Text file busy"
-            let rec startWithRetry attempts =
-                match tryStartProcess execInfo with
-                | Ok proc -> Ok proc
-                | Error msg when msg.Contains("Text file busy") && attempts > 0 ->
-                    Threading.Thread.Sleep(10)  // Wait 10ms before retry
-                    startWithRetry (attempts - 1)
-                | Error msg -> Error msg
+                // Retry up to 3 times with small delay if we get "Text file busy"
+                let rec startWithRetry attempts =
+                    match tryStartProcess execInfo with
+                    | Ok proc -> Ok proc
+                    | Error msg when msg.Contains("Text file busy") && attempts > 0 ->
+                        Threading.Thread.Sleep(10)  // Wait 10ms before retry
+                        startWithRetry (attempts - 1)
+                    | Error msg -> Error msg
 
-            match startWithRetry 3 with
-            | Error msg ->
-                { ExitCode = -1
-                  Stdout = ""
-                  Stderr = $"Failed to start process: {msg}" }
-            | Ok execProc ->
-                use proc = execProc
-                // Start async reads immediately to avoid blocking
-                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
-                let stderrTask = proc.StandardError.ReadToEndAsync()
+                match startWithRetry 3 with
+                | Error msg ->
+                    finish -1 "" $"Failed to start process: {msg}"
+                | Ok execProc ->
+                    use proc = execProc
+                    // Start async reads immediately to avoid blocking
+                    let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                    let stderrTask = proc.StandardError.ReadToEndAsync()
 
-                // Wait for process to complete
-                proc.WaitForExit()
+                    // Wait for process to complete
+                    proc.WaitForExit()
 
-                // Now wait for output to be fully read
-                let stdout = stdoutTask.Result
-                let stderr = stderrTask.Result
+                    // Now wait for output to be fully read
+                    let stdout = stdoutTask.Result
+                    let stderr = stderrTask.Result
 
-                let execTime = sw.Elapsed.TotalMilliseconds - execStart
-                if verbosity >= 2 then println $"      {System.Math.Round(execTime, 1)}ms"
+                    let execTime = sw.Elapsed.TotalMilliseconds - execStart
+                    if verbosity >= 2 then println $"      {System.Math.Round(execTime, 1)}ms"
 
-                sw.Stop()
+                    if verbosity >= 1 then
+                        println $"  ✓ Execution complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
 
-                if verbosity >= 1 then
-                    println $"  ✓ Execution complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
-
-                { ExitCode = proc.ExitCode
-                  Stdout = stdout
-                  Stderr = stderr }
-    finally
-        // Cleanup - ignore deletion errors
-        tryDeleteFile tempPath
-
-let private compileResultToExecution (verbosity: int) (compileResult: CompileResult) : ExecutionResult =
-    match compileResult with
-    | Error err ->
-        { ExitCode = 1
-          Stdout = ""
-          Stderr = err }
-    | Ok binary ->
-        execute verbosity binary
-
-/// Compile and run source code with options
-let compileAndRunWithOptions (verbosity: int) (options: CompilerOptions) (source: string) : ExecutionResult =
-    compileWithOptions verbosity options source |> compileResultToExecution verbosity
-
-/// Compile and run with timing breakdown using a prebuilt preamble context
-let compileAndRunWithPreambleContextTimedWithOptions
-    (allowInternal: bool)
-    (verbosity: int)
-    (options: CompilerOptions)
-    (stdlib: StdlibResult)
-    (preambleCtx: PreambleContext)
-    (testExpr: string)
-    (sourceFile: string)
-    : TimedExecutionResult =
-    let compileTimer = Stopwatch.StartNew()
-    let compileResult =
-        compileTestWithPreambleWithOptions allowInternal verbosity options stdlib preambleCtx sourceFile testExpr
-    compileTimer.Stop()
-    let compileTime = compileTimer.Elapsed
-
-    match compileResult with
-    | Error err ->
-        { ExitCode = 1
-          Stdout = ""
-          Stderr = err
-          CompileTime = compileTime
-          RuntimeTime = TimeSpan.Zero }
-    | Ok binary ->
-        let runtimeTimer = Stopwatch.StartNew()
-        let execResult = execute verbosity binary
-        runtimeTimer.Stop()
-        { ExitCode = execResult.ExitCode
-          Stdout = execResult.Stdout
-          Stderr = execResult.Stderr
-          CompileTime = compileTime
-          RuntimeTime = runtimeTimer.Elapsed }
-
-/// Compile and run with timing breakdown, building a preamble context for each test
-let compileAndRunWithPreambleTimedWithOptions (allowInternal: bool) (verbosity: int) (options: CompilerOptions) (stdlib: StdlibResult) (testExpr: string) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : TimedExecutionResult =
-    match compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
-    | Error err ->
-        { ExitCode = 1
-          Stdout = ""
-          Stderr = err
-          CompileTime = TimeSpan.Zero
-          RuntimeTime = TimeSpan.Zero }
-    | Ok preambleCtx ->
-        compileAndRunWithPreambleContextTimedWithOptions allowInternal verbosity options stdlib preambleCtx testExpr sourceFile
+                    finish proc.ExitCode stdout stderr
+        finally
+            // Cleanup - ignore deletion errors
+            tryDeleteFile tempPath
+    result
 
 /// Get all stdlib function names from the prebuilt stdlib
 let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =

@@ -87,11 +87,10 @@ Why ref counting?
 
 `CompilerLibrary.fs` exposes a narrow surface for tools/tests:
 
-- `compileWithOptions` for in-memory compilation with explicit options
-- `compileAndRunWithOptions` for compile+execute with explicit options
-- `compileStdlib` for test harnesses and tooling that prebuild stdlib
-- `compilePreamble` and `compileTestWithPreamble` for preamble reuse in tests
-- `compileAndRunWithPreambleTimed` for E2E tests with timing breakdown
+- `buildStdlib` for test harnesses and tooling that prebuild stdlib
+- `buildPreambleContext` for preamble reuse in tests
+- `compile` for in-memory compilation via `CompileRequest`
+- `execute` for running compiled binaries with timing
 
 ## Key Invariants
 

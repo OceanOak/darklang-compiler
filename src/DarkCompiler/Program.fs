@@ -349,30 +349,48 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
 
     // Use library for compilation
     let options = buildCompilerOptions cliOpts
-    let result = CompilerLibrary.compileWithOptions (verbosityToInt verbosity) options source
+    let sourceFile =
+        if cliOpts.IsExpression then ""
+        else cliOpts.Argument |> Option.defaultValue ""
 
-    match result with
+    match CompilerLibrary.buildStdlib() with
     | Error err ->
         eprintln $"Compilation failed: {err}"
         1
-    | Ok binary ->
-        // Write to file
-        match Platform.detectOS () with
+    | Ok stdlib ->
+        let request : CompilerLibrary.CompileRequest = {
+            Context = CompilerLibrary.StdlibOnly stdlib
+            Mode = CompilerLibrary.FullProgram
+            Source = source
+            SourceFile = sourceFile
+            AllowInternal = false
+            Verbosity = verbosityToInt verbosity
+            Options = options
+        }
+        let compileReport = CompilerLibrary.compile request
+
+        match compileReport.Result with
         | Error err ->
-            eprintln $"Platform detection failed: {err}"
+            eprintln $"Compilation failed: {err}"
             1
-        | Ok os ->
-            let writeResult =
-                match os with
-                | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
-                | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
-            match writeResult with
+        | Ok binary ->
+            // Write to file
+            match Platform.detectOS () with
             | Error err ->
-                eprintln $"Failed to write binary: {err}"
+                eprintln $"Platform detection failed: {err}"
                 1
-            | Ok () ->
-                if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
-                0
+            | Ok os ->
+                let writeResult =
+                    match os with
+                    | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
+                    | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
+                match writeResult with
+                | Error err ->
+                    eprintln $"Failed to write binary: {err}"
+                    1
+                | Ok () ->
+                    if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
+                    0
 
 /// Run an expression (compile to temp and execute)
 let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int =
@@ -384,17 +402,46 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
 
     // Use library for compile and run
     let options = buildCompilerOptions cliOpts
-    let result = CompilerLibrary.compileAndRunWithOptions (verbosityToInt verbosity) options source
+    let sourceFile =
+        if cliOpts.IsExpression then ""
+        else cliOpts.Argument |> Option.defaultValue ""
+
+    let execResult : CompilerLibrary.ExecutionOutput =
+        match CompilerLibrary.buildStdlib() with
+        | Error err ->
+            { ExitCode = 1
+              Stdout = ""
+              Stderr = err
+              RuntimeTime = TimeSpan.Zero }
+        | Ok stdlib ->
+            let request : CompilerLibrary.CompileRequest = {
+                Context = CompilerLibrary.StdlibOnly stdlib
+                Mode = CompilerLibrary.FullProgram
+                Source = source
+                SourceFile = sourceFile
+                AllowInternal = false
+                Verbosity = verbosityToInt verbosity
+                Options = options
+            }
+            let compileReport = CompilerLibrary.compile request
+            match compileReport.Result with
+            | Error err ->
+                { ExitCode = 1
+                  Stdout = ""
+                  Stderr = err
+                  RuntimeTime = TimeSpan.Zero }
+            | Ok binary ->
+                CompilerLibrary.execute (verbosityToInt verbosity) binary
 
     if showNormal then
-        if result.Stdout <> "" then
-            println $"{result.Stdout}"
-        if result.Stderr <> "" then
-            eprintln $"{result.Stderr}"
+        if execResult.Stdout <> "" then
+            println $"{execResult.Stdout}"
+        if execResult.Stderr <> "" then
+            eprintln $"{execResult.Stderr}"
         println "---"
-        println $"Exit code: {result.ExitCode}"
+        println $"Exit code: {execResult.ExitCode}"
 
-    result.ExitCode
+    execResult.ExitCode
 
 /// Get a cache key based on the SHA256 hash of the compiler binary.
 /// This uniquely identifies this build of the compiler.

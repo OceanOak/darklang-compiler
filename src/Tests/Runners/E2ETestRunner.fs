@@ -24,6 +24,14 @@ type E2ETestResult = {
     RuntimeTime: TimeSpan
 }
 
+type private TestExecutionResult = {
+    ExitCode: int
+    Stdout: string
+    Stderr: string
+    CompileTime: TimeSpan
+    RuntimeTime: TimeSpan
+}
+
 /// Compile stdlib once (call at test startup, pass result to runE2ETest)
 /// Uses prebuilt stdlib - all functions compiled to LIR upfront for maximum speed
 let compileStdlib () : Result<CompilerLibrary.StdlibResult, string> =
@@ -39,7 +47,7 @@ type PreambleContextMap = Map<PreambleKey, CompilerLibrary.PreambleContext>
 let compilePreambleContext (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<CompilerLibrary.PreambleContext, string> =
     let allowInternal = isInternalTestFile sourceFile
     emit "preamble.build.start" [("source", sourceFile)]
-    match CompilerLibrary.compilePreambleWithOptions allowInternal stdlib preamble sourceFile funcLineMap with
+    match CompilerLibrary.buildPreambleContext allowInternal stdlib preamble sourceFile funcLineMap with
     | Error err ->
         let msg = $"Preamble build error ({sourceFile}): {err}"
         emit "preamble.build.error" [("source", sourceFile); ("message", msg)]
@@ -75,7 +83,7 @@ let buildPreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) 
     | Error err -> Error err
     | Ok _ -> Ok ()
 
-let private buildE2EResult (test: E2ETest) (execResult: CompilerLibrary.TimedExecutionResult) : E2ETestResult =
+let private buildE2EResult (test: E2ETest) (execResult: TestExecutionResult) : E2ETestResult =
     if test.ExpectCompileError then
         let gotError = execResult.ExitCode <> 0
         if not gotError then
@@ -165,6 +173,23 @@ let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptio
         DumpLIR = false
     }
 
+let private compileAndExecute (request: CompilerLibrary.CompileRequest) : TestExecutionResult =
+    let compileReport = CompilerLibrary.compile request
+    match compileReport.Result with
+    | Error err ->
+        { ExitCode = 1
+          Stdout = ""
+          Stderr = err
+          CompileTime = compileReport.CompileTime
+          RuntimeTime = TimeSpan.Zero }
+    | Ok binary ->
+        let execResult = CompilerLibrary.execute 0 binary
+        { ExitCode = execResult.ExitCode
+          Stdout = execResult.Stdout
+          Stderr = execResult.Stderr
+          CompileTime = compileReport.CompileTime
+          RuntimeTime = execResult.RuntimeTime }
+
 /// Run E2E test (internal implementation)
 let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     try
@@ -172,7 +197,24 @@ let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2E
         let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
-            CompilerLibrary.compileAndRunWithPreambleTimedWithOptions allowInternal 0 options stdlib test.Source test.Preamble test.SourceFile test.FunctionLineMap
+            match CompilerLibrary.buildPreambleContext allowInternal stdlib test.Preamble test.SourceFile test.FunctionLineMap with
+            | Error err ->
+                { ExitCode = 1
+                  Stdout = ""
+                  Stderr = err
+                  CompileTime = TimeSpan.Zero
+                  RuntimeTime = TimeSpan.Zero }
+            | Ok preambleCtx ->
+                let request : CompilerLibrary.CompileRequest = {
+                    Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
+                    Mode = CompilerLibrary.TestExpression
+                    Source = test.Source
+                    SourceFile = test.SourceFile
+                    AllowInternal = allowInternal
+                    Verbosity = 0
+                    Options = options
+                }
+                compileAndExecute request
 
         let result = buildE2EResult test execResult
         emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
@@ -200,8 +242,16 @@ let runE2ETestWithPreambleContext
         emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
         let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
-        let execResult =
-            CompilerLibrary.compileAndRunWithPreambleContextTimedWithOptions allowInternal 0 options stdlib preambleCtx test.Source test.SourceFile
+        let request : CompilerLibrary.CompileRequest = {
+            Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
+            Mode = CompilerLibrary.TestExpression
+            Source = test.Source
+            SourceFile = test.SourceFile
+            AllowInternal = allowInternal
+            Verbosity = 0
+            Options = options
+        }
+        let execResult = compileAndExecute request
         let result = buildE2EResult test execResult
         emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
         result
