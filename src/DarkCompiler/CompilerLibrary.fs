@@ -13,7 +13,6 @@ open System.IO
 open System.Diagnostics
 open System.Reflection
 open Output
-open Trace
 
 /// Result of compilation with timing
 type CompileReport = {
@@ -319,7 +318,7 @@ let private buildConversionResult
         ModuleRegistry = registries.ModuleRegistry
     }
 
-/// Run ANF optimization + RC/TCO, returning a final ANF function list and type map
+/// Run ANF optimization + RC insertion, returning a final ANF function list and type map
 let private buildAnf
     (verbosity: int)
     (options: CompilerOptions)
@@ -377,19 +376,29 @@ let private buildAnf
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after RC insertion) ===" anfAfterRC
 
-        if verbosity >= 1 then println "  [2.7/8] Tail Call Detection..."
-        let tcoStart = sw.Elapsed.TotalMilliseconds
-        let anfAfterTCO =
-            if options.DisableTCO then anfAfterRC
-            else TailCallDetection.detectTailCallsInProgram anfAfterRC
-        if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - tcoStart, 1)
-            println $"        {t}ms"
-        if shouldDumpIR verbosity options.DumpANF then
-            printANFProgram "=== ANF (after Tail Call Detection) ===" anfAfterTCO
-
-        let (ANF.Program (finalFunctions, _)) = anfAfterTCO
+        let (ANF.Program (finalFunctions, _)) = anfAfterRC
         Ok (finalFunctions, typeMap)
+
+/// Run tail call detection on a function list (for post-print insertion TCO)
+let private applyTco
+    (verbosity: int)
+    (options: CompilerOptions)
+    (sw: Stopwatch)
+    (functions: ANF.Function list)
+    : ANF.Function list =
+    if verbosity >= 1 then println "  [2.7/8] Tail Call Detection..."
+    let tcoStart = sw.Elapsed.TotalMilliseconds
+    let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
+    let anfAfterTCO =
+        if options.DisableTCO then anfProgram
+        else TailCallDetection.detectTailCallsInProgram anfProgram
+    if verbosity >= 2 then
+        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - tcoStart, 1)
+        println $"        {t}ms"
+    if shouldDumpIR verbosity options.DumpANF then
+        printANFProgram "=== ANF (after Tail Call Detection) ===" anfAfterTCO
+    let (ANF.Program (tcoFunctions, _)) = anfAfterTCO
+    tcoFunctions
 
 /// Run codegen, encoding, and binary generation
 let private generateBinary
@@ -699,7 +708,8 @@ let private loadStdlib () : Result<AST.Program, string> =
         let mergeFile (acc: AST.TopLevel list) (filename: string) : Result<AST.TopLevel list, string> =
             match loadDarkFileAllowInternal filename with
             | Error err -> Error err
-            | Ok (AST.Program items) -> Ok (acc @ items)
+            | Ok (AST.Program items) ->
+                Ok (acc @ items)
         match List.fold (fun acc filename -> Result.bind (fun items -> mergeFile items filename) acc) (Ok []) filenames with
         | Error err -> Error err
         | Ok items -> Ok (AST.Program items)
@@ -721,10 +731,8 @@ let private loadStdlib () : Result<AST.Program, string> =
 /// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
 let buildStdlib () : Result<StdlibResult, string> =
-    emit "stdlib.compile.start" []
     match loadStdlib() with
     | Error e ->
-        emit "stdlib.compile.error" [("message", e)]
         Error e
     | Ok stdlibAst ->
         // Add dummy main expression for type checking (stdlib has no main)
@@ -734,7 +742,6 @@ let buildStdlib () : Result<StdlibResult, string> =
         match TypeChecking.checkProgramWithEnv withMain with
         | Error e ->
             let msg = TypeChecking.typeErrorToString e
-            emit "stdlib.compile.error" [("message", msg)]
             Error msg
         | Ok (_, typedStdlib, typeCheckEnv) ->
             // Extract generic function definitions for on-demand monomorphization
@@ -743,7 +750,6 @@ let buildStdlib () : Result<StdlibResult, string> =
             let moduleRegistry = Stdlib.buildModuleRegistry ()
             match convertTypedProgramToConversionResult moduleRegistry typedStdlib with
             | Error e ->
-                emit "stdlib.compile.error" [("message", e)]
                 Error e
             | Ok anfResult ->
                 let registries : AST_to_ANF.Registries = {
@@ -755,18 +761,18 @@ let buildStdlib () : Result<StdlibResult, string> =
                 }
                 let context = buildContext typeCheckEnv genericFuncDefs registries
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
-                let stdlibOptions = defaultOptions
+                let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
                 match buildAnf 0 stdlibOptions sw registries stdlibFunctions with
                 | Error e ->
-                    emit "stdlib.compile.error" [("message", e)]
                     Error e
                 | Ok (anfFunctions, typeMap) ->
+                    let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions
                     let stdlibFuncMap =
-                        anfFunctions
+                        tcoFunctions
                         |> List.map (fun f -> f.Name, f)
                         |> Map.ofList
-                    let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph anfFunctions
+                    let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
                     let externalReturnTypes = extractReturnTypes registries.FuncReg
                     match lowerToAllocatedLir
@@ -774,23 +780,20 @@ let buildStdlib () : Result<StdlibResult, string> =
                         stdlibOptions
                         sw
                         "stdlib"
-                        anfFunctions
+                        tcoFunctions
                         typeMap
                         registries
                         externalReturnTypes with
                     | Error e ->
-                        emit "stdlib.compile.error" [("message", e)]
                         Error e
                     | Ok allocatedFuncs ->
                         let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                         match LIRSymbolic.toLIR allocatedSymbolic with
                         | Error err ->
-                            emit "stdlib.compile.error" [("message", err)]
                             Error err
                         | Ok allocatedProgram ->
                             let (LIR.Program (resolvedFuncs, _, _)) = allocatedProgram
                             let stdlibCallGraph = DeadCodeElimination.buildCallGraph resolvedFuncs
-                            emit "stdlib.compile.finish" [("functions", string resolvedFuncs.Length)]
                             Ok {
                                 AST = stdlibAst
                                 TypedAST = typedStdlib
@@ -878,11 +881,6 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             userOnly.UserFunctions
                             |> List.filter (fun f -> not (Set.contains f.Name plan.SkipFunctionNames))
 
-                        if plan.EmitFunctionEvents && isEnabled () then
-                            emit "test.compile.functions" [("source", plan.SourceFile); ("count", string functionsToCompile.Length)]
-                            for func in functionsToCompile do
-                                emit "test.compile.function" [("source", plan.SourceFile); ("function", func.Name)]
-
                         if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
                             println $"  [COMPILE] {functionsToCompile.Length} user functions compiled fresh"
                             for f in functionsToCompile do
@@ -907,7 +905,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                         match anfResult with
                         | Error err -> Error err
                         | Ok (anfFunctions, typeMap) ->
-                            if plan.Verbosity >= 1 then println "  [2.8/8] Print Insertion..."
+                            if plan.Verbosity >= 1 then println "  [2.6/8] Print Insertion..."
                             let printStart = sw.Elapsed.TotalMilliseconds
                             match PrintInsertion.insertPrintInEntry "_start" programType anfFunctions with
                             | Error err -> Error $"Print insertion error: {err}"
@@ -919,6 +917,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     let printProgram = ANF.Program (printedFunctions, ANF.Return ANF.UnitLiteral)
                                     printANFProgram "=== ANF (after Print insertion) ===" printProgram
 
+                                let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions
                                 let externalReturnTypes = extractReturnTypes userRegistries.FuncReg
                                 let userLirResult =
                                     lowerToAllocatedLir
@@ -926,7 +925,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         plan.Options
                                         sw
                                         plan.Labels.StageSuffix
-                                        printedFunctions
+                                        tcoFunctions
                                         typeMap
                                         userRegistries
                                         externalReturnTypes
@@ -997,7 +996,6 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is built once per file and reused for all tests in that file
 let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
-    emit "preamble.compile.start" [("source", sourceFile); ("length", string preamble.Length)]
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
         let emptyContext = {
@@ -1006,7 +1004,6 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
             TypeMap = stdlib.StdlibTypeMap
             SymbolicFunctions = []
         }
-        emit "preamble.compile.finish" [("source", sourceFile); ("functions", "0")]
         Ok emptyContext
     else
         // Parse preamble with dummy expression (parser requires a main expression)
@@ -1014,14 +1011,12 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
         match parseSourceWithInternal allowInternal preambleSource with
         | Error err ->
             let msg = $"Preamble parse error: {err}"
-            emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
             Error msg
         | Ok preambleAst ->
             // Type-check preamble with stdlib context
             match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv preambleAst with
             | Error typeErr ->
                 let msg = $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
-                emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                 Error msg
             | Ok (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
                 // Extract generic function definitions from preamble
@@ -1033,7 +1028,6 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                 match convertTypedProgramToUserOnly stdlib.Context typedPreambleAst with
                 | Error err ->
                     let msg = $"Preamble ANF conversion error: {err}"
-                    emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                     Error msg
                 | Ok preambleUserOnly ->
                     let preambleRegistries : AST_to_ANF.Registries = {
@@ -1055,22 +1049,21 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                                 $"Preamble RC insertion error: {suffix}"
                             else
                                 $"Preamble {err}"
-                        emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                         Error msg
                     | Ok (preambleFunctions, typeMap) ->
+                        let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
                         let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
                         match lowerToAllocatedLir
                             0
                             preambleOptions
                             sw
                             "preamble"
-                            preambleFunctions
+                            tcoFunctions
                             typeMap
                             preambleRegistries
                             preambleExternalReturnTypes with
                         | Error err ->
                             let msg = $"Preamble {err}"
-                            emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                             Error msg
                         | Ok allocatedFuncs ->
                             let stdlibFuncNames =
@@ -1089,11 +1082,10 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
 
                             let context = {
                                 Context = pipelineContext
-                                ANFFunctions = preambleFunctions
+                                ANFFunctions = tcoFunctions
                                 TypeMap = mergedTypeMap
                                 SymbolicFunctions = preambleSymbolicFuncs
                             }
-                            emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
                             Ok context
 
 let private labelsForMode (mode: CompileMode) : UserCompileLabels =
@@ -1299,6 +1291,7 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
                     match PrintInsertion.insertPrintInEntry "_start" programType userFunctions with
                     | Error err -> Error $"Print insertion error: {err}"
                     | Ok printedFunctions ->
+                        let tcoFunctions = applyTco 0 coverageOptions sw printedFunctions
                         let reachableStdlibNames =
-                            ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph printedFunctions
+                            ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph tcoFunctions
                         Ok reachableStdlibNames

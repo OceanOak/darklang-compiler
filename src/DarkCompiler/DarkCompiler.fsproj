@@ -10,7 +10,6 @@
   <ItemGroup>
     <Compile Include="Crash.fs" />
     <Compile Include="Output.fs" />
-    <Compile Include="Trace.fs" />
     <Compile Include="AST.fs" />
     <Compile Include="Stdlib.fs" />
     <Compile Include="ResultList.fs" />
