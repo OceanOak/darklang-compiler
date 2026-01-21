@@ -254,69 +254,37 @@ let private compileMirToLir
             println $"        {t}ms"
         Ok optimizedLir
 
-/// Run MIR+LIR passes from ANF, returning an optimized LIR program
-let private compileAnfToLir
+/// Allocate registers for a list of symbolic LIR functions
+let private allocateRegistersForFunctions
+    (functions: LIRSymbolic.Function list)
+    : LIRSymbolic.Function list =
+    functions |> List.map RegisterAllocation.allocateRegisters
+
+/// Run MIR+LIR passes (including register allocation) from ANF functions
+let private lowerToAllocatedLir
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
     (stageSuffix: string)
-    (anfProgram: ANF.Program)
+    (functions: ANF.Function list)
     (typeMap: ANF.TypeMap)
-    (convResult: AST_to_ANF.ConversionResult)
-    (programType: AST.Type)
+    (registries: AST_to_ANF.Registries)
     (externalReturnTypes: Map<string, AST.Type>)
-    : Result<LIRSymbolic.Program, string> =
+    : Result<LIRSymbolic.Function list, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
     if verbosity >= 1 then println $"  [3/8] ANF → MIR{suffix}..."
     let mirStart = sw.Elapsed.TotalMilliseconds
-    let mirResult =
-        ANF_to_MIR.toMIR
-            anfProgram
-            typeMap
-            convResult.FuncParams
-            programType
-            convResult.VariantLookup
-            convResult.TypeReg
-            options.EnableCoverage
-            externalReturnTypes
-    match mirResult with
-    | Error err -> Error $"MIR conversion error: {err}"
-    | Ok mirProgram ->
-        if shouldDumpIR verbosity options.DumpMIR then
-            printMIRProgram "=== MIR (Control Flow Graph) ===" mirProgram
-        if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirStart, 1)
-            println $"        {t}ms"
-        compileMirToLir verbosity options sw stageSuffix mirProgram
-
-/// Run MIR+LIR passes from ANF functions only, returning an optimized LIR program
-let private compileAnfFunctionsOnlyToLir
-    (verbosity: int)
-    (options: CompilerOptions)
-    (sw: Stopwatch)
-    (stageSuffix: string)
-    (anfProgram: ANF.Program)
-    (typeMap: ANF.TypeMap)
-    (funcParams: Map<string, (string * AST.Type) list>)
-    (variantLookup: AST_to_ANF.VariantLookup)
-    (recordRegistry: Map<string, (string * AST.Type) list>)
-    (externalReturnTypes: Map<string, AST.Type>)
-    : Result<LIRSymbolic.Program, string> =
-
-    let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
-
-    if verbosity >= 1 then println $"  [3/8] ANF → MIR{suffix}..."
-    let mirStart = sw.Elapsed.TotalMilliseconds
+    let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
     let mirResult =
         ANF_to_MIR.toMIRFunctionsOnly
             anfProgram
             typeMap
-            funcParams
-            variantLookup
-            recordRegistry
-            false
+            registries.FuncParams
+            registries.VariantLookup
+            registries.TypeReg
+            options.EnableCoverage
             externalReturnTypes
     match mirResult with
     | Error err -> Error $"MIR conversion error: {err}"
@@ -328,28 +296,37 @@ let private compileAnfFunctionsOnlyToLir
             let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirStart, 1)
             println $"        {t}ms"
         compileMirToLir verbosity options sw stageSuffix mirProgram
+        |> Result.bind (fun lirProgram ->
+            if verbosity >= 1 then println "  [5/8] Register Allocation..."
+            let allocStart = sw.Elapsed.TotalMilliseconds
+            let (LIRSymbolic.Program lirFuncs) = lirProgram
+            let allocatedFuncs = allocateRegistersForFunctions lirFuncs
+            if verbosity >= 2 then
+                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                println $"        {t}ms"
+            Ok allocatedFuncs)
 
-/// Allocate registers for a list of symbolic LIR functions
-let private allocateRegistersForFunctions
-    (functions: LIRSymbolic.Function list)
-    : LIRSymbolic.Function list =
-    functions |> List.map RegisterAllocation.allocateRegisters
+let private buildConversionResult
+    (program: ANF.Program)
+    (registries: AST_to_ANF.Registries)
+    : AST_to_ANF.ConversionResult =
+    {
+        Program = program
+        TypeReg = registries.TypeReg
+        VariantLookup = registries.VariantLookup
+        FuncReg = registries.FuncReg
+        FuncParams = registries.FuncParams
+        ModuleRegistry = registries.ModuleRegistry
+    }
 
-type private AnfPipelineResult = {
-    Program: ANF.Program
-    TypeMap: ANF.TypeMap
-    ConvResult: AST_to_ANF.ConversionResult
-}
-
-/// Run ANF optimization + RC/TCO, returning a final ANF program and type map
-let private buildAnfProgramCore
+/// Run ANF optimization + RC/TCO, returning a final ANF function list and type map
+let private buildAnf
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
-    (userFunctions: ANF.Function list)
-    (mainExpr: ANF.AExpr)
-    (userOnly: AST_to_ANF.UserOnlyResult)
-    : Result<AnfPipelineResult, string> =
+    (registries: AST_to_ANF.Registries)
+    (functions: ANF.Function list)
+    : Result<ANF.Function list * ANF.TypeMap, string> =
 
     let anfOptions = buildANFOptimizeOptions options
     let anfPassLabel =
@@ -363,7 +340,7 @@ let private buildAnfProgramCore
                 ("strength_reduction", anfOptions.EnableStrengthReduction)
             ]
     if verbosity >= 1 then println $"  [2.3/8] {anfPassLabel}..."
-    let anfProgram = ANF.Program (userFunctions, mainExpr)
+    let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (before optimization) ===" anfProgram
     let anfOptStart = sw.Elapsed.TotalMilliseconds
@@ -387,14 +364,7 @@ let private buildAnfProgramCore
         let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - inlineStart, 1)
         println $"        {t}ms"
 
-    let convResult : AST_to_ANF.ConversionResult = {
-        Program = anfInlined
-        TypeReg = userOnly.TypeReg
-        VariantLookup = userOnly.VariantLookup
-        FuncReg = userOnly.FuncReg
-        FuncParams = userOnly.FuncParams
-        ModuleRegistry = userOnly.ModuleRegistry
-    }
+    let convResult = buildConversionResult anfInlined registries
 
     if verbosity >= 1 then println "  [2.5/8] Reference Count Insertion..."
     let rcStart = sw.Elapsed.TotalMilliseconds
@@ -418,38 +388,8 @@ let private buildAnfProgramCore
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after Tail Call Detection) ===" anfAfterTCO
 
-        Ok { Program = anfAfterTCO; TypeMap = typeMap; ConvResult = convResult }
-
-/// Run ANF optimization + RC/TCO/print insertion, returning a final ANF program and type map
-let private buildAnfProgram
-    (verbosity: int)
-    (options: CompilerOptions)
-    (sw: Stopwatch)
-    (programType: AST.Type)
-    (userFunctions: ANF.Function list)
-    (mainExpr: ANF.AExpr)
-    (userOnly: AST_to_ANF.UserOnlyResult)
-    (extraFunctions: ANF.Function list)
-    (extraTypeMap: ANF.TypeMap)
-    : Result<ANF.Program * ANF.TypeMap * AST_to_ANF.ConversionResult, string> =
-
-    match buildAnfProgramCore verbosity options sw userFunctions mainExpr userOnly with
-    | Error err -> Error err
-    | Ok pipeline ->
-        let (ANF.Program (postTcoFunctions, postTcoMain)) = pipeline.Program
-        let mergedFunctions = extraFunctions @ postTcoFunctions
-        let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) extraTypeMap pipeline.TypeMap
-
-        if verbosity >= 1 then println "  [2.8/8] Print Insertion..."
-        let printStart = sw.Elapsed.TotalMilliseconds
-        let mergedProgram =
-            PrintInsertion.insertPrint mergedFunctions postTcoMain programType
-        if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - printStart, 1)
-            println $"        {t}ms"
-        if shouldDumpIR verbosity options.DumpANF then
-            printANFProgram "=== ANF (after Print insertion) ===" mergedProgram
-        Ok (mergedProgram, mergedTypeMap, pipeline.ConvResult)
+        let (ANF.Program (finalFunctions, _)) = anfAfterTCO
+        Ok (finalFunctions, typeMap)
 
 /// Run codegen, encoding, and binary generation
 let private generateBinary
@@ -521,19 +461,33 @@ let private generateBinary
             Ok binary
 
 
+/// Shared compilation context used across pipeline steps
+type PipelineContext = {
+    TypeCheckEnv: TypeChecking.TypeCheckEnv
+    GenericFuncDefs: AST_to_ANF.GenericFuncDefs
+    Registries: AST_to_ANF.Registries
+}
+
+let private buildContext
+    (typeCheckEnv: TypeChecking.TypeCheckEnv)
+    (genericFuncDefs: AST_to_ANF.GenericFuncDefs)
+    (registries: AST_to_ANF.Registries)
+    : PipelineContext =
+    {
+        TypeCheckEnv = typeCheckEnv
+        GenericFuncDefs = genericFuncDefs
+        Registries = registries
+    }
+
 /// Compiled preamble context - extends stdlib for a test file
 /// Preamble functions are compiled ONCE per file, then reused for all tests in that file
 type PreambleContext = {
-    /// Extended type checking environment (stdlib + preamble types/functions)
-    TypeCheckEnv: TypeChecking.TypeCheckEnv
-    /// Preamble's generic function definitions for monomorphization
-    GenericFuncDefs: AST_to_ANF.GenericFuncDefs
+    /// Extended compilation context (stdlib + preamble)
+    Context: PipelineContext
     /// Preamble's ANF functions (after mono, inline, lift, ANF, RC, TCO)
     ANFFunctions: ANF.Function list
     /// Type map from RC insertion (merged with stdlib's TypeMap)
     TypeMap: ANF.TypeMap
-    /// Preamble's registries for ANF conversion
-    ANFResult: AST_to_ANF.ConversionResult
     /// Preamble's symbolic LIR functions after register allocation
     SymbolicFunctions: LIRSymbolic.Function list
 }
@@ -544,15 +498,8 @@ type StdlibResult = {
     AST: AST.Program
     /// Type-checked stdlib with inferred types
     TypedAST: AST.Program
-    /// Type checking environment (registries for types, variants, functions)
-    TypeCheckEnv: TypeChecking.TypeCheckEnv
-    /// ANF conversion result
-    ANFResult: AST_to_ANF.ConversionResult
-    /// Generic function definitions for on-demand monomorphization
-    /// (e.g., Stdlib.List.length<t> needs to be specialized when user calls it with Int64)
-    GenericFuncDefs: AST_to_ANF.GenericFuncDefs
-    /// Module registry for stdlib intrinsics (built once, reused)
-    ModuleRegistry: AST.ModuleRegistry
+    /// Shared compilation context (typecheck env + registries)
+    Context: PipelineContext
     /// Precompiled LIR program (used for string/float pools)
     LIRProgram: LIR.Program
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
@@ -597,6 +544,94 @@ let private extractReturnTypes (funcReg: Map<string, AST.Type>) : Map<string, AS
         | AST.TFunction (_, retType) -> Some (name, retType)
         | other -> Crash.crash $"extractReturnTypes: Non-function type '{other}' found in FuncReg for '{name}'")
     |> Map.ofSeq
+
+let private emptyRegistries (moduleRegistry: AST.ModuleRegistry) : AST_to_ANF.Registries =
+    {
+        TypeReg = Map.empty
+        VariantLookup = Map.empty
+        FuncReg = Map.empty
+        FuncParams = Map.empty
+        ModuleRegistry = moduleRegistry
+    }
+
+let private liftLambdasWithBase
+    (baseRegistries: AST_to_ANF.Registries)
+    (program: AST.Program)
+    : Result<AST.Program, string> =
+    let baseFuncReturnTypes = extractReturnTypes baseRegistries.FuncReg
+    AST_to_ANF.liftLambdasInProgram
+        baseRegistries.TypeReg
+        baseRegistries.VariantLookup
+        baseRegistries.FuncParams
+        baseFuncReturnTypes
+        program
+
+let private prepareProgramForAnf
+    (genericFuncDefs: AST_to_ANF.GenericFuncDefs option)
+    (baseRegistries: AST_to_ANF.Registries)
+    (program: AST.Program)
+    : Result<AST.Program, string> =
+    let monomorphized =
+        match genericFuncDefs with
+        | None -> AST_to_ANF.monomorphize program
+        | Some defs -> AST_to_ANF.monomorphizeWithExternalDefs defs program
+    let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
+    liftLambdasWithBase baseRegistries inlined
+
+let private buildRegistriesForProgram
+    (moduleRegistry: AST.ModuleRegistry)
+    (baseRegistries: AST_to_ANF.Registries)
+    (typeDefs: AST.TypeDef list)
+    (functions: AST.FunctionDef list)
+    : AST_to_ANF.Registries * AST.FunctionDef list =
+    let aliasReg = AST_to_ANF.buildAliasRegistry typeDefs
+    let resolvedFunctions = AST_to_ANF.resolveAliasesInFunctions aliasReg functions
+    let localRegistries = AST_to_ANF.buildRegistries moduleRegistry typeDefs aliasReg resolvedFunctions
+    let mergedRegistries = AST_to_ANF.mergeRegistries baseRegistries localRegistries
+    (mergedRegistries, resolvedFunctions)
+
+let private convertTypedProgramToConversionResult
+    (moduleRegistry: AST.ModuleRegistry)
+    (typedProgram: AST.Program)
+    : Result<AST_to_ANF.ConversionResult, string> =
+    let baseRegistries = emptyRegistries moduleRegistry
+    prepareProgramForAnf None baseRegistries typedProgram
+    |> Result.bind (fun liftedProgram ->
+        AST_to_ANF.splitTopLevels liftedProgram
+        |> Result.bind (fun (typeDefs, functions, expr) ->
+            let (registries, resolvedFunctions) =
+                buildRegistriesForProgram moduleRegistry baseRegistries typeDefs functions
+            let varGen = ANF.VarGen 0
+            AST_to_ANF.convertFunctions registries varGen resolvedFunctions
+            |> Result.bind (fun (anfFuncs, varGen1) ->
+                AST_to_ANF.convertExprToAnf registries varGen1 expr
+                |> Result.map (fun (anfExpr, _) ->
+                    buildConversionResult (ANF.Program (anfFuncs, anfExpr)) registries))))
+
+let private convertTypedProgramToUserOnly
+    (baseContext: PipelineContext)
+    (typedProgram: AST.Program)
+    : Result<AST_to_ANF.UserOnlyResult, string> =
+    prepareProgramForAnf (Some baseContext.GenericFuncDefs) baseContext.Registries typedProgram
+    |> Result.bind (fun liftedProgram ->
+        AST_to_ANF.splitTopLevels liftedProgram
+        |> Result.bind (fun (typeDefs, functions, expr) ->
+            let (registries, resolvedFunctions) =
+                buildRegistriesForProgram baseContext.Registries.ModuleRegistry baseContext.Registries typeDefs functions
+            let varGen = ANF.VarGen 0
+            AST_to_ANF.convertFunctions registries varGen resolvedFunctions
+            |> Result.bind (fun (anfFuncs, varGen1) ->
+                AST_to_ANF.convertExprToAnf registries varGen1 expr
+                |> Result.map (fun (anfExpr, _) ->
+                    {
+                        UserFunctions = anfFuncs
+                        MainExpr = anfExpr
+                        TypeReg = registries.TypeReg
+                        VariantLookup = registries.VariantLookup
+                        FuncReg = registries.FuncReg
+                        FuncParams = registries.FuncParams
+                        ModuleRegistry = registries.ModuleRegistry
+                    }))))
 
 /// Try to delete a file, ignoring any errors
 let private tryDeleteFile (path: string) : unit =
@@ -706,49 +741,47 @@ let buildStdlib () : Result<StdlibResult, string> =
             let genericFuncDefs = AST_to_ANF.extractGenericFuncDefs typedStdlib
             // Build module registry once (reused across all compilations)
             let moduleRegistry = Stdlib.buildModuleRegistry ()
-            match AST_to_ANF.convertProgramWithTypes typedStdlib with
+            match convertTypedProgramToConversionResult moduleRegistry typedStdlib with
             | Error e ->
                 emit "stdlib.compile.error" [("message", e)]
                 Error e
             | Ok anfResult ->
-                // Run RC insertion on stdlib ANF (stdlib functions need ref counting too)
-                match RefCountInsertion.insertRCInProgram anfResult with
+                let registries : AST_to_ANF.Registries = {
+                    TypeReg = anfResult.TypeReg
+                    VariantLookup = anfResult.VariantLookup
+                    FuncReg = anfResult.FuncReg
+                    FuncParams = anfResult.FuncParams
+                    ModuleRegistry = anfResult.ModuleRegistry
+                }
+                let context = buildContext typeCheckEnv genericFuncDefs registries
+                let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
+                let stdlibOptions = defaultOptions
+                let sw = Stopwatch.StartNew()
+                match buildAnf 0 stdlibOptions sw registries stdlibFunctions with
                 | Error e ->
                     emit "stdlib.compile.error" [("message", e)]
                     Error e
-                | Ok (anfAfterRC, typeMap) ->
-                    // Pass 2.7: Tail Call Detection
-                    let anfAfterTCO = TailCallDetection.detectTailCallsInProgram anfAfterRC
-                    // Extract stdlib ANF functions for coverage analysis
-                    let (ANF.Program (stdlibFuncs, _)) = anfAfterTCO
+                | Ok (anfFunctions, typeMap) ->
                     let stdlibFuncMap =
-                        stdlibFuncs
+                        anfFunctions
                         |> List.map (fun f -> f.Name, f)
                         |> Map.ofList
-                    // Build ANF-level call graph for coverage analysis
-                    let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph stdlibFuncs
+                    let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph anfFunctions
 
-                    // Compile stdlib functions through shared MIR/LIR pipeline
-                    let externalReturnTypes = extractReturnTypes anfResult.FuncReg
-                    let stdlibOptions = defaultOptions
-                    let sw = Stopwatch.StartNew()
-                    match compileAnfFunctionsOnlyToLir
+                    let externalReturnTypes = extractReturnTypes registries.FuncReg
+                    match lowerToAllocatedLir
                         0
                         stdlibOptions
                         sw
                         "stdlib"
-                        anfAfterTCO
+                        anfFunctions
                         typeMap
-                        anfResult.FuncParams
-                        anfResult.VariantLookup
-                        Map.empty
+                        registries
                         externalReturnTypes with
                     | Error e ->
                         emit "stdlib.compile.error" [("message", e)]
                         Error e
-                    | Ok optimizedLirProgram ->
-                        let (LIRSymbolic.Program lirFuncs) = optimizedLirProgram
-                        let allocatedFuncs = allocateRegistersForFunctions lirFuncs
+                    | Ok allocatedFuncs ->
                         let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
                         match LIRSymbolic.toLIR allocatedSymbolic with
                         | Error err ->
@@ -756,16 +789,12 @@ let buildStdlib () : Result<StdlibResult, string> =
                             Error err
                         | Ok allocatedProgram ->
                             let (LIR.Program (resolvedFuncs, _, _)) = allocatedProgram
-                            // Build call graph for dead code elimination
                             let stdlibCallGraph = DeadCodeElimination.buildCallGraph resolvedFuncs
                             emit "stdlib.compile.finish" [("functions", string resolvedFuncs.Length)]
                             Ok {
                                 AST = stdlibAst
                                 TypedAST = typedStdlib
-                                TypeCheckEnv = typeCheckEnv
-                                ANFResult = anfResult
-                                GenericFuncDefs = genericFuncDefs
-                                ModuleRegistry = moduleRegistry
+                                Context = context
                                 LIRProgram = allocatedProgram
                                 AllocatedFunctions = resolvedFuncs
                                 StdlibCallGraph = stdlibCallGraph
@@ -792,9 +821,7 @@ type private UserCompilePlan = {
     Verbosity: int
     Options: CompilerOptions
     Stdlib: StdlibResult
-    BaseTypeCheckEnv: TypeChecking.TypeCheckEnv
-    BaseGenericFuncDefs: AST_to_ANF.GenericFuncDefs
-    BaseANFResult: AST_to_ANF.ConversionResult
+    BaseContext: PipelineContext
     PrebuiltSymbolicFunctions: LIRSymbolic.Function list
     SkipFunctionNames: Set<string>
     EmitFunctionEvents: bool
@@ -822,7 +849,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
             | Ok userAst ->
                 // Pass 1.5: Type Checking (user code with base TypeCheckEnv)
                 if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
-                let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseTypeCheckEnv userAst
+                let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseContext.TypeCheckEnv userAst
                 let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
                 if plan.Verbosity >= 2 then
                     let t = System.Math.Round(typeCheckTime, 1)
@@ -838,10 +865,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                     // Pass 2: AST → ANF (user only)
                     if plan.Verbosity >= 1 then println plan.Labels.Anf
                     let userOnlyResult =
-                        AST_to_ANF.convertUserOnly
-                            plan.BaseGenericFuncDefs
-                            plan.BaseANFResult
-                            typedUserAst
+                        convertTypedProgramToUserOnly plan.BaseContext typedUserAst
                     let anfTime = sw.Elapsed.TotalMilliseconds - parseTime - typeCheckTime
                     if plan.Verbosity >= 2 then
                         let t = System.Math.Round(anfTime, 1)
@@ -864,95 +888,101 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             for f in functionsToCompile do
                                 println $"    - {f.Name}"
 
+                        let entryFunction =
+                            AST_to_ANF.synthesizeEntryFunction "_start" programType userOnly.MainExpr
+                        let userRegistries : AST_to_ANF.Registries = {
+                            TypeReg = userOnly.TypeReg
+                            VariantLookup = userOnly.VariantLookup
+                            FuncReg = userOnly.FuncReg
+                            FuncParams = userOnly.FuncParams
+                            ModuleRegistry = userOnly.ModuleRegistry
+                        }
                         let anfResult =
-                            buildAnfProgram
+                            buildAnf
                                 plan.Verbosity
                                 plan.Options
                                 sw
-                                programType
-                                functionsToCompile
-                                userOnly.MainExpr
-                                userOnly
-                                []
-                                Map.empty
+                                userRegistries
+                                (entryFunction :: functionsToCompile)
                         match anfResult with
                         | Error err -> Error err
-                        | Ok (userAnfProgram, typeMap, userConvResult) ->
-                            let externalReturnTypes = extractReturnTypes userOnly.FuncReg
-                            let userLirResult =
-                                compileAnfToLir
-                                    plan.Verbosity
-                                    plan.Options
-                                    sw
-                                    plan.Labels.StageSuffix
-                                    userAnfProgram
-                                    typeMap
-                                    userConvResult
-                                    programType
-                                    externalReturnTypes
-                            match userLirResult with
-                            | Error err -> Error err
-                            | Ok userOptimizedLirProgram ->
-                                // Pass 5: Register Allocation
-                                if plan.Verbosity >= 1 then println "  [5/8] Register Allocation..."
-                                let allocStart = sw.Elapsed.TotalMilliseconds
-                                let (LIRSymbolic.Program userFuncs) = userOptimizedLirProgram
-                                let (LIR.Program (_, stdlibStrings, stdlibFloats)) = plan.Stdlib.LIRProgram
+                        | Ok (anfFunctions, typeMap) ->
+                            if plan.Verbosity >= 1 then println "  [2.8/8] Print Insertion..."
+                            let printStart = sw.Elapsed.TotalMilliseconds
+                            match PrintInsertion.insertPrintInEntry "_start" programType anfFunctions with
+                            | Error err -> Error $"Print insertion error: {err}"
+                            | Ok printedFunctions ->
+                                if plan.Verbosity >= 2 then
+                                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - printStart, 1)
+                                    println $"        {t}ms"
+                                if shouldDumpIR plan.Verbosity plan.Options.DumpANF then
+                                    let printProgram = ANF.Program (printedFunctions, ANF.Return ANF.UnitLiteral)
+                                    printANFProgram "=== ANF (after Print insertion) ===" printProgram
 
-                                let allocatedUserFuncs = allocateRegistersForFunctions userFuncs
-                                let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
+                                let externalReturnTypes = extractReturnTypes userRegistries.FuncReg
+                                let userLirResult =
+                                    lowerToAllocatedLir
+                                        plan.Verbosity
+                                        plan.Options
+                                        sw
+                                        plan.Labels.StageSuffix
+                                        printedFunctions
+                                        typeMap
+                                        userRegistries
+                                        externalReturnTypes
+                                match userLirResult with
+                                | Error err -> Error err
+                                | Ok allocatedUserFuncs ->
+                                    let (LIR.Program (_, stdlibStrings, stdlibFloats)) = plan.Stdlib.LIRProgram
+                                    let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
 
-                                match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
-                                | Error err -> Error $"LIR pool resolution error: {err}"
-                                | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
-                                    if plan.Verbosity >= 2 then
-                                        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
-                                        println $"        {t}ms"
+                                    match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
+                                    | Error err -> Error $"LIR pool resolution error: {err}"
+                                    | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
+                                        let finalUserFuncs =
+                                            if plan.TreeShakeUserFunctions then
+                                                if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
+                                                if plan.Options.DisableFunctionTreeShaking then allUserFuncs
+                                                else FunctionTreeShaking.filterUserFunctions (Some "_start") allUserFuncs
+                                            else
+                                                allUserFuncs
 
-                                    let finalUserFuncs =
-                                        if plan.TreeShakeUserFunctions then
-                                            if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
-                                            if plan.Options.DisableFunctionTreeShaking then allUserFuncs
-                                            else FunctionTreeShaking.filterUserFunctions allUserFuncs
-                                        else
-                                            allUserFuncs
+                                        if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
+                                            println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
+                                            for f in allUserFuncs do
+                                                println $"    - {f.Name}"
+                                            println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
 
-                                    if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
-                                        println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
-                                        for f in allUserFuncs do
-                                            println $"    - {f.Name}"
-                                        println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
+                                        // Filter stdlib functions to only include reachable ones (dead code elimination)
+                                        let reachableStdlib =
+                                            if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
+                                            else
+                                                FunctionTreeShaking.filterStdlibFunctions
+                                                    plan.Stdlib.StdlibCallGraph
+                                                    finalUserFuncs
+                                                    plan.Stdlib.AllocatedFunctions
 
-                                    // Filter stdlib functions to only include reachable ones (dead code elimination)
-                                    let reachableStdlib =
-                                        if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
-                                        else
-                                            FunctionTreeShaking.filterStdlibFunctions
-                                                plan.Stdlib.StdlibCallGraph
-                                                finalUserFuncs
-                                                plan.Stdlib.AllocatedFunctions
+                                        // Combine reachable stdlib functions with user functions
+                                        let allFuncs = reachableStdlib @ finalUserFuncs
+                                        let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
+                                        if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
+                                            printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
 
-                                    // Combine reachable stdlib functions with user functions
-                                    let allFuncs = reachableStdlib @ finalUserFuncs
-                                    let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
-                                    if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
-                                        printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
-
-                                    let binaryResult =
-                                        generateBinary
-                                            plan.Verbosity
-                                            plan.Options
-                                            sw
-                                            "  [6/8] Code Generation..."
-                                            "  [7/7] ARM64 Encoding..."
-                                            "  [7/7] Binary Generation ({format})..."
-                                            false
-                                            false
-                                            allocatedProgram
-                                    match binaryResult with
-                                    | Error err -> Error err
-                                    | Ok binary ->
-                                        Ok binary
+                                        let binaryResult =
+                                            generateBinary
+                                                plan.Verbosity
+                                                plan.Options
+                                                sw
+                                                "  [6/8] Code Generation..."
+                                                "  [7/7] ARM64 Encoding..."
+                                                "  [7/7] Binary Generation ({format})..."
+                                                false
+                                                false
+                                                allocatedProgram
+                                        match binaryResult with
+                                        | Error err -> Error err
+                                        | Ok binary ->
+                                            Ok binary
         with
         | ex ->
             Error $"Compilation failed: {ex.Message}"
@@ -971,11 +1001,9 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
         let emptyContext = {
-            TypeCheckEnv = stdlib.TypeCheckEnv
-            GenericFuncDefs = stdlib.GenericFuncDefs
+            Context = stdlib.Context
             ANFFunctions = []
             TypeMap = stdlib.StdlibTypeMap
-            ANFResult = stdlib.ANFResult
             SymbolicFunctions = []
         }
         emit "preamble.compile.finish" [("source", sourceFile); ("functions", "0")]
@@ -989,8 +1017,8 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
             emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
             Error msg
         | Ok preambleAst ->
-            // Type-check preamble with stdlib.TypeCheckEnv
-            match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv preambleAst with
+            // Type-check preamble with stdlib context
+            match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv preambleAst with
             | Error typeErr ->
                 let msg = $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
                 emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
@@ -999,18 +1027,26 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                 // Extract generic function definitions from preamble
                 let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
                 // Merge stdlib generics with preamble generics
-                let mergedGenericDefs = Map.fold (fun acc k v -> Map.add k v acc) stdlib.GenericFuncDefs preambleGenericDefs
+                let mergedGenericDefs = Map.fold (fun acc k v -> Map.add k v acc) stdlib.Context.GenericFuncDefs preambleGenericDefs
 
                 // Convert preamble to ANF (mono → inline → lift → ANF)
-                match AST_to_ANF.convertUserOnly mergedGenericDefs stdlib.ANFResult typedPreambleAst with
+                match convertTypedProgramToUserOnly stdlib.Context typedPreambleAst with
                 | Error err ->
                     let msg = $"Preamble ANF conversion error: {err}"
                     emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                     Error msg
                 | Ok preambleUserOnly ->
+                    let preambleRegistries : AST_to_ANF.Registries = {
+                        TypeReg = preambleUserOnly.TypeReg
+                        VariantLookup = preambleUserOnly.VariantLookup
+                        FuncReg = preambleUserOnly.FuncReg
+                        FuncParams = preambleUserOnly.FuncParams
+                        ModuleRegistry = preambleUserOnly.ModuleRegistry
+                    }
+                    let pipelineContext = buildContext preambleTypeCheckEnv mergedGenericDefs preambleRegistries
                     let preambleOptions = defaultOptions
-                    let anfSw = Stopwatch.StartNew()
-                    match buildAnfProgramCore 0 preambleOptions anfSw preambleUserOnly.UserFunctions preambleUserOnly.MainExpr preambleUserOnly with
+                    let sw = Stopwatch.StartNew()
+                    match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions with
                     | Error err ->
                         let rcPrefix = "Reference count insertion error: "
                         let msg =
@@ -1021,52 +1057,40 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                                 $"Preamble {err}"
                         emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                         Error msg
-                    | Ok pipeline ->
-                        // Extract just the functions (ignore main expr which is dummy `0`)
-                        let (ANF.Program (preambleFunctions, _dummyMainExpr)) = pipeline.Program
-
-                        let preambleConvResult = pipeline.ConvResult
-                        let preambleExternalReturnTypes = extractReturnTypes preambleConvResult.FuncReg
-                        let sw = Stopwatch.StartNew()
-                        match compileAnfFunctionsOnlyToLir
+                    | Ok (preambleFunctions, typeMap) ->
+                        let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
+                        match lowerToAllocatedLir
                             0
                             preambleOptions
                             sw
                             "preamble"
-                            pipeline.Program
-                            pipeline.TypeMap
-                            preambleConvResult.FuncParams
-                            preambleConvResult.VariantLookup
-                            Map.empty
+                            preambleFunctions
+                            typeMap
+                            preambleRegistries
                             preambleExternalReturnTypes with
                         | Error err ->
                             let msg = $"Preamble {err}"
                             emit "preamble.compile.error" [("source", sourceFile); ("message", msg)]
                             Error msg
-                        | Ok optimizedLir ->
-                            let (LIRSymbolic.Program lirFuncs) = optimizedLir
+                        | Ok allocatedFuncs ->
                             let stdlibFuncNames =
                                 stdlib.AllocatedFunctions
                                 |> List.map (fun func -> func.Name)
                                 |> Set.ofList
                             let isStdlibFunction (name: string) : bool =
                                 Set.contains name stdlibFuncNames
-                            let allocatedFuncs: LIRSymbolic.Function list =
-                                allocateRegistersForFunctions lirFuncs
                             let preambleOnlyFuncs =
                                 allocatedFuncs
                                 |> List.filter (fun func -> not (isStdlibFunction func.Name))
                             let preambleSymbolicFuncs = preambleOnlyFuncs
 
                             // Merge TypeMaps (stdlib + preamble)
-                            let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap pipeline.TypeMap
+                            let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
 
                             let context = {
-                                TypeCheckEnv = preambleTypeCheckEnv
-                                GenericFuncDefs = mergedGenericDefs
+                                Context = pipelineContext
                                 ANFFunctions = preambleFunctions
                                 TypeMap = mergedTypeMap
-                                ANFResult = preambleConvResult
                                 SymbolicFunctions = preambleSymbolicFuncs
                             }
                             emit "preamble.compile.finish" [("source", sourceFile); ("functions", string preambleSymbolicFuncs.Length)]
@@ -1090,15 +1114,15 @@ let private labelsForMode (mode: CompileMode) : UserCompileLabels =
         }
 
 let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
-    let (stdlib, baseTypeCheckEnv, baseGenericDefs, baseAnfResult, prebuiltSymbolic, skipNames) =
+    let (stdlib, baseContext, prebuiltSymbolic, skipNames) =
         match request.Context with
         | StdlibOnly stdlib ->
-            stdlib, stdlib.TypeCheckEnv, stdlib.GenericFuncDefs, stdlib.ANFResult, [], Set.empty
+            stdlib, stdlib.Context, [], Set.empty
         | StdlibWithPreamble (stdlib, preambleCtx) ->
             let preambleFuncs = preambleCtx.SymbolicFunctions
             let preambleFuncNameSet =
                 preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
-            stdlib, preambleCtx.TypeCheckEnv, preambleCtx.GenericFuncDefs, preambleCtx.ANFResult, preambleFuncs, preambleFuncNameSet
+            stdlib, preambleCtx.Context, preambleFuncs, preambleFuncNameSet
 
     let emitFunctionEvents, treeShakeUserFunctions =
         match request.Mode with
@@ -1110,9 +1134,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         Verbosity = request.Verbosity
         Options = request.Options
         Stdlib = stdlib
-        BaseTypeCheckEnv = baseTypeCheckEnv
-        BaseGenericFuncDefs = baseGenericDefs
-        BaseANFResult = baseAnfResult
+        BaseContext = baseContext
         PrebuiltSymbolicFunctions = prebuiltSymbolic
         SkipFunctionNames = skipNames
         EmitFunctionEvents = emitFunctionEvents
@@ -1253,19 +1275,30 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
     | Error err -> Error $"Parse error: {err}"
     | Ok userAst ->
         // Type check with stdlib environment
-        match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv userAst with
+        match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv userAst with
         | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
         | Ok (programType, typedUserAst, _) ->
             // Convert to ANF
-            match AST_to_ANF.convertUserOnly stdlib.GenericFuncDefs stdlib.ANFResult typedUserAst with
+            match convertTypedProgramToUserOnly stdlib.Context typedUserAst with
             | Error err -> Error $"ANF conversion error: {err}"
             | Ok userOnly ->
                 let coverageOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
-                match buildAnfProgram 0 coverageOptions sw programType userOnly.UserFunctions userOnly.MainExpr userOnly [] Map.empty with
+                let entryFunction =
+                    AST_to_ANF.synthesizeEntryFunction "_start" programType userOnly.MainExpr
+                let userRegistries : AST_to_ANF.Registries = {
+                    TypeReg = userOnly.TypeReg
+                    VariantLookup = userOnly.VariantLookup
+                    FuncReg = userOnly.FuncReg
+                    FuncParams = userOnly.FuncParams
+                    ModuleRegistry = userOnly.ModuleRegistry
+                }
+                match buildAnf 0 coverageOptions sw userRegistries (entryFunction :: userOnly.UserFunctions) with
                 | Error err -> Error err
-                | Ok (userAnfProgram, _typeMap, _userConvResult) ->
-                    // Extract reachable stdlib functions using tree-shaking infrastructure
-                    let reachableStdlibNames =
-                        FunctionTreeShaking.getReachableStdlibNames stdlib.StdlibANFCallGraph userAnfProgram
-                    Ok reachableStdlibNames
+                | Ok (userFunctions, _typeMap) ->
+                    match PrintInsertion.insertPrintInEntry "_start" programType userFunctions with
+                    | Error err -> Error $"Print insertion error: {err}"
+                    | Ok printedFunctions ->
+                        let reachableStdlibNames =
+                            ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph printedFunctions
+                        Ok reachableStdlibNames

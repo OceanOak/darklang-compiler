@@ -6235,33 +6235,70 @@ type UserOnlyResult = {
     ModuleRegistry: AST.ModuleRegistry
 }
 
-/// Convert a program to ANF with type information for reference counting
-let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, string> =
-    // First, monomorphize the program (specialize generic functions, replace TypeApp with Call)
-    let monomorphizedProgram = monomorphize program
-    // Then, inline lambdas at their call sites for first-class function support
-    let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
-    // Then, lift non-capturing lambdas to top-level functions
-    liftLambdasInProgram Map.empty Map.empty Map.empty Map.empty inlinedProgram
-    |> Result.bind (fun liftedProgram ->
-    let (AST.Program topLevels) = liftedProgram
-    let varGen = ANF.VarGen 0
+/// Registry bundle used during ANF conversion
+type Registries = {
+    TypeReg: TypeRegistry
+    VariantLookup: VariantLookup
+    FuncReg: FunctionRegistry
+    FuncParams: Map<string, (string * AST.Type) list>
+    ModuleRegistry: AST.ModuleRegistry
+}
 
-    // Build type registry from type definitions
-    // Note: typeParams are stored but not used for ANF conversion (monomorphized at use sites)
-    let typeReg : TypeRegistry =
+/// Split program into type defs, function defs, and a single expression
+let splitTopLevels (program: AST.Program) : Result<AST.TypeDef list * AST.FunctionDef list * AST.Expr, string> =
+    let (AST.Program topLevels) = program
+    let typeDefs =
         topLevels
+        |> List.choose (function AST.TypeDef t -> Some t | _ -> None)
+    let functions =
+        topLevels
+        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
+    let expressions =
+        topLevels
+        |> List.choose (function AST.Expression e -> Some e | _ -> None)
+
+    let hasMainFunc = functions |> List.exists (fun f -> f.Name = "main")
+    let hasStartFunc = functions |> List.exists (fun f -> f.Name = "_start")
+    if hasMainFunc then
+        Error "Function name 'main' is reserved"
+    elif hasStartFunc then
+        Error "Function name '_start' is reserved"
+    else
+        match expressions with
+        | [expr] -> Ok (typeDefs, functions, expr)
+        | [] -> Error "Program must have a main expression"
+        | _ -> Error "Multiple top-level expressions not allowed"
+
+/// Build alias registry from type definitions
+let buildAliasRegistry (typeDefs: AST.TypeDef list) : AliasRegistry =
+    typeDefs
+    |> List.choose (function
+        | AST.TypeAlias (name, typeParams, targetType) -> Some (name, (typeParams, targetType))
+        | _ -> None)
+    |> Map.ofList
+
+/// Resolve type aliases inside function definitions
+let resolveAliasesInFunctions (aliasReg: AliasRegistry) (functions: AST.FunctionDef list) : AST.FunctionDef list =
+    functions |> List.map (resolveAliasesInFunction aliasReg)
+
+/// Build registries from type and function definitions
+let buildRegistries
+    (moduleRegistry: AST.ModuleRegistry)
+    (typeDefs: AST.TypeDef list)
+    (aliasReg: AliasRegistry)
+    (functions: AST.FunctionDef list)
+    : Registries =
+    let typeRegBase : TypeRegistry =
+        typeDefs
         |> List.choose (function
-            | AST.TypeDef (AST.RecordDef (name, _typeParams, fields)) -> Some (name, fields)
+            | AST.RecordDef (name, _typeParams, fields) -> Some (name, fields)
             | _ -> None)
         |> Map.ofList
 
-    // Build variant lookup from sum type definitions
-    // Note: typeParams are stored but not used here (monomorphization happens elsewhere)
     let variantLookup : VariantLookup =
-        topLevels
+        typeDefs
         |> List.choose (function
-            | AST.TypeDef (AST.SumTypeDef (typeName, typeParams, variants)) ->
+            | AST.SumTypeDef (typeName, typeParams, variants) ->
                 Some (typeName, typeParams, variants)
             | _ -> None)
         |> List.collect (fun (typeName, typeParams, variants) ->
@@ -6269,25 +6306,8 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
             |> List.mapi (fun idx variant -> (variant.Name, (typeName, typeParams, idx, variant.Payload))))
         |> Map.ofList
 
-    // Build alias registry from type alias definitions
-    let aliasReg : AliasRegistry =
-        topLevels
-        |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
-            | _ -> None)
-        |> Map.ofList
+    let typeReg = expandTypeRegWithAliases typeRegBase aliasReg
 
-    // Expand typeReg with alias entries so "Vec" can be looked up when it aliases "Point"
-    let typeReg = expandTypeRegWithAliases typeReg aliasReg
-
-    // Separate functions and expressions
-    let functions =
-        topLevels
-        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
-        |> List.map (resolveAliasesInFunction aliasReg)
-    let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
-
-    // Build function registry - maps function names to their FULL function types
     let funcReg : FunctionRegistry =
         functions
         |> List.map (fun f ->
@@ -6296,143 +6316,11 @@ let convertProgramWithTypes (program: AST.Program) : Result<ConversionResult, st
             (f.Name, funcType))
         |> Map.ofList
 
-    // Build function parameters map (includes user-defined and module functions)
     let userFuncParams : Map<string, (string * AST.Type) list> =
         functions
         |> List.map (fun f -> (f.Name, f.Params))
         |> Map.ofList
 
-    // Add module function parameters from Stdlib
-    let moduleRegistry = Stdlib.buildModuleRegistry ()
-    let moduleFuncParams : Map<string, (string * AST.Type) list> =
-        moduleRegistry
-        |> Map.toList
-        |> List.map (fun (qualifiedName, moduleFunc) ->
-            // Create parameter names like "arg0", "arg1" for each parameter type
-            let paramList = moduleFunc.ParamTypes |> List.mapi (fun i t -> ($"arg{i}", t))
-            (qualifiedName, paramList))
-        |> Map.ofList
-
-    let funcParams = Map.fold (fun acc k v -> Map.add k v acc) userFuncParams moduleFuncParams
-
-    // Convert all functions, passing VarGen between them for globally unique TempIds
-    let rec convertFunctions (funcs: AST.FunctionDef list) (vg: ANF.VarGen) (acc: ANF.Function list) : Result<ANF.Function list * ANF.VarGen, string> =
-        match funcs with
-        | [] -> Ok (List.rev acc, vg)
-        | func :: rest ->
-            convertFunction func vg typeReg variantLookup funcReg moduleRegistry
-            |> Result.bind (fun (anfFunc, vg') ->
-                convertFunctions rest vg' (anfFunc :: acc))
-
-    // Validate no function is named "main" (reserved for synthesized entry point)
-    let hasMainFunc = functions |> List.exists (fun f -> f.Name = "main")
-    if hasMainFunc then
-        Error "Function name 'main' is reserved"
-    else
-
-    // Stdlib functions are now loaded from split stdlib files and included as regular functions
-    convertFunctions functions varGen []
-    |> Result.bind (fun (anfFuncs, varGen1) ->
-        match expressions with
-        | [expr] ->
-            let emptyEnv : VarEnv = Map.empty
-            toANF expr varGen1 emptyEnv typeReg variantLookup funcReg moduleRegistry
-            |> Result.map (fun (anfExpr, _) ->
-                { Program = ANF.Program (anfFuncs, anfExpr)
-                  TypeReg = typeReg
-                  VariantLookup = variantLookup
-                  FuncReg = funcReg
-                  FuncParams = funcParams
-                  ModuleRegistry = moduleRegistry })
-        | [] ->
-            Error "Program must have a main expression"
-        | _ ->
-            Error "Multiple top-level expressions not allowed"))
-
-/// Merge two maps, with overlay taking precedence on conflicts
-let private mergeMaps m1 m2 = Map.fold (fun acc k v -> Map.add k v acc) m1 m2
-
-let private funcReturnTypesFromFuncReg (funcReg: FunctionRegistry) : Map<string, AST.Type> =
-    funcReg
-    |> Map.toList
-    |> List.choose (fun (name, funcType) ->
-        match funcType with
-        | AST.TFunction (_, returnType) -> Some (name, returnType)
-        | _ -> None)
-    |> Map.ofList
-
-/// Convert user program to ANF WITHOUT merging with stdlib functions.
-/// Returns user functions separately for MIR-level caching optimization.
-/// The registries are still merged to allow proper lookups during conversion.
-let convertUserOnly
-    (stdlibGenericDefs: GenericFuncDefs)
-    (stdlibResult: ConversionResult)
-    (userProgram: AST.Program) : Result<UserOnlyResult, string> =
-    // 1. Run transformations on user code only (with access to stdlib generics)
-    let monomorphizedProgram = monomorphizeWithExternalDefs stdlibGenericDefs userProgram
-    let inlinedProgram = inlineLambdasInProgram monomorphizedProgram
-    let baseFuncReturnTypes = funcReturnTypesFromFuncReg stdlibResult.FuncReg
-    liftLambdasInProgram stdlibResult.TypeReg stdlibResult.VariantLookup stdlibResult.FuncParams baseFuncReturnTypes inlinedProgram
-    |> Result.bind (fun liftedProgram ->
-    let (AST.Program topLevels) = liftedProgram
-    let varGen = ANF.VarGen 0
-
-    // 2. Build registries from user code only
-    let userTypeRegBase : TypeRegistry =
-        topLevels
-        |> List.choose (function
-            | AST.TypeDef (AST.RecordDef (name, _typeParams, fields)) -> Some (name, fields)
-            | _ -> None)
-        |> Map.ofList
-
-    let userVariantLookup : VariantLookup =
-        topLevels
-        |> List.choose (function
-            | AST.TypeDef (AST.SumTypeDef (typeName, typeParams, variants)) ->
-                Some (typeName, typeParams, variants)
-            | _ -> None)
-        |> List.collect (fun (typeName, typeParams, variants) ->
-            variants
-            |> List.mapi (fun idx variant -> (variant.Name, (typeName, typeParams, idx, variant.Payload))))
-        |> Map.ofList
-
-    // Build alias registry from type alias definitions
-    let userAliasReg : AliasRegistry =
-        topLevels
-        |> List.choose (function
-            | AST.TypeDef (AST.TypeAlias (name, typeParams, targetType)) -> Some (name, (typeParams, targetType))
-            | _ -> None)
-        |> Map.ofList
-
-    // Expand userTypeReg with alias entries so "Vec" can be looked up when it aliases "Point"
-    let userTypeReg = expandTypeRegWithAliases userTypeRegBase userAliasReg
-
-    let functions =
-        topLevels
-        |> List.choose (function AST.FunctionDef f -> Some f | _ -> None)
-        |> List.map (resolveAliasesInFunction userAliasReg)
-    let expressions = topLevels |> List.choose (function AST.Expression e -> Some e | _ -> None)
-
-    let userFuncReg : FunctionRegistry =
-        functions
-        |> List.map (fun f ->
-            let paramTypes = f.Params |> List.map snd
-            let funcType = AST.TFunction (paramTypes, f.ReturnType)
-            (f.Name, funcType))
-        |> Map.ofList
-
-    let userFuncParams : Map<string, (string * AST.Type) list> =
-        functions
-        |> List.map (fun f -> (f.Name, f.Params))
-        |> Map.ofList
-
-    // 3. Merge with stdlib registries (stdlib first, user overlays)
-    let mergedTypeReg = mergeMaps stdlibResult.TypeReg userTypeReg
-    let mergedVariantLookup = mergeMaps stdlibResult.VariantLookup userVariantLookup
-    let mergedFuncReg = mergeMaps stdlibResult.FuncReg userFuncReg
-
-    // Get module function parameters from stdlib result
-    let moduleRegistry = stdlibResult.ModuleRegistry
     let moduleFuncParams : Map<string, (string * AST.Type) list> =
         moduleRegistry
         |> Map.toList
@@ -6441,40 +6329,52 @@ let convertUserOnly
             (qualifiedName, paramList))
         |> Map.ofList
 
-    let mergedFuncParams = mergeMaps stdlibResult.FuncParams (mergeMaps userFuncParams moduleFuncParams)
+    let funcParams =
+        Map.fold (fun acc k v -> Map.add k v acc) userFuncParams moduleFuncParams
 
-    // 4. Convert user functions with merged registries for lookups
-    // Pass VarGen between functions for globally unique TempIds
-    let rec convertFunctions (funcs: AST.FunctionDef list) (vg: ANF.VarGen) (acc: ANF.Function list) : Result<ANF.Function list * ANF.VarGen, string> =
+    {
+        TypeReg = typeReg
+        VariantLookup = variantLookup
+        FuncReg = funcReg
+        FuncParams = funcParams
+        ModuleRegistry = moduleRegistry
+    }
+
+/// Merge registries with overlay taking precedence (module registry stays from base)
+let mergeRegistries (baseRegs: Registries) (overlay: Registries) : Registries =
+    let mergeMaps m1 m2 = Map.fold (fun acc k v -> Map.add k v acc) m1 m2
+    {
+        TypeReg = mergeMaps baseRegs.TypeReg overlay.TypeReg
+        VariantLookup = mergeMaps baseRegs.VariantLookup overlay.VariantLookup
+        FuncReg = mergeMaps baseRegs.FuncReg overlay.FuncReg
+        FuncParams = mergeMaps baseRegs.FuncParams overlay.FuncParams
+        ModuleRegistry = baseRegs.ModuleRegistry
+    }
+
+/// Convert functions to ANF, returning updated VarGen
+let convertFunctions
+    (registries: Registries)
+    (varGen: ANF.VarGen)
+    (functions: AST.FunctionDef list)
+    : Result<ANF.Function list * ANF.VarGen, string> =
+    let rec loop funcs vg acc =
         match funcs with
         | [] -> Ok (List.rev acc, vg)
         | func :: rest ->
-            convertFunction func vg mergedTypeReg mergedVariantLookup mergedFuncReg moduleRegistry
+            convertFunction func vg registries.TypeReg registries.VariantLookup registries.FuncReg registries.ModuleRegistry
             |> Result.bind (fun (anfFunc, vg') ->
-                convertFunctions rest vg' (anfFunc :: acc))
+                loop rest vg' (anfFunc :: acc))
+    loop functions varGen []
 
-    // Validate no function is named "main" (reserved for synthesized entry point)
-    let hasMainFunc = functions |> List.exists (fun f -> f.Name = "main")
-    if hasMainFunc then
-        Error "Function name 'main' is reserved"
-    else
+/// Convert an expression to ANF with the given VarGen
+let convertExprToAnf
+    (registries: Registries)
+    (varGen: ANF.VarGen)
+    (expr: AST.Expr)
+    : Result<ANF.AExpr * ANF.VarGen, string> =
+    let emptyEnv : VarEnv = Map.empty
+    toANF expr varGen emptyEnv registries.TypeReg registries.VariantLookup registries.FuncReg registries.ModuleRegistry
 
-    convertFunctions functions varGen []
-    |> Result.bind (fun (userAnfFuncs, varGen1) ->
-        match expressions with
-        | [expr] ->
-            let emptyEnv : VarEnv = Map.empty
-            toANF expr varGen1 emptyEnv mergedTypeReg mergedVariantLookup mergedFuncReg moduleRegistry
-            |> Result.map (fun (anfExpr, _) ->
-                // Return user functions ONLY (not merged with stdlib)
-                { UserFunctions = userAnfFuncs
-                  MainExpr = anfExpr
-                  TypeReg = mergedTypeReg
-                  VariantLookup = mergedVariantLookup
-                  FuncReg = mergedFuncReg
-                  FuncParams = mergedFuncParams
-                  ModuleRegistry = moduleRegistry })
-        | [] ->
-            Error "Program must have a main expression"
-        | _ ->
-            Error "Multiple top-level expressions not allowed"))
+/// Synthesize an entrypoint function from a main expression
+let synthesizeEntryFunction (name: string) (returnType: AST.Type) (body: ANF.AExpr) : ANF.Function =
+    { Name = name; TypedParams = []; ReturnType = returnType; Body = body }

@@ -33,9 +33,34 @@ let private externalReturnTypes : Map<string, AST.Type> =
     ]
 
 let private typeCheckWithStdlib (stdlib: CompilerLibrary.StdlibResult) (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
-    match TypeChecking.checkProgramWithBaseEnv stdlib.TypeCheckEnv ast with
+    match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv ast with
     | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
     | Ok (programType, typedAst, _env) -> Ok (programType, typedAst)
+
+let private convertTypedProgram (typedAst: AST.Program) : Result<AST_to_ANF.ConversionResult, string> =
+    let moduleRegistry = Stdlib.buildModuleRegistry ()
+    let monomorphized = AST_to_ANF.monomorphize typedAst
+    let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
+    AST_to_ANF.liftLambdasInProgram Map.empty Map.empty Map.empty Map.empty inlined
+    |> Result.bind (fun lifted ->
+        AST_to_ANF.splitTopLevels lifted
+        |> Result.bind (fun (typeDefs, functions, expr) ->
+            let aliasReg = AST_to_ANF.buildAliasRegistry typeDefs
+            let resolvedFunctions = AST_to_ANF.resolveAliasesInFunctions aliasReg functions
+            let registries = AST_to_ANF.buildRegistries moduleRegistry typeDefs aliasReg resolvedFunctions
+            let varGen = ANF.VarGen 0
+            AST_to_ANF.convertFunctions registries varGen resolvedFunctions
+            |> Result.bind (fun (anfFuncs, varGen1) ->
+                AST_to_ANF.convertExprToAnf registries varGen1 expr
+                |> Result.map (fun (anfExpr, _) ->
+                    {
+                        Program = ANF.Program (anfFuncs, anfExpr)
+                        TypeReg = registries.TypeReg
+                        VariantLookup = registries.VariantLookup
+                        FuncReg = registries.FuncReg
+                        FuncParams = registries.FuncParams
+                        ModuleRegistry = registries.ModuleRegistry
+                    }))))
 
 /// Normalize IR output for comparison
 /// - Trim whitespace
@@ -58,7 +83,7 @@ let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
-            match AST_to_ANF.convertProgramWithTypes typedAst with
+            match convertTypedProgram typedAst with
             | Error e -> Error $"ANF conversion error: {e}"
             | Ok convResult ->
                 // Optimize ANF
@@ -78,7 +103,7 @@ let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
-            match AST_to_ANF.convertProgramWithTypes typedAst with
+            match convertTypedProgram typedAst with
             | Error e -> Error $"ANF conversion error: {e}"
             | Ok convResult ->
                 // Optimize ANF
@@ -118,7 +143,7 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
         | Error e -> Error e
         | Ok (programType, typedAst) ->
             // Convert to ANF
-            match AST_to_ANF.convertProgramWithTypes typedAst with
+            match convertTypedProgram typedAst with
             | Error e -> Error $"ANF conversion error: {e}"
             | Ok convResult ->
                 // Optimize ANF

@@ -21,24 +21,24 @@ let private emptyStdlibResult () : StdlibResult =
         ModuleRegistry = Map.empty
         AliasReg = Map.empty
     }
-    let emptyAnfProgram = ANF.Program ([], ANF.Return ANF.UnitLiteral)
-    let emptyAnfResult : AST_to_ANF.ConversionResult = {
-        Program = emptyAnfProgram
+    let emptyRegistries : AST_to_ANF.Registries = {
         TypeReg = Map.empty
         VariantLookup = Map.empty
         FuncReg = Map.empty
         FuncParams = Map.empty
         ModuleRegistry = Map.empty
     }
+    let emptyContext : PipelineContext = {
+        TypeCheckEnv = emptyTypeCheckEnv
+        GenericFuncDefs = Map.empty
+        Registries = emptyRegistries
+    }
     let emptyLirProgram = LIR.Program ([], MIR.emptyStringPool, MIR.emptyFloatPool)
 
     {
         AST = emptyAst
         TypedAST = emptyAst
-        TypeCheckEnv = emptyTypeCheckEnv
-        ANFResult = emptyAnfResult
-        GenericFuncDefs = Map.empty
-        ModuleRegistry = Map.empty
+        Context = emptyContext
         LIRProgram = emptyLirProgram
         AllocatedFunctions = []
         StdlibCallGraph = Map.empty

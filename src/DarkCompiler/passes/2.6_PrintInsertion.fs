@@ -79,3 +79,21 @@ let insertPrint (functions: ANF.Function list) (mainExpr: ANF.AExpr) (programTyp
     let varGen = VarGen 2000  // Start high to avoid conflicts
     let (exprWithPrint, _) = wrapReturnWithPrint programType varGen mainExpr
     ANF.Program (functions, exprWithPrint)
+
+/// Insert Print into a named entry function
+let insertPrintInEntry (entryName: string) (programType: AST.Type) (functions: ANF.Function list) : Result<ANF.Function list, string> =
+    let varGen = VarGen 2000  // Start high to avoid conflicts
+    let rec update found remaining =
+        match remaining with
+        | [] ->
+            if found then Ok []
+            else Error $"Entry function '{entryName}' not found for print insertion"
+        | f :: rest ->
+            if f.Name = entryName then
+                let (bodyWithPrint, _) = wrapReturnWithPrint programType varGen f.Body
+                update true rest
+                |> Result.map (fun updatedTail -> { f with Body = bodyWithPrint } :: updatedTail)
+            else
+                update found rest
+                |> Result.map (fun updatedTail -> f :: updatedTail)
+    update false functions

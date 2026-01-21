@@ -27,9 +27,9 @@ match loadStdlib() with
     match TypeChecking.checkProgramWithEnv withMain with
     | Error e -> Error (TypeChecking.typeErrorToString e)
     | Ok (_, typedStdlib, typeCheckEnv) ->
-        match AST_to_ANF.convertProgramWithTypes typedStdlib with
+        match AST_to_ANF.splitTopLevels typedStdlib with
         | Error e -> Error e
-        | Ok anfProgram ->
+        | Ok (typeDefs, functions, expr) ->
             // Continue processing...
             Ok result
 ```

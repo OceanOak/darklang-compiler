@@ -5,16 +5,20 @@
 
 module FunctionTreeShaking
 
-/// Build root set for user reachability (_start when present, otherwise all functions)
-let private buildUserRoots (functions: LIR.Function list) : Set<string> =
-    if functions |> List.exists (fun f -> f.Name = "_start") then
-        Set.ofList ["_start"]
-    else
+/// Build root set for user reachability (explicit entry when provided)
+let private buildUserRoots (entryName: string option) (functions: LIR.Function list) : Set<string> =
+    match entryName with
+    | Some name ->
+        if functions |> List.exists (fun f -> f.Name = name) then
+            Set.ofList [name]
+        else
+            Crash.crash $"FunctionTreeShaking: entry '{name}' not found in user functions"
+    | None ->
         functions |> List.map (fun f -> f.Name) |> Set.ofList
 
 /// Filter user functions to only include reachable ones
-let filterUserFunctions (functions: LIR.Function list) : LIR.Function list =
-    let roots = buildUserRoots functions
+let filterUserFunctions (entryName: string option) (functions: LIR.Function list) : LIR.Function list =
+    let roots = buildUserRoots entryName functions
     let userCallGraph = DeadCodeElimination.buildCallGraph functions
     let reachableNames = DeadCodeElimination.findReachable userCallGraph roots
     functions |> List.filter (fun f -> Set.contains f.Name reachableNames)
