@@ -4,9 +4,7 @@
 
 module ASTToANFTests
 
-open AST
 open AST_to_ANF
-open ANF
 
 type TestResult = Result<unit, string>
 

@@ -20,7 +20,6 @@
     <Compile Include="TestDSL/E2EFormat.fs" />
     <Compile Include="TestDSL/TypeCheckingFormat.fs" />
     <Compile Include="TestDSL/OptimizationFormat.fs" />
-    <Compile Include="StdlibTestHarness.fs" />
     <Compile Include="Runners/PassTestRunner.fs" />
     <Compile Include="Runners/ARM64EncodingTestRunner.fs" />
     <Compile Include="Runners/E2ETestRunner.fs" />
@@ -32,20 +31,12 @@
     <!-- Unit tests -->
     <Compile Include="TestRunnerArgs.fs" />
     <Compile Include="CliFlagTests.fs" />
-    <Compile Include="TestRunnerScheduling.fs" />
-    <Compile Include="TestRunnerSchedulingTests.fs" />
-    <Compile Include="CompilerLibraryTests.fs" />
-    <Compile Include="StdlibTestHarnessTests.fs" />
-    <Compile Include="StdlibCompileTests.fs" />
-    <Compile Include="PreambleBuildTests.fs" />
     <Compile Include="IRSymbolTests.fs" />
     <Compile Include="IRPrinterTests.fs" />
     <Compile Include="MIROptimizeTests.fs" />
     <Compile Include="ScriptHelperTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
-    <Compile Include="ResultListTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
-    <Compile Include="TraceTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />

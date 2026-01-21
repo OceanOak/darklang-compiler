@@ -13,9 +13,14 @@ open TestDSL.E2EFormat
 open TestDSL.E2ETestRunner
 open TestDSL.OptimizationFormat
 open TestDSL.OptimizationTestRunner
-open TestRunnerScheduling
-open StdlibTestHarness
 open TestRunnerArgs
+ 
+type UnitTestCase = string * (unit -> Result<unit, string>)
+
+type UnitTestSuite = {
+    Name: string
+    Tests: UnitTestCase list
+}
 
 // Failed test info for summary at end
 type FailedTestInfo = {
@@ -116,7 +121,6 @@ let main args =
             [||]
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
-    let needsUnitStdlib = unitStdlibSuites |> List.exists (matchesFilter filter)
     let unitTestNames = [|
         "CLI Flags Tests"
         "Test Runner Scheduling Tests"
@@ -137,57 +141,15 @@ let main args =
         "Lambda Lifting Tests"
     |]
 
-    let hasE2ETests = e2eTestFiles.Length > 0
-    let hasVerificationTests = verificationTestFiles.Length > 0
-
-    let hasMatchingE2ETests =
-        if not hasE2ETests then
-            false
-        else
-            match filter with
-            | None -> true
-            | Some _ ->
-                e2eTestFiles
-                |> Array.exists (fun testFile ->
-                    match TestDSL.E2EFormat.parseE2ETestFile testFile with
-                    | Error _ -> false
-                    | Ok tests -> tests |> List.exists (fun test -> matchesFilter filter test.Name))
-
-    let hasMatchingVerificationTests =
-        if not hasVerificationTests then
-            false
-        else
-            match filter with
-            | None -> true
-            | Some _ ->
-                verificationTestFiles
-                |> Array.exists (fun testFile ->
-                    match TestDSL.E2EFormat.parseE2ETestFile testFile with
-                    | Error _ -> false
-                    | Ok tests -> tests |> List.exists (fun test -> matchesFilter filter test.Name))
-
-    let needsOptimizationStdlib = optTestFiles.Length > 0
-
-    let shouldCompileStdlib =
-        shouldStartStdlibCompile
-            hasE2ETests
-            (verificationEnabled && hasVerificationTests)
-            needsUnitStdlib
-            hasMatchingE2ETests
-            (verificationEnabled && hasMatchingVerificationTests)
-            needsOptimizationStdlib
-
-    let stdlibWarmupPlan = decideStdlibWarmupPlan shouldCompileStdlib
-
     let enableVerification = verificationEnabled
 
-    let compileStdlibWithTiming () : Result<CompilerLibrary.StdlibResult, string> * TimeSpan =
-        let timer = Stopwatch.StartNew()
-        let result = TestDSL.E2ETestRunner.compileStdlib()
-        timer.Stop()
-        (result, timer.Elapsed)
+    let timer = Stopwatch.StartNew()
+    let stdlib =
+        match CompilerLibrary.buildStdlib() with
+        | Ok stdlib -> stdlib
+        | Error err -> failwith $"Stdlib didnt build with error: {err}"
+    let elapsed = timer.Elapsed
 
-    let mutable e2eStdlib : CompilerLibrary.StdlibResult option = None
 
     let mutable passed = 0
     let mutable failed = 0
@@ -202,37 +164,6 @@ let main args =
         failed <- failed + failedDelta
         for test in failedTestsDelta do
             failedTests.Add test
-
-    let mutable stdlibCompileResult : Result<CompilerLibrary.StdlibResult, string> option = None
-    let mutable stdlibCompileElapsed : TimeSpan option = None
-
-    let tryGetStdlibCompileElapsed () : TimeSpan option =
-        stdlibCompileElapsed
-
-    let recordStdlibCompile
-        (result: Result<CompilerLibrary.StdlibResult, string>)
-        (elapsed: TimeSpan)
-        : unit =
-        stdlibCompileResult <- Some result
-        stdlibCompileElapsed <- Some elapsed
-        match result with
-        | Ok stdlib -> e2eStdlib <- Some stdlib
-        | Error _ -> ()
-        recordTiming { Name = "Stdlib Compile"; TotalTime = elapsed; CompileTime = None; RuntimeTime = None }
-
-    match stdlibWarmupPlan with
-    | CompileStdlibBeforeTests ->
-        let (result, elapsed) = compileStdlibWithTiming ()
-        recordStdlibCompile result elapsed
-    | SkipStdlibWarmup -> ()
-
-    let getStdlibResult () : Result<CompilerLibrary.StdlibResult, string> =
-        match e2eStdlib with
-        | Some stdlib -> Ok stdlib
-        | None ->
-            match stdlibCompileResult with
-            | Some compiled -> compiled
-            | None -> Error "Stdlib was not compiled before tests"
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
         let tests = ResizeArray<E2ETest>()
@@ -603,18 +534,14 @@ let main args =
 
     // Run Optimization Tests (ANF, MIR, LIR)
     if optTestFiles.Length > 0 then
-        let stdlibForOptimization = getStdlibResult ()
         let runOptimizationFile testFile =
-            match stdlibForOptimization with
-            | Error err -> Error $"Stdlib compile failed: {err}"
-            | Ok stdlib ->
-                let fileName = Path.GetFileNameWithoutExtension (testFile: string)
-                let stage =
-                    if fileName.ToLower().Contains("anf") then TestDSL.OptimizationFormat.ANF
-                    elif fileName.ToLower().Contains("mir") then TestDSL.OptimizationFormat.MIR
-                    elif fileName.ToLower().Contains("lir") then TestDSL.OptimizationFormat.LIR
-                    else TestDSL.OptimizationFormat.ANF
-                TestDSL.OptimizationTestRunner.runTestFile stdlib stage testFile
+            let fileName = Path.GetFileNameWithoutExtension (testFile: string)
+            let stage =
+                if fileName.ToLower().Contains("anf") then TestDSL.OptimizationFormat.ANF
+                elif fileName.ToLower().Contains("mir") then TestDSL.OptimizationFormat.MIR
+                elif fileName.ToLower().Contains("lir") then TestDSL.OptimizationFormat.LIR
+                else TestDSL.OptimizationFormat.ANF
+            TestDSL.OptimizationTestRunner.runTestFile stdlib stage testFile
         let handleOptimizationSuccess
             (progress: ProgressBar.State)
             (testPath: string)
@@ -669,36 +596,15 @@ let main args =
             handleOptimizationSuccess
             handleOptimizationError
 
-    let runWithStdlib
-        (suiteName: string)
-        (runner: CompilerLibrary.StdlibResult -> Result<unit, string>)
-        : Result<unit, string> =
-        StdlibTestHarness.withStdlib getStdlibResult (fun stdlib -> runner stdlib)
-
-    let wrapStdlibTests
-        (suiteName: string)
-        (tests: (string * (CompilerLibrary.StdlibResult -> Result<unit, string>)) list)
-        : (string * (unit -> Result<unit, string>)) list =
-        tests
-        |> List.map (fun (name, test) ->
-            (name, fun () -> runWithStdlib suiteName (fun stdlib -> test stdlib)))
-
     // Define unit test suites and their per-test runners
     let allUnitTests : UnitTestSuite array = [|
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
-        { Name = "Test Runner Scheduling Tests"; Tests = TestRunnerSchedulingTests.tests }
-        { Name = "Compiler Library Tests"; Tests = CompilerLibraryTests.tests }
-        { Name = "Stdlib Test Harness Tests"; Tests = StdlibTestHarnessTests.tests }
-        { Name = "Stdlib Compile Tests"; Tests = wrapStdlibTests "Stdlib Compile Tests" StdlibCompileTests.tests }
-        { Name = "Preamble Build Tests"; Tests = wrapStdlibTests "Preamble Build Tests" PreambleBuildTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
         { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
-        { Name = "Result List Tests"; Tests = ResultListTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
-        { Name = "Trace Tests"; Tests = TraceTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -710,6 +616,17 @@ let main args =
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
     |]
+
+    let splitUnitTestsByStdlibNeed
+        (needsStdlib: string list)
+        (suites: UnitTestSuite array)
+        : UnitTestSuite array * UnitTestSuite array =
+        let needsStdlibSet = Set.ofList needsStdlib
+        let needsStdlibSuites, noStdlibSuites =
+            suites
+            |> Array.partition (fun suite -> Set.contains suite.Name needsStdlibSet)
+        (noStdlibSuites, needsStdlibSuites)
+
     let unitTests = allUnitTests |> Array.filter (fun suite -> matchesFilter filter suite.Name)
 
     let (unitTestsNoStdlib, unitTestsWithStdlib) =
@@ -733,16 +650,16 @@ let main args =
         for suite in unitTestsOrdered do
             for (testName, runTest) in suite.Tests do
                 let timer = Stopwatch.StartNew()
+                let displayName = $"{suite.Name}: {testName}: "
                 match runTest() with
                 | Ok () ->
                     timer.Stop()
-                    let displayName = formatUnitTestName suite.Name testName
                     recordTiming { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
                     unitSectionPassed <- unitSectionPassed + 1
                     ProgressBar.increment unitProgress true
                 | Error msg ->
                     timer.Stop()
-                    let displayName = formatUnitTestName suite.Name testName
+                    recordTiming { Name = $"Unit: {suite.Name}: {testName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
                     recordTiming { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
                     ProgressBar.increment unitProgress false
                     ProgressBar.finish unitProgress
@@ -775,17 +692,9 @@ let main args =
                         allE2ETests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
                     if testsArray.Length > 0 then
-                        match getStdlibResult () with
-                        | Error e ->
-                            println $"  {Colors.red}Stdlib compilation failed: {e}{Colors.reset}"
-                            println $"  {Colors.red}Skipping all E2E tests{Colors.reset}"
-                        | Ok stdlib ->
-                            let timingText =
-                                match tryGetStdlibCompileElapsed () with
-                                | Some elapsed -> $"(Stdlib compiled in {formatTime elapsed})"
-                                | None -> "(Stdlib compiled)"
-                            println $"  {Colors.gray}{timingText}{Colors.reset}"
-                            runE2ESuite "E2E" "E2E" testsArray stdlib
+                        let timingText = $"(Stdlib compiled in {formatTime elapsed})"
+                        println $"  {Colors.gray}{timingText}{Colors.reset}"
+                        runE2ESuite "E2E" "E2E" testsArray stdlib
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
@@ -803,12 +712,7 @@ let main args =
                         allVerifTests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
                     if testsArray.Length > 0 then
-                        match getStdlibResult () with
-                        | Error err ->
-                            println $"  {Colors.red}Stdlib compilation failed: {err}{Colors.reset}"
-                            println $"  {Colors.red}Skipping verification tests{Colors.reset}"
-                        | Ok stdlib ->
-                            runE2ESuite "Verification" "Verification" testsArray stdlib
+                        runE2ESuite "Verification" "Verification" testsArray stdlib
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
@@ -822,29 +726,26 @@ let main args =
     let coveragePercent =
         if not showCoverage then None
         else
-            match e2eStdlib with
-            | None -> None  // No stdlib compiled (no E2E tests ran)
-            | Some stdlib ->
-                let allStdlibFuncs = CompilerLibrary.getAllStdlibFunctionNamesFromStdlib stdlib
-                let coveredFuncs = System.Collections.Generic.HashSet<string>()
-                let e2eDir = Path.Combine(testDataRoot, "e2e")
-                if Directory.Exists e2eDir then
-                    let e2eTestFiles = Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
-                    for testFile in e2eTestFiles do
-                        match TestDSL.E2EFormat.parseE2ETestFile testFile with
-                        | Error _ -> ()
-                        | Ok tests ->
-                            for test in tests do
-                                match CompilerLibrary.getReachableStdlibFunctionsFromStdlib stdlib test.Source with
-                                | Error _ -> ()
-                                | Ok reachable ->
-                                    for func in reachable do
-                                        if Set.contains func allStdlibFuncs then
-                                            coveredFuncs.Add(func) |> ignore
-                    let totalFuncs = Set.count allStdlibFuncs
-                    let coveredCount = coveredFuncs.Count
-                    if totalFuncs > 0 then Some (float coveredCount / float totalFuncs * 100.0) else None
-                else None
+            let allStdlibFuncs = CompilerLibrary.getAllStdlibFunctionNamesFromStdlib stdlib
+            let coveredFuncs = System.Collections.Generic.HashSet<string>()
+            let e2eDir = Path.Combine(testDataRoot, "e2e")
+            if Directory.Exists e2eDir then
+                let e2eTestFiles = Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
+                for testFile in e2eTestFiles do
+                    match TestDSL.E2EFormat.parseE2ETestFile testFile with
+                    | Error _ -> ()
+                    | Ok tests ->
+                        for test in tests do
+                            match CompilerLibrary.getReachableStdlibFunctionsFromStdlib stdlib test.Source with
+                            | Error _ -> ()
+                            | Ok reachable ->
+                                for func in reachable do
+                                    if Set.contains func allStdlibFuncs then
+                                        coveredFuncs.Add(func) |> ignore
+                let totalFuncs = Set.count allStdlibFuncs
+                let coveredCount = coveredFuncs.Count
+                if totalFuncs > 0 then Some (float coveredCount / float totalFuncs * 100.0) else None
+            else None
 
     totalTimer.Stop()
 

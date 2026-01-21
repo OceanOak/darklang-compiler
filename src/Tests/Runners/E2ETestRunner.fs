@@ -6,8 +6,6 @@ module TestDSL.E2ETestRunner
 
 open System
 open TestDSL.E2EFormat
-open StdlibTestHarness
-open Trace
 
 let private isInternalTestFile (sourceFile: string) : bool =
     let normalized = sourceFile.Replace('\\', '/')
@@ -32,11 +30,6 @@ type private TestExecutionResult = {
     RuntimeTime: TimeSpan
 }
 
-/// Compile stdlib once (call at test startup, pass result to runE2ETest)
-/// Uses prebuilt stdlib - all functions compiled to LIR upfront for maximum speed
-let compileStdlib () : Result<CompilerLibrary.StdlibResult, string> =
-    StdlibTestHarness.compileStdlib()
-
 /// Preamble identity: (source file, preamble text)
 type PreambleKey = string * string
 
@@ -46,14 +39,10 @@ type PreambleContextMap = Map<PreambleKey, CompilerLibrary.PreambleContext>
 /// Build a single preamble context
 let compilePreambleContext (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<CompilerLibrary.PreambleContext, string> =
     let allowInternal = isInternalTestFile sourceFile
-    emit "preamble.build.start" [("source", sourceFile)]
     match CompilerLibrary.buildPreambleContext allowInternal stdlib preamble sourceFile funcLineMap with
     | Error err ->
-        let msg = $"Preamble build error ({sourceFile}): {err}"
-        emit "preamble.build.error" [("source", sourceFile); ("message", msg)]
-        Error msg
+        Error $"Preamble build error ({sourceFile}): {err}"
     | Ok ctx ->
-        emit "preamble.build.finish" [("source", sourceFile)]
         Ok ctx
 
 /// Build all distinct preambles (by file + preamble text) and return contexts
@@ -193,7 +182,6 @@ let private compileAndExecute (request: CompilerLibrary.CompileRequest) : TestEx
 /// Run E2E test (internal implementation)
 let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
     try
-        emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
         let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
         let execResult =
@@ -216,21 +204,16 @@ let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2E
                 }
                 compileAndExecute request
 
-        let result = buildE2EResult test execResult
-        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
-        result
+        buildE2EResult test execResult
     with
     | ex ->
-        let result =
-            { Success = false
-              Message = $"Test execution failed: {ex.Message}"
-              Stdout = None
-              Stderr = None
-              ExitCode = None
-              CompileTime = TimeSpan.Zero
-              RuntimeTime = TimeSpan.Zero }
-        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
-        result
+        { Success = false
+          Message = $"Test execution failed: {ex.Message}"
+          Stdout = None
+          Stderr = None
+          ExitCode = None
+          CompileTime = TimeSpan.Zero
+          RuntimeTime = TimeSpan.Zero }
 
 /// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
@@ -239,7 +222,6 @@ let runE2ETestWithPreambleContext
     (test: E2ETest)
     : E2ETestResult =
     try
-        emit "test.start" [("source", test.SourceFile); ("name", test.Name)]
         let options = buildCompilerOptions test
         let allowInternal = isInternalTestFile test.SourceFile
         let request : CompilerLibrary.CompileRequest = {
@@ -252,21 +234,16 @@ let runE2ETestWithPreambleContext
             Options = options
         }
         let execResult = compileAndExecute request
-        let result = buildE2EResult test execResult
-        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
-        result
+        buildE2EResult test execResult
     with
     | ex ->
-        let result =
-            { Success = false
-              Message = $"Test execution failed: {ex.Message}"
-              Stdout = None
-              Stderr = None
-              ExitCode = None
-              CompileTime = TimeSpan.Zero
-              RuntimeTime = TimeSpan.Zero }
-        emit "test.finish" [("source", test.SourceFile); ("name", test.Name); ("success", string result.Success)]
-        result
+        { Success = false
+          Message = $"Test execution failed: {ex.Message}"
+          Stdout = None
+          Stderr = None
+          ExitCode = None
+          CompileTime = TimeSpan.Zero
+          RuntimeTime = TimeSpan.Zero }
 
 /// Run E2E test with prebuilt stdlib
 let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
