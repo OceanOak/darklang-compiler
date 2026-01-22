@@ -190,35 +190,51 @@ let main args =
             let progress = ProgressBar.create progressLabel numTests
             ProgressBar.update progress
 
-            let collectExitCodeDetails (test: E2ETest) (testResult: E2ETestResult) : string list =
-                let details = ResizeArray<string>()
-                match testResult.ExitCode with
-                | Some code when code <> test.ExpectedExitCode ->
-                    details.Add($"Expected exit code: {test.ExpectedExitCode}, Actual: {code}")
-                | _ -> ()
-                details |> Seq.toList
+            let unpackRun (run: E2ERun) : int * string * string * TimeSpan * TimeSpan =
+                match run with
+                | CompileFailed (exitCode, error, compileTime) ->
+                    (exitCode, "", error, compileTime, TimeSpan.Zero)
+                | Ran (exitCode, stdout, stderr, compileTime, runtimeTime) ->
+                    (exitCode, stdout, stderr, compileTime, runtimeTime)
 
-            let printE2EFailure (test: E2ETest) (testResult: E2ETestResult) : string list =
+            let runFromTestResult (result: E2ETestResult) : E2ERun =
+                match result with
+                | Ok run -> run
+                | Error failure -> failure.Run
+
+            let preambleFailureResult (message: string) : E2ETestResult =
+                Error { Run = CompileFailed (1, message, TimeSpan.Zero); Message = message }
+
+            let collectExitCodeDetails (test: E2ETest) (run: E2ERun) : string list =
+                let (exitCode, _, _, _, _) = unpackRun run
+                if exitCode <> test.ExpectedExitCode then
+                    [ $"Expected exit code: {test.ExpectedExitCode}, Actual: {exitCode}" ]
+                else
+                    []
+
+            let printE2EFailure (test: E2ETest) (failure: E2EFailure) : string list =
+                let run = failure.Run
+                let (_, stdout, stderr, compileTime, runtimeTime) = unpackRun run
                 let cleanName = test.Name.Replace("Stdlib.", "")
                 let displayName = if cleanName.Length > 60 then cleanName.Substring(0, 57) + "..." else cleanName
-                println $"  {displayName}... {Colors.red}✗ FAIL{Colors.reset} {Colors.gray}(compile: {formatTime testResult.CompileTime}, run: {formatTime testResult.RuntimeTime}){Colors.reset}"
-                println $"    {testResult.Message}"
+                println $"  {displayName}... {Colors.red}✗ FAIL{Colors.reset} {Colors.gray}(compile: {formatTime compileTime}, run: {formatTime runtimeTime}){Colors.reset}"
+                println $"    {failure.Message}"
 
-                let details = collectExitCodeDetails test testResult
+                let details = collectExitCodeDetails test run
                 for detail in details do
                     println $"    {detail}"
 
-                match test.ExpectedStdout, testResult.Stdout with
-                | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
+                match test.ExpectedStdout with
+                | Some expected when stdout.Trim() <> expected.Trim() ->
                     let expectedDisp = expected.Replace("\n", "\\n")
-                    let actualDisp = actual.Replace("\n", "\\n")
+                    let actualDisp = stdout.Replace("\n", "\\n")
                     println $"    Expected stdout: {expectedDisp}"
                     println $"    Actual stdout: {actualDisp}"
                 | _ -> ()
-                match test.ExpectedStderr, testResult.Stderr with
-                | Some expected, Some actual when actual.Trim() <> expected.Trim() ->
+                match test.ExpectedStderr with
+                | Some expected when stderr.Trim() <> expected.Trim() ->
                     let expectedDisp = expected.Replace("\n", "\\n")
-                    let actualDisp = actual.Replace("\n", "\\n")
+                    let actualDisp = stderr.Replace("\n", "\\n")
                     println $"    Expected stderr: {expectedDisp}"
                     println $"    Actual stderr: {actualDisp}"
                 | _ -> ()
@@ -229,34 +245,30 @@ let main args =
                 let result =
                     match preambleContextsResult with
                     | Error err ->
-                        { Success = false
-                          Message = $"Preamble build failed: {err}"
-                          Stdout = None
-                          Stderr = None
-                          ExitCode = Some 1
-                          CompileTime = TimeSpan.Zero
-                          RuntimeTime = TimeSpan.Zero }
+                        preambleFailureResult $"Preamble build failed: {err}"
                     | Ok preambleContexts ->
-                        let key = (test.SourceFile, test.Preamble)
-                        match Map.tryFind key preambleContexts with
+                        match Map.tryFind test.SourceFile preambleContexts with
                         | None ->
-                            { Success = false
-                              Message = $"Missing built preamble context for {test.SourceFile}"
-                              Stdout = None
-                              Stderr = None
-                              ExitCode = Some 1
-                              CompileTime = TimeSpan.Zero
-                              RuntimeTime = TimeSpan.Zero }
+                            preambleFailureResult $"Missing built preamble context for {test.SourceFile}"
                         | Some ctx ->
                             TestDSL.E2ETestRunner.runE2ETestWithPreambleContext stdlib ctx test
-                let totalTime = result.CompileTime + result.RuntimeTime
+
+                let run = runFromTestResult result
+                let (_, _, _, compileTime, runtimeTime) = unpackRun run
+                let totalTime = compileTime + runtimeTime
                 results.[i] <- Some (test, result)
-                recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some result.CompileTime; RuntimeTime = Some result.RuntimeTime }
-                ProgressBar.increment progress result.Success
-                if verbose && not result.Success then
+                recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some compileTime; RuntimeTime = Some runtimeTime }
+                let success =
+                    match result with
+                    | Ok _ -> true
+                    | Error _ -> false
+                ProgressBar.increment progress success
+                match result with
+                | Error failure when verbose ->
                     ProgressBar.finish progress
-                    let _ = printE2EFailure test result
+                    let _ = printE2EFailure test failure
                     ProgressBar.update progress
+                | _ -> ()
 
             ProgressBar.finish progress
 
@@ -266,13 +278,14 @@ let main args =
             for result in results do
                 match result with
                 | Some (test, testResult) ->
-                    if testResult.Success then
+                    match testResult with
+                    | Ok _ ->
                         sectionPassed <- sectionPassed + 1
-                    else
+                    | Error failure ->
                         let details =
-                            if verbose then collectExitCodeDetails test testResult
-                            else printE2EFailure test testResult
-                        failedTestsLocal.Add({ File = test.SourceFile; Name = $"{suiteName}: {test.Name}"; Message = testResult.Message; Details = details })
+                            if verbose then collectExitCodeDetails test failure.Run
+                            else printE2EFailure test failure
+                        failedTestsLocal.Add({ File = test.SourceFile; Name = $"{suiteName}: {test.Name}"; Message = failure.Message; Details = details })
                         sectionFailed <- sectionFailed + 1
                 | None -> ()
 

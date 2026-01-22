@@ -7,132 +7,140 @@ module TestDSL.E2ETestRunner
 open System
 open TestDSL.E2EFormat
 
+// Internal identifiers are only allowed for stdlib-internal tests.
 let private isInternalTestFile (sourceFile: string) : bool =
     let normalized = sourceFile.Replace('\\', '/')
     normalized.Contains("/stdlib-internal/")
 
 /// Result of running an E2E test
-type E2ETestResult = {
-    Success: bool
+type E2ERun =
+    | CompileFailed of exitCode:int * error:string * compileTime:TimeSpan
+    | Ran of exitCode:int * stdout:string * stderr:string * compileTime:TimeSpan * runtimeTime:TimeSpan
+
+type E2EFailure = {
+    Run: E2ERun
     Message: string
-    Stdout: string option
-    Stderr: string option
-    ExitCode: int option
-    CompileTime: TimeSpan
-    RuntimeTime: TimeSpan
 }
 
-type private TestExecutionResult = {
-    ExitCode: int
-    Stdout: string
-    Stderr: string
-    CompileTime: TimeSpan
-    RuntimeTime: TimeSpan
+type E2ETestResult = Result<E2ERun, E2EFailure>
+
+type private PreambleBuildSpec = {
+    SourceFile: string
+    Preamble: string
+    FunctionLineMap: Map<string, int>
+    AllowInternal: bool
 }
 
-/// Preamble identity: (source file, preamble text)
-type PreambleKey = string * string
+/// Map of built preamble contexts keyed by source file
+type PreambleContextMap = Map<string, CompilerLibrary.PreambleContext>
 
-/// Map of built preamble contexts keyed by preamble identity
-type PreambleContextMap = Map<PreambleKey, CompilerLibrary.PreambleContext>
-
-/// Build a single preamble context
-let compilePreambleContext (stdlib: CompilerLibrary.StdlibResult) (sourceFile: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<CompilerLibrary.PreambleContext, string> =
-    let allowInternal = isInternalTestFile sourceFile
-    match CompilerLibrary.buildPreambleContext allowInternal stdlib preamble sourceFile funcLineMap with
+let private buildPreambleContextFromSpec
+    (stdlib: CompilerLibrary.StdlibResult)
+    (spec: PreambleBuildSpec)
+    : Result<CompilerLibrary.PreambleContext, string> =
+    match CompilerLibrary.buildPreambleContext spec.AllowInternal stdlib spec.Preamble spec.SourceFile spec.FunctionLineMap with
     | Error err ->
-        Error $"Preamble build error ({sourceFile}): {err}"
+        Error $"Preamble build error ({spec.SourceFile}): {err}"
     | Ok ctx ->
         Ok ctx
 
-/// Build all distinct preambles (by file + preamble text) and return contexts
-let buildPreambleContexts (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest array) : Result<PreambleContextMap, string> =
-    let grouped =
+let private buildPreambleBuildSpec (sourceFile: string) (tests: E2ETest list) : Result<PreambleBuildSpec, string> =
+    let preambles =
         tests
-        |> Array.toList
-        |> List.groupBy (fun test -> (test.SourceFile, test.Preamble))
-    let rec compileAll remaining acc =
-        match remaining with
-        | [] -> Ok (Map.ofList acc)
-        | ((sourceFile, preamble), group) :: rest ->
-            let funcLineMap =
-                group
-                |> List.tryHead
-                |> Option.map (fun test -> test.FunctionLineMap)
-                |> Option.defaultValue Map.empty
-            match compilePreambleContext stdlib sourceFile preamble funcLineMap with
-            | Error err -> Error err
-            | Ok ctx ->
-                compileAll rest (((sourceFile, preamble), ctx) :: acc)
-    compileAll grouped []
+        |> List.map (fun test -> test.Preamble)
+        |> List.distinct
+    match preambles with
+    | [preamble] ->
+        let funcLineMaps =
+            tests
+            |> List.map (fun test -> test.FunctionLineMap)
+            |> List.distinct
+        match funcLineMaps with
+        | [funcLineMap] ->
+            Ok {
+                SourceFile = sourceFile
+                Preamble = preamble
+                FunctionLineMap = funcLineMap
+                AllowInternal = isInternalTestFile sourceFile
+            }
+        | _ ->
+            Error $"Multiple function line maps found for {sourceFile}"
+    | _ ->
+        Error $"Multiple preambles found for {sourceFile}"
 
-/// Build all distinct preambles (by file + preamble text) and discard contexts
-let buildPreambles (stdlib: CompilerLibrary.StdlibResult) (tests: E2ETest list) : Result<unit, string> =
-    match buildPreambleContexts stdlib (List.toArray tests) with
-    | Error err -> Error err
-    | Ok _ -> Ok ()
+/// Build all distinct preambles (by source file) and return contexts
+/// Each source file must produce exactly one preamble and function line map.
+let buildPreambleContexts
+    (stdlib: CompilerLibrary.StdlibResult)
+    (tests: E2ETest array)
+    : Result<PreambleContextMap, string> =
+    tests
+    |> Array.toList
+    |> List.groupBy (fun test -> test.SourceFile)
+    |> List.fold
+        (fun acc (sourceFile, group) ->
+            acc
+            |> Result.bind (fun contexts ->
+                buildPreambleBuildSpec sourceFile group
+                |> Result.bind (fun spec ->
+                    buildPreambleContextFromSpec stdlib spec
+                    |> Result.map (fun ctx -> Map.add sourceFile ctx contexts))))
+        (Ok Map.empty)
 
-let private buildE2EResult (test: E2ETest) (execResult: TestExecutionResult) : E2ETestResult =
+let private exitCodeFromRun (run: E2ERun) : int =
+    match run with
+    | CompileFailed (exitCode, _, _) -> exitCode
+    | Ran (exitCode, _, _, _, _) -> exitCode
+
+let private stdoutFromRun (run: E2ERun) : string =
+    match run with
+    | CompileFailed _ -> ""
+    | Ran (_, stdout, _, _, _) -> stdout
+
+let private stderrFromRun (run: E2ERun) : string =
+    match run with
+    | CompileFailed (_, error, _) -> error
+    | Ran (_, _, stderr, _, _) -> stderr
+
+let private failRun (run: E2ERun) (message: string) : E2ETestResult =
+    Error { Run = run; Message = message }
+
+let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
     if test.ExpectCompileError then
-        let gotError = execResult.ExitCode <> 0
+        let gotError = exitCodeFromRun run <> 0
         if not gotError then
-            { Success = false
-              Message = "Expected compilation error but compilation succeeded"
-              Stdout = Some execResult.Stdout
-              Stderr = Some execResult.Stderr
-              ExitCode = Some execResult.ExitCode
-              CompileTime = execResult.CompileTime
-              RuntimeTime = execResult.RuntimeTime }
+            failRun run "Expected compilation error but compilation succeeded"
         else
             match test.ExpectedErrorMessage with
             | Some expectedMsg ->
-                let output = execResult.Stderr
+                let output = stderrFromRun run
                 if output.Contains(expectedMsg) then
-                    { Success = true
-                      Message = "Compilation failed with expected error message"
-                      Stdout = Some execResult.Stdout
-                      Stderr = Some execResult.Stderr
-                      ExitCode = Some execResult.ExitCode
-                      CompileTime = execResult.CompileTime
-                      RuntimeTime = execResult.RuntimeTime }
+                    Ok run
                 else
-                    { Success = false
-                      Message = $"Expected error message '{expectedMsg}' not found in stderr"
-                      Stdout = Some execResult.Stdout
-                      Stderr = Some execResult.Stderr
-                      ExitCode = Some execResult.ExitCode
-                      CompileTime = execResult.CompileTime
-                      RuntimeTime = execResult.RuntimeTime }
+                    failRun run $"Expected error message '{expectedMsg}' not found in stderr"
             | None ->
-                { Success = true
-                  Message = "Compilation failed as expected"
-                  Stdout = Some execResult.Stdout
-                  Stderr = Some execResult.Stderr
-                  ExitCode = Some execResult.ExitCode
-                  CompileTime = execResult.CompileTime
-                  RuntimeTime = execResult.RuntimeTime }
+                Ok run
     else
         let stdoutMatches =
             match test.ExpectedStdout with
             | None -> true
-            | Some expected -> execResult.Stdout.Trim() = expected.Trim()
+            | Some expected ->
+                let actual = stdoutFromRun run
+                actual.Trim() = expected.Trim()
 
         let stderrMatches =
             match test.ExpectedStderr with
             | None -> true
-            | Some expected -> execResult.Stderr.Trim() = expected.Trim()
+            | Some expected ->
+                let actual = stderrFromRun run
+                actual.Trim() = expected.Trim()
 
-        let exitCodeMatches = execResult.ExitCode = test.ExpectedExitCode
+        let exitCodeMatches = exitCodeFromRun run = test.ExpectedExitCode
 
-        let success = stdoutMatches && stderrMatches && exitCodeMatches
-
-        { Success = success
-          Message = if success then "Test passed" else "Output mismatch"
-          Stdout = Some execResult.Stdout
-          Stderr = Some execResult.Stderr
-          ExitCode = Some execResult.ExitCode
-          CompileTime = execResult.CompileTime
-          RuntimeTime = execResult.RuntimeTime }
+        if stdoutMatches && stderrMatches && exitCodeMatches then
+            Ok run
+        else
+            failRun run "Output mismatch"
 
 let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptions =
     { CompilerLibrary.defaultOptions with
@@ -162,58 +170,21 @@ let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptio
         DumpLIR = false
     }
 
-let private compileAndExecute (request: CompilerLibrary.CompileRequest) : TestExecutionResult =
+let private tryExecuteBinary (binary: byte array) : Result<CompilerLibrary.ExecutionOutput, string> =
+    try Ok (CompilerLibrary.execute 0 binary)
+    with ex -> Error ex.Message
+
+let private compileAndRun (request: CompilerLibrary.CompileRequest) : E2ERun =
     let compileReport = CompilerLibrary.compile request
     match compileReport.Result with
     | Error err ->
-        { ExitCode = 1
-          Stdout = ""
-          Stderr = err
-          CompileTime = compileReport.CompileTime
-          RuntimeTime = TimeSpan.Zero }
+        CompileFailed (1, err, compileReport.CompileTime)
     | Ok binary ->
-        let execResult = CompilerLibrary.execute 0 binary
-        { ExitCode = execResult.ExitCode
-          Stdout = execResult.Stdout
-          Stderr = execResult.Stderr
-          CompileTime = compileReport.CompileTime
-          RuntimeTime = execResult.RuntimeTime }
-
-/// Run E2E test (internal implementation)
-let private runE2ETestInternal (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
-    try
-        let options = buildCompilerOptions test
-        let allowInternal = isInternalTestFile test.SourceFile
-        let execResult =
-            match CompilerLibrary.buildPreambleContext allowInternal stdlib test.Preamble test.SourceFile test.FunctionLineMap with
-            | Error err ->
-                { ExitCode = 1
-                  Stdout = ""
-                  Stderr = err
-                  CompileTime = TimeSpan.Zero
-                  RuntimeTime = TimeSpan.Zero }
-            | Ok preambleCtx ->
-                let request : CompilerLibrary.CompileRequest = {
-                    Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
-                    Mode = CompilerLibrary.TestExpression
-                    Source = test.Source
-                    SourceFile = test.SourceFile
-                    AllowInternal = allowInternal
-                    Verbosity = 0
-                    Options = options
-                }
-                compileAndExecute request
-
-        buildE2EResult test execResult
-    with
-    | ex ->
-        { Success = false
-          Message = $"Test execution failed: {ex.Message}"
-          Stdout = None
-          Stderr = None
-          ExitCode = None
-          CompileTime = TimeSpan.Zero
-          RuntimeTime = TimeSpan.Zero }
+        match tryExecuteBinary binary with
+        | Ok execResult ->
+            Ran (execResult.ExitCode, execResult.Stdout, execResult.Stderr, compileReport.CompileTime, execResult.RuntimeTime)
+        | Error err ->
+            Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero)
 
 /// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
@@ -221,50 +192,16 @@ let runE2ETestWithPreambleContext
     (preambleCtx: CompilerLibrary.PreambleContext)
     (test: E2ETest)
     : E2ETestResult =
-    try
-        let options = buildCompilerOptions test
-        let allowInternal = isInternalTestFile test.SourceFile
-        let request : CompilerLibrary.CompileRequest = {
-            Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
-            Mode = CompilerLibrary.TestExpression
-            Source = test.Source
-            SourceFile = test.SourceFile
-            AllowInternal = allowInternal
-            Verbosity = 0
-            Options = options
-        }
-        let execResult = compileAndExecute request
-        buildE2EResult test execResult
-    with
-    | ex ->
-        { Success = false
-          Message = $"Test execution failed: {ex.Message}"
-          Stdout = None
-          Stderr = None
-          ExitCode = None
-          CompileTime = TimeSpan.Zero
-          RuntimeTime = TimeSpan.Zero }
-
-/// Run E2E test with prebuilt stdlib
-let runE2ETest (stdlib: CompilerLibrary.StdlibResult) (test: E2ETest) : E2ETestResult =
-    runE2ETestInternal stdlib test
-
-/// Run E2E tests with built preamble contexts
-let runE2ETestsWithPreambleContexts
-    (stdlib: CompilerLibrary.StdlibResult)
-    (tests: E2ETest array)
-    : Result<(E2ETest * E2ETestResult) array, string> =
-    match buildPreambleContexts stdlib tests with
-    | Error err -> Error err
-    | Ok preambleContexts ->
-        let rec runAll remaining acc =
-            match remaining with
-            | [] -> Ok (List.rev acc |> List.toArray)
-            | test :: rest ->
-                let key = (test.SourceFile, test.Preamble)
-                match Map.tryFind key preambleContexts with
-                | None -> Error $"Missing built preamble context for {test.SourceFile}"
-                | Some ctx ->
-                    let result = runE2ETestWithPreambleContext stdlib ctx test
-                    runAll rest ((test, result) :: acc)
-        runAll (tests |> Array.toList) []
+    let options = buildCompilerOptions test
+    let allowInternal = isInternalTestFile test.SourceFile
+    let request : CompilerLibrary.CompileRequest = {
+        Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
+        Mode = CompilerLibrary.TestExpression
+        Source = test.Source
+        SourceFile = test.SourceFile
+        AllowInternal = allowInternal
+        Verbosity = 0
+        Options = options
+    }
+    let run = compileAndRun request
+    evaluateExpectations test run
