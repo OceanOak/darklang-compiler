@@ -28,6 +28,8 @@ let update (state: State) =
         let failStr = if state.Failed > 0 then $" ({Colors.red}{state.Failed} failed{Colors.reset})" else ""
         // Use \r to return to start of line, \x1b[K to clear to end of line
         eprint $"\r\x1b[K  {state.Label}: [{bar}] {state.Completed}/{state.Total}{failStr}"
+        // Flush stderr so progress updates are visible in buffered environments.
+        System.Console.Error.Flush()
     )
 
 let increment (state: State) (success: bool) =
@@ -41,4 +43,5 @@ let finish (state: State) =
     lock lockObj (fun () ->
         // Clear the progress line and print final summary
         eprint "\r\x1b[K"
+        System.Console.Error.Flush()
     )
