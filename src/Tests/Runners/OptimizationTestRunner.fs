@@ -75,7 +75,7 @@ let normalizeIR (ir: string) : string =
 /// Compile source and get ANF after optimization
 let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseStringAllowInternal source with
+    match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
@@ -95,7 +95,7 @@ let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
 /// Compile source and get MIR after optimization
 let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseStringAllowInternal source with
+    match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check
@@ -135,7 +135,7 @@ let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
 /// Compile source and get LIR after optimization
 let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
     // Parse source
-    match Parser.parseStringAllowInternal source with
+    match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
     | Ok ast ->
         // Type check

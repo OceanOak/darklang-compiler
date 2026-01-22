@@ -24,7 +24,7 @@ type TypeCheckingTestResult = {
 /// Run a single type checking test
 let runTypeCheckingTest (test: TypeCheckingTest) : TypeCheckingTestResult =
     // Parse the source
-    let parseResult = parseString test.Source
+    let parseResult = parseString false test.Source
 
     match parseResult with
     | Error parseErr ->

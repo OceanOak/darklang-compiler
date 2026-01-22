@@ -2118,17 +2118,9 @@ let private validateNoInternalIdentifiers (Program items) : Result<Program, stri
     |> Result.map (fun () -> Program items)
 
 /// Parse a string directly to AST
-let parseStringWithOptions (allowInternal: bool) (input: string) : Result<Program, string> =
+let parseString (allowInternal: bool) (input: string) : Result<Program, string> =
     lex input
     |> Result.bind parse
     |> Result.bind (fun program ->
         if allowInternal then Ok program
         else validateNoInternalIdentifiers program)
-
-/// Parse a string directly to AST (user code defaults)
-let parseString (input: string) : Result<Program, string> =
-    parseStringWithOptions false input
-
-/// Parse a string directly to AST, allowing internal identifiers
-let parseStringAllowInternal (input: string) : Result<Program, string> =
-    parseStringWithOptions true input

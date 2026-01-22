@@ -667,7 +667,7 @@ let private loadDarkFileAllowInternal (filename: string) : Result<AST.Program, s
         Error $"Could not find {filename} in any of: {pathsStr}"
     | Some path ->
         let source = File.ReadAllText(path)
-        Parser.parseStringAllowInternal source
+        Parser.parseString true source
         |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
 
 /// Load the stdlib and unicode_data.dark files
@@ -793,12 +793,6 @@ let buildStdlib () : Result<StdlibResult, string> =
                                 StdlibTypeMap = typeMap
                             }
 
-let private parseSourceWithInternal (allowInternal: bool) (source: string) : Result<AST.Program, string> =
-    if allowInternal then
-        Parser.parseStringAllowInternal source
-    else
-        Parser.parseString source
-
 type private UserCompileLabels = {
     Parse: string
     TypeCheck: string
@@ -828,7 +822,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
         try
             // Pass 1: Parse user code only
             if plan.Verbosity >= 1 then println plan.Labels.Parse
-            let parseResult = parseSourceWithInternal plan.AllowInternal plan.Source
+            let parseResult = Parser.parseString plan.AllowInternal plan.Source
             let parseTime = sw.Elapsed.TotalMilliseconds
             if plan.Verbosity >= 2 then
                 let t = System.Math.Round(parseTime, 1)
@@ -995,7 +989,7 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
     else
         // Parse preamble with dummy expression (parser requires a main expression)
         let preambleSource = preamble + "\n0"
-        match parseSourceWithInternal allowInternal preambleSource with
+        match Parser.parseString allowInternal preambleSource with
         | Error err ->
             let msg = $"Preamble parse error: {err}"
             Error msg
@@ -1250,7 +1244,7 @@ let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =
 /// Used for coverage analysis without re-compiling stdlib
 let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string) : Result<Set<string>, string> =
     // Parse user code
-    match Parser.parseString source with
+    match Parser.parseString false source with
     | Error err -> Error $"Parse error: {err}"
     | Ok userAst ->
         // Type check with stdlib environment
