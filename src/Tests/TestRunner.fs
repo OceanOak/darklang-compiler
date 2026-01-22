@@ -64,62 +64,18 @@ let main args =
 
     // Use the source tree for test data to avoid copying files into the build output.
     let testDataRoot = Path.GetFullPath(__SOURCE_DIRECTORY__)
+    let getTestFiles (dir : string) (suffix: string) =
+        let fulldir = Path.Combine(testDataRoot, dir)
+        Directory.GetFiles(fulldir, $"*.{suffix}", SearchOption.AllDirectories)
 
-    let e2eDir = Path.Combine(testDataRoot, "e2e")
-    let e2eTestFiles =
-        if Directory.Exists e2eDir then
-            Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
-        else
-            [||]
-
-    let verificationDir = Path.Combine(testDataRoot, "verification")
-    let verificationTestFiles =
-        if Directory.Exists verificationDir then
-            Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories)
-        else
-            [||]
-
-    let optDir = Path.Combine(testDataRoot, "optimization")
-    let optTestFiles =
-        if Directory.Exists optDir then
-            Directory.GetFiles(optDir, "*.opt", SearchOption.AllDirectories)
-        else
-            [||]
-
-    let typecheckDir = Path.Combine(testDataRoot, "typecheck")
-    let typecheckTestFiles =
-        if Directory.Exists typecheckDir then
-            Directory.GetFiles(typecheckDir, "*.typecheck", SearchOption.AllDirectories)
-        else
-            [||]
-
-    let anf2mirDir = Path.Combine(testDataRoot, "passes", "anf2mir")
-    let anf2mirTestFiles =
-        if Directory.Exists anf2mirDir then
-            Directory.GetFiles(anf2mirDir, "*.anf2mir")
-        else
-            [||]
-
-    let mir2lirDir = Path.Combine(testDataRoot, "passes", "mir2lir")
-    let mir2lirTestFiles =
-        if Directory.Exists mir2lirDir then
-            Directory.GetFiles(mir2lirDir, "*.mir2lir")
-        else
-            [||]
-
-    let lir2arm64Dir = Path.Combine(testDataRoot, "passes", "lir2arm64")
-    let lir2arm64TestFiles =
-        if Directory.Exists lir2arm64Dir then
-            Directory.GetFiles(lir2arm64Dir, "*.lir2arm64")
-        else
-            [||]
-
-    let arm64encDir = Path.Combine(testDataRoot, "passes", "arm64enc")
-    let arm64encTestFiles =
-        if Directory.Exists arm64encDir then
-            Directory.GetFiles(arm64encDir, "*.arm64enc")
-        else
-            [||]
+    let e2eTestFiles = getTestFiles "e2e" "e2e"
+    let verificationTestFiles = getTestFiles "verification" "e2e"
+    let optTestFiles = getTestFiles "optimization" "opt"
+    let typecheckTestFiles = getTestFiles "typecheck" "typecheck"
+    let anf2mirTestFiles  = getTestFiles "passes/anf2mir" "anf2mir"
+    let mir2lirTestFiles  = getTestFiles "passes/mir2lir" "mir2lir"
+    let lir2arm64TestFiles  = getTestFiles "passes/lir2arm64" "lir2arm64"
+    let arm64encTestFiles  = getTestFiles "passes/arm64enc" "arm64enc"
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let allUnitTests : UnitTestSuite array = [|
@@ -180,7 +136,6 @@ let main args =
         (suiteName: string)
         (progressLabel: string)
         (testsArray: E2ETest array)
-        (stdlib: CompilerLibrary.StdlibResult)
         : unit =
         let numTests = testsArray.Length
         if numTests > 0 then
@@ -578,7 +533,7 @@ let main args =
                     if testsArray.Length > 0 then
                         let timingText = $"(Stdlib compiled in {formatTime elapsed})"
                         println $"  {Colors.gray}{timingText}{Colors.reset}"
-                        runE2ESuite "E2E" "E2E" testsArray stdlib
+                        runE2ESuite "E2E" "E2E" testsArray 
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
@@ -596,7 +551,7 @@ let main args =
                         allVerifTests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
                     if testsArray.Length > 0 then
-                        runE2ESuite "Verification" "Verification" testsArray stdlib
+                        runE2ESuite "Verification" "Verification" testsArray
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
