@@ -93,9 +93,9 @@ let parseInstructionOrTerminator (lineNum: int) (line: string) : Result<Choice<I
     else
         Error $"Line {lineNum}: Invalid instruction format '{line}'"
 
-/// Parse MIR program from text
+/// Parse MIR program from text with a specific entry label
 /// Parses flat instruction list and wraps in a single-block CFG
-let parseMIR (text: string) : Result<MIR.Program, string> =
+let parseMIRWithEntryLabel (entryLabelName: string) (text: string) : Result<MIR.Program, string> =
     let lines =
         text.Split('\n')
         |> Array.map (fun line -> line.Trim())
@@ -133,7 +133,7 @@ let parseMIR (text: string) : Result<MIR.Program, string> =
                 Error "Only the last line can be a terminator (ret)"
             else
                 // Build single-block CFG
-                let entryLabel = Label "entry"
+                let entryLabel = Label entryLabelName
                 let block = {
                     Label = entryLabel
                     Instrs = instrs
@@ -153,3 +153,8 @@ let parseMIR (text: string) : Result<MIR.Program, string> =
                 Ok (Program ([func], Map.empty, Map.empty))
         | Choice1Of2 _ ->
             Error "Last instruction must be a terminator (ret)"
+
+/// Parse MIR program from text
+/// Parses flat instruction list and wraps in a single-block CFG
+let parseMIR (text: string) : Result<MIR.Program, string> =
+    parseMIRWithEntryLabel "entry" text

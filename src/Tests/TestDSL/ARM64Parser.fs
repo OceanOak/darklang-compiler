@@ -25,6 +25,17 @@ let parseReg (text: string) : Result<Reg, string> =
     | "X16" -> Ok X16 | "X29" -> Ok X29 | "X30" -> Ok X30 | "SP" -> Ok SP
     | reg -> Error $"Invalid ARM64 register '{reg}'"
 
+/// Parse ARM64 condition from text like "EQ", "NE", etc.
+let parseCond (text: string) : Result<Condition, string> =
+    match text.Trim() with
+    | "EQ" -> Ok EQ
+    | "NE" -> Ok NE
+    | "LT" -> Ok LT
+    | "GT" -> Ok GT
+    | "LE" -> Ok LE
+    | "GE" -> Ok GE
+    | cond -> Error $"Invalid ARM64 condition '{cond}'"
+
 /// Parse a single ARM64 instruction
 let parseInstruction (lineNum: int) (line: string) : Result<Instr, string> =
     let line = line.Trim()
@@ -172,6 +183,22 @@ let parseInstruction (lineNum: int) (line: string) : Result<Instr, string> =
                     Ok (STP (reg1, reg2, addr, offset))
     else
 
+    // Try STP_pre: "STP_pre(X29, X30, SP, -16)"
+    let stpPreMatch = Regex.Match(line, @"^STP_pre\((.+?),\s*(.+?),\s*(.+?),\s*(-?\d+)\)$")
+    if stpPreMatch.Success then
+        match parseReg stpPreMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok reg1 ->
+            match parseReg stpPreMatch.Groups.[2].Value with
+            | Error e -> Error $"Line {lineNum}: {e}"
+            | Ok reg2 ->
+                match parseReg stpPreMatch.Groups.[3].Value with
+                | Error e -> Error $"Line {lineNum}: {e}"
+                | Ok addr ->
+                    let offset = int16 stpPreMatch.Groups.[4].Value
+                    Ok (STP_pre (reg1, reg2, addr, offset))
+    else
+
     // Try LDP: "LDP(X29, X30, SP, 16)"
     let ldpMatch = Regex.Match(line, @"^LDP\((.+?),\s*(.+?),\s*(.+?),\s*(-?\d+)\)$")
     if ldpMatch.Success then
@@ -188,6 +215,22 @@ let parseInstruction (lineNum: int) (line: string) : Result<Instr, string> =
                     Ok (LDP (reg1, reg2, addr, offset))
     else
 
+    // Try LDP_post: "LDP_post(X29, X30, SP, 16)"
+    let ldpPostMatch = Regex.Match(line, @"^LDP_post\((.+?),\s*(.+?),\s*(.+?),\s*(-?\d+)\)$")
+    if ldpPostMatch.Success then
+        match parseReg ldpPostMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok reg1 ->
+            match parseReg ldpPostMatch.Groups.[2].Value with
+            | Error e -> Error $"Line {lineNum}: {e}"
+            | Ok reg2 ->
+                match parseReg ldpPostMatch.Groups.[3].Value with
+                | Error e -> Error $"Line {lineNum}: {e}"
+                | Ok addr ->
+                    let offset = int16 ldpPostMatch.Groups.[4].Value
+                    Ok (LDP_post (reg1, reg2, addr, offset))
+    else
+
     // Try STR: "STR(X0, SP, 8)"
     let strMatch = Regex.Match(line, @"^STR\((.+?),\s*(.+?),\s*(-?\d+)\)$")
     if strMatch.Success then
@@ -201,6 +244,19 @@ let parseInstruction (lineNum: int) (line: string) : Result<Instr, string> =
                 Ok (STR (src, addr, offset))
     else
 
+    // Try STUR: "STUR(X0, X29, -8)"
+    let sturMatch = Regex.Match(line, @"^STUR\((.+?),\s*(.+?),\s*(-?\d+)\)$")
+    if sturMatch.Success then
+        match parseReg sturMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok src ->
+            match parseReg sturMatch.Groups.[2].Value with
+            | Error e -> Error $"Line {lineNum}: {e}"
+            | Ok addr ->
+                let offset = int16 sturMatch.Groups.[3].Value
+                Ok (STUR (src, addr, offset))
+    else
+
     // Try LDR: "LDR(X0, SP, 8)"
     let ldrMatch = Regex.Match(line, @"^LDR\((.+?),\s*(.+?),\s*(-?\d+)\)$")
     if ldrMatch.Success then
@@ -212,6 +268,36 @@ let parseInstruction (lineNum: int) (line: string) : Result<Instr, string> =
             | Ok addr ->
                 let offset = int16 ldrMatch.Groups.[3].Value
                 Ok (LDR (dest, addr, offset))
+    else
+
+    // Try LDUR: "LDUR(X0, X29, -8)"
+    let ldurMatch = Regex.Match(line, @"^LDUR\((.+?),\s*(.+?),\s*(-?\d+)\)$")
+    if ldurMatch.Success then
+        match parseReg ldurMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok dest ->
+            match parseReg ldurMatch.Groups.[2].Value with
+            | Error e -> Error $"Line {lineNum}: {e}"
+            | Ok addr ->
+                let offset = int16 ldurMatch.Groups.[3].Value
+                Ok (LDUR (dest, addr, offset))
+    else
+
+    // Try B_label: "B_label(_epilogue_test)"
+    let bLabelMatch = Regex.Match(line, @"^B_label\((.+?)\)$")
+    if bLabelMatch.Success then
+        let label = bLabelMatch.Groups.[1].Value
+        Ok (B_label label)
+    else
+
+    // Try B_cond_label: "B_cond_label(EQ, label)"
+    let bCondLabelMatch = Regex.Match(line, @"^B_cond_label\((.+?),\s*(.+?)\)$")
+    if bCondLabelMatch.Success then
+        match parseCond bCondLabelMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok cond ->
+            let label = bCondLabelMatch.Groups.[2].Value
+            Ok (B_cond_label (cond, label))
     else
 
     // Try BL: "BL(label)"

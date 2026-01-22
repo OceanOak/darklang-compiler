@@ -71,7 +71,7 @@ let parseOperand (text: string) : Result<Operand, string> =
     else
 
     // Try stack slot: "Stack 0"
-    let stackMatch = Regex.Match(text, @"^Stack\s+(\d+)$")
+    let stackMatch = Regex.Match(text, @"^Stack\s+(-?\d+)$")
     if stackMatch.Success then
         Ok (StackSlot (int stackMatch.Groups.[1].Value))
     else
@@ -112,6 +112,18 @@ let parseInstructionOrTerminator (lineNum: int) (line: string) : Result<Choice<I
             match parseOperand movMatch.Groups.[2].Value with
             | Error e -> Error $"Line {lineNum}: {e}"
             | Ok src -> Ok (Choice1Of2 (Mov (dest, src)))
+    else
+
+    // Try Store: "Store(Stack -8, X11)"
+    let storeMatch = Regex.Match(line, @"^Store\((.+?),\s*(.+)\)$")
+    if storeMatch.Success then
+        match parseOperand storeMatch.Groups.[1].Value with
+        | Error e -> Error $"Line {lineNum}: {e}"
+        | Ok (StackSlot offset) ->
+            match parseRegister storeMatch.Groups.[2].Value with
+            | Error e -> Error $"Line {lineNum}: {e}"
+            | Ok src -> Ok (Choice1Of2 (Store (offset, src)))
+        | Ok _ -> Error $"Line {lineNum}: Store expects a Stack slot as the first operand"
     else
 
     // Try Add: "X3 <- Add(X1, Imm 5)"

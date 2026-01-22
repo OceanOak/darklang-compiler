@@ -38,6 +38,12 @@ let prettyPrintMIR (program: MIR.Program) : string =
 let prettyPrintLIR (program: LIR.Program) : string =
     formatLIR program
 
+/// Rename all functions in an LIR program
+let renameLIRFunctions (name: string) (program: LIR.Program) : LIR.Program =
+    let (LIR.Program (functions, strings, floats)) = program
+    let renamed = functions |> List.map (fun func -> { func with Name = name })
+    LIR.Program (renamed, strings, floats)
+
 /// Pretty-print ANF program with shared formatter
 let prettyPrintANF (program: ANF.Program) : string =
     formatANF program
@@ -107,17 +113,23 @@ let loadANF2MIRTest (path: string) : Result<ANF.Program * MIR.Program, string> =
                 match getRequiredSection "OUTPUT-MIR" testFile with
                 | Error e -> Error e
                 | Ok outputText ->
-                    match parseMIR outputText with
+                    match parseMIRWithEntryLabel "_start_body" outputText with
                     | Error e -> Error $"Failed to parse OUTPUT-MIR: {e}"
                     | Ok mirProgram -> Ok (anfProgram, mirProgram)
 
 /// Run ANF→MIR test
 let runANF2MIRTest (input: ANF.Program) (expected: MIR.Program) : PassTestResult =
-    // Pass empty TypeMap and TypeReg since payload sizes are stored in instructions
-    // Use TInt64 as default for pass tests (E2E tests use actual program type)
-    let emptyTypeMap : ANF.TypeMap = Map.empty
+    // Pass-test ANF DSL is int-only, so map all TempIds to TInt64.
+    let maxId = maxTempIdInProgram input
+    let typeMap : ANF.TypeMap =
+        if maxId < 0 then
+            Map.empty
+        else
+            [0 .. maxId]
+            |> List.map (fun id -> (ANF.TempId id, AST.TInt64))
+            |> Map.ofList
     let emptyTypeReg : Map<string, (string * AST.Type) list> = Map.empty
-    match ANF_to_MIR.toMIR input emptyTypeMap emptyTypeReg AST.TInt64 Map.empty Map.empty false Map.empty with
+    match ANF_to_MIR.toMIR input typeMap emptyTypeReg AST.TInt64 Map.empty Map.empty false Map.empty with
     | Error err ->
         { Success = false
           Message = $"MIR conversion error: {err}"
@@ -346,7 +358,9 @@ let loadLIR2ARM64Test (path: string) : Result<LIR.Program * ARM64.Instr list, st
                 | Ok outputText ->
                     match parseARM64 outputText with
                     | Error e -> Error $"Failed to parse OUTPUT-ARM64: {e}"
-                    | Ok arm64Instrs -> Ok (lirProgram, arm64Instrs)
+                    | Ok arm64Instrs ->
+                        let renamedProgram = renameLIRFunctions "test" lirProgram
+                        Ok (renamedProgram, arm64Instrs)
 
 /// Run LIR→ARM64 test
 let runLIR2ARM64Test (input: LIR.Program) (expected: ARM64.Instr list) : PassTestResult =

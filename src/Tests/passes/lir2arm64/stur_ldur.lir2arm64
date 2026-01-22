@@ -1,0 +1,17 @@
+---NAME---
+STUR/LDUR stack slot accesses with negative offsets
+
+---INPUT-LIR---
+X11 <- Mov(Imm 42)
+Store(Stack -8, X11)
+X12 <- Mov(Stack -8)
+Ret
+
+---OUTPUT-ARM64---
+STP_pre(X29, X30, SP, -16)
+MOV_reg(X29, SP)
+MOVZ(X11, 42, 0)
+STUR(X11, X29, -8)
+LDUR(X12, X29, -8)
+LDP_post(X29, X30, SP, 16)
+RET
