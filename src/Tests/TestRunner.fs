@@ -1,6 +1,6 @@
-// TestRunner.fs - Standalone test runner for DSL-based tests
+// TestRunner.fs - Test runner entrypoint and suite orchestration.
 //
-// Discovers and runs test files from src/Tests directories.
+// Defines Dark compiler test suites and their execution order.
 
 module TestRunner.Main
 
@@ -14,43 +14,7 @@ open TestDSL.E2ETestRunner
 open TestDSL.OptimizationFormat
 open TestDSL.OptimizationTestRunner
 open TestRunnerArgs
- 
-type UnitTestCase = string * (unit -> Result<unit, string>)
-
-type UnitTestSuite = {
-    Name: string
-    Tests: UnitTestCase list
-}
-
-// Failed test info for summary at end
-type FailedTestInfo = {
-    File: string
-    Name: string
-    Message: string
-    Details: string list  // Additional details like expected/actual
-}
-
-// Test timing info for slowest tests report
-type TestTiming = {
-    Name: string
-    TotalTime: TimeSpan
-    CompileTime: TimeSpan option
-    RuntimeTime: TimeSpan option
-}
-
-// Summary of per-file test suite results
-type FileSuiteSummary = {
-    Passed: int
-    Failed: int
-    FailedTests: FailedTestInfo list
-}
-
-// Format elapsed time
-let formatTime (elapsed: TimeSpan) =
-    if elapsed.TotalMilliseconds < 1000.0 then
-        sprintf "%.0fms" elapsed.TotalMilliseconds
-    else
-        sprintf "%.2fs" elapsed.TotalSeconds
+open TestFramework
 
 // Print help message
 let printHelp () =
@@ -102,17 +66,19 @@ let main args =
     let testDataRoot = Path.GetFullPath(__SOURCE_DIRECTORY__)
 
     let e2eDir = Path.Combine(testDataRoot, "e2e")
-    let verificationDir = Path.Combine(testDataRoot, "verification")
     let e2eTestFiles =
         if Directory.Exists e2eDir then
             Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
         else
             [||]
+
+    let verificationDir = Path.Combine(testDataRoot, "verification")
     let verificationTestFiles =
         if Directory.Exists verificationDir then
             Directory.GetFiles(verificationDir, "*.e2e", SearchOption.AllDirectories)
         else
             [||]
+
     let optDir = Path.Combine(testDataRoot, "optimization")
     let optTestFiles =
         if Directory.Exists optDir then
@@ -120,28 +86,72 @@ let main args =
         else
             [||]
 
+    let typecheckDir = Path.Combine(testDataRoot, "typecheck")
+    let typecheckTestFiles =
+        if Directory.Exists typecheckDir then
+            Directory.GetFiles(typecheckDir, "*.typecheck", SearchOption.AllDirectories)
+        else
+            [||]
+
+    let anf2mirDir = Path.Combine(testDataRoot, "passes", "anf2mir")
+    let anf2mirTestFiles =
+        if Directory.Exists anf2mirDir then
+            Directory.GetFiles(anf2mirDir, "*.anf2mir")
+        else
+            [||]
+
+    let mir2lirDir = Path.Combine(testDataRoot, "passes", "mir2lir")
+    let mir2lirTestFiles =
+        if Directory.Exists mir2lirDir then
+            Directory.GetFiles(mir2lirDir, "*.mir2lir")
+        else
+            [||]
+
+    let lir2arm64Dir = Path.Combine(testDataRoot, "passes", "lir2arm64")
+    let lir2arm64TestFiles =
+        if Directory.Exists lir2arm64Dir then
+            Directory.GetFiles(lir2arm64Dir, "*.lir2arm64")
+        else
+            [||]
+
+    let arm64encDir = Path.Combine(testDataRoot, "passes", "arm64enc")
+    let arm64encTestFiles =
+        if Directory.Exists arm64encDir then
+            Directory.GetFiles(arm64encDir, "*.arm64enc")
+        else
+            [||]
+
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
-    let unitTestNames = [|
-        "CLI Flags Tests"
-        "Test Runner Scheduling Tests"
-        "Stdlib Compile Tests"
-        "Preamble Build Tests"
-        "Stdlib Test Harness Tests"
-        "IR Symbol Tests"
-        "IR Printer Tests"
-        "Pass Test Runner Tests"
-        "Result List Tests"
-        "Encoding Tests"
-        "Binary Tests"
-        "Type Checking Tests"
-        "Parallel Move Tests"
-        "SSA Liveness Tests"
-        "Phi Resolution Tests"
-        "Chordal Graph Tests"
-        "Lambda Lifting Tests"
+    let allUnitTests : UnitTestSuite array = [|
+        { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
+        { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
+        { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
+        { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
+        { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
+        { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
+        { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
+        { Name = "Encoding Tests"; Tests = EncodingTests.tests }
+        { Name = "Binary Tests"; Tests = BinaryTests.tests }
+        { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
+        { Name = "Parallel Move Tests"; Tests = ParallelMoveTests.tests }
+        { Name = "SSA Liveness Tests"; Tests = SSALivenessTests.tests }
+        { Name = "Phi Resolution Tests"; Tests = PhiResolutionTests.tests }
+        { Name = "Chordal Graph Tests"; Tests = ChordalGraphTests.tests }
+        { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
+        { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
+        { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
     |]
 
     let enableVerification = verificationEnabled
+
+    let symbols : OutputSymbols =
+        { Pass = "✓"
+          Fail = "✗"
+          SectionPrefix = "└─" }
+
+    let runState = TestFramework.createState ()
+    let recordTiming = TestFramework.recordTiming runState
+    let recordResults = TestFramework.recordResults runState
 
     let timer = Stopwatch.StartNew()
     let stdlib =
@@ -149,21 +159,6 @@ let main args =
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
     let elapsed = timer.Elapsed
-
-
-    let mutable passed = 0
-    let mutable failed = 0
-    let failedTests = ResizeArray<FailedTestInfo>()
-    let allTimings = ResizeArray<TestTiming>()
-
-    let recordTiming (timing: TestTiming) : unit =
-        allTimings.Add timing
-
-    let recordResults (passedDelta: int) (failedDelta: int) (failedTestsDelta: FailedTestInfo list) : unit =
-        passed <- passed + passedDelta
-        failed <- failed + failedDelta
-        for test in failedTestsDelta do
-            failedTests.Add test
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
         let tests = ResizeArray<E2ETest>()
@@ -180,68 +175,6 @@ let main args =
             println $"  {Colors.red}✗ ERROR parsing {fileName}{Colors.reset}"
             println $"    {msg}"
             recordResults 0 1 [{ File = filePath; Name = $"{suiteName}: {fileName}"; Message = msg; Details = [] }]
-
-    let addExpectedActualDetails (expected: string option) (actual: string option) : string list =
-        let details = ResizeArray<string>()
-        match expected, actual with
-        | Some exp, Some act ->
-            println "    Expected:"
-            for line in exp.Split('\n') do
-                println $"      {line}"
-                details.Add($"Expected: {line}")
-            println "    Actual:"
-            for line in act.Split('\n') do
-                println $"      {line}"
-                details.Add($"Actual: {line}")
-        | _ -> ()
-        details |> Seq.toList
-
-    let runFileSuite
-        (suiteTitle: string)
-        (progressLabel: string)
-        (testFiles: string array)
-        (getTestName: string -> string)
-        (formatTimingName: string -> string)
-        (runFile: string -> Result<'result, string>)
-        (handleSuccess: ProgressBar.State -> string -> string -> TimeSpan -> 'result -> FileSuiteSummary)
-        (handleError: ProgressBar.State -> string -> string -> TimeSpan -> string -> FileSuiteSummary)
-        : unit =
-        if testFiles.Length > 0 then
-            let sectionTimer = Stopwatch.StartNew()
-            println $"{Colors.cyan}{suiteTitle}{Colors.reset}"
-
-            let mutable sectionPassed = 0
-            let mutable sectionFailed = 0
-            let progress = ProgressBar.create progressLabel testFiles.Length
-            ProgressBar.update progress
-
-            for testPath in testFiles do
-                let testName = getTestName testPath
-                let testTimer = Stopwatch.StartNew()
-                let summary =
-                    match runFile testPath with
-                    | Ok result ->
-                        testTimer.Stop()
-                        handleSuccess progress testPath testName testTimer.Elapsed result
-                    | Error msg ->
-                        testTimer.Stop()
-                        handleError progress testPath testName testTimer.Elapsed msg
-                allTimings.Add({ Name = formatTimingName testName; TotalTime = testTimer.Elapsed; CompileTime = None; RuntimeTime = None })
-                sectionPassed <- sectionPassed + summary.Passed
-                sectionFailed <- sectionFailed + summary.Failed
-                passed <- passed + summary.Passed
-                failed <- failed + summary.Failed
-                for failedTest in summary.FailedTests do
-                    failedTests.Add failedTest
-
-            ProgressBar.finish progress
-            sectionTimer.Stop()
-            if sectionFailed = 0 then
-                println $"  {Colors.green}✓ {sectionPassed} passed{Colors.reset}"
-            else
-                println $"  {Colors.green}✓ {sectionPassed} passed{Colors.reset}, {Colors.red}✗ {sectionFailed} failed{Colors.reset}"
-            println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
-            println ""
 
     let runE2ESuite
         (suiteName: string)
@@ -405,132 +338,134 @@ let main args =
         { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
 
     // Run ANF→MIR tests
-    let anf2mirDir = Path.Combine(testDataRoot, "passes", "anf2mir")
-    if Directory.Exists anf2mirDir then
-        let anf2mirTests = Directory.GetFiles(anf2mirDir, "*.anf2mir") |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
-        let runANF2MIRFile =
-            runPassTestFile loadANF2MIRTest (fun (input, expected) -> runANF2MIRTest input expected)
-        runFileSuite
-            "📦 ANF→MIR Tests"
-            "ANF→MIR"
-            anf2mirTests
-            Path.GetFileName
-            (fun testName -> $"ANF→MIR: {testName}")
-            runANF2MIRFile
-            (handlePassTestSuccess "ANF→MIR")
-            (handlePassTestError "ANF→MIR")
+    let anf2mirTests = anf2mirTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
+    let runANF2MIRFile =
+        runPassTestFile loadANF2MIRTest (fun (input, expected) -> runANF2MIRTest input expected)
+    runFileSuite
+        runState
+        symbols
+        "📦 ANF→MIR Tests"
+        "ANF→MIR"
+        anf2mirTests
+        Path.GetFileName
+        (fun testName -> $"ANF→MIR: {testName}")
+        runANF2MIRFile
+        (handlePassTestSuccess "ANF→MIR")
+        (handlePassTestError "ANF→MIR")
 
     // Run MIR→LIR tests
-    let mir2lirDir = Path.Combine(testDataRoot, "passes", "mir2lir")
-    if Directory.Exists mir2lirDir then
-        let mir2lirTests = Directory.GetFiles(mir2lirDir, "*.mir2lir") |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
-        let runMIR2LIRFile =
-            runPassTestFile loadMIR2LIRTest (fun (input, expected) -> runMIR2LIRTest input expected)
-        runFileSuite
-            "🔄 MIR→LIR Tests"
-            "MIR→LIR"
-            mir2lirTests
-            Path.GetFileName
-            (fun testName -> $"MIR→LIR: {testName}")
-            runMIR2LIRFile
-            (handlePassTestSuccess "MIR→LIR")
-            (handlePassTestError "MIR→LIR")
+    let mir2lirTests = mir2lirTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
+    let runMIR2LIRFile =
+        runPassTestFile loadMIR2LIRTest (fun (input, expected) -> runMIR2LIRTest input expected)
+    runFileSuite
+        runState
+        symbols
+        "🔄 MIR→LIR Tests"
+        "MIR→LIR"
+        mir2lirTests
+        Path.GetFileName
+        (fun testName -> $"MIR→LIR: {testName}")
+        runMIR2LIRFile
+        (handlePassTestSuccess "MIR→LIR")
+        (handlePassTestError "MIR→LIR")
 
     // Run LIR→ARM64 tests
-    let lir2arm64Dir = Path.Combine(testDataRoot, "passes", "lir2arm64")
-    if Directory.Exists lir2arm64Dir then
-        let lir2arm64Tests = Directory.GetFiles(lir2arm64Dir, "*.lir2arm64") |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
-        let runLIR2ARM64File =
-            runPassTestFile loadLIR2ARM64Test (fun (input, expected) -> runLIR2ARM64Test input expected)
-        runFileSuite
-            "🎯 LIR→ARM64 Tests"
-            "LIR→ARM64"
-            lir2arm64Tests
-            Path.GetFileName
-            (fun testName -> $"LIR→ARM64: {testName}")
-            runLIR2ARM64File
-            (handlePassTestSuccess "LIR→ARM64")
-            (handlePassTestError "LIR→ARM64")
+    let lir2arm64Tests = lir2arm64TestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
+    let runLIR2ARM64File =
+        runPassTestFile loadLIR2ARM64Test (fun (input, expected) -> runLIR2ARM64Test input expected)
+    runFileSuite
+        runState
+        symbols
+        "🎯 LIR→ARM64 Tests"
+        "LIR→ARM64"
+        lir2arm64Tests
+        Path.GetFileName
+        (fun testName -> $"LIR→ARM64: {testName}")
+        runLIR2ARM64File
+        (handlePassTestSuccess "LIR→ARM64")
+        (handlePassTestError "LIR→ARM64")
 
     // Run ARM64 encoding tests
-    let arm64encDir = Path.Combine(testDataRoot, "passes", "arm64enc")
-    if Directory.Exists arm64encDir then
-        let arm64encTests = Directory.GetFiles(arm64encDir, "*.arm64enc") |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
-        let runARM64EncodingFile =
-            runPassTestFile
-                TestDSL.ARM64EncodingTestRunner.loadARM64EncodingTest
-                TestDSL.ARM64EncodingTestRunner.runARM64EncodingTest
-        runFileSuite
-            "⚙️  ARM64 Encoding Tests"
-            "ARM64 Enc"
-            arm64encTests
-            Path.GetFileName
-            (fun testName -> $"ARM64 Encoding: {testName}")
-            runARM64EncodingFile
-            (handlePassTestSuccess "ARM64 Encoding")
-            (handlePassTestError "ARM64 Encoding")
+    let arm64encTests = arm64encTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
+    let runARM64EncodingFile =
+        runPassTestFile
+            TestDSL.ARM64EncodingTestRunner.loadARM64EncodingTest
+            TestDSL.ARM64EncodingTestRunner.runARM64EncodingTest
+    runFileSuite
+        runState
+        symbols
+        "⚙️  ARM64 Encoding Tests"
+        "ARM64 Enc"
+        arm64encTests
+        Path.GetFileName
+        (fun testName -> $"ARM64 Encoding: {testName}")
+        runARM64EncodingFile
+        (handlePassTestSuccess "ARM64 Encoding")
+        (handlePassTestError "ARM64 Encoding")
 
     // Run Type Checking tests
-    let typecheckDir = Path.Combine(testDataRoot, "typecheck")
-    if Directory.Exists typecheckDir then
-        let typecheckTestFiles = Directory.GetFiles(typecheckDir, "*.typecheck", SearchOption.AllDirectories) |> Array.filter (fun p -> matchesFilter filter (Path.GetFileNameWithoutExtension p))
-        let runTypecheckFile testFile =
-            TestDSL.TypeCheckingTestRunner.runTypeCheckingTestFile testFile
-        let handleTypecheckSuccess
-            (progress: ProgressBar.State)
-            (testPath: string)
-            (fileName: string)
-            (_: TimeSpan)
-            (results: TestDSL.TypeCheckingTestRunner.TypeCheckingTestResult list)
-            : FileSuiteSummary =
-            let fileSuccess = results |> List.forall (fun r -> r.Success)
-            let filePassCount = results |> List.filter (fun r -> r.Success) |> List.length
-            let fileFailCount = results |> List.filter (fun r -> not r.Success) |> List.length
-            if fileSuccess then
-                ProgressBar.increment progress true
-                { Passed = filePassCount; Failed = 0; FailedTests = [] }
-            else
-                let failures = ResizeArray<FailedTestInfo>()
-                for result in results do
-                    if not result.Success then
-                        ProgressBar.increment progress false
-                        ProgressBar.finish progress
-                        let typeDesc =
-                            match result.ExpectedType with
-                            | Some t -> TypeChecking.typeToString t
-                            | None -> "error"
-                        println $"  {typeDesc} ({fileName})... {Colors.red}✗ FAIL{Colors.reset}"
-                        println $"    {result.Message}"
-                        failures.Add({ File = testPath; Name = $"Type Checking: {typeDesc} ({fileName})"; Message = result.Message; Details = [] })
-                        ProgressBar.update progress
-                { Passed = filePassCount; Failed = fileFailCount; FailedTests = failures |> Seq.toList }
-        let handleTypecheckError
-            (progress: ProgressBar.State)
-            (testPath: string)
-            (_: string)
-            (_: TimeSpan)
-            (msg: string)
-            : FileSuiteSummary =
-            ProgressBar.increment progress false
-            ProgressBar.finish progress
-            println $"  {Colors.red}✗ ERROR parsing {Path.GetFileName testPath}{Colors.reset}"
-            println $"    {msg}"
-            let failedInfo =
-                { File = testPath
-                  Name = $"Type Checking: {Path.GetFileName testPath}"
-                  Message = msg
-                  Details = [] }
-            ProgressBar.update progress
-            { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
-        runFileSuite
-            "📋 Type Checking Tests"
-            "TypeCheck"
-            typecheckTestFiles
-            (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
-            (fun fileName -> $"TypeCheck: {fileName}")
-            runTypecheckFile
-            handleTypecheckSuccess
-            handleTypecheckError
+    let typecheckTests =
+        typecheckTestFiles
+        |> Array.filter (fun p -> matchesFilter filter (Path.GetFileNameWithoutExtension p))
+    let runTypecheckFile testFile =
+        TestDSL.TypeCheckingTestRunner.runTypeCheckingTestFile testFile
+    let handleTypecheckSuccess
+        (progress: ProgressBar.State)
+        (testPath: string)
+        (fileName: string)
+        (_: TimeSpan)
+        (results: TestDSL.TypeCheckingTestRunner.TypeCheckingTestResult list)
+        : FileSuiteSummary =
+        let fileSuccess = results |> List.forall (fun r -> r.Success)
+        let filePassCount = results |> List.filter (fun r -> r.Success) |> List.length
+        let fileFailCount = results |> List.filter (fun r -> not r.Success) |> List.length
+        if fileSuccess then
+            ProgressBar.increment progress true
+            { Passed = filePassCount; Failed = 0; FailedTests = [] }
+        else
+            let failures = ResizeArray<FailedTestInfo>()
+            for result in results do
+                if not result.Success then
+                    ProgressBar.increment progress false
+                    ProgressBar.finish progress
+                    let typeDesc =
+                        match result.ExpectedType with
+                        | Some t -> TypeChecking.typeToString t
+                        | None -> "error"
+                    println $"  {typeDesc} ({fileName})... {Colors.red}✗ FAIL{Colors.reset}"
+                    println $"    {result.Message}"
+                    failures.Add({ File = testPath; Name = $"Type Checking: {typeDesc} ({fileName})"; Message = result.Message; Details = [] })
+                    ProgressBar.update progress
+            { Passed = filePassCount; Failed = fileFailCount; FailedTests = failures |> Seq.toList }
+    let handleTypecheckError
+        (progress: ProgressBar.State)
+        (testPath: string)
+        (_: string)
+        (_: TimeSpan)
+        (msg: string)
+        : FileSuiteSummary =
+        ProgressBar.increment progress false
+        ProgressBar.finish progress
+        println $"  {Colors.red}✗ ERROR parsing {Path.GetFileName testPath}{Colors.reset}"
+        println $"    {msg}"
+        let failedInfo =
+            { File = testPath
+              Name = $"Type Checking: {Path.GetFileName testPath}"
+              Message = msg
+              Details = [] }
+        ProgressBar.update progress
+        { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
+    runFileSuite
+        runState
+        symbols
+        "📋 Type Checking Tests"
+        "TypeCheck"
+        typecheckTests
+        (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
+        (fun fileName -> $"TypeCheck: {fileName}")
+        runTypecheckFile
+        handleTypecheckSuccess
+        handleTypecheckError
 
     // Run Optimization Tests (ANF, MIR, LIR)
     if optTestFiles.Length > 0 then
@@ -587,6 +522,8 @@ let main args =
             ProgressBar.update progress
             { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
         runFileSuite
+            runState
+            symbols
             "⚡ Optimization Tests"
             "Optimization"
             optTestFiles
@@ -596,27 +533,7 @@ let main args =
             handleOptimizationSuccess
             handleOptimizationError
 
-    // Define unit test suites and their per-test runners
-    let allUnitTests : UnitTestSuite array = [|
-        { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
-        { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
-        { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
-        { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
-        { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
-        { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
-        { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
-        { Name = "Encoding Tests"; Tests = EncodingTests.tests }
-        { Name = "Binary Tests"; Tests = BinaryTests.tests }
-        { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
-        { Name = "Parallel Move Tests"; Tests = ParallelMoveTests.tests }
-        { Name = "SSA Liveness Tests"; Tests = SSALivenessTests.tests }
-        { Name = "Phi Resolution Tests"; Tests = PhiResolutionTests.tests }
-        { Name = "Chordal Graph Tests"; Tests = ChordalGraphTests.tests }
-        { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
-        { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
-        { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
-    |]
-
+    // Order unit test suites so non-stdlib tests run first.
     let splitUnitTestsByStdlibNeed
         (needsStdlib: string list)
         (suites: UnitTestSuite array)
@@ -632,52 +549,6 @@ let main args =
     let (unitTestsNoStdlib, unitTestsWithStdlib) =
         splitUnitTestsByStdlibNeed unitStdlibSuites unitTests
     let unitTestsOrdered = Array.append unitTestsNoStdlib unitTestsWithStdlib
-
-    let runUnitTests () : unit =
-        let unitSectionTimer = Stopwatch.StartNew()
-        println $"{Colors.cyan}🔧 Unit Tests{Colors.reset}"
-
-        let mutable unitSectionPassed = 0
-        let mutable unitSectionFailed = 0
-        let unitFailedTests = ResizeArray<FailedTestInfo>()
-
-        let totalUnitTests =
-            unitTestsOrdered
-            |> Array.sumBy (fun suite -> suite.Tests.Length)
-        let unitProgress = ProgressBar.create "Unit" totalUnitTests
-        ProgressBar.update unitProgress
-
-        for suite in unitTestsOrdered do
-            for (testName, runTest) in suite.Tests do
-                let timer = Stopwatch.StartNew()
-                let displayName = $"{suite.Name}: {testName}: "
-                match runTest() with
-                | Ok () ->
-                    timer.Stop()
-                    recordTiming { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
-                    unitSectionPassed <- unitSectionPassed + 1
-                    ProgressBar.increment unitProgress true
-                | Error msg ->
-                    timer.Stop()
-                    recordTiming { Name = $"Unit: {suite.Name}: {testName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
-                    recordTiming { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
-                    ProgressBar.increment unitProgress false
-                    ProgressBar.finish unitProgress
-                    println $"  {displayName}... {Colors.red}✗ FAIL{Colors.reset} {Colors.gray}({formatTime timer.Elapsed}){Colors.reset}"
-                    println $"    {msg}"
-                    unitFailedTests.Add({ File = ""; Name = $"Unit: {displayName}"; Message = msg; Details = [] })
-                    unitSectionFailed <- unitSectionFailed + 1
-                    ProgressBar.update unitProgress
-
-        ProgressBar.finish unitProgress
-        unitSectionTimer.Stop()
-        if unitSectionFailed = 0 then
-            println $"  {Colors.green}✓ {unitSectionPassed} passed{Colors.reset}"
-        else
-            println $"  {Colors.green}✓ {unitSectionPassed} passed{Colors.reset}, {Colors.red}✗ {unitSectionFailed} failed{Colors.reset}"
-        println $"  {Colors.gray}└─ Completed in {formatTime unitSectionTimer.Elapsed}{Colors.reset}"
-        println ""
-        recordResults unitSectionPassed unitSectionFailed (unitFailedTests |> Seq.toList)
 
     let runE2EAndVerification () : unit =
         if e2eTestFiles.Length > 0 then
@@ -719,7 +590,7 @@ let main args =
                 println ""
 
     // Run tests sequentially
-    runUnitTests ()
+    runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered
     runE2EAndVerification ()
 
     // Compute stdlib coverage only if --coverage flag is set
@@ -728,9 +599,7 @@ let main args =
         else
             let allStdlibFuncs = CompilerLibrary.getAllStdlibFunctionNamesFromStdlib stdlib
             let coveredFuncs = System.Collections.Generic.HashSet<string>()
-            let e2eDir = Path.Combine(testDataRoot, "e2e")
-            if Directory.Exists e2eDir then
-                let e2eTestFiles = Directory.GetFiles(e2eDir, "*.e2e", SearchOption.AllDirectories)
+            if e2eTestFiles.Length > 0 then
                 for testFile in e2eTestFiles do
                     match TestDSL.E2EFormat.parseE2ETestFile testFile with
                     | Error _ -> ()
@@ -750,11 +619,11 @@ let main args =
     totalTimer.Stop()
 
     // Print slowest tests
-    if allTimings.Count > 0 then
+    if runState.Timings.Count > 0 then
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}🐢 Slowest Tests{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        let slowest = allTimings |> Seq.sortByDescending (fun t -> t.TotalTime) |> Seq.truncate 5 |> Seq.toList
+        let slowest = runState.Timings |> Seq.sortByDescending (fun t -> t.TotalTime) |> Seq.truncate 5 |> Seq.toList
         for (i, timing) in slowest |> List.indexed do
             let timingStr =
                 match timing.CompileTime, timing.RuntimeTime with
@@ -769,11 +638,11 @@ let main args =
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}📊 Test Results{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
-    if failed = 0 then
-        println $"  {Colors.green}✓ All tests passed: {passed}/{passed + failed}{Colors.reset}"
+    if runState.Failed = 0 then
+        println $"  {Colors.green}✓ All tests passed: {runState.Passed}/{runState.Passed + runState.Failed}{Colors.reset}"
     else
-        println $"  {Colors.green}✓ Passed: {passed}{Colors.reset}"
-        println $"  {Colors.red}✗ Failed: {failed}{Colors.reset}"
+        println $"  {Colors.green}✓ Passed: {runState.Passed}{Colors.reset}"
+        println $"  {Colors.red}✗ Failed: {runState.Failed}{Colors.reset}"
     match coveragePercent with
     | Some pct -> println $"  {Colors.gray}📊 Stdlib coverage: {pct:F1}%%{Colors.reset}"
     | None -> ()
@@ -781,20 +650,20 @@ let main args =
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
 
     // Print first 10 failing tests summary
-    if failedTests.Count > 0 then
+    if runState.FailedTests.Count > 0 then
         println ""
         println $"{Colors.bold}{Colors.red}═══════════════════════════════════════{Colors.reset}"
-        let displayCount = min 10 failedTests.Count
-        let moreCount = failedTests.Count - displayCount
+        let displayCount = min 10 runState.FailedTests.Count
+        let moreCount = runState.FailedTests.Count - displayCount
         if moreCount > 0 then
-            println $"{Colors.bold}{Colors.red}❌ First {displayCount} Failing Tests (of {failedTests.Count} total){Colors.reset}"
+            println $"{Colors.bold}{Colors.red}❌ First {displayCount} Failing Tests (of {runState.FailedTests.Count} total){Colors.reset}"
         else
-            println $"{Colors.bold}{Colors.red}❌ Failing Tests ({failedTests.Count}){Colors.reset}"
+            println $"{Colors.bold}{Colors.red}❌ Failing Tests ({runState.FailedTests.Count}){Colors.reset}"
         println $"{Colors.bold}{Colors.red}═══════════════════════════════════════{Colors.reset}"
         println ""
 
         for i in 0 .. displayCount - 1 do
-            let test = failedTests.[i]
+            let test = runState.FailedTests.[i]
             let fileName = if test.File <> "" then Path.GetFileName test.File else ""
             // Format: "1. E2E: file.e2e:L43: expression" with file:line in cyan
             let displayName =
@@ -815,6 +684,6 @@ let main args =
             println $"{Colors.gray}... and {moreCount} more failing test(s){Colors.reset}"
             println ""
 
-    (if failed = 0 then 0 else 1)
+    (if runState.Failed = 0 then 0 else 1)
     |> fun exitCode ->
         exitCode

@@ -27,6 +27,7 @@
     <Compile Include="Runners/OptimizationTestRunner.fs" />
     <Compile Include="TestRunnerColors.fs" />
     <Compile Include="ProgressBar.fs" />
+    <Compile Include="TestFramework.fs" />
 
     <!-- Unit tests -->
     <Compile Include="TestRunnerArgs.fs" />
