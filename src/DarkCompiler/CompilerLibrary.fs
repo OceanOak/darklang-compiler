@@ -691,6 +691,7 @@ let private loadStdlib () : Result<AST.Program, string> =
         "stdlib/Float.dark"
         "stdlib/Path.dark"
         "stdlib/Platform.dark"
+        "unicode_data.dark"
         "stdlib/String.dark"
         "stdlib/__Hash.dark"
         "stdlib/Dict.dark"
@@ -704,29 +705,15 @@ let private loadStdlib () : Result<AST.Program, string> =
         "stdlib/Math.dark"
         "stdlib/__FingerTree.dark"
     ]
-    let loadStdlibFiles (filenames: string list) : Result<AST.Program, string> =
-        let mergeFile (acc: AST.TopLevel list) (filename: string) : Result<AST.TopLevel list, string> =
-            match loadDarkFileAllowInternal filename with
-            | Error err -> Error err
-            | Ok (AST.Program items) ->
-                Ok (acc @ items)
-        match List.fold (fun acc filename -> Result.bind (fun items -> mergeFile items filename) acc) (Ok []) filenames with
+    let mergeFile (acc: AST.TopLevel list) (filename: string) : Result<AST.TopLevel list, string> =
+        match loadDarkFileAllowInternal filename with
         | Error err -> Error err
-        | Ok items -> Ok (AST.Program items)
+        | Ok (AST.Program items) ->
+            Ok (acc @ items)
+    stdlibFiles
+    |> List.fold (fun acc filename -> Result.bind (fun items -> mergeFile items filename) acc) (Ok [])
+    |> Result.bind (fun items -> Ok (AST.Program items))
 
-    let stdlibResult = loadStdlibFiles stdlibFiles
-
-    match stdlibResult with
-    | Error e -> Error e
-    | Ok (AST.Program stdlibItems) ->
-        // Try to load unicode_data.dark (optional, may not exist in all environments)
-        match loadDarkFileAllowInternal "unicode_data.dark" with
-        | Error _ ->
-            // Unicode data not available, return stdlib only
-            Ok (AST.Program stdlibItems)
-        | Ok (AST.Program unicodeItems) ->
-            // Merge stdlib and unicode data
-            Ok (AST.Program (stdlibItems @ unicodeItems))
 
 /// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
