@@ -193,6 +193,8 @@ let buildSuiteContexts
                     ANFFunctions = []
                     TypeMap = stdlibWithSpecs.StdlibTypeMap
                     SymbolicFunctions = []
+                    PreambleHash = Cache.hashString ""
+                    PreambleFunctionDependencyHashes = Map.empty
                 }
             let contextsResult =
                 plans

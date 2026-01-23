@@ -33,6 +33,12 @@ type CompileMode =
     | FullProgram
     | TestExpression
 
+/// Cache settings for compilation
+type CacheSettings = {
+    Enabled: bool
+    CompilerKey: string
+}
+
 /// Compiler options for controlling optimization behavior
 type CompilerOptions = {
     /// Disable free list memory reuse (always bump allocate)
@@ -112,6 +118,500 @@ let defaultOptions : CompilerOptions = {
     DumpMIR = false
     DumpLIR = false
 }
+
+/// Cacheable compiler options (excludes debug-only dump flags)
+type CacheOptions = {
+    DisableFreeList: bool
+    DisableANFOpt: bool
+    DisableANFConstFolding: bool
+    DisableANFConstProp: bool
+    DisableANFCopyProp: bool
+    DisableANFDCE: bool
+    DisableANFStrengthReduction: bool
+    DisableInlining: bool
+    DisableTCO: bool
+    DisableMIROpt: bool
+    DisableMIRConstFolding: bool
+    DisableMIRCSE: bool
+    DisableMIRCopyProp: bool
+    DisableMIRDCE: bool
+    DisableMIRCFGSimplify: bool
+    DisableMIRLICM: bool
+    DisableLIROpt: bool
+    DisableLIRPeephole: bool
+    DisableFunctionTreeShaking: bool
+    EnableCoverage: bool
+    EnableLeakCheck: bool
+}
+
+let private buildCacheOptions (options: CompilerOptions) : CacheOptions = {
+    DisableFreeList = options.DisableFreeList
+    DisableANFOpt = options.DisableANFOpt
+    DisableANFConstFolding = options.DisableANFConstFolding
+    DisableANFConstProp = options.DisableANFConstProp
+    DisableANFCopyProp = options.DisableANFCopyProp
+    DisableANFDCE = options.DisableANFDCE
+    DisableANFStrengthReduction = options.DisableANFStrengthReduction
+    DisableInlining = options.DisableInlining
+    DisableTCO = options.DisableTCO
+    DisableMIROpt = options.DisableMIROpt
+    DisableMIRConstFolding = options.DisableMIRConstFolding
+    DisableMIRCSE = options.DisableMIRCSE
+    DisableMIRCopyProp = options.DisableMIRCopyProp
+    DisableMIRDCE = options.DisableMIRDCE
+    DisableMIRCFGSimplify = options.DisableMIRCFGSimplify
+    DisableMIRLICM = options.DisableMIRLICM
+    DisableLIROpt = options.DisableLIROpt
+    DisableLIRPeephole = options.DisableLIRPeephole
+    DisableFunctionTreeShaking = options.DisableFunctionTreeShaking
+    EnableCoverage = options.EnableCoverage
+    EnableLeakCheck = options.EnableLeakCheck
+}
+
+let private hashValue (value: 'T) : string =
+    // Use MessagePack encoding for deterministic cache hashes.
+    match Cache.hashData value with
+    | Ok hash -> hash
+    | Error err -> Crash.crash $"Cache hash error: {err}"
+
+// Cache helpers
+
+let private defaultCacheSettings () : Result<CacheSettings, string> =
+    Cache.getCompilerKey ()
+    |> Result.map (fun key -> { Enabled = true; CompilerKey = key })
+
+let private combineHashes (hashes: string list) : string =
+    Cache.hashString (String.concat "|" hashes)
+
+let private hashCacheOptions (options: CompilerOptions) : string =
+    hashValue (buildCacheOptions options)
+
+let private hashTypedProgram (program: AST.Program) : string =
+    hashValue program
+
+let private hashAnfFunctionBody (func: ANF.Function) : string =
+    // Hash the post-inlining function body (including signature) so inlining changes invalidate cache keys.
+    hashValue (func.TypedParams, func.ReturnType, func.Body)
+
+let private collectTempIdsInAtom (atom: ANF.Atom) : Set<ANF.TempId> =
+    match atom with
+    | ANF.Var tid -> Set.singleton tid
+    | _ -> Set.empty
+
+let private collectTempIdsInAtoms (atoms: ANF.Atom list) : Set<ANF.TempId> =
+    atoms
+    |> List.fold (fun acc atom -> Set.union acc (collectTempIdsInAtom atom)) Set.empty
+
+let private collectTempIdsInCExpr (cexpr: ANF.CExpr) : Set<ANF.TempId> =
+    let atomIds = collectTempIdsInAtom
+    let atomListIds = collectTempIdsInAtoms
+    match cexpr with
+    | ANF.Atom atom -> atomIds atom
+    | ANF.TypedAtom (atom, _) -> atomIds atom
+    | ANF.Prim (_, left, right) -> Set.union (atomIds left) (atomIds right)
+    | ANF.UnaryPrim (_, atom) -> atomIds atom
+    | ANF.IfValue (cond, thenVal, elseVal) ->
+        atomIds cond |> Set.union (atomIds thenVal) |> Set.union (atomIds elseVal)
+    | ANF.Call (_, args) -> atomListIds args
+    | ANF.TailCall (_, args) -> atomListIds args
+    | ANF.IndirectCall (func, args) -> Set.union (atomIds func) (atomListIds args)
+    | ANF.IndirectTailCall (func, args) -> Set.union (atomIds func) (atomListIds args)
+    | ANF.ClosureAlloc (_, captures) -> atomListIds captures
+    | ANF.ClosureCall (closure, args) -> Set.union (atomIds closure) (atomListIds args)
+    | ANF.ClosureTailCall (closure, args) -> Set.union (atomIds closure) (atomListIds args)
+    | ANF.TupleAlloc atoms -> atomListIds atoms
+    | ANF.TupleGet (tuple, _) -> atomIds tuple
+    | ANF.StringConcat (left, right) -> Set.union (atomIds left) (atomIds right)
+    | ANF.RefCountInc (atom, _) -> atomIds atom
+    | ANF.RefCountDec (atom, _) -> atomIds atom
+    | ANF.Print (atom, _) -> atomIds atom
+    | ANF.FileReadText path -> atomIds path
+    | ANF.FileExists path -> atomIds path
+    | ANF.FileWriteText (path, content) -> Set.union (atomIds path) (atomIds content)
+    | ANF.FileAppendText (path, content) -> Set.union (atomIds path) (atomIds content)
+    | ANF.FileDelete path -> atomIds path
+    | ANF.FileSetExecutable path -> atomIds path
+    | ANF.FileWriteFromPtr (path, ptr, length) ->
+        atomIds path |> Set.union (atomIds ptr) |> Set.union (atomIds length)
+    | ANF.FloatSqrt atom -> atomIds atom
+    | ANF.FloatAbs atom -> atomIds atom
+    | ANF.FloatNeg atom -> atomIds atom
+    | ANF.Int64ToFloat atom -> atomIds atom
+    | ANF.FloatToInt64 atom -> atomIds atom
+    | ANF.FloatToBits atom -> atomIds atom
+    | ANF.RawAlloc numBytes -> atomIds numBytes
+    | ANF.RawFree ptr -> atomIds ptr
+    | ANF.RawGet (ptr, offset, _) -> Set.union (atomIds ptr) (atomIds offset)
+    | ANF.RawGetByte (ptr, offset) -> Set.union (atomIds ptr) (atomIds offset)
+    | ANF.RawSet (ptr, offset, value, _) ->
+        atomIds ptr |> Set.union (atomIds offset) |> Set.union (atomIds value)
+    | ANF.RawSetByte (ptr, offset, value) ->
+        atomIds ptr |> Set.union (atomIds offset) |> Set.union (atomIds value)
+    | ANF.RefCountIncString atom -> atomIds atom
+    | ANF.RefCountDecString atom -> atomIds atom
+    | ANF.RandomInt64 -> Set.empty
+    | ANF.DateNow -> Set.empty
+    | ANF.FloatToString atom -> atomIds atom
+
+let rec private collectTempIdsInAExpr (expr: ANF.AExpr) : Set<ANF.TempId> =
+    match expr with
+    | ANF.Let (tempId, cexpr, body) ->
+        Set.add tempId (Set.union (collectTempIdsInCExpr cexpr) (collectTempIdsInAExpr body))
+    | ANF.Return atom -> collectTempIdsInAtom atom
+    | ANF.If (cond, thenBranch, elseBranch) ->
+        collectTempIdsInAtom cond
+        |> Set.union (collectTempIdsInAExpr thenBranch)
+        |> Set.union (collectTempIdsInAExpr elseBranch)
+
+let private collectTypesInCExpr (cexpr: ANF.CExpr) : Set<AST.Type> =
+    match cexpr with
+    | ANF.TypedAtom (_, t) -> Set.singleton t
+    | ANF.Print (_, t) -> Set.singleton t
+    | ANF.RawGet (_, _, Some t) -> Set.singleton t
+    | ANF.RawSet (_, _, _, Some t) -> Set.singleton t
+    | _ -> Set.empty
+
+let rec private collectTypesInAExpr (expr: ANF.AExpr) : Set<AST.Type> =
+    match expr with
+    | ANF.Let (_, cexpr, body) ->
+        Set.union (collectTypesInCExpr cexpr) (collectTypesInAExpr body)
+    | ANF.Return _ -> Set.empty
+    | ANF.If (_, thenBranch, elseBranch) ->
+        Set.union (collectTypesInAExpr thenBranch) (collectTypesInAExpr elseBranch)
+
+let private collectTypesUsedByFunction (func: ANF.Function) (typeMap: ANF.TypeMap) : Set<AST.Type> =
+    let paramTypes = func.TypedParams |> List.map (fun p -> p.Type) |> Set.ofList
+    let returnTypes = Set.singleton func.ReturnType
+    let exprTypes = collectTypesInAExpr func.Body
+    let tempIds = collectTempIdsInAExpr func.Body
+    let tempTypes =
+        // TypeMap is from RC insertion; temps introduced after that (e.g., PrintInsertion)
+        // are safe to ignore for cache keying because they don't affect codegen types.
+        tempIds
+        |> Set.toList
+        |> List.choose (fun tid -> Map.tryFind tid typeMap)
+        |> Set.ofList
+    [paramTypes; returnTypes; exprTypes; tempTypes]
+    |> List.fold Set.union Set.empty
+
+let rec private collectNamedTypes (t: AST.Type) : Set<string> * Set<string> =
+    let combine (records: Set<string>, sums: Set<string>) (r2: Set<string>, s2: Set<string>) =
+        (Set.union records r2, Set.union sums s2)
+    match t with
+    | AST.TRecord (name, typeArgs) ->
+        let (recArgs, sumArgs) =
+            typeArgs
+            |> List.fold (fun acc arg -> combine acc (collectNamedTypes arg)) (Set.empty, Set.empty)
+        (Set.add name recArgs, sumArgs)
+    | AST.TSum (name, typeArgs) ->
+        let (recArgs, sumArgs) =
+            typeArgs
+            |> List.fold (fun acc arg -> combine acc (collectNamedTypes arg)) (Set.empty, Set.empty)
+        (recArgs, Set.add name sumArgs)
+    | AST.TFunction (args, ret) ->
+        let (recArgs, sumArgs) =
+            args
+            |> List.fold (fun acc arg -> combine acc (collectNamedTypes arg)) (Set.empty, Set.empty)
+        combine (recArgs, sumArgs) (collectNamedTypes ret)
+    | AST.TTuple elems ->
+        elems
+        |> List.fold (fun acc elem -> combine acc (collectNamedTypes elem)) (Set.empty, Set.empty)
+    | AST.TList elem -> collectNamedTypes elem
+    | AST.TDict (keyType, valueType) -> combine (collectNamedTypes keyType) (collectNamedTypes valueType)
+    | _ -> (Set.empty, Set.empty)
+
+let private buildSumTypeDefs (variantLookup: AST_to_ANF.VariantLookup)
+    : Map<string, string list * (string * int * AST.Type option) list> =
+    variantLookup
+    |> Map.toList
+    |> List.fold (fun acc (variantName, (typeName, typeParams, tag, payload)) ->
+        let (typeParams', variants) =
+            match Map.tryFind typeName acc with
+            | Some (existingParams, existingVariants) ->
+                if existingParams <> typeParams then
+                    Crash.crash $"Cache: sum type '{typeName}' has inconsistent type params"
+                (existingParams, existingVariants)
+            | None -> (typeParams, [])
+        Map.add typeName (typeParams', (variantName, tag, payload) :: variants) acc
+    ) Map.empty
+    |> Map.map (fun _ (typeParams', variants) ->
+        let sorted = variants |> List.sortBy (fun (name, tag, _) -> (tag, name))
+        (typeParams', sorted))
+
+let private buildTypeHash
+    (typesUsed: Set<AST.Type>)
+    (registries: AST_to_ANF.Registries)
+    (sumTypeDefs: Map<string, string list * (string * int * AST.Type option) list>)
+    : string =
+    let (recordNames, sumNames) =
+        typesUsed
+        |> Set.toList
+        |> List.fold (fun acc t ->
+            let (recNames, sumNames) = collectNamedTypes t
+            let (recAcc, sumAcc) = acc
+            (Set.union recAcc recNames, Set.union sumAcc sumNames)) (Set.empty, Set.empty)
+
+    let recordDefs =
+        recordNames
+        |> Set.toList
+        |> List.sort
+        |> List.map (fun name ->
+            match Map.tryFind name registries.TypeReg with
+            | Some fields -> (name, fields)
+            | None -> Crash.crash $"Cache: record type '{name}' not found in registry")
+
+    let sumDefs =
+        sumNames
+        |> Set.toList
+        |> List.sort
+        |> List.map (fun name ->
+            match Map.tryFind name sumTypeDefs with
+            | Some (typeParams, variants) -> (name, typeParams, variants)
+            | None -> Crash.crash $"Cache: sum type '{name}' not found in variant registry")
+
+    let typesSorted = typesUsed |> Set.toList |> List.sort
+    hashValue (typesSorted, recordDefs, sumDefs)
+
+let private buildFunctionDependencyHashes
+    (functions: ANF.Function list)
+    (typeMap: ANF.TypeMap)
+    (registries: AST_to_ANF.Registries)
+    (externalFunctionHashes: Map<string, string>)
+    : Map<string, string> =
+    // Compute dependency hashes from function bodies, types, and callee hashes (SCC-aware).
+    if List.isEmpty functions then
+        Map.empty
+    else
+        let funcNames = functions |> List.map (fun f -> f.Name) |> Set.ofList
+        let callGraph = ANFDeadCodeElimination.buildCallGraph functions
+        let internalCallGraph =
+            callGraph
+            |> Map.map (fun _ callees -> callees |> Set.filter (fun name -> Set.contains name funcNames))
+        let externalCallGraph =
+            callGraph
+            |> Map.map (fun _ callees -> callees |> Set.filter (fun name -> not (Set.contains name funcNames)))
+
+        let sumTypeDefs = buildSumTypeDefs registries.VariantLookup
+
+        let bodyHashes =
+            functions
+            |> List.map (fun func -> func.Name, hashAnfFunctionBody func)
+            |> Map.ofList
+
+        let typeHashes =
+            functions
+            |> List.map (fun func ->
+                let typesUsed = collectTypesUsedByFunction func typeMap
+                func.Name, buildTypeHash typesUsed registries sumTypeDefs)
+            |> Map.ofList
+
+        let externalNames =
+            externalCallGraph
+            |> Map.fold (fun acc _ names -> Set.union acc names) Set.empty
+
+        let externalHashes =
+            externalNames
+            |> Set.toList
+            |> List.sort
+            |> List.map (fun name ->
+                match Map.tryFind name externalFunctionHashes with
+                | Some hash -> (name, hash)
+                | None ->
+                    match Map.tryFind name registries.FuncReg with
+                    | Some funcType ->
+                        let typeHash = buildTypeHash (Set.singleton funcType) registries sumTypeDefs
+                        (name, hashValue (funcType, typeHash))
+                    | None ->
+                        Crash.crash $"Cache: external function '{name}' not found in registry")
+            |> Map.ofList
+
+        let buildReverseCallGraph (graph: Map<string, Set<string>>) : Map<string, Set<string>> =
+            graph
+            |> Map.fold (fun acc caller callees ->
+                callees
+                |> Set.fold (fun acc' callee ->
+                    let existing = Map.tryFind callee acc' |> Option.defaultValue Set.empty
+                    Map.add callee (Set.add caller existing) acc'
+                ) acc
+            ) Map.empty
+
+        let rec dfsFinishOrder
+            (graph: Map<string, Set<string>>)
+            (node: string)
+            (visited: Set<string>)
+            (order: string list)
+            : Set<string> * string list =
+            if Set.contains node visited then
+                (visited, order)
+            else
+                let visited' = Set.add node visited
+                let neighbors =
+                    Map.tryFind node graph
+                    |> Option.defaultValue Set.empty
+                    |> Set.toList
+                    |> List.sort
+                let (visited'', order') =
+                    neighbors
+                    |> List.fold (fun (v, o) neighbor -> dfsFinishOrder graph neighbor v o) (visited', order)
+                (visited'', node :: order')
+
+        let rec dfsCollectScc
+            (graph: Map<string, Set<string>>)
+            (node: string)
+            (visited: Set<string>)
+            (scc: Set<string>)
+            : Set<string> * Set<string> =
+            if Set.contains node visited then
+                (visited, scc)
+            else
+                let visited' = Set.add node visited
+                let scc' = Set.add node scc
+                let neighbors =
+                    Map.tryFind node graph
+                    |> Option.defaultValue Set.empty
+                    |> Set.toList
+                    |> List.sort
+                neighbors
+                |> List.fold (fun (v, c) neighbor -> dfsCollectScc graph neighbor v c) (visited', scc')
+
+        let findSccs (graph: Map<string, Set<string>>) (nodes: Set<string>) : Set<string> list =
+            let names = nodes |> Set.toList |> List.sort
+            let (_, finishOrder) =
+                names |> List.fold (fun (visited, order) name -> dfsFinishOrder graph name visited order) (Set.empty, [])
+            let reverseGraph = buildReverseCallGraph graph
+            let (_, sccs) =
+                finishOrder
+                |> List.fold (fun (visited, components) name ->
+                    if Set.contains name visited then
+                        (visited, components)
+                    else
+                        let (visited', scc) = dfsCollectScc reverseGraph name visited Set.empty
+                        (visited', scc :: components)
+                ) (Set.empty, [])
+            sccs
+
+        let sccs = findSccs internalCallGraph funcNames
+        let sccInfos =
+            sccs
+            |> List.map (fun scc ->
+                let names = scc |> Set.toList |> List.sort
+                let key = String.concat "|" names
+                (key, names, scc))
+
+        let sccInfoMap =
+            sccInfos
+            |> List.map (fun (key, names, sccSet) -> key, (names, sccSet))
+            |> Map.ofList
+
+        let sccKeyByFunc =
+            sccInfos
+            |> List.collect (fun (key, names, _) -> names |> List.map (fun name -> name, key))
+            |> Map.ofList
+
+        let sccDeps =
+            internalCallGraph
+            |> Map.fold (fun acc caller callees ->
+                let callerKey =
+                    match Map.tryFind caller sccKeyByFunc with
+                    | Some key -> key
+                    | None -> Crash.crash $"Cache: missing SCC key for function {caller}"
+                let depKeys =
+                    callees
+                    |> Set.toList
+                    |> List.choose (fun callee ->
+                        match Map.tryFind callee sccKeyByFunc with
+                        | Some key when key <> callerKey -> Some key
+                        | Some _ -> None
+                        | None -> Crash.crash $"Cache: missing SCC key for callee {callee}")
+                    |> Set.ofList
+                let existing = Map.tryFind callerKey acc |> Option.defaultValue Set.empty
+                Map.add callerKey (Set.union existing depKeys) acc
+            ) Map.empty
+
+        let sccDepsAll =
+            sccInfos
+            |> List.fold (fun acc (key, _, _) ->
+                if Map.containsKey key acc then acc else Map.add key Set.empty acc
+            ) sccDeps
+
+        let rec dfsScc
+            (graph: Map<string, Set<string>>)
+            (node: string)
+            (visited: Set<string>)
+            (order: string list)
+            : Set<string> * string list =
+            if Set.contains node visited then
+                (visited, order)
+            else
+                let visited' = Set.add node visited
+                let neighbors =
+                    Map.tryFind node graph
+                    |> Option.defaultValue Set.empty
+                    |> Set.toList
+                    |> List.sort
+                let (visited'', order') =
+                    neighbors |> List.fold (fun (v, o) n -> dfsScc graph n v o) (visited', order)
+                (visited'', node :: order')
+
+        let sccOrder =
+            let keys = sccInfos |> List.map (fun (key, _, _) -> key) |> List.sort
+            let (_, order) = keys |> List.fold (fun (v, o) key -> dfsScc sccDepsAll key v o) (Set.empty, [])
+            List.rev order
+
+        let sccHashMap =
+            sccOrder
+            |> List.fold (fun acc key ->
+                let (names, sccSet) =
+                    match Map.tryFind key sccInfoMap with
+                    | Some info -> info
+                    | None -> Crash.crash $"Cache: missing SCC info for {key}"
+
+                let internalDeps =
+                    Map.tryFind key sccDepsAll
+                    |> Option.defaultValue Set.empty
+                    |> Set.toList
+                    |> List.sort
+                    |> List.map (fun depKey ->
+                        match Map.tryFind depKey acc with
+                        | Some depHash -> (depKey, depHash)
+                        | None -> Crash.crash $"Cache: missing dependency hash for SCC {depKey}")
+
+                let functionParts =
+                    names
+                    |> List.map (fun name ->
+                        let bodyHash =
+                            match Map.tryFind name bodyHashes with
+                            | Some hash -> hash
+                            | None -> Crash.crash $"Cache: missing body hash for {name}"
+                        let typeHash =
+                            match Map.tryFind name typeHashes with
+                            | Some hash -> hash
+                            | None -> Crash.crash $"Cache: missing type hash for {name}"
+                        (name, bodyHash, typeHash))
+
+                let externalDeps =
+                    sccSet
+                    |> Set.fold (fun accNames name ->
+                        let callees = Map.tryFind name externalCallGraph |> Option.defaultValue Set.empty
+                        Set.union accNames callees
+                    ) Set.empty
+                    |> Set.toList
+                    |> List.sort
+                    |> List.map (fun name ->
+                        match Map.tryFind name externalHashes with
+                        | Some hash -> (name, hash)
+                        | None -> Crash.crash $"Cache: missing external hash for {name}")
+
+                let sccHash = hashValue (functionParts, internalDeps, externalDeps)
+                Map.add key sccHash acc
+            ) Map.empty
+
+        sccInfos
+        |> List.collect (fun (key, names, _) ->
+            match Map.tryFind key sccHashMap with
+            | Some hash -> names |> List.map (fun name -> name, hash)
+            | None -> Crash.crash $"Cache: missing SCC hash for {key}")
+        |> Map.ofList
 
 /// Determine whether to dump a specific IR, based on verbosity or explicit option
 let private shouldDumpIR (verbosity: int) (enabled: bool) : bool =
@@ -263,6 +763,7 @@ let private allocateRegistersForFunctions
 
 /// Run MIR+LIR passes (including register allocation) from ANF functions
 let private lowerToAllocatedLir
+    (cacheSettings: CacheSettings)
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
@@ -271,41 +772,128 @@ let private lowerToAllocatedLir
     (typeMap: ANF.TypeMap)
     (registries: AST_to_ANF.Registries)
     (externalReturnTypes: Map<string, AST.Type>)
+    (dependencyHashes: Map<string, string>)
     : Result<LIRSymbolic.Function list, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
-    if verbosity >= 1 then println $"  [3/8] ANF → MIR{suffix}..."
-    let mirStart = sw.Elapsed.TotalMilliseconds
-    let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
-    let mirResult =
-        ANF_to_MIR.toMIRFunctionsOnly
-            anfProgram
-            typeMap
-            registries.FuncParams
-            registries.VariantLookup
-            registries.TypeReg
-            options.EnableCoverage
-            externalReturnTypes
-    match mirResult with
-    | Error err -> Error $"MIR conversion error: {err}"
-    | Ok (mirFuncs, variantRegistry, mirRecordRegistry) ->
-        let mirProgram = MIR.Program (mirFuncs, variantRegistry, mirRecordRegistry)
-        if shouldDumpIR verbosity options.DumpMIR then
-            printMIRProgram "=== MIR (Control Flow Graph) ===" mirProgram
-        if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirStart, 1)
-            println $"        {t}ms"
-        compileMirToLir verbosity options sw stageSuffix mirProgram
-        |> Result.bind (fun lirProgram ->
-            if verbosity >= 1 then println "  [5/8] Register Allocation..."
-            let allocStart = sw.Elapsed.TotalMilliseconds
-            let (LIRSymbolic.Program lirFuncs) = lirProgram
-            let allocatedFuncs = allocateRegistersForFunctions lirFuncs
-            if verbosity >= 2 then
-                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
-                println $"        {t}ms"
-            Ok allocatedFuncs)
+    let optionsHashOpt =
+        if cacheSettings.Enabled then
+            Some (hashCacheOptions options)
+        else
+            None
+
+    let functionOrder = functions |> List.map (fun f -> f.Name)
+
+    let cachePlanResult : Result<string option * Map<string, LIRSymbolic.Function> * Map<string, string> * ANF.Function list, string> =
+        match optionsHashOpt with
+        | None -> Ok (None, Map.empty, Map.empty, functions)
+        | Some optionsHash ->
+            let buildKey (func: ANF.Function) (funcHash: string) : Cache.FunctionCacheKey = {
+                CacheVersion = Cache.cacheVersion
+                CompilerKey = cacheSettings.CompilerKey
+                OptionsHash = optionsHash
+                FunctionName = func.Name
+                FunctionHash = funcHash
+            }
+
+            let keyedFunctions =
+                functions
+                |> List.map (fun func ->
+                    let funcHash =
+                        match Map.tryFind func.Name dependencyHashes with
+                        | Some hash -> hash
+                        | None -> Crash.crash $"Cache: missing dependency hash for {func.Name}"
+                    (func, funcHash, buildKey func funcHash))
+
+            let funcHashMap =
+                keyedFunctions
+                |> List.fold (fun acc (func, funcHash, _) -> Map.add func.Name funcHash acc) Map.empty
+
+            let keys = keyedFunctions |> List.map (fun (_, _, key) -> key)
+            Cache.getFunctions<LIRSymbolic.Function> keys
+            |> Result.mapError (fun err -> $"Cache read error: {err}")
+            |> Result.map (fun cachedMap ->
+                let functionsToCompile =
+                    keyedFunctions
+                    |> List.choose (fun (func, _, _) ->
+                        match Map.tryFind func.Name cachedMap with
+                        | Some _ -> None
+                        | None -> Some func)
+                (Some optionsHash, cachedMap, funcHashMap, functionsToCompile))
+
+    let compileMissing (functionsToCompile: ANF.Function list) : Result<LIRSymbolic.Function list, string> =
+        if List.isEmpty functionsToCompile then
+            Ok []
+        else
+            if verbosity >= 1 then println $"  [3/8] ANF → MIR{suffix}..."
+            let mirStart = sw.Elapsed.TotalMilliseconds
+            let anfProgram = ANF.Program (functionsToCompile, ANF.Return ANF.UnitLiteral)
+            let mirResult =
+                ANF_to_MIR.toMIRFunctionsOnly
+                    anfProgram
+                    typeMap
+                    registries.FuncParams
+                    registries.VariantLookup
+                    registries.TypeReg
+                    options.EnableCoverage
+                    externalReturnTypes
+            match mirResult with
+            | Error err -> Error $"MIR conversion error: {err}"
+            | Ok (mirFuncs, variantRegistry, mirRecordRegistry) ->
+                let mirProgram = MIR.Program (mirFuncs, variantRegistry, mirRecordRegistry)
+                if shouldDumpIR verbosity options.DumpMIR then
+                    printMIRProgram "=== MIR (Control Flow Graph) ===" mirProgram
+                if verbosity >= 2 then
+                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirStart, 1)
+                    println $"        {t}ms"
+                compileMirToLir verbosity options sw stageSuffix mirProgram
+                |> Result.bind (fun lirProgram ->
+                    if verbosity >= 1 then println "  [5/8] Register Allocation..."
+                    let allocStart = sw.Elapsed.TotalMilliseconds
+                    let (LIRSymbolic.Program lirFuncs) = lirProgram
+                    let allocatedFuncs = allocateRegistersForFunctions lirFuncs
+                    if verbosity >= 2 then
+                        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                        println $"        {t}ms"
+                    Ok allocatedFuncs)
+
+    cachePlanResult
+    |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
+        compileMissing functionsToCompile
+        |> Result.bind (fun compiledFuncs ->
+            let compiledMap =
+                compiledFuncs
+                |> List.fold (fun acc func -> Map.add func.Name func acc) Map.empty
+
+            let writeResult =
+                match optionsHashOpt with
+                | Some optionsHash ->
+                    let entries =
+                        compiledFuncs
+                        |> List.choose (fun func ->
+                            match Map.tryFind func.Name funcHashes with
+                            | None -> None
+                            | Some hash ->
+                                let key : Cache.FunctionCacheKey = {
+                                    CacheVersion = Cache.cacheVersion
+                                    CompilerKey = cacheSettings.CompilerKey
+                                    OptionsHash = optionsHash
+                                    FunctionName = func.Name
+                                    FunctionHash = hash
+                                }
+                                Some (key, func))
+                    Cache.setFunctions entries
+                    |> Result.mapError (fun err -> $"Cache write error: {err}")
+                | _ -> Ok ()
+
+            writeResult
+            |> Result.map (fun () ->
+                functionOrder
+                |> List.choose (fun name ->
+                    match Map.tryFind name compiledMap with
+                    | Some func -> Some func
+                    | None -> Map.tryFind name cachedMap))))
 
 let private buildConversionResult
     (program: ANF.Program)
@@ -508,6 +1096,10 @@ type PreambleContext = {
     TypeMap: ANF.TypeMap
     /// Preamble's symbolic LIR functions after register allocation
     SymbolicFunctions: LIRSymbolic.Function list
+    /// Hash of the typed preamble (including any specializations)
+    PreambleHash: string
+    /// Dependency hashes for preamble functions (post-inlining)
+    PreambleFunctionDependencyHashes: Map<string, string>
 }
 
 /// Parsed and typechecked preamble analysis for suite-level specialization
@@ -525,6 +1117,12 @@ type StdlibResult = {
     TypedAST: AST.Program
     /// Shared compilation context (typecheck env + registries)
     Context: PipelineContext
+    /// Cache settings in effect for this stdlib build
+    CacheSettings: CacheSettings
+    /// Hash of stdlib source (typed AST)
+    StdlibSourceHash: string
+    /// Hash of stdlib source + specialization registry
+    StdlibHash: string
     /// Precompiled LIR program (used for string/float pools)
     LIRProgram: LIR.Program
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
@@ -537,6 +1135,8 @@ type StdlibResult = {
     StdlibANFCallGraph: Map<string, Set<string>>
     /// TypeMap from RC insertion (needed for getReachableStdlibFunctions)
     StdlibTypeMap: ANF.TypeMap
+    /// Dependency hashes for stdlib functions (post-inlining)
+    StdlibFunctionDependencyHashes: Map<string, string>
 }
 
 /// Context for compiling user code
@@ -808,7 +1408,7 @@ let private loadStdlib () : Result<AST.Program, string> =
 
 /// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
-let buildStdlib () : Result<StdlibResult, string> =
+let buildStdlibWithCache (cacheSettings: CacheSettings) : Result<StdlibResult, string> =
     match loadStdlib() with
     | Error e ->
         Error e
@@ -822,6 +1422,7 @@ let buildStdlib () : Result<StdlibResult, string> =
             let msg = TypeChecking.typeErrorToString e
             Error msg
         | Ok (_, typedStdlib, typeCheckEnv) ->
+            let stdlibSourceHash = hashTypedProgram typedStdlib
             // Extract generic function definitions for on-demand monomorphization
             let genericFuncDefs = AST_to_ANF.extractGenericFuncDefs typedStdlib
             // Build module registry once (reused across all compilations)
@@ -838,6 +1439,8 @@ let buildStdlib () : Result<StdlibResult, string> =
                     ModuleRegistry = anfResult.ModuleRegistry
                 }
                 let context = buildContext typeCheckEnv genericFuncDefs Map.empty registries
+                let specHash = hashValue context.SpecRegistry
+                let stdlibHash = combineHashes [stdlibSourceHash; specHash]
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
@@ -852,8 +1455,15 @@ let buildStdlib () : Result<StdlibResult, string> =
                         |> Map.ofList
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
+                    let stdlibDependencyHashes =
+                        if cacheSettings.Enabled then
+                            buildFunctionDependencyHashes tcoFunctions typeMap registries Map.empty
+                        else
+                            Map.empty
+
                     let externalReturnTypes = extractReturnTypes registries.FuncReg
                     match lowerToAllocatedLir
+                        cacheSettings
                         0
                         stdlibOptions
                         sw
@@ -861,7 +1471,8 @@ let buildStdlib () : Result<StdlibResult, string> =
                         tcoFunctions
                         typeMap
                         registries
-                        externalReturnTypes with
+                        externalReturnTypes
+                        stdlibDependencyHashes with
                     | Error e ->
                         Error e
                     | Ok allocatedFuncs ->
@@ -876,13 +1487,22 @@ let buildStdlib () : Result<StdlibResult, string> =
                                 AST = stdlibAst
                                 TypedAST = typedStdlib
                                 Context = context
+                                CacheSettings = cacheSettings
+                                StdlibSourceHash = stdlibSourceHash
+                                StdlibHash = stdlibHash
                                 LIRProgram = allocatedProgram
                                 AllocatedFunctions = resolvedFuncs
                                 StdlibCallGraph = stdlibCallGraph
                                 StdlibANFFunctions = stdlibFuncMap
                                 StdlibANFCallGraph = stdlibANFCallGraph
                                 StdlibTypeMap = typeMap
+                                StdlibFunctionDependencyHashes = stdlibDependencyHashes
                             }
+
+/// Build stdlib in isolation with default cache settings
+let buildStdlib () : Result<StdlibResult, string> =
+    defaultCacheSettings ()
+    |> Result.bind buildStdlibWithCache
 
 /// Build stdlib specializations for a spec set and merge them into the stdlib result
 let buildStdlibSpecializations
@@ -894,6 +1514,7 @@ let buildStdlibSpecializations
     else
         let specialization = AST_to_ANF.specializeFromSpecs stdlib.Context.GenericFuncDefs specs
         let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
+        let stdlibHash = combineHashes [stdlib.StdlibSourceHash; hashValue combinedSpecRegistry]
         let existingNames =
             stdlib.StdlibANFFunctions
             |> Map.keys
@@ -904,7 +1525,11 @@ let buildStdlibSpecializations
 
         if List.isEmpty newSpecializedFuncs then
             let updatedContext = { stdlib.Context with SpecRegistry = combinedSpecRegistry }
-            Ok { stdlib with Context = updatedContext }
+            Ok {
+                stdlib with
+                    Context = updatedContext
+                    StdlibHash = stdlibHash
+            }
         else
             let rec mapResult (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'b list, string> =
                 match items with
@@ -942,8 +1567,18 @@ let buildStdlibSpecializations
                                 tcoFunctions
                                 |> List.map (fun f -> f.Name, f)
                                 |> Map.ofList
+                            let specializationDependencyHashes =
+                                if stdlib.CacheSettings.Enabled then
+                                    buildFunctionDependencyHashes
+                                        tcoFunctions
+                                        typeMap
+                                        registries
+                                        stdlib.StdlibFunctionDependencyHashes
+                                else
+                                    Map.empty
                             let externalReturnTypes = extractReturnTypes registries.FuncReg
                             lowerToAllocatedLir
+                                stdlib.CacheSettings
                                 0
                                 stdlibOptions
                                 sw
@@ -952,6 +1587,7 @@ let buildStdlibSpecializations
                                 typeMap
                                 registries
                                 externalReturnTypes
+                                specializationDependencyHashes
                             |> Result.bind (fun allocatedFuncs ->
                                 let (LIR.Program (_, stdlibStrings, stdlibFloats)) = stdlib.LIRProgram
                                 LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allocatedFuncs
@@ -967,6 +1603,12 @@ let buildStdlibSpecializations
                                         |> List.map snd
                                     let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
                                     let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
+                                    let mergedDependencyHashes =
+                                        if stdlib.CacheSettings.Enabled then
+                                            specializationDependencyHashes
+                                            |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
+                                        else
+                                            stdlib.StdlibFunctionDependencyHashes
                                     let updatedContext = {
                                         stdlib.Context with
                                             Registries = registries
@@ -975,12 +1617,14 @@ let buildStdlibSpecializations
                                     Ok {
                                         stdlib with
                                             Context = updatedContext
+                                            StdlibHash = stdlibHash
                                             LIRProgram = LIR.Program (allLirFuncs, mergedStrings, mergedFloats)
                                             AllocatedFunctions = allLirFuncs
                                             StdlibCallGraph = stdlibCallGraph
                                             StdlibANFFunctions = mergedStdlibAnfFunctions
                                             StdlibANFCallGraph = stdlibAnfCallGraph
                                             StdlibTypeMap = mergedStdlibTypeMap
+                                            StdlibFunctionDependencyHashes = mergedDependencyHashes
                                     }))))))
 
 type private UserCompileLabels = {
@@ -999,6 +1643,7 @@ type private UserCompilePlan = {
     Monomorphization: MonomorphizationMode
     PrebuiltSymbolicFunctions: LIRSymbolic.Function list
     SkipFunctionNames: Set<string>
+    ExternalFunctionDependencyHashes: Map<string, string>
     EmitFunctionEvents: bool
     TreeShakeUserFunctions: bool
     Labels: UserCompileLabels
@@ -1093,9 +1738,19 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     printANFProgram "=== ANF (after Print insertion) ===" printProgram
 
                                 let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions
+                                let userDependencyHashes =
+                                    if plan.Stdlib.CacheSettings.Enabled then
+                                        buildFunctionDependencyHashes
+                                            tcoFunctions
+                                            typeMap
+                                            userRegistries
+                                            plan.ExternalFunctionDependencyHashes
+                                    else
+                                        Map.empty
                                 let externalReturnTypes = extractReturnTypes userRegistries.FuncReg
                                 let userLirResult =
                                     lowerToAllocatedLir
+                                        plan.Stdlib.CacheSettings
                                         plan.Verbosity
                                         plan.Options
                                         sw
@@ -1104,6 +1759,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         typeMap
                                         userRegistries
                                         externalReturnTypes
+                                        userDependencyHashes
                                 match userLirResult with
                                 | Error err -> Error err
                                 | Ok allocatedUserFuncs ->
@@ -1184,6 +1840,8 @@ let buildPreambleContext
             ANFFunctions = []
             TypeMap = stdlib.StdlibTypeMap
             SymbolicFunctions = []
+            PreambleHash = Cache.hashString ""
+            PreambleFunctionDependencyHashes = Map.empty
         }
         Ok emptyContext
     else
@@ -1200,6 +1858,7 @@ let buildPreambleContext
                 let msg = $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
                 Error msg
             | Ok (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
+                let preambleHash = hashTypedProgram typedPreambleAst
                 // Extract generic function definitions from preamble
                 let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
                 // Merge stdlib generics with preamble generics
@@ -1233,8 +1892,18 @@ let buildPreambleContext
                         Error msg
                     | Ok (preambleFunctions, typeMap) ->
                         let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
+                        let preambleDependencyHashes =
+                            if stdlib.CacheSettings.Enabled then
+                                buildFunctionDependencyHashes
+                                    tcoFunctions
+                                    typeMap
+                                    preambleRegistries
+                                    stdlib.StdlibFunctionDependencyHashes
+                            else
+                                Map.empty
                         let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
                         match lowerToAllocatedLir
+                            stdlib.CacheSettings
                             0
                             preambleOptions
                             sw
@@ -1242,7 +1911,8 @@ let buildPreambleContext
                             tcoFunctions
                             typeMap
                             preambleRegistries
-                            preambleExternalReturnTypes with
+                            preambleExternalReturnTypes
+                            preambleDependencyHashes with
                         | Error err ->
                             let msg = $"Preamble {err}"
                             Error msg
@@ -1266,6 +1936,8 @@ let buildPreambleContext
                                 ANFFunctions = tcoFunctions
                                 TypeMap = mergedTypeMap
                                 SymbolicFunctions = preambleSymbolicFuncs
+                                PreambleHash = preambleHash
+                                PreambleFunctionDependencyHashes = preambleDependencyHashes
                             }
                             Ok context
 
@@ -1286,6 +1958,7 @@ let buildPreambleContextFromAnalysis
     let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
     let programWithSpecializations = AST.Program (specializedTopLevels @ items)
 
+    let preambleHash = hashTypedProgram programWithSpecializations
     convertTypedProgramToUserOnlyWithMode
         stdlib.Context
         (ReplaceTypeApps combinedSpecRegistry)
@@ -1313,8 +1986,18 @@ let buildPreambleContextFromAnalysis
             Error msg
         | Ok (preambleFunctions, typeMap) ->
             let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
+            let preambleDependencyHashes =
+                if stdlib.CacheSettings.Enabled then
+                    buildFunctionDependencyHashes
+                        tcoFunctions
+                        typeMap
+                        preambleRegistries
+                        stdlib.StdlibFunctionDependencyHashes
+                else
+                    Map.empty
             let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
             match lowerToAllocatedLir
+                stdlib.CacheSettings
                 0
                 preambleOptions
                 sw
@@ -1322,7 +2005,8 @@ let buildPreambleContextFromAnalysis
                 tcoFunctions
                 typeMap
                 preambleRegistries
-                preambleExternalReturnTypes with
+                preambleExternalReturnTypes
+                preambleDependencyHashes with
             | Error err ->
                 let msg = $"Preamble {err}"
                 Error msg
@@ -1345,6 +2029,8 @@ let buildPreambleContextFromAnalysis
                     ANFFunctions = tcoFunctions
                     TypeMap = mergedTypeMap
                     SymbolicFunctions = preambleSymbolicFuncs
+                    PreambleHash = preambleHash
+                    PreambleFunctionDependencyHashes = preambleDependencyHashes
                 })
 
 let private labelsForMode (mode: CompileMode) : UserCompileLabels =
@@ -1365,15 +2051,26 @@ let private labelsForMode (mode: CompileMode) : UserCompileLabels =
         }
 
 let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
-    let (stdlib, baseContext, prebuiltSymbolic, skipNames) =
+    let (stdlib, baseContext, prebuiltSymbolic, skipNames, externalDependencyHashes) =
         match request.Context with
         | StdlibOnly stdlib ->
-            stdlib, stdlib.Context, [], Set.empty
+            let externalHashes =
+                if stdlib.CacheSettings.Enabled then
+                    stdlib.StdlibFunctionDependencyHashes
+                else
+                    Map.empty
+            stdlib, stdlib.Context, [], Set.empty, externalHashes
         | StdlibWithPreamble (stdlib, preambleCtx) ->
             let preambleFuncs = preambleCtx.SymbolicFunctions
             let preambleFuncNameSet =
                 preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
-            stdlib, preambleCtx.Context, preambleFuncs, preambleFuncNameSet
+            let externalHashes =
+                if stdlib.CacheSettings.Enabled then
+                    preambleCtx.PreambleFunctionDependencyHashes
+                    |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
+                else
+                    Map.empty
+            stdlib, preambleCtx.Context, preambleFuncs, preambleFuncNameSet, externalHashes
 
     let emitFunctionEvents, treeShakeUserFunctions =
         match request.Mode with
@@ -1394,6 +2091,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         Monomorphization = monomorphization
         PrebuiltSymbolicFunctions = prebuiltSymbolic
         SkipFunctionNames = skipNames
+        ExternalFunctionDependencyHashes = externalDependencyHashes
         EmitFunctionEvents = emitFunctionEvents
         TreeShakeUserFunctions = treeShakeUserFunctions
         Labels = labelsForMode request.Mode
@@ -1403,7 +2101,8 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
 
 /// Compile source code to binary (in-memory, no file I/O)
 let compile (request: CompileRequest) : CompileReport =
-    request |> buildCompilePlan |> compileUserWithPlan
+    let plan = buildCompilePlan request
+    compileUserWithPlan plan
 
 /// Execute compiled binary and capture output
 let execute (verbosity: int) (binary: byte array) : ExecutionOutput =

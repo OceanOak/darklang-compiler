@@ -94,6 +94,11 @@ Why ref counting?
 - `compile` for in-memory compilation via `CompileRequest`
 - `execute` for running compiled binaries with timing
 
+## Compiler Cache
+
+The compiler uses a small SQLite cache for compiled functions.
+See `docs/compiler-cache.md` for key details and invalidation rules.
+
 ## Key Invariants
 
 Each pass must maintain certain properties:

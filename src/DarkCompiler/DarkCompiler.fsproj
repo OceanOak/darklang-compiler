@@ -45,11 +45,15 @@
     <Compile Include="passes/8_Binary_Generation_MachO.fs" />
     <Compile Include="passes/8_Binary_Generation_ELF.fs" />
     <Compile Include="IRPrinter.fs" />
+    <Compile Include="Cache.fs" />
     <Compile Include="CompilerLibrary.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="MessagePack" Version="2.5.187" />
+    <PackageReference Include="MessagePack.FSharpExtensions" Version="4.0.0" />
   </ItemGroup>
 
 </Project>

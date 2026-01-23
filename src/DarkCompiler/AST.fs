@@ -17,7 +17,11 @@
 
 module AST
 
+open MessagePack
+
 /// Type system - will be used for type checking in Phase 0+
+/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
+[<MessagePackObject(false)>]
 type Type =
     // Signed integers
     | TInt8
@@ -96,6 +100,8 @@ module NonEmptyList =
         | h :: t -> { Head = h; Tail = t }
 
 /// Pattern matching patterns
+/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
+[<MessagePackObject(false)>]
 type Pattern =
     | PUnit                                                // () - matches unit value
     | PWildcard                                            // _
@@ -123,7 +129,8 @@ type StringPart =
     | StringExpr of Expr      // Interpolated expression: {name}
 
 /// Expression nodes
-and Expr =
+/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
+and [<MessagePackObject(false)>] Expr =
     | UnitLiteral                           // Unit value: ()
     | Int64Literal of int64                 // 64-bit signed (default): 42, 42L
     | Int8Literal of sbyte                  // 8-bit signed: 42y
@@ -183,6 +190,8 @@ type Variant = {
 }
 
 /// Type definition (record types, sum types, etc.)
+/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
+[<MessagePackObject(false)>]
 type TypeDef =
     | RecordDef of name:string * typeParams:string list * fields:(string * Type) list  // type Point<T> = { x: T, y: T }
     | SumTypeDef of name:string * typeParams:string list * variants:Variant list       // type Result<T, E> = Ok of T | Error of E

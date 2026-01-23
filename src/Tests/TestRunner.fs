@@ -24,6 +24,7 @@ let printHelp () =
     println "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
+    println "  --no-cache         Disable compiler cache during tests"
     println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
@@ -52,6 +53,9 @@ let main args =
 
     // Check for --verification flag (enable verification/stress tests)
     let verificationEnabled = hasVerificationArg args
+
+    // Check for --no-cache flag (disable compiler cache)
+    let noCache = hasNoCacheArg args
 
     // Check for --verbose flag (print failing tests immediately)
     let verbose = hasVerboseArg args
@@ -111,7 +115,12 @@ let main args =
 
     let timer = Stopwatch.StartNew()
     let stdlib =
-        match CompilerLibrary.buildStdlib() with
+        let stdlibResult =
+            if noCache then
+                CompilerLibrary.buildStdlibWithCache { Enabled = false; CompilerKey = "" }
+            else
+                CompilerLibrary.buildStdlib()
+        match stdlibResult with
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
     let elapsed = timer.Elapsed

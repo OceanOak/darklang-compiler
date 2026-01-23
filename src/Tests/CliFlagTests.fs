@@ -127,6 +127,17 @@ let testFunctionTreeShakingFlag () : TestResult =
         else
             Ok ()
 
+/// Test that cache flag parses and sets the expected option
+let testNoCacheFlag () : TestResult =
+    let args = [| "--no-cache"; "input.dark" |]
+    match parseArgs args with
+    | Error msg -> Error $"Expected no-cache flag to parse, got error: {msg}"
+    | Ok opts ->
+        if not opts.NoCache then
+            Error "Expected NoCache to be true"
+        else
+            Ok ()
+
 /// Test compiler option mapping from CLI options
 let testBuildCompilerOptions () : TestResult =
     let cliOpts = {
@@ -215,6 +226,7 @@ let tests = [
     ("MIR opt flags", testMIROptFlags)
     ("LIR peephole flag", testLIRPeepholeFlag)
     ("function tree shaking flag", testFunctionTreeShakingFlag)
+    ("no-cache flag", testNoCacheFlag)
     ("build compiler options", testBuildCompilerOptions)
 ]
 

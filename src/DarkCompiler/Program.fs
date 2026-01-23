@@ -56,6 +56,7 @@ type CliOptions = {
     Help: bool
     Version: bool
     CacheKey: bool               // True = output cache key (SHA256 of compiler binary)
+    NoCache: bool                // True = disable compilation cache
     Argument: string option
     LeakCheck: bool
     // Optimization flags
@@ -93,6 +94,7 @@ let defaultOptions = {
     Help = false
     Version = false
     CacheKey = false
+    NoCache = false
     Argument = None
     LeakCheck = false
     DisableFreeList = false
@@ -146,6 +148,14 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
     DumpMIR = cliOpts.DumpMIR
     DumpLIR = cliOpts.DumpLIR
 }
+
+/// Build cache settings from CLI options
+let buildCacheSettings (cliOpts: CliOptions) : Result<CompilerLibrary.CacheSettings, string> =
+    if cliOpts.NoCache then
+        Ok { Enabled = false; CompilerKey = "" }
+    else
+        Cache.getCompilerKey ()
+        |> Result.map (fun key -> { Enabled = true; CompilerKey = key })
 
 /// Parse command-line flags into options
 let parseArgs (argv: string array) : Result<CliOptions, string> =
@@ -223,6 +233,9 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
         | "--cache-key" :: rest ->
             parseFlags rest { opts with CacheKey = true } lastVerbosity
+
+        | "--no-cache" :: rest ->
+            parseFlags rest { opts with NoCache = true } lastVerbosity
 
         | "--no-free-list" :: rest | "--disable-opt-freelist" :: rest ->
             parseFlags rest { opts with DisableFreeList = true } lastVerbosity
@@ -349,70 +362,19 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
 
     // Use library for compilation
     let options = buildCompilerOptions cliOpts
-    let sourceFile =
-        if cliOpts.IsExpression then ""
-        else cliOpts.Argument |> Option.defaultValue ""
-
-    match CompilerLibrary.buildStdlib() with
+    match buildCacheSettings cliOpts with
     | Error err ->
         eprintln $"Compilation failed: {err}"
         1
-    | Ok stdlib ->
-        let request : CompilerLibrary.CompileRequest = {
-            Context = CompilerLibrary.StdlibOnly stdlib
-            Mode = CompilerLibrary.FullProgram
-            Source = source
-            SourceFile = sourceFile
-            AllowInternal = false
-            Verbosity = verbosityToInt verbosity
-            Options = options
-        }
-        let compileReport = CompilerLibrary.compile request
+    | Ok cacheSettings ->
+        let sourceFile =
+            if cliOpts.IsExpression then ""
+            else cliOpts.Argument |> Option.defaultValue ""
 
-        match compileReport.Result with
+        match CompilerLibrary.buildStdlibWithCache cacheSettings with
         | Error err ->
             eprintln $"Compilation failed: {err}"
             1
-        | Ok binary ->
-            // Write to file
-            match Platform.detectOS () with
-            | Error err ->
-                eprintln $"Platform detection failed: {err}"
-                1
-            | Ok os ->
-                let writeResult =
-                    match os with
-                    | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
-                    | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
-                match writeResult with
-                | Error err ->
-                    eprintln $"Failed to write binary: {err}"
-                    1
-                | Ok () ->
-                    if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
-                    0
-
-/// Run an expression (compile to temp and execute)
-let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int =
-    let showNormal = shouldShowNormal verbosity
-
-    if showNormal then
-        println $"Compiling and running: {source}"
-        println "---"
-
-    // Use library for compile and run
-    let options = buildCompilerOptions cliOpts
-    let sourceFile =
-        if cliOpts.IsExpression then ""
-        else cliOpts.Argument |> Option.defaultValue ""
-
-    let execResult : CompilerLibrary.ExecutionOutput =
-        match CompilerLibrary.buildStdlib() with
-        | Error err ->
-            { ExitCode = 1
-              Stdout = ""
-              Stderr = err
-              RuntimeTime = TimeSpan.Zero }
         | Ok stdlib ->
             let request : CompilerLibrary.CompileRequest = {
                 Context = CompilerLibrary.StdlibOnly stdlib
@@ -424,14 +386,77 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                 Options = options
             }
             let compileReport = CompilerLibrary.compile request
+
             match compileReport.Result with
+            | Error err ->
+                eprintln $"Compilation failed: {err}"
+                1
+            | Ok binary ->
+                // Write to file
+                match Platform.detectOS () with
+                | Error err ->
+                    eprintln $"Platform detection failed: {err}"
+                    1
+                | Ok os ->
+                    let writeResult =
+                        match os with
+                        | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
+                        | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
+                    match writeResult with
+                    | Error err ->
+                        eprintln $"Failed to write binary: {err}"
+                        1
+                    | Ok () ->
+                        if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
+                        0
+
+/// Run an expression (compile to temp and execute)
+let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int =
+    let showNormal = shouldShowNormal verbosity
+
+    if showNormal then
+        println $"Compiling and running: {source}"
+        println "---"
+
+    // Use library for compile and run
+    let options = buildCompilerOptions cliOpts
+    let execResult : CompilerLibrary.ExecutionOutput =
+        match buildCacheSettings cliOpts with
+        | Error err ->
+            { ExitCode = 1
+              Stdout = ""
+              Stderr = err
+              RuntimeTime = TimeSpan.Zero }
+        | Ok cacheSettings ->
+            let sourceFile =
+                if cliOpts.IsExpression then ""
+                else cliOpts.Argument |> Option.defaultValue ""
+
+            match CompilerLibrary.buildStdlibWithCache cacheSettings with
             | Error err ->
                 { ExitCode = 1
                   Stdout = ""
                   Stderr = err
                   RuntimeTime = TimeSpan.Zero }
-            | Ok binary ->
-                CompilerLibrary.execute (verbosityToInt verbosity) binary
+            | Ok stdlib ->
+                let request : CompilerLibrary.CompileRequest = {
+                    Context = CompilerLibrary.StdlibOnly stdlib
+                    Mode = CompilerLibrary.FullProgram
+                    Source = source
+                    SourceFile = sourceFile
+                    AllowInternal = false
+                    Verbosity = verbosityToInt verbosity
+                    Options = options
+                }
+                let compileReport = CompilerLibrary.compile request
+                match compileReport.Result with
+                | Error err ->
+                    { ExitCode = 1
+                      Stdout = ""
+                      Stderr = err
+                      RuntimeTime = TimeSpan.Zero }
+                | Ok binary ->
+                    CompilerLibrary.execute (verbosityToInt verbosity) binary
 
     if showNormal then
         if execResult.Stdout <> "" then
@@ -445,13 +470,8 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
 
 /// Get a cache key based on the SHA256 hash of the compiler binary.
 /// This uniquely identifies this build of the compiler.
-let getCacheKey () : string =
-    let assembly = System.Reflection.Assembly.GetExecutingAssembly()
-    let location = assembly.Location
-    use stream = File.OpenRead(location)
-    use sha256 = System.Security.Cryptography.SHA256.Create()
-    let hash = sha256.ComputeHash(stream)
-    BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant()
+let getCacheKey () : Result<string, string> =
+    Cache.getCompilerKey ()
 
 /// Print version information
 let printVersion () =
@@ -484,6 +504,7 @@ let printUsage () =
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
     println "  --cache-key          Output compiler binary hash (for caching)"
+    println "  --no-cache           Disable compilation cache"
     println ""
     println "Optimization flags (for debugging):"
     println "  --disable-opt-anf       Disable ANF-level optimizations"
@@ -529,8 +550,13 @@ let main argv =
             0
 
         | Ok options when options.CacheKey ->
-            printf "%s" (getCacheKey())
-            0
+            match getCacheKey () with
+            | Ok key ->
+                printf "%s" key
+                0
+            | Error err ->
+                eprintln $"Cache key error: {err}"
+                1
 
         | Ok options ->
             // Get source code (from stdin, file, or inline expression)

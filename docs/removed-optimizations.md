@@ -2,6 +2,8 @@
 
 This document describes the performance optimization systems that were removed from the compiler to simplify the codebase. These were removed in the commit that added this document (see `git log --oneline docs/removed-optimizations.md`).
 
+Note: a new, simpler cache has since been reintroduced. See `docs/compiler-cache.md` for the current design.
+
 ## Why They Were Removed
 
 The compiler accumulated complexity from four interrelated optimization systems. While these improved compilation speed during development, they added significant complexity:
