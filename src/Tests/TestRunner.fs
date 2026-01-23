@@ -139,7 +139,7 @@ let main args =
         : unit =
         let numTests = testsArray.Length
         if numTests > 0 then
-            let preambleContextsResult = TestDSL.E2ETestRunner.buildPreambleContexts stdlib testsArray
+            let suiteContextsResult = TestDSL.E2ETestRunner.buildSuiteContexts stdlib testsArray
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
             let progress = ProgressBar.create progressLabel numTests
@@ -198,15 +198,15 @@ let main args =
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
                 let result =
-                    match preambleContextsResult with
+                    match suiteContextsResult with
                     | Error err ->
                         preambleFailureResult $"Preamble build failed: {err}"
-                    | Ok preambleContexts ->
-                        match Map.tryFind test.SourceFile preambleContexts with
+                    | Ok suiteContexts ->
+                        match Map.tryFind test.SourceFile suiteContexts.PreambleContexts with
                         | None ->
                             preambleFailureResult $"Missing built preamble context for {test.SourceFile}"
                         | Some ctx ->
-                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext stdlib ctx test
+                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext suiteContexts.Stdlib ctx test
 
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run

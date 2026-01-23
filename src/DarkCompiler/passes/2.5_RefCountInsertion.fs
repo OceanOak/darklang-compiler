@@ -365,6 +365,37 @@ let rec insertDecBeforeReturn (tempId: TempId) (size: int) (expr: AExpr) (varGen
         let (elseBr', varGen2, elseIds) = insertDecBeforeReturn tempId size elseBr varGen1
         (If (cond, thenBr', elseBr'), varGen2, thenIds @ elseIds)
 
+/// Insert RefCountInc before Return when returning a parameter (or alias)
+/// Returns (transformed expr, varGen, list of new TempIds created)
+let rec insertIncBeforeReturnForAtom
+    (aliases: Map<TempId, TempId>)
+    (targetId: TempId)
+    (size: int)
+    (expr: AExpr)
+    (varGen: VarGen)
+    : AExpr * VarGen * TempId list =
+    match expr with
+    | Return (Var retId as retAtom) ->
+        if isTransitiveAliasOf aliases retId targetId then
+            let (dummyId, varGen') = freshVar varGen
+            let incExpr = RefCountInc (Var retId, size)
+            (Let (dummyId, incExpr, Return retAtom), varGen', [dummyId])
+        else
+            (expr, varGen, [])
+    | Return _ ->
+        (expr, varGen, [])
+    | Let (boundId, cexpr, body) ->
+        let aliases' =
+            match cexpr with
+            | Atom (Var sourceId) -> Map.add boundId sourceId aliases
+            | _ -> aliases
+        let (body', varGen', newIds) = insertIncBeforeReturnForAtom aliases' targetId size body varGen
+        (Let (boundId, cexpr, body'), varGen', newIds)
+    | If (cond, thenBr, elseBr) ->
+        let (thenBr', varGen1, thenIds) = insertIncBeforeReturnForAtom aliases targetId size thenBr varGen
+        let (elseBr', varGen2, elseIds) = insertIncBeforeReturnForAtom aliases targetId size elseBr varGen1
+        (If (cond, thenBr', elseBr'), varGen2, thenIds @ elseIds)
+
 /// Insert RefCountDec for a TempId at all return points
 /// Returns (transformed expr, varGen, list of new TempIds created)
 let wrapWithDecAndTrack (tempId: TempId) (typ: AST.Type) (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * TempId list =
@@ -514,7 +545,27 @@ let insertRCInFunction (ctx: TypeContext) (func: Function) (varGen: VarGen) : Fu
 
     // Process function body
     let (body', varGen', accTypes) = insertRC ctx' func.Body varGen
-    ({ func with Body = body' }, varGen', accTypes)
+
+    let (bodyWithParamIncs, varGen'', accTypes') =
+        func.TypedParams
+        |> List.fold
+            (fun (bodyAcc, vgAcc, typesAcc) param ->
+                let shouldInsertParamReturnInc =
+                    match param.Type with
+                    | AST.TDict _ -> false  // Dict pointers are tagged; RC ops expect raw pointers.
+                    | _ -> isHeapType param.Type
+                if shouldInsertParamReturnInc && isTempReturned param.Id bodyAcc then
+                    let size = payloadSize param.Type ctx'.TypeReg
+                    let (body', vg', newIds) =
+                        insertIncBeforeReturnForAtom Map.empty param.Id size bodyAcc vgAcc
+                    let typesAcc' =
+                        newIds |> List.fold (fun m tid -> Map.add tid AST.TUnit m) typesAcc
+                    (body', vg', typesAcc')
+                else
+                    (bodyAcc, vgAcc, typesAcc))
+            (body', varGen', accTypes)
+
+    ({ func with Body = bodyWithParamIncs }, varGen'', accTypes')
 
 // ============================================================================
 // TypeMap Completeness Verification

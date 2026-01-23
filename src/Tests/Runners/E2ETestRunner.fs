@@ -5,6 +5,10 @@
 module TestDSL.E2ETestRunner
 
 open System
+open AST
+open AST_to_ANF
+open Parser
+open TypeChecking
 open TestDSL.E2EFormat
 
 // Internal identifiers are only allowed for stdlib-internal tests.
@@ -34,15 +38,16 @@ type private PreambleBuildSpec = {
 /// Map of built preamble contexts keyed by source file
 type PreambleContextMap = Map<string, CompilerLibrary.PreambleContext>
 
-let private buildPreambleContextFromSpec
-    (stdlib: CompilerLibrary.StdlibResult)
-    (spec: PreambleBuildSpec)
-    : Result<CompilerLibrary.PreambleContext, string> =
-    match CompilerLibrary.buildPreambleContext spec.AllowInternal stdlib spec.Preamble spec.SourceFile spec.FunctionLineMap with
-    | Error err ->
-        Error $"Preamble build error ({spec.SourceFile}): {err}"
-    | Ok ctx ->
-        Ok ctx
+type SuiteContext = {
+    Stdlib: CompilerLibrary.StdlibResult
+    PreambleContexts: PreambleContextMap
+}
+
+type private PreamblePlan = {
+    Spec: PreambleBuildSpec
+    Analysis: CompilerLibrary.PreambleAnalysis option
+    Specialization: SpecializationResult
+}
 
 let private buildPreambleBuildSpec (sourceFile: string) (tests: E2ETest list) : Result<PreambleBuildSpec, string> =
     let preambles =
@@ -68,24 +73,155 @@ let private buildPreambleBuildSpec (sourceFile: string) (tests: E2ETest list) : 
     | _ ->
         Error $"Multiple preambles found for {sourceFile}"
 
-/// Build all distinct preambles (by source file) and return contexts
-/// Each source file must produce exactly one preamble and function line map.
-let buildPreambleContexts
+let private collectTypeAppsFromProgram (program: Program) : Set<SpecKey> =
+    let (Program topLevels) = program
+    topLevels
+    |> List.map (function
+        | FunctionDef f when List.isEmpty f.TypeParams -> collectTypeAppsFromFunc f
+        | Expression e -> collectTypeApps e
+        | _ -> Set.empty)
+    |> List.fold Set.union Set.empty
+
+let private filterSpecsByDefs (genericDefs: GenericFuncDefs) (specs: Set<SpecKey>) : Set<SpecKey> =
+    specs |> Set.filter (fun (funcName, _) -> Map.containsKey funcName genericDefs)
+
+let private collectSpecsFromTests
+    (allowInternal: bool)
+    (typeCheckEnv: TypeCheckEnv)
+    (tests: E2ETest list)
+    : Result<Set<SpecKey>, string> =
+    let testsToAnalyze =
+        tests
+        |> List.filter (fun test -> not test.ExpectCompileError)
+    let rec loop remaining acc =
+        match remaining with
+        | [] -> Ok acc
+        | test :: rest ->
+            parseString allowInternal test.Source
+            |> Result.mapError (fun err ->
+                $"Test parse error ({test.SourceFile}: {test.Name}): {err}")
+            |> Result.bind (fun testAst ->
+                checkProgramWithBaseEnv typeCheckEnv testAst
+                |> Result.mapError (fun err ->
+                    $"Test type error ({test.SourceFile}: {test.Name}): {typeErrorToString err}")
+                |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
+            |> Result.bind (fun specs ->
+                loop rest (Set.union acc specs))
+    loop testsToAnalyze Set.empty
+
+let private buildPreamblePlan
+    (stdlib: CompilerLibrary.StdlibResult)
+    (spec: PreambleBuildSpec)
+    (tests: E2ETest list)
+    : Result<PreamblePlan * Set<SpecKey>, string> =
+    let preambleIsEmpty = String.IsNullOrWhiteSpace spec.Preamble
+    let analysisResult =
+        if preambleIsEmpty then
+            Ok None
+        else
+            CompilerLibrary.analyzePreamble spec.AllowInternal stdlib spec.Preamble
+            |> Result.map Some
+
+    analysisResult
+    |> Result.bind (fun analysisOpt ->
+        let typeCheckEnv =
+            match analysisOpt with
+            | Some analysis -> analysis.TypeCheckEnv
+            | None -> stdlib.Context.TypeCheckEnv
+        collectSpecsFromTests spec.AllowInternal typeCheckEnv tests
+        |> Result.bind (fun testSpecs ->
+            let preambleSpecs =
+                match analysisOpt with
+                | None -> Set.empty
+                | Some analysis -> collectTypeAppsFromProgram analysis.TypedAST
+            let combinedSpecs = Set.union testSpecs preambleSpecs
+            let preambleGenericDefs =
+                match analysisOpt with
+                | None -> Map.empty
+                | Some analysis -> analysis.GenericFuncDefs
+            let preambleSpecsForDefs = filterSpecsByDefs preambleGenericDefs combinedSpecs
+            let stdlibSpecsFromCombined = filterSpecsByDefs stdlib.Context.GenericFuncDefs combinedSpecs
+            let specialization =
+                if Map.isEmpty preambleGenericDefs then
+                    {
+                        SpecializedFuncs = []
+                        SpecRegistry = Map.empty
+                        ExternalSpecs = Set.empty
+                    }
+                else
+                    specializeFromSpecs preambleGenericDefs preambleSpecsForDefs
+            let stdlibSpecsFromSpecialization =
+                filterSpecsByDefs stdlib.Context.GenericFuncDefs specialization.ExternalSpecs
+            let stdlibSpecs = Set.union stdlibSpecsFromCombined stdlibSpecsFromSpecialization
+            let plan = {
+                Spec = spec
+                Analysis = analysisOpt
+                Specialization = specialization
+            }
+            Ok (plan, stdlibSpecs)))
+
+/// Build suite stdlib specializations and per-file preamble contexts
+let buildSuiteContexts
     (stdlib: CompilerLibrary.StdlibResult)
     (tests: E2ETest array)
-    : Result<PreambleContextMap, string> =
-    tests
-    |> Array.toList
-    |> List.groupBy (fun test -> test.SourceFile)
-    |> List.fold
-        (fun acc (sourceFile, group) ->
-            acc
-            |> Result.bind (fun contexts ->
-                buildPreambleBuildSpec sourceFile group
-                |> Result.bind (fun spec ->
-                    buildPreambleContextFromSpec stdlib spec
-                    |> Result.map (fun ctx -> Map.add sourceFile ctx contexts))))
-        (Ok Map.empty)
+    : Result<SuiteContext, string> =
+    let groupedTests =
+        tests
+        |> Array.toList
+        |> List.groupBy (fun test -> test.SourceFile)
+
+    let plansResult =
+        groupedTests
+        |> List.fold
+            (fun acc (sourceFile, group) ->
+                acc
+                |> Result.bind (fun (plans, stdlibSpecs) ->
+                    buildPreambleBuildSpec sourceFile group
+                    |> Result.bind (fun spec ->
+                        buildPreamblePlan stdlib spec group
+                        |> Result.map (fun (plan, specs) ->
+                            (plan :: plans, Set.union stdlibSpecs specs)))))
+            (Ok ([], Set.empty))
+
+    plansResult
+    |> Result.bind (fun (plans, stdlibSpecs) ->
+        CompilerLibrary.buildStdlibSpecializations stdlib stdlibSpecs
+        |> Result.bind (fun stdlibWithSpecs ->
+            let buildEmptyContext () : CompilerLibrary.PreambleContext =
+                {
+                    Context = stdlibWithSpecs.Context
+                    ANFFunctions = []
+                    TypeMap = stdlibWithSpecs.StdlibTypeMap
+                    SymbolicFunctions = []
+                }
+            let contextsResult =
+                plans
+                |> List.fold
+                    (fun acc plan ->
+                        acc
+                        |> Result.bind (fun contexts ->
+                            let ctxResult =
+                                match plan.Analysis with
+                                | None -> Ok (buildEmptyContext ())
+                                | Some analysis ->
+                                    CompilerLibrary.buildPreambleContextFromAnalysis
+                                        stdlibWithSpecs
+                                        analysis
+                                        plan.Specialization
+                                        plan.Spec.SourceFile
+                                        plan.Spec.FunctionLineMap
+                                    |> Result.mapError (fun err ->
+                                        $"Preamble build error ({plan.Spec.SourceFile}): {err}")
+                            ctxResult
+                            |> Result.map (fun ctx ->
+                                Map.add plan.Spec.SourceFile ctx contexts)))
+                    (Ok Map.empty)
+            contextsResult
+            |> Result.map (fun contexts ->
+                {
+                    Stdlib = stdlibWithSpecs
+                    PreambleContexts = contexts
+                })))
 
 let private exitCodeFromRun (run: E2ERun) : int =
     match run with

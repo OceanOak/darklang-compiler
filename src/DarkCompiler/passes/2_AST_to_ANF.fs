@@ -306,6 +306,13 @@ type SpecKey = string * AST.Type list  // (funcName, typeArgs)
 /// Maps (funcName, typeArgs) -> specialized name
 type SpecRegistry = Map<SpecKey, string>
 
+/// Result of specializing generic functions from a spec set
+type SpecializationResult = {
+    SpecializedFuncs: AST.FunctionDef list
+    SpecRegistry: SpecRegistry
+    ExternalSpecs: Set<SpecKey>
+}
+
 /// Extract generic function definitions (functions with type parameters)
 /// from a program. Used for on-demand monomorphization of stdlib generics.
 let extractGenericFuncDefs (program: AST.Program) : GenericFuncDefs =
@@ -680,6 +687,45 @@ let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
 let collectTypeAppsFromFunc (funcDef: AST.FunctionDef) : Set<SpecKey> =
     collectTypeApps funcDef.Body
 
+/// Specialize only the requested generic specs, returning new functions and a registry
+let specializeFromSpecs (genericFuncDefs: GenericFuncDefs) (initialSpecs: Set<SpecKey>) : SpecializationResult =
+    let rec iterate
+        (pendingSpecs: Set<SpecKey>)
+        (processedSpecs: Set<SpecKey>)
+        (accFuncs: AST.FunctionDef list)
+        (specRegistry: SpecRegistry)
+        (externalSpecs: Set<SpecKey>)
+        : SpecializationResult =
+        let newSpecs = Set.difference pendingSpecs processedSpecs
+        if Set.isEmpty newSpecs then
+            { SpecializedFuncs = accFuncs
+              SpecRegistry = specRegistry
+              ExternalSpecs = externalSpecs }
+        else
+            let (newFuncs, newPendingSpecs, newRegistry, newExternal) =
+                newSpecs
+                |> Set.toList
+                |> List.fold
+                    (fun (funcs, pending, registry, external) (funcName, typeArgs) ->
+                        match Map.tryFind funcName genericFuncDefs with
+                        | Some funcDef ->
+                            let specialized = specializeFunction funcDef typeArgs
+                            let registry' = Map.add (funcName, typeArgs) specialized.Name registry
+                            let bodySpecs = collectTypeAppsFromFunc specialized
+                            (specialized :: funcs, Set.union pending bodySpecs, registry', external)
+                        | None ->
+                            (funcs, pending, registry, Set.add (funcName, typeArgs) external))
+                    ([], Set.empty, specRegistry, externalSpecs)
+
+            iterate
+                newPendingSpecs
+                (Set.union processedSpecs newSpecs)
+                (newFuncs @ accFuncs)
+                newRegistry
+                newExternal
+
+    iterate initialSpecs Set.empty [] Map.empty Set.empty
+
 /// Replace TypeApp with Call using specialized name in an expression
 let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
     match expr with
@@ -739,9 +785,195 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
             | AST.StringExpr e -> AST.StringExpr (replaceTypeApps e)
         AST.InterpolatedString (List.map replacePart parts)
 
+let private isIntrinsicTypeAppName (funcName: string) : bool =
+    match funcName with
+    | "__raw_get"
+    | "__raw_set"
+    | "__empty_dict"
+    | "__dict_is_null"
+    | "__dict_get_tag"
+    | "__dict_to_rawptr"
+    | "__rawptr_to_dict"
+    | "__list_empty"
+    | "__list_is_null"
+    | "__list_get_tag"
+    | "__list_to_rawptr"
+    | "__rawptr_to_list" -> true
+    | _ -> false
+
+let private missingSpecMessage (funcName: string) (typeArgs: AST.Type list) : string =
+    let typeArgText =
+        typeArgs
+        |> List.map typeToMangledName
+        |> String.concat ", "
+    $"Missing specialization for {funcName}<{typeArgText}>"
+
+/// Replace TypeApp with Call using a precomputed specialization registry
+let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : Result<AST.Expr, string> =
+    let rec mapResult (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'b list, string> =
+        match items with
+        | [] -> Ok []
+        | x :: xs ->
+            f x
+            |> Result.bind (fun x' ->
+                mapResult f xs
+                |> Result.map (fun xs' -> x' :: xs'))
+
+    let rec replace (expr': AST.Expr) : Result<AST.Expr, string> =
+        match expr' with
+        | AST.UnitLiteral
+        | AST.Int64Literal _
+        | AST.Int8Literal _
+        | AST.Int16Literal _
+        | AST.Int32Literal _
+        | AST.UInt8Literal _
+        | AST.UInt16Literal _
+        | AST.UInt32Literal _
+        | AST.UInt64Literal _
+        | AST.BoolLiteral _
+        | AST.StringLiteral _
+        | AST.CharLiteral _
+        | AST.FloatLiteral _
+        | AST.Var _
+        | AST.FuncRef _
+        | AST.Closure _ -> Ok expr'
+        | AST.BinOp (op, left, right) ->
+            replace left
+            |> Result.bind (fun left' ->
+                replace right
+                |> Result.map (fun right' -> AST.BinOp (op, left', right')))
+        | AST.UnaryOp (op, inner) ->
+            replace inner |> Result.map (fun inner' -> AST.UnaryOp (op, inner'))
+        | AST.Let (name, value, body) ->
+            replace value
+            |> Result.bind (fun value' ->
+                replace body |> Result.map (fun body' -> AST.Let (name, value', body')))
+        | AST.If (cond, thenBranch, elseBranch) ->
+            replace cond
+            |> Result.bind (fun cond' ->
+                replace thenBranch
+                |> Result.bind (fun thenBranch' ->
+                    replace elseBranch
+                    |> Result.map (fun elseBranch' -> AST.If (cond', thenBranch', elseBranch'))))
+        | AST.Call (funcName, args) ->
+            mapResult replace args
+            |> Result.map (fun args' -> AST.Call (funcName, args'))
+        | AST.TypeApp (funcName, typeArgs, args) ->
+            let hasTypeVars = List.exists containsTypeVar typeArgs
+            let emptyDictSpec = (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
+                                && args = [AST.ListLiteral []]
+                                && not hasTypeVars
+            let resolvedNameResult =
+                if funcName = "__hash" || funcName = "__key_eq" then
+                    Ok (specName funcName typeArgs)
+                elif isIntrinsicTypeAppName funcName then
+                    Ok (specName funcName typeArgs)
+                elif emptyDictSpec then
+                    let key = ("Stdlib.Dict.empty", typeArgs)
+                    match Map.tryFind key specRegistry with
+                    | Some name -> Ok name
+                    | None -> Error (missingSpecMessage "Stdlib.Dict.empty" typeArgs)
+                else
+                    match Map.tryFind (funcName, typeArgs) specRegistry with
+                    | Some name -> Ok name
+                    | None -> Error (missingSpecMessage funcName typeArgs)
+
+            resolvedNameResult
+            |> Result.bind (fun resolvedName ->
+                if emptyDictSpec then
+                    Ok (AST.Call (resolvedName, []))
+                else
+                    mapResult replace args
+                    |> Result.map (fun args' -> AST.Call (resolvedName, args')))
+        | AST.TupleLiteral elements ->
+            mapResult replace elements
+            |> Result.map AST.TupleLiteral
+        | AST.TupleAccess (tuple, index) ->
+            replace tuple |> Result.map (fun tuple' -> AST.TupleAccess (tuple', index))
+        | AST.RecordLiteral (typeName, fields) ->
+            fields
+            |> mapResult (fun (name, value) ->
+                replace value |> Result.map (fun value' -> (name, value')))
+            |> Result.map (fun fields' -> AST.RecordLiteral (typeName, fields'))
+        | AST.RecordUpdate (record, updates) ->
+            replace record
+            |> Result.bind (fun record' ->
+                updates
+                |> mapResult (fun (name, value) ->
+                    replace value |> Result.map (fun value' -> (name, value')))
+                |> Result.map (fun updates' -> AST.RecordUpdate (record', updates')))
+        | AST.RecordAccess (record, fieldName) ->
+            replace record |> Result.map (fun record' -> AST.RecordAccess (record', fieldName))
+        | AST.Constructor (typeName, variantName, payload) ->
+            match payload with
+            | None -> Ok (AST.Constructor (typeName, variantName, None))
+            | Some payloadExpr ->
+                replace payloadExpr
+                |> Result.map (fun payload' -> AST.Constructor (typeName, variantName, Some payload'))
+        | AST.Match (scrutinee, cases) ->
+            replace scrutinee
+            |> Result.bind (fun scrutinee' ->
+                cases
+                |> mapResult (fun mc ->
+                    let guardResult =
+                        match mc.Guard with
+                        | None -> Ok None
+                        | Some guardExpr -> replace guardExpr |> Result.map Some
+                    guardResult
+                    |> Result.bind (fun guard' ->
+                        replace mc.Body
+                        |> Result.map (fun body' -> { mc with Guard = guard'; Body = body' })))
+                |> Result.map (fun cases' -> AST.Match (scrutinee', cases')))
+        | AST.ListLiteral elements ->
+            mapResult replace elements |> Result.map AST.ListLiteral
+        | AST.ListCons (headElements, tail) ->
+            mapResult replace headElements
+            |> Result.bind (fun heads' ->
+                replace tail |> Result.map (fun tail' -> AST.ListCons (heads', tail')))
+        | AST.Lambda (parameters, body) ->
+            replace body |> Result.map (fun body' -> AST.Lambda (parameters, body'))
+        | AST.Apply (func, args) ->
+            replace func
+            |> Result.bind (fun func' ->
+                mapResult replace args |> Result.map (fun args' -> AST.Apply (func', args')))
+        | AST.InterpolatedString parts ->
+            parts
+            |> mapResult (function
+                | AST.StringText s -> Ok (AST.StringText s)
+                | AST.StringExpr e -> replace e |> Result.map AST.StringExpr)
+            |> Result.map AST.InterpolatedString
+
+    replace expr
+
 /// Replace TypeApp with Call in a function definition
 let replaceTypeAppsInFunc (funcDef: AST.FunctionDef) : AST.FunctionDef =
     { funcDef with Body = replaceTypeApps funcDef.Body }
+
+/// Replace TypeApp with Call in a function definition using a registry
+let replaceTypeAppsInFuncWithRegistry (specRegistry: SpecRegistry) (funcDef: AST.FunctionDef) : Result<AST.FunctionDef, string> =
+    replaceTypeAppsWithRegistry specRegistry funcDef.Body
+    |> Result.map (fun body' -> { funcDef with Body = body' })
+
+/// Replace TypeApp with Call across a program using a registry (drops generic defs)
+let replaceTypeAppsInProgramWithRegistry (specRegistry: SpecRegistry) (program: AST.Program) : Result<AST.Program, string> =
+    let (AST.Program topLevels) = program
+    let rec loop (remaining: AST.TopLevel list) (acc: AST.TopLevel list) : Result<AST.Program, string> =
+        match remaining with
+        | [] -> Ok (AST.Program (List.rev acc))
+        | tl :: rest ->
+            match tl with
+            | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
+                loop rest acc
+            | AST.FunctionDef f ->
+                replaceTypeAppsInFuncWithRegistry specRegistry f
+                |> Result.bind (fun f' -> loop rest (AST.FunctionDef f' :: acc))
+            | AST.Expression e ->
+                replaceTypeAppsWithRegistry specRegistry e
+                |> Result.bind (fun e' -> loop rest (AST.Expression e' :: acc))
+            | AST.TypeDef td ->
+                loop rest (AST.TypeDef td :: acc)
+
+    loop topLevels []
 
 // =============================================================================
 // Lambda Inlining

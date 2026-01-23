@@ -135,7 +135,9 @@ file <binary>               # Check file type
 The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally small:
 
 - `buildStdlib` to prebuild stdlib for tests and tooling
-- `buildPreambleContext` for test preamble build/reuse
+- `buildStdlibSpecializations` to prebuild suite-level stdlib specializations
+- `buildPreambleContext` for ad-hoc preamble build/reuse
+- `analyzePreamble` + `buildPreambleContextFromAnalysis` for suite-level preamble specialization
 - `compile` for in-memory compilation via `CompileRequest` (`CompileContext` + `CompileMode`)
 - `execute` for running compiled binaries with timing
 

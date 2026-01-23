@@ -246,8 +246,10 @@ let private compileMirToLir
         if verbosity >= 1 then println $"  [4.5/8] {lirPassLabel}{suffix}..."
         let lirOptStart = sw.Elapsed.TotalMilliseconds
         let optimizedLir =
-            if options.DisableLIROpt || options.DisableLIRPeephole then lirProgram
-            else LIR_Peephole.optimizeProgram lirProgram
+            if options.DisableLIROpt || options.DisableLIRPeephole then
+                lirProgram
+            else
+                LIR_Peephole.optimizeProgram lirProgram
         if verbosity >= 2 then
             let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - lirOptStart, 1)
             println $"        {t}ms"
@@ -357,8 +359,10 @@ let private buildAnf
     if verbosity >= 1 then println "  [2.4/8] ANF Inlining..."
     let inlineStart = sw.Elapsed.TotalMilliseconds
     let anfInlined =
-        if options.DisableInlining then anfOptimized
-        else ANF_Inlining.inlineProgramDefault anfOptimized
+        if options.DisableInlining then
+            anfOptimized
+        else
+            ANF_Inlining.inlineProgramDefault anfOptimized
     if verbosity >= 2 then
         let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - inlineStart, 1)
         println $"        {t}ms"
@@ -390,8 +394,10 @@ let private applyTco
     let tcoStart = sw.Elapsed.TotalMilliseconds
     let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
     let anfAfterTCO =
-        if options.DisableTCO then anfProgram
-        else TailCallDetection.detectTailCallsInProgram anfProgram
+        if options.DisableTCO then
+            anfProgram
+        else
+            TailCallDetection.detectTailCallsInProgram anfProgram
     if verbosity >= 2 then
         let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - tcoStart, 1)
         println $"        {t}ms"
@@ -474,17 +480,20 @@ let private generateBinary
 type PipelineContext = {
     TypeCheckEnv: TypeChecking.TypeCheckEnv
     GenericFuncDefs: AST_to_ANF.GenericFuncDefs
+    SpecRegistry: AST_to_ANF.SpecRegistry
     Registries: AST_to_ANF.Registries
 }
 
 let private buildContext
     (typeCheckEnv: TypeChecking.TypeCheckEnv)
     (genericFuncDefs: AST_to_ANF.GenericFuncDefs)
+    (specRegistry: AST_to_ANF.SpecRegistry)
     (registries: AST_to_ANF.Registries)
     : PipelineContext =
     {
         TypeCheckEnv = typeCheckEnv
         GenericFuncDefs = genericFuncDefs
+        SpecRegistry = specRegistry
         Registries = registries
     }
 
@@ -499,6 +508,13 @@ type PreambleContext = {
     TypeMap: ANF.TypeMap
     /// Preamble's symbolic LIR functions after register allocation
     SymbolicFunctions: LIRSymbolic.Function list
+}
+
+/// Parsed and typechecked preamble analysis for suite-level specialization
+type PreambleAnalysis = {
+    TypedAST: AST.Program
+    TypeCheckEnv: TypeChecking.TypeCheckEnv
+    GenericFuncDefs: AST_to_ANF.GenericFuncDefs
 }
 
 /// Result of compiling stdlib - can be reused across compilations
@@ -575,17 +591,62 @@ let private liftLambdasWithBase
         baseFuncReturnTypes
         program
 
+let private mergeSpecRegistries
+    (baseRegistry: AST_to_ANF.SpecRegistry)
+    (overlayRegistry: AST_to_ANF.SpecRegistry)
+    : AST_to_ANF.SpecRegistry =
+    Map.fold (fun acc key value -> Map.add key value acc) baseRegistry overlayRegistry
+
+let private collectLocalSpecs
+    (genericDefs: AST_to_ANF.GenericFuncDefs)
+    (program: AST.Program)
+    : Set<AST_to_ANF.SpecKey> =
+    let (AST.Program topLevels) = program
+    let allSpecs =
+        topLevels
+        |> List.map (function
+            | AST.FunctionDef f when List.isEmpty f.TypeParams -> AST_to_ANF.collectTypeAppsFromFunc f
+            | AST.Expression e -> AST_to_ANF.collectTypeApps e
+            | _ -> Set.empty)
+        |> List.fold Set.union Set.empty
+    allSpecs
+    |> Set.filter (fun (funcName, _) -> Map.containsKey funcName genericDefs)
+
+type private MonomorphizationMode =
+    | Monomorphize of AST_to_ANF.GenericFuncDefs option
+    | ReplaceTypeApps of AST_to_ANF.SpecRegistry
+    | SpecializeLocalAndReplace of AST_to_ANF.SpecRegistry
+
 let private prepareProgramForAnf
-    (genericFuncDefs: AST_to_ANF.GenericFuncDefs option)
+    (monomorphization: MonomorphizationMode)
     (baseRegistries: AST_to_ANF.Registries)
     (program: AST.Program)
     : Result<AST.Program, string> =
-    let monomorphized =
-        match genericFuncDefs with
-        | None -> AST_to_ANF.monomorphize program
-        | Some defs -> AST_to_ANF.monomorphizeWithExternalDefs defs program
-    let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
-    liftLambdasWithBase baseRegistries inlined
+    let monomorphizedResult =
+        match monomorphization with
+        | Monomorphize None ->
+            Ok (AST_to_ANF.monomorphize program)
+        | Monomorphize (Some defs) ->
+            Ok (AST_to_ANF.monomorphizeWithExternalDefs defs program)
+        | ReplaceTypeApps specRegistry ->
+            AST_to_ANF.replaceTypeAppsInProgramWithRegistry specRegistry program
+        | SpecializeLocalAndReplace specRegistry ->
+            let localGenericDefs = AST_to_ANF.extractGenericFuncDefs program
+            if Map.isEmpty localGenericDefs then
+                AST_to_ANF.replaceTypeAppsInProgramWithRegistry specRegistry program
+            else
+                let localSpecs = collectLocalSpecs localGenericDefs program
+                let specialization = AST_to_ANF.specializeFromSpecs localGenericDefs localSpecs
+                let combinedSpecRegistry =
+                    mergeSpecRegistries specRegistry specialization.SpecRegistry
+                let (AST.Program items) = program
+                let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
+                let programWithSpecializations = AST.Program (specializedTopLevels @ items)
+                AST_to_ANF.replaceTypeAppsInProgramWithRegistry combinedSpecRegistry programWithSpecializations
+    monomorphizedResult
+    |> Result.bind (fun monomorphized ->
+        let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
+        liftLambdasWithBase baseRegistries inlined)
 
 let private buildRegistriesForProgram
     (moduleRegistry: AST.ModuleRegistry)
@@ -604,7 +665,7 @@ let private convertTypedProgramToConversionResult
     (typedProgram: AST.Program)
     : Result<AST_to_ANF.ConversionResult, string> =
     let baseRegistries = emptyRegistries moduleRegistry
-    prepareProgramForAnf None baseRegistries typedProgram
+    prepareProgramForAnf (Monomorphize None) baseRegistries typedProgram
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
@@ -617,11 +678,12 @@ let private convertTypedProgramToConversionResult
                 |> Result.map (fun (anfExpr, _) ->
                     buildConversionResult (ANF.Program (anfFuncs, anfExpr)) registries))))
 
-let private convertTypedProgramToUserOnly
+let private convertTypedProgramToUserOnlyWithMode
     (baseContext: PipelineContext)
+    (monomorphization: MonomorphizationMode)
     (typedProgram: AST.Program)
     : Result<AST_to_ANF.UserOnlyResult, string> =
-    prepareProgramForAnf (Some baseContext.GenericFuncDefs) baseContext.Registries typedProgram
+    prepareProgramForAnf monomorphization baseContext.Registries typedProgram
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
@@ -642,6 +704,15 @@ let private convertTypedProgramToUserOnly
                         ModuleRegistry = registries.ModuleRegistry
                     }))))
 
+let private convertTypedProgramToUserOnly
+    (baseContext: PipelineContext)
+    (typedProgram: AST.Program)
+    : Result<AST_to_ANF.UserOnlyResult, string> =
+    convertTypedProgramToUserOnlyWithMode
+        baseContext
+        (Monomorphize (Some baseContext.GenericFuncDefs))
+        typedProgram
+
 /// Try to delete a file, ignoring any errors
 let private tryDeleteFile (path: string) : unit =
     try File.Delete(path) with _ -> ()
@@ -650,6 +721,26 @@ let private tryDeleteFile (path: string) : unit =
 let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     try Ok (Process.Start(info))
     with ex -> Error ex.Message
+
+/// Parse and typecheck a preamble, returning typed AST + preamble typecheck env
+let analyzePreamble
+    (allowInternal: bool)
+    (stdlib: StdlibResult)
+    (preamble: string)
+    : Result<PreambleAnalysis, string> =
+    let preambleSource = preamble + "\n0"
+    Parser.parseString allowInternal preambleSource
+    |> Result.mapError (fun err -> $"Preamble parse error: {err}")
+    |> Result.bind (fun preambleAst ->
+        TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv preambleAst
+        |> Result.mapError (fun typeErr -> $"Preamble type error: {TypeChecking.typeErrorToString typeErr}")
+        |> Result.map (fun (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
+            let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
+            {
+                TypedAST = typedPreambleAst
+                TypeCheckEnv = preambleTypeCheckEnv
+                GenericFuncDefs = preambleGenericDefs
+            }))
 
 /// Load a .dark file allowing internal identifiers (for stdlib sources)
 let private loadDarkFileAllowInternal (filename: string) : Result<AST.Program, string> =
@@ -746,7 +837,7 @@ let buildStdlib () : Result<StdlibResult, string> =
                     FuncParams = anfResult.FuncParams
                     ModuleRegistry = anfResult.ModuleRegistry
                 }
-                let context = buildContext typeCheckEnv genericFuncDefs registries
+                let context = buildContext typeCheckEnv genericFuncDefs Map.empty registries
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
@@ -793,6 +884,105 @@ let buildStdlib () : Result<StdlibResult, string> =
                                 StdlibTypeMap = typeMap
                             }
 
+/// Build stdlib specializations for a spec set and merge them into the stdlib result
+let buildStdlibSpecializations
+    (stdlib: StdlibResult)
+    (specs: Set<AST_to_ANF.SpecKey>)
+    : Result<StdlibResult, string> =
+    if Set.isEmpty specs then
+        Ok stdlib
+    else
+        let specialization = AST_to_ANF.specializeFromSpecs stdlib.Context.GenericFuncDefs specs
+        let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
+        let existingNames =
+            stdlib.StdlibANFFunctions
+            |> Map.keys
+            |> Set.ofSeq
+        let newSpecializedFuncs =
+            specialization.SpecializedFuncs
+            |> List.filter (fun f -> not (Set.contains f.Name existingNames))
+
+        if List.isEmpty newSpecializedFuncs then
+            let updatedContext = { stdlib.Context with SpecRegistry = combinedSpecRegistry }
+            Ok { stdlib with Context = updatedContext }
+        else
+            let rec mapResult (f: 'a -> Result<'b, string>) (items: 'a list) : Result<'b list, string> =
+                match items with
+                | [] -> Ok []
+                | x :: xs ->
+                    f x
+                    |> Result.bind (fun x' ->
+                        mapResult f xs
+                        |> Result.map (fun xs' -> x' :: xs'))
+
+            AST_to_ANF.splitTopLevels stdlib.TypedAST
+            |> Result.bind (fun (typeDefs, _functions, _expr) ->
+                let (registries, resolvedFunctions) =
+                    buildRegistriesForProgram
+                        stdlib.Context.Registries.ModuleRegistry
+                        stdlib.Context.Registries
+                        typeDefs
+                        newSpecializedFuncs
+
+                let replacedFunctionsResult =
+                    resolvedFunctions
+                    |> mapResult (AST_to_ANF.replaceTypeAppsInFuncWithRegistry combinedSpecRegistry)
+
+                replacedFunctionsResult
+                |> Result.bind (fun replacedFunctions ->
+                    let varGen = ANF.VarGen 0
+                    AST_to_ANF.convertFunctions registries varGen replacedFunctions
+                    |> Result.bind (fun (anfFuncs, _varGen1) ->
+                        let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
+                        let sw = Stopwatch.StartNew()
+                        buildAnf 0 stdlibOptions sw registries anfFuncs
+                        |> Result.bind (fun (anfFunctions, typeMap) ->
+                            let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions
+                            let newAnfFuncMap =
+                                tcoFunctions
+                                |> List.map (fun f -> f.Name, f)
+                                |> Map.ofList
+                            let externalReturnTypes = extractReturnTypes registries.FuncReg
+                            lowerToAllocatedLir
+                                0
+                                stdlibOptions
+                                sw
+                                "stdlib_specializations"
+                                tcoFunctions
+                                typeMap
+                                registries
+                                externalReturnTypes
+                            |> Result.bind (fun allocatedFuncs ->
+                                let (LIR.Program (_, stdlibStrings, stdlibFloats)) = stdlib.LIRProgram
+                                LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allocatedFuncs
+                                |> Result.bind (fun (LIR.Program (newLirFuncs, mergedStrings, mergedFloats)) ->
+                                    let allLirFuncs = stdlib.AllocatedFunctions @ newLirFuncs
+                                    let mergedStdlibTypeMap =
+                                        Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
+                                    let mergedStdlibAnfFunctions =
+                                        Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibANFFunctions newAnfFuncMap
+                                    let allAnfFunctions =
+                                        mergedStdlibAnfFunctions
+                                        |> Map.toList
+                                        |> List.map snd
+                                    let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
+                                    let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
+                                    let updatedContext = {
+                                        stdlib.Context with
+                                            Registries = registries
+                                            SpecRegistry = combinedSpecRegistry
+                                    }
+                                    Ok {
+                                        stdlib with
+                                            Context = updatedContext
+                                            LIRProgram = LIR.Program (allLirFuncs, mergedStrings, mergedFloats)
+                                            AllocatedFunctions = allLirFuncs
+                                            StdlibCallGraph = stdlibCallGraph
+                                            StdlibANFFunctions = mergedStdlibAnfFunctions
+                                            StdlibANFCallGraph = stdlibAnfCallGraph
+                                            StdlibTypeMap = mergedStdlibTypeMap
+                                    }))))))
+
 type private UserCompileLabels = {
     Parse: string
     TypeCheck: string
@@ -806,6 +996,7 @@ type private UserCompilePlan = {
     Options: CompilerOptions
     Stdlib: StdlibResult
     BaseContext: PipelineContext
+    Monomorphization: MonomorphizationMode
     PrebuiltSymbolicFunctions: LIRSymbolic.Function list
     SkipFunctionNames: Set<string>
     EmitFunctionEvents: bool
@@ -849,7 +1040,10 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                     // Pass 2: AST → ANF (user only)
                     if plan.Verbosity >= 1 then println plan.Labels.Anf
                     let userOnlyResult =
-                        convertTypedProgramToUserOnly plan.BaseContext typedUserAst
+                        convertTypedProgramToUserOnlyWithMode
+                            plan.BaseContext
+                            plan.Monomorphization
+                            typedUserAst
                     let anfTime = sw.Elapsed.TotalMilliseconds - parseTime - typeCheckTime
                     if plan.Verbosity >= 2 then
                         let t = System.Math.Round(anfTime, 1)
@@ -976,7 +1170,13 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
 /// Build preamble with stdlib as base, returning extended context for test compilation
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is built once per file and reused for all tests in that file
-let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble: string) (sourceFile: string) (funcLineMap: Map<string, int>) : Result<PreambleContext, string> =
+let buildPreambleContext
+    (allowInternal: bool)
+    (stdlib: StdlibResult)
+    (preamble: string)
+    (_sourceFile: string)
+    (_funcLineMap: Map<string, int>)
+    : Result<PreambleContext, string> =
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
         let emptyContext = {
@@ -1018,7 +1218,7 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                         FuncParams = preambleUserOnly.FuncParams
                         ModuleRegistry = preambleUserOnly.ModuleRegistry
                     }
-                    let pipelineContext = buildContext preambleTypeCheckEnv mergedGenericDefs preambleRegistries
+                    let pipelineContext = buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries
                     let preambleOptions = defaultOptions
                     let sw = Stopwatch.StartNew()
                     match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions with
@@ -1069,6 +1269,84 @@ let buildPreambleContext (allowInternal: bool) (stdlib: StdlibResult) (preamble:
                             }
                             Ok context
 
+/// Build preamble context from a typed preamble analysis and precomputed specializations
+let buildPreambleContextFromAnalysis
+    (stdlib: StdlibResult)
+    (analysis: PreambleAnalysis)
+    (specialization: AST_to_ANF.SpecializationResult)
+    (_sourceFile: string)
+    (_funcLineMap: Map<string, int>)
+    : Result<PreambleContext, string> =
+    let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
+
+    let mergedGenericDefs =
+        Map.fold (fun acc k v -> Map.add k v acc) stdlib.Context.GenericFuncDefs analysis.GenericFuncDefs
+
+    let (AST.Program items) = analysis.TypedAST
+    let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
+    let programWithSpecializations = AST.Program (specializedTopLevels @ items)
+
+    convertTypedProgramToUserOnlyWithMode
+        stdlib.Context
+        (ReplaceTypeApps combinedSpecRegistry)
+        programWithSpecializations
+    |> Result.bind (fun preambleUserOnly ->
+        let preambleRegistries : AST_to_ANF.Registries = {
+            TypeReg = preambleUserOnly.TypeReg
+            VariantLookup = preambleUserOnly.VariantLookup
+            FuncReg = preambleUserOnly.FuncReg
+            FuncParams = preambleUserOnly.FuncParams
+            ModuleRegistry = preambleUserOnly.ModuleRegistry
+        }
+        let pipelineContext = buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries
+        let preambleOptions = defaultOptions
+        let sw = Stopwatch.StartNew()
+        match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions with
+        | Error err ->
+            let rcPrefix = "Reference count insertion error: "
+            let msg =
+                if err.StartsWith(rcPrefix) then
+                    let suffix = err.Substring(rcPrefix.Length)
+                    $"Preamble RC insertion error: {suffix}"
+                else
+                    $"Preamble {err}"
+            Error msg
+        | Ok (preambleFunctions, typeMap) ->
+            let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
+            let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
+            match lowerToAllocatedLir
+                0
+                preambleOptions
+                sw
+                "preamble"
+                tcoFunctions
+                typeMap
+                preambleRegistries
+                preambleExternalReturnTypes with
+            | Error err ->
+                let msg = $"Preamble {err}"
+                Error msg
+            | Ok allocatedFuncs ->
+                let stdlibFuncNames =
+                    stdlib.AllocatedFunctions
+                    |> List.map (fun func -> func.Name)
+                    |> Set.ofList
+                let isStdlibFunction (name: string) : bool =
+                    Set.contains name stdlibFuncNames
+                let preambleOnlyFuncs =
+                    allocatedFuncs
+                    |> List.filter (fun func -> not (isStdlibFunction func.Name))
+                let preambleSymbolicFuncs = preambleOnlyFuncs
+
+                let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
+
+                Ok {
+                    Context = pipelineContext
+                    ANFFunctions = tcoFunctions
+                    TypeMap = mergedTypeMap
+                    SymbolicFunctions = preambleSymbolicFuncs
+                })
+
 let private labelsForMode (mode: CompileMode) : UserCompileLabels =
     match mode with
     | FullProgram ->
@@ -1102,12 +1380,18 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         | FullProgram -> false, false
         | TestExpression -> true, true
 
+    let monomorphization =
+        match request.Mode with
+        | FullProgram -> Monomorphize (Some baseContext.GenericFuncDefs)
+        | TestExpression -> SpecializeLocalAndReplace baseContext.SpecRegistry
+
     {
         AllowInternal = request.AllowInternal
         Verbosity = request.Verbosity
         Options = request.Options
         Stdlib = stdlib
         BaseContext = baseContext
+        Monomorphization = monomorphization
         PrebuiltSymbolicFunctions = prebuiltSymbolic
         SkipFunctionNames = skipNames
         EmitFunctionEvents = emitFunctionEvents

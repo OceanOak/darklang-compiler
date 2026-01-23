@@ -88,7 +88,9 @@ Why ref counting?
 `CompilerLibrary.fs` exposes a narrow surface for tools/tests:
 
 - `buildStdlib` for test harnesses and tooling that prebuild stdlib
-- `buildPreambleContext` for preamble reuse in tests
+- `buildStdlibSpecializations` for suite-level stdlib specializations
+- `buildPreambleContext` for ad-hoc preamble reuse
+- `analyzePreamble` + `buildPreambleContextFromAnalysis` for suite-level preamble specialization
 - `compile` for in-memory compilation via `CompileRequest`
 - `execute` for running compiled binaries with timing
 
