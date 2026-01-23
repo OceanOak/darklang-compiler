@@ -310,12 +310,10 @@ floatMultiBranchIntermediates(10.0, 2.0, 4) = 5.0
 // =====================================================
 // Float Interference Graph Building (Mutation #203)
 // =====================================================
-// Tests the buildFloatInterferenceGraph function which builds edges between
-// all pairs of live float variables. The loop uses:
-//   for i in 0 .. liveList.Length - 2 do
-//     for j in i + 1 .. liveList.Length - 1 do
-// If mutation changes - to +, the loop bounds become invalid (liveList.Length + 2),
-// causing array index out of bounds or incorrect interference edges.
+// Tests the buildFloatInterferenceGraph function which adds edges from each
+// float definition to the current live set (including entry float params).
+// If the live-set edge loop is incorrect, floats that are live together
+// may be assigned the same register.
 // When interference edges are missing, two float variables that are live together
 // may be assigned the same physical register, causing incorrect values.
 
@@ -342,15 +340,8 @@ let f1 = 1.1 in let f2 = 2.2 in let f3 = 3.3 in let f4 = 4.4 in let f5 = 5.5 in 
 // Float Interference Graph LiveOut Processing (Mutation #205)
 // =====================================================
 // Tests the buildFloatInterferenceGraph function's LiveOut processing.
-// The function first processes blockLiveness.LiveOut for each block:
-//   let liveList = Set.toList live
-//   for i in 0 .. liveList.Length - 2 do
-//     for j in i + 1 .. liveList.Length - 1 do
-//       addEdge liveList.[i] liveList.[j]
-// If mutation changes - 2 to + 2, the loop bounds become invalid,
-// causing array index out of bounds or incorrect interference edges.
-// This test specifically targets the LiveOut processing path by having
-// multiple float variables live at the exit of a block.
+// The function initializes live from LiveOut and then adds edges from defs
+// to that set while walking backwards.
 
 // Multiple floats live-out from a block with conditional successor
 // All floats a,b,c,d must be in the LiveOut set of the entry block

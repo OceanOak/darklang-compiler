@@ -80,6 +80,13 @@ type ColoringResult = {
     ChromaticNumber: int            // Max color used + 1
 }
 
+/// Profiling data for Maximum Cardinality Search
+type McsProfile = {
+    VertexCount: int
+    SelectionChecks: int
+    WeightUpdates: int
+    BucketSkips: int
+}
 // ============================================================================
 // Liveness Analysis
 // ============================================================================
@@ -278,6 +285,7 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
     | LIRSymbolic.HeapAlloc (dest, _) -> regToVReg dest
     | LIRSymbolic.HeapLoad (dest, _, _) -> regToVReg dest
     | LIRSymbolic.StringConcat (dest, _, _) -> regToVReg dest
+    | LIRSymbolic.LoadFuncAddr (dest, _) -> regToVReg dest
     | LIRSymbolic.FileReadText (dest, _) -> regToVReg dest
     | LIRSymbolic.FileExists (dest, _) -> regToVReg dest
     | LIRSymbolic.FileWriteText (dest, _, _) -> regToVReg dest
@@ -674,11 +682,15 @@ let getAllocatableRegs (cfg: LIRSymbolic.CFG) : LIR.PhysReg list =
 // ============================================================================
 
 /// Build interference graph from CFG and liveness information
-/// Two variables interfere if they are both live at any program point
-let buildInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, BlockLiveness>) : InterferenceGraph =
+/// Two variables interfere if their live ranges overlap.
+/// In SSA form, it is sufficient to add edges from each definition to live-out variables.
+let buildInterferenceGraph
+    (cfg: LIRSymbolic.CFG)
+    (liveness: Map<LIR.Label, BlockLiveness>)
+    (entryDefs: Set<int>)
+    : InterferenceGraph =
     let mutable vertices = Set.empty<int>
     let mutable edges = Map.empty<int, Set<int>>
-
 
     /// Add a vertex to the graph
     let addVertex (v: int) =
@@ -694,8 +706,13 @@ let buildInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, Bloc
             edges <- Map.add u (Set.add v (Map.find u edges)) edges
             edges <- Map.add v (Set.add u (Map.find v edges)) edges
 
+    let addEdgesToLive (d: int) (live: Set<int>) =
+        for v in live do
+            if v <> d then
+                addEdge d v
+
     // For each block, walk backward through instructions
-    // At each point, all live variables interfere with each other
+    // Add edges from each definition to the current live set
     for kvp in cfg.Blocks do
         let block = kvp.Value
         let label = kvp.Key
@@ -705,21 +722,14 @@ let buildInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, Bloc
         | Some blockLiveness ->
             let mutable live = blockLiveness.LiveOut
 
-            // Add all LiveOut variables as vertices
-            for v in live do
-                addVertex v
-
             // Process terminator
             let termUses = getTerminatorUsedVRegs block.Terminator
             for v in termUses do
-                addVertex v
                 live <- Set.add v live
 
-            // All live variables at this point interfere
-            let liveList = Set.toList live
-            for i in 0 .. liveList.Length - 2 do
-                for j in i + 1 .. liveList.Length - 1 do
-                    addEdge liveList.[i] liveList.[j]
+            // Track all variables that are live at the block end
+            for v in live do
+                addVertex v
 
             // Walk instructions backward
             for instr in List.rev block.Instrs do
@@ -727,33 +737,38 @@ let buildInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, Bloc
                 let def = getDefinedVReg instr
                 let uses = getUsedVRegs instr
 
+                for u in uses do
+                    addVertex u
+
                 // Definition kills liveness
                 match def with
                 | Some d ->
                     addVertex d
-                    // The defined variable interferes with all currently live (except itself)
-                    for v in live do
-                        if v <> d then
-                            addEdge d v
+                    addEdgesToLive d live
                     live <- Set.remove d live
                 | None -> ()
 
                 // Uses make variables live
                 for u in uses do
-                    addVertex u
                     live <- Set.add u live
 
-                // All live variables interfere
-                let liveList = Set.toList live
-                for i in 0 .. liveList.Length - 2 do
-                    for j in i + 1 .. liveList.Length - 1 do
-                        addEdge liveList.[i] liveList.[j]
+            // Parameters are defined at function entry (not by an instruction).
+            // Add interference edges from live entry parameters to other live-in values.
+            if label = cfg.Entry then
+                let entryLiveDefs = Set.intersect entryDefs live
+                for d in entryLiveDefs do
+                    addVertex d
+                    addEdgesToLive d live
 
     { Vertices = vertices; Edges = edges }
 
 /// Build float interference graph from CFG and float liveness information
 /// Two float variables interfere if they are both live at any program point
-let buildFloatInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label, BlockLiveness>) : InterferenceGraph =
+let buildFloatInterferenceGraph
+    (cfg: LIRSymbolic.CFG)
+    (liveness: Map<LIR.Label, BlockLiveness>)
+    (entryDefs: Set<int>)
+    : InterferenceGraph =
     let mutable vertices = Set.empty<int>
     let mutable edges = Map.empty<int, Set<int>>
 
@@ -769,6 +784,10 @@ let buildFloatInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label,
             edges <- Map.add u (Set.add v (Map.find u edges)) edges
             edges <- Map.add v (Set.add u (Map.find v edges)) edges
 
+    let addEdgesToLive (d: int) (live: Set<int>) =
+        for v in live do
+            if v <> d then addEdge d v
+
     for kvp in cfg.Blocks do
         let block = kvp.Value
         let label = kvp.Key
@@ -780,31 +799,28 @@ let buildFloatInterferenceGraph (cfg: LIRSymbolic.CFG) (liveness: Map<LIR.Label,
 
             for v in live do addVertex v
 
-            let liveList = Set.toList live
-            for i in 0 .. liveList.Length - 2 do
-                for j in i + 1 .. liveList.Length - 1 do
-                    addEdge liveList.[i] liveList.[j]
-
             for instr in List.rev block.Instrs do
                 let def = getDefinedFVReg instr
                 let uses = getUsedFVRegs instr
 
+                for u in uses do
+                    addVertex u
+
                 match def with
                 | Some d ->
                     addVertex d
-                    for v in live do
-                        if v <> d then addEdge d v
+                    addEdgesToLive d live
                     live <- Set.remove d live
                 | None -> ()
 
                 for u in uses do
-                    addVertex u
                     live <- Set.add u live
 
-                let liveList = Set.toList live
-                for i in 0 .. liveList.Length - 2 do
-                    for j in i + 1 .. liveList.Length - 1 do
-                        addEdge liveList.[i] liveList.[j]
+            if label = cfg.Entry then
+                let entryLiveDefs = Set.intersect entryDefs live
+                for d in entryLiveDefs do
+                    addVertex d
+                    addEdgesToLive d live
 
     { Vertices = vertices; Edges = edges }
 
@@ -839,45 +855,106 @@ let collectPhiPreferences (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
 
 /// Maximum Cardinality Search - computes Perfect Elimination Ordering for chordal graphs
 /// Returns vertices in PEO order (first vertex is most "central")
-let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
+/// Uses a bucket queue for linear-time selection in terms of vertices + edges.
+let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * McsProfile =
     if Set.isEmpty graph.Vertices then
-        []
+        ([], { VertexCount = 0; SelectionChecks = 0; WeightUpdates = 0; BucketSkips = 0 })
     else
-        let n = Set.count graph.Vertices
         let vertexList = Set.toArray graph.Vertices
+        let n = vertexList.Length
         let vertexToIdx = vertexList |> Array.mapi (fun i v -> (v, i)) |> Map.ofArray
+
+        let neighbors =
+            vertexList
+            |> Array.map (fun v ->
+                match Map.tryFind v graph.Edges with
+                | None -> [||]
+                | Some adj ->
+                    adj
+                    |> Seq.map (fun u ->
+                        match Map.tryFind u vertexToIdx with
+                        | Some idx -> idx
+                        | None -> Crash.crash $"Interference graph missing vertex {u}")
+                    |> Seq.toArray)
 
         // Track weights and ordered status
         let weights = Array.zeroCreate<int> n
         let ordered = Array.create n false
+
+        // Bucket queue state (weight -> list of vertices)
+        let bucketHeads = Array.create n -1
+        let next = Array.create n -1
+        let prev = Array.create n -1
+
+        // Initialize all vertices in bucket 0
+        for i in 0 .. n - 1 do
+            let head = bucketHeads.[0]
+            next.[i] <- head
+            prev.[i] <- -1
+            if head <> -1 then prev.[head] <- i
+            bucketHeads.[0] <- i
+
+        let removeFromBucket (idx: int) (weight: int) : unit =
+            let p = prev.[idx]
+            let nidx = next.[idx]
+            if p <> -1 then
+                next.[p] <- nidx
+            else
+                bucketHeads.[weight] <- nidx
+            if nidx <> -1 then
+                prev.[nidx] <- p
+            next.[idx] <- -1
+            prev.[idx] <- -1
+
+        let addToBucket (idx: int) (weight: int) : unit =
+            let head = bucketHeads.[weight]
+            next.[idx] <- head
+            prev.[idx] <- -1
+            if head <> -1 then prev.[head] <- idx
+            bucketHeads.[weight] <- idx
+
+        let mutable currentMax = 0
         let mutable ordering = []
+        let mutable selectionChecks = 0
+        let mutable weightUpdates = 0
+        let mutable bucketSkips = 0
 
-        // Simple O(V^2) implementation - can optimize with buckets later
         for _ in 0 .. n - 1 do
-            // Find unordered vertex with maximum weight
-            let mutable maxWeight = -1
-            let mutable maxVertex = -1
-            for i in 0 .. n - 1 do
-                if not ordered.[i] && weights.[i] > maxWeight then
-                    maxWeight <- weights.[i]
-                    maxVertex <- i
+            while currentMax >= 0 && bucketHeads.[currentMax] = -1 do
+                currentMax <- currentMax - 1
+                bucketSkips <- bucketSkips + 1
+            if currentMax < 0 then
+                Crash.crash "MCS bucket queue empty before selecting all vertices"
 
-            // Mark as ordered
-            ordered.[maxVertex] <- true
-            ordering <- vertexList.[maxVertex] :: ordering
+            let idx = bucketHeads.[currentMax]
+            selectionChecks <- selectionChecks + 1
+            removeFromBucket idx currentMax
+            ordered.[idx] <- true
+            ordering <- vertexList.[idx] :: ordering
 
-            // Increment weights of unordered neighbors
-            let v = vertexList.[maxVertex]
-            match Map.tryFind v graph.Edges with
-            | Some neighbors ->
-                for u in neighbors do
-                    match Map.tryFind u vertexToIdx with
-                    | Some idx when not ordered.[idx] ->
-                        weights.[idx] <- weights.[idx] + 1
-                    | _ -> ()
-            | None -> ()
+            for nidx in neighbors.[idx] do
+                if not ordered.[nidx] then
+                    let oldWeight = weights.[nidx]
+                    removeFromBucket nidx oldWeight
+                    let newWeight = oldWeight + 1
+                    if newWeight >= n then
+                        Crash.crash $"MCS weight overflow: {newWeight} >= {n}"
+                    weights.[nidx] <- newWeight
+                    addToBucket nidx newWeight
+                    if newWeight > currentMax then currentMax <- newWeight
+                    weightUpdates <- weightUpdates + 1
 
-        List.rev ordering  // Return in PEO order
+        let profile = {
+            VertexCount = n
+            SelectionChecks = selectionChecks
+            WeightUpdates = weightUpdates
+            BucketSkips = bucketSkips
+        }
+        (List.rev ordering, profile)
+
+let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
+    let (ordering, _profile) = maximumCardinalitySearchWithProfile graph
+    ordering
 
 /// Greedy color in reverse PEO order with phi coalescing preferences
 /// For chordal graphs, this produces an optimal coloring.
@@ -1120,11 +1197,11 @@ let floatColoringToAllocation (colorResult: ColoringResult) (registers: LIR.Phys
 /// even if they don't appear in the CFG instructions
 let chordalFloatAllocation (cfg: LIRSymbolic.CFG) (additionalVRegs: Set<int>) : FAllocationResult =
     let liveness = computeFloatLiveness cfg
-    let graph = buildFloatInterferenceGraph cfg liveness
+    let graph = buildFloatInterferenceGraph cfg liveness additionalVRegs
     // Add additional VRegs (like float params) as isolated vertices if not already in graph
-    let graphWithParams =
+    let graphWithParams : InterferenceGraph =
         additionalVRegs
-        |> Set.fold (fun g vregId ->
+        |> Set.fold (fun (g: InterferenceGraph) vregId ->
             if Set.contains vregId g.Vertices then g
             else { g with Vertices = Set.add vregId g.Vertices
                           Edges = Map.add vregId Set.empty g.Edges }
@@ -2397,24 +2474,8 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
     // Step 1: Compute liveness
     let liveness = computeLiveness func.CFG
 
-    // Step 2: Build interference graph
-    let graph = buildInterferenceGraph func.CFG liveness
-
-    // Step 2b: Collect phi coalescing preferences
-    let preferences = collectPhiPreferences func.CFG
-
-    // Step 3: Run chordal graph coloring with phi coalescing
-    // Use optimal register order based on calling pattern:
-    // - Functions with non-tail calls: callee-saved first (save once in prologue/epilogue)
-    // - Leaf functions / tail-call-only: caller-saved first (no prologue overhead)
-    let regs = getAllocatableRegs func.CFG
-    let colorResult = chordalGraphColor graph Map.empty (List.length regs) preferences
-    let result = coloringToAllocation colorResult regs
-
-    // Step 3b: Build parameter info with separate int/float counters (AAPCS64)
-    // Each parameter type uses its own register counter
-    // IMPORTANT: This must happen BEFORE float allocation so we can include
-    // float param FVirtuals in the interference graph
+    // Precompute parameter info with separate int/float counters (AAPCS64)
+    // Needed for entry defs and float allocation.
     let paramsWithTypes = func.TypedParams |> List.map (fun tp -> (tp.Reg, tp.Type))
     let _, _, intParams, floatParams =
         paramsWithTypes
@@ -2429,6 +2490,14 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
     let intParams = List.rev intParams
     let floatParams = List.rev floatParams
 
+    let intParamVRegs =
+        intParams
+        |> List.choose (fun (reg, _) ->
+            match reg with
+            | LIR.Virtual id -> Some id
+            | LIR.Physical _ -> None)
+        |> Set.ofList
+
     // Extract FVirtual IDs from float params for allocation
     // Float params use Virtual register IDs that are also FVirtual IDs
     let floatParamFVirtualIds =
@@ -2438,6 +2507,22 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
             | LIR.Virtual id -> Some id
             | LIR.Physical _ -> None)
         |> Set.ofList
+
+    // Step 2: Build interference graph
+    let graph = buildInterferenceGraph func.CFG liveness intParamVRegs
+
+    // Step 2b: Collect phi coalescing preferences
+    let preferences = collectPhiPreferences func.CFG
+
+    // Step 3: Run chordal graph coloring with phi coalescing
+    // Use optimal register order based on calling pattern:
+    // - Functions with non-tail calls: callee-saved first (save once in prologue/epilogue)
+    // - Leaf functions / tail-call-only: caller-saved first (no prologue overhead)
+    let regs = getAllocatableRegs func.CFG
+    let colorResult = chordalGraphColor graph Map.empty (List.length regs) preferences
+    let result = coloringToAllocation colorResult regs
+
+    // Step 3b: Parameter info already computed (needed for float allocation and param moves)
 
     // Step 3c: Run float register allocation
     // Include float param FVirtuals so they get allocated even if not used in CFG
@@ -2457,7 +2542,7 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
                 | Some (PhysReg allocatedReg) when allocatedReg <> paramReg ->
                     // Need to copy from paramReg to allocatedReg
                     Some (allocatedReg, LIRSymbolic.Reg (LIR.Physical paramReg))
-                | Some (StackSlot offset) ->
+                | Some (StackSlot _offset) ->
                     // Store to stack - not a register move, handle separately
                     None // We'll handle stack stores separately
                 | _ -> None // Same register or not in mapping

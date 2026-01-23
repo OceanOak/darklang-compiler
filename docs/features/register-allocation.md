@@ -60,6 +60,9 @@ Build an interference graph where:
 - **Edges**: Two registers interfere if they are simultaneously live at any program point
 
 In SSA form, this graph is guaranteed to be **chordal** (every cycle of 4+ vertices has a chord).
+To construct the graph efficiently, we add edges from each definition to the
+current live set (LiveOut), and treat entry parameters as definitions at the
+function entry block. This avoids O(|live|^2) clique construction at every point.
 
 ### Phase 3: Chordal Graph Coloring
 
@@ -67,6 +70,7 @@ Chordal graphs can be optimally colored using a simple greedy algorithm:
 
 1. **Maximum Cardinality Search (MCS)**: Compute a Perfect Elimination Ordering (PEO)
    - Process vertices, always picking the vertex with most already-processed neighbors
+   - Uses a bucket queue for linear-time selection
    - This ordering has the property that for chordal graphs, greedy coloring is optimal
 
 2. **Greedy Coloring in Reverse PEO**: Assign colors (registers) to vertices

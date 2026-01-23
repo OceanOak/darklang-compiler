@@ -143,7 +143,18 @@ let testMCSOrdering () : TestResult =
     else
         Error $"MCS should produce valid ordering with all 4 vertices, got {ordering}"
 
-/// Test 10: Diamond CFG pattern (common in SSA)
+/// Test 10: MCS profile should avoid per-vertex scans
+/// For a graph with no edges, linear-time MCS should inspect only one vertex per selection.
+let testMCSProfileLinear () : TestResult =
+    let vertices = [0..15]
+    let graph = makeGraph vertices []
+    let (_ordering, profile) = maximumCardinalitySearchWithProfile graph
+    if profile.SelectionChecks = vertices.Length then
+        Ok ()
+    else
+        Error $"Expected SelectionChecks {vertices.Length}, got {profile.SelectionChecks}"
+
+/// Test 11: Diamond CFG pattern (common in SSA)
 /// Simulates: v0 defined in A, used in B and C, phi in D
 /// v1 defined in B, v2 defined in C, v3 = phi(v1, v2)
 let testDiamondCFG () : TestResult =
@@ -158,7 +169,7 @@ let testDiamondCFG () : TestResult =
     else
         Error $"Diamond CFG should need at most 3 colors, got {result.ChromaticNumber}"
 
-/// Test 11: Star graph (one central vertex connected to all others)
+/// Test 12: Star graph (one central vertex connected to all others)
 let testStarGraph () : TestResult =
     // Center vertex 0 connected to 1, 2, 3, 4
     let graph = makeGraph [0; 1; 2; 3; 4] [(0, 1); (0, 2); (0, 3); (0, 4)]
@@ -175,7 +186,7 @@ let testStarGraph () : TestResult =
     else
         Error $"Star graph needs 2 colors, got {result.ChromaticNumber}"
 
-/// Test 12: Multiple pre-colored vertices
+/// Test 13: Multiple pre-colored vertices
 let testMultiplePrecolored () : TestResult =
     // Triangle with two vertices pre-colored
     let graph = makeGraph [0; 1; 2] [(0, 1); (0, 2); (1, 2)]
@@ -186,7 +197,7 @@ let testMultiplePrecolored () : TestResult =
     else
         Error $"Pre-coloring not respected: 0→{result.Colors.[0]}, 1→{result.Colors.[1]}, 2→{result.Colors.[2]}"
 
-/// Test 13: Large clique exactly matches register count
+/// Test 14: Large clique exactly matches register count
 let testExactClique () : TestResult =
     // Clique of 8 with 8 colors - should use all colors, no spills
     let vertices = [0..7]
@@ -202,7 +213,7 @@ let testExactClique () : TestResult =
     else
         Error $"Clique of 8 with 8 colors should work with no spills, got chromatic {result.ChromaticNumber}, spills {Set.count result.Spills}"
 
-/// Test 14: Disconnected components
+/// Test 15: Disconnected components
 let testDisconnectedComponents () : TestResult =
     // Two separate edges: 0--1, 2--3
     let graph = makeGraph [0; 1; 2; 3] [(0, 1); (2, 3)]
@@ -213,7 +224,7 @@ let testDisconnectedComponents () : TestResult =
     else
         Error $"Disconnected components should reuse colors, got {result.ChromaticNumber}"
 
-/// Test 15: Build interference graph from real LIR CFG
+/// Test 16: Build interference graph from real LIR CFG
 /// Simulates a function (a, b) => a * b where parameters should interfere
 let testBuildFromCFG () : TestResult =
     // Create a minimal CFG for: (a, b) => a * b
@@ -241,7 +252,7 @@ let testBuildFromCFG () : TestResult =
 
     // Compute liveness and build interference graph
     let liveness = RegisterAllocation.computeLiveness cfg
-    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness
+    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness (Set.ofList [0; 1])
 
     // v0 and v1 should both be in the graph
     if not (Set.contains 0 graph.Vertices) then
@@ -259,7 +270,7 @@ let testBuildFromCFG () : TestResult =
         else
             Error $"v0 and v1 should interfere. v0 neighbors: {v0Neighbors}, v1 neighbors: {v1Neighbors}"
 
-/// Test 16: Full pipeline - CFG to allocation using chordal graph coloring
+/// Test 17: Full pipeline - CFG to allocation using chordal graph coloring
 /// Verify that interfering parameters get different register colors
 let testFullChordalPipeline () : TestResult =
     // Same CFG as testBuildFromCFG
@@ -284,7 +295,7 @@ let testFullChordalPipeline () : TestResult =
 
     // Build interference graph and run chordal coloring
     let liveness = RegisterAllocation.computeLiveness cfg
-    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness
+    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness (Set.ofList [0; 1])
     let colorResult = chordalGraphColor graph Map.empty 16 Map.empty  // 16 available colors
 
     // v0 and v1 must have different colors (they interfere)
@@ -297,7 +308,7 @@ let testFullChordalPipeline () : TestResult =
     | _ ->
         Error $"v0 or v1 not found in coloring. Colors: {colorResult.Colors}"
 
-/// Test 17: Simulates apply2(f, a, b) = f(a, b) pattern
+/// Test 18: Simulates apply2(f, a, b) = f(a, b) pattern
 /// f, a, b are all used in the ClosureCall - they should all interfere
 let testApply2Pattern () : TestResult =
     // Simulate: def apply2(f, a, b) = f(a, b)
@@ -328,7 +339,7 @@ let testApply2Pattern () : TestResult =
 
     // Build interference graph
     let liveness = RegisterAllocation.computeLiveness cfg
-    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness
+    let graph = RegisterAllocation.buildInterferenceGraph cfg liveness (Set.ofList [0; 1; 2])
 
     // All of v0, v1, v2 should be in the graph and interfere with each other
     let v0Neighbors = Map.tryFind 0 graph.Edges |> Option.defaultValue Set.empty
@@ -371,6 +382,7 @@ let tests = [
     ("Spill required", testSpillRequired)
     ("Pre-coloring respected", testPrecoloring)
     ("MCS ordering", testMCSOrdering)
+    ("MCS profile linear", testMCSProfileLinear)
     ("Diamond CFG", testDiamondCFG)
     ("Star graph", testStarGraph)
     ("Multiple pre-colored", testMultiplePrecolored)

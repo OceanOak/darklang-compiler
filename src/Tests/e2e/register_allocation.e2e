@@ -155,13 +155,25 @@ let v1 = 1 in let v2 = 2 in let v3 = 3 in let v4 = 4 in let v5 = 5 in let v6 = 6
 
 
 // ===================================================================
+// Phi Sources After Block Splitting
+// ===================================================================
+
+// Modulo lowering inserts a check block, which must not break phi predecessor labels.
+def modLoop(a: Int64, b: Int64) : Int64 =
+    if b == 0 then a
+    else modLoop(b, a % b)
+
+modLoop(48, 18) = 6
+
+
+// ===================================================================
 // Interference Graph Building Tests (Mutation #201)
 // ===================================================================
 
 // Tests for interference edge generation at terminators.
-// The buildInterferenceGraph function builds edges between all pairs
-// of live variables at each program point. Mutation #201 affects the
-// loop bounds for generating these pairwise edges.
+// The buildInterferenceGraph function adds edges from each definition
+// to the current live set (plus entry parameter defs). Mutation #201
+// affects the loop bounds when adding edges to the live set.
 
 // Multiple variables live at conditional branch terminator
 // Variables a,b,c,d,e are all live at the if condition check

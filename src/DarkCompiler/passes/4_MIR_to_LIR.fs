@@ -1501,7 +1501,7 @@ let selectBlocksWithModuloChecks
     (floatRegs: Set<int>)
     (errorLabel: LIR.Label)
     (state: TempState)
-    : Result<LIRSymbolic.BasicBlock list * TempState, string> =
+    : Result<LIRSymbolic.BasicBlock list * LIR.Label * TempState, string> =
     let (MIR.Label baseLabel) = block.Label
     let rec loop instrs counter currentLabel currentInstrs blocksRev currentState =
         match instrs with
@@ -1543,7 +1543,7 @@ let selectBlocksWithModuloChecks
                     Instrs = currentInstrs @ termInstrs
                     Terminator = lirTerm
                 }
-            Ok (List.rev (finalBlock :: blocksRev), nextState)
+            Ok (List.rev (finalBlock :: blocksRev), currentLabel, nextState)
 
 /// Convert MIR CFG to LIR CFG
 let selectCFG
@@ -1558,18 +1558,19 @@ let selectCFG
     let lirEntry = convertLabel cfg.Entry
 
     let blockList = cfg.Blocks |> Map.toList
-    let rec buildBlocks remaining currentState acc =
+    let rec buildBlocks remaining currentState blocksAcc labelMapAcc =
         match remaining with
-        | [] -> Ok (List.rev acc |> List.concat, currentState)
+        | [] -> Ok (List.rev blocksAcc |> List.concat, labelMapAcc |> Map.ofList, currentState)
         | (_label, block) :: rest ->
             match selectBlocksWithModuloChecks block variantRegistry recordRegistry returnType floatRegs errorLabel currentState with
             | Error err -> Error err
-            | Ok (lirBlocks, nextState) ->
-                buildBlocks rest nextState (lirBlocks :: acc)
+            | Ok (lirBlocks, finalLabel, nextState) ->
+                let originalLabel = convertLabel block.Label
+                buildBlocks rest nextState (lirBlocks :: blocksAcc) ((originalLabel, finalLabel) :: labelMapAcc)
 
-    match buildBlocks blockList state [] with
+    match buildBlocks blockList state [] [] with
     | Error err -> Error err
-    | Ok (lirBlocks, _finalState) ->
+    | Ok (lirBlocks, labelMap, _finalState) ->
         let needsErrorBlock =
             lirBlocks
             |> List.exists (fun block ->
@@ -1599,9 +1600,28 @@ let selectCFG
         if hasDuplicate then
             Error "Internal error: duplicate LIR labels after modulo check insertion"
         else
+            let remapLabel (label: LIR.Label) : LIR.Label =
+                match Map.tryFind label labelMap with
+                | Some mapped -> mapped
+                | None -> label
+
+            let remapPhiInstr (instr: LIRSymbolic.Instr) : LIRSymbolic.Instr =
+                match instr with
+                | LIRSymbolic.Phi (dest, sources, valueType) ->
+                    let sources' = sources |> List.map (fun (op, pred) -> (op, remapLabel pred))
+                    LIRSymbolic.Phi (dest, sources', valueType)
+                | LIRSymbolic.FPhi (dest, sources) ->
+                    let sources' = sources |> List.map (fun (src, pred) -> (src, remapLabel pred))
+                    LIRSymbolic.FPhi (dest, sources')
+                | _ -> instr
+
+            let remappedBlocks =
+                blocksWithError
+                |> List.map (fun block -> { block with Instrs = block.Instrs |> List.map remapPhiInstr })
+
             Ok {
                 Entry = lirEntry
-                Blocks = blocksWithError |> List.map (fun block -> (block.Label, block)) |> Map.ofList
+                Blocks = remappedBlocks |> List.map (fun block -> (block.Label, block)) |> Map.ofList
             }
 
 /// Check if any function has more than 8 parameters (ARM64 calling convention limit)
