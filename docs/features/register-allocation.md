@@ -129,6 +129,12 @@ Float values use a separate register file (D0-D15). The allocator tracks:
 
 Float registers D0-D7 are caller-saved and saved/restored around calls when live.
 
+## Coalescing
+
+The allocator prefers to eliminate redundant moves:
+- Non-interfering move-related vregs are merged before coloring.
+- Phi-related preferences remain soft hints during greedy coloring.
+
 ## Key Data Structures
 
 ```fsharp
@@ -164,7 +170,7 @@ type LiveInterval = {
 | `5_RegisterAllocation.fs:85-400` | Liveness analysis |
 | `5_RegisterAllocation.fs:743-906` | Interference graph construction |
 | `5_RegisterAllocation.fs:907-951` | Maximum Cardinality Search (PEO) |
-| `5_RegisterAllocation.fs:952-1092` | Greedy coloring with phi coalescing |
+| `5_RegisterAllocation.fs:952-1092` | Greedy coloring with coalescing preferences |
 | `5_RegisterAllocation.fs:1093-1140` | Main chordal allocation entry points |
 
 ## Tests

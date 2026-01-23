@@ -45,6 +45,17 @@ let makeCFG (entry: Label) (blocks: BasicBlock list) : CFG =
     let blockMap = blocks |> List.map (fun b -> (b.Label, b)) |> Map.ofList
     { Entry = entry; Blocks = blockMap }
 
+/// Extract label name for error messages
+let labelName (label: Label) : string =
+    match label with
+    | LIR.Label name -> name
+
+/// Lookup a block in the CFG and return a test failure when missing
+let withBlock (label: Label) (cfg: CFG) (f: BasicBlock -> TestResult) : TestResult =
+    match Map.tryFind label cfg.Blocks with
+    | Some block -> f block
+    | None -> Error $"Missing block {labelName label}"
+
 /// Check if a block contains any phi instructions
 let hasPhiNodes (block: BasicBlock) : bool =
     block.Instrs |> List.exists (fun instr ->
@@ -113,20 +124,20 @@ let testSimplePhiResolution () : TestResult =
     let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
 
     // Check D has no phi nodes
-    let blockD' = Map.find labelD resolvedCFG.Blocks
-    if hasPhiNodes blockD' then
-        Error "Block D should not have phi nodes after resolution"
-    // Check B has a move v3 <- v1 (X4 <- X2)
-    else
-        let blockB' = Map.find labelB resolvedCFG.Blocks
-        if not (hasMove blockB' (phys X4) (Reg (phys X2))) then
-            Error "Block B should have Mov(X4, X2) for phi resolution"
+    withBlock labelD resolvedCFG (fun blockD' ->
+        if hasPhiNodes blockD' then
+            Error "Block D should not have phi nodes after resolution"
+        // Check B has a move v3 <- v1 (X4 <- X2)
         else
-            let blockC' = Map.find labelC resolvedCFG.Blocks
-            if not (hasMove blockC' (phys X4) (Reg (phys X3))) then
-                Error "Block C should have Mov(X4, X3) for phi resolution"
-            else
-                Ok ()
+            withBlock labelB resolvedCFG (fun blockB' ->
+                if not (hasMove blockB' (phys X4) (Reg (phys X2))) then
+                    Error "Block B should have Mov(X4, X2) for phi resolution"
+                else
+                    withBlock labelC resolvedCFG (fun blockC' ->
+                        if not (hasMove blockC' (phys X4) (Reg (phys X3))) then
+                            Error "Block C should have Mov(X4, X3) for phi resolution"
+                        else
+                            Ok ())))
 
 /// Test: Multiple phis needing parallel moves
 /// Two phis in the same block that need proper sequencing:
@@ -149,7 +160,7 @@ let testMultiplePhisParallel () : TestResult =
     let blockC = makeJumpBlock labelC [Mov (vr 2, Imm 20L); Mov (vr 6, Imm 60L)] labelD
     let phi1 = Phi (vr 3, [(vreg 1, labelB); (vreg 2, labelC)], None)
     let phi2 = Phi (vr 4, [(vreg 5, labelB); (vreg 6, labelC)], None)
-    let blockD = makeRetBlock labelD [phi1; phi2]
+    let blockD = makeRetBlock labelD [phi1; phi2; Mov (vr 7, vreg 3); Mov (vr 8, vreg 4)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
@@ -167,18 +178,18 @@ let testMultiplePhisParallel () : TestResult =
     let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
 
     // D should have no phi nodes
-    let blockD' = Map.find labelD resolvedCFG.Blocks
-    if hasPhiNodes blockD' then
-        Error "Block D should not have phi nodes after resolution"
-    // B should have 2 moves (possibly more if there are cycles)
-    else
-        let blockB' = Map.find labelB resolvedCFG.Blocks
-        let moveCount = countMoves blockB'
-        // Original had 2 movs (for v1, v5), plus 2 more for phi resolution
-        if moveCount < 4 then
-            Error $"Block B should have at least 4 moves, got {moveCount}"
+    withBlock labelD resolvedCFG (fun blockD' ->
+        if hasPhiNodes blockD' then
+            Error "Block D should not have phi nodes after resolution"
+        // B should have 2 moves (possibly more if there are cycles)
         else
-            Ok ()
+            withBlock labelB resolvedCFG (fun blockB' ->
+                let moveCount = countMoves blockB'
+                // Original had 2 movs (for v1, v5), plus 2 more for phi resolution
+                if moveCount < 4 then
+                    Error $"Block B should have at least 4 moves, got {moveCount}"
+                else
+                    Ok ()))
 
 /// Test: Phi with swap (creates a cycle)
 /// When two phis swap values, we need temp register:
@@ -204,7 +215,7 @@ let testPhiSwap () : TestResult =
     // If v3→X1 and v4→X2, and v1→X1 and v2→X2, then this is a direct swap
     let phi1 = Phi (vr 3, [(vreg 2, labelB); (vreg 5, labelC)], None)  // v3 ← v2 from B
     let phi2 = Phi (vr 4, [(vreg 1, labelB); (vreg 6, labelC)], None)  // v4 ← v1 from B
-    let blockD = makeRetBlock labelD [phi1; phi2]
+    let blockD = makeRetBlock labelD [phi1; phi2; Mov (vr 7, vreg 3); Mov (vr 8, vreg 4)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
@@ -224,18 +235,18 @@ let testPhiSwap () : TestResult =
     let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
 
     // D should have no phi nodes
-    let blockD' = Map.find labelD resolvedCFG.Blocks
-    if hasPhiNodes blockD' then
-        Error "Block D should not have phi nodes after resolution"
-    else
-        // B should have moves for the swap (3 moves: save to temp, move, restore from temp)
-        let blockB' = Map.find labelB resolvedCFG.Blocks
-        let moveCount = countMoves blockB'
-        // Original 2 movs + swap needs 3 moves (using temp)
-        if moveCount < 5 then
-            Error $"Block B should have at least 5 moves for swap, got {moveCount}"
+    withBlock labelD resolvedCFG (fun blockD' ->
+        if hasPhiNodes blockD' then
+            Error "Block D should not have phi nodes after resolution"
         else
-            Ok ()
+            // B should have moves for the swap (3 moves: save to temp, move, restore from temp)
+            withBlock labelB resolvedCFG (fun blockB' ->
+                let moveCount = countMoves blockB'
+                // Original 2 movs + swap needs 3 moves (using temp)
+                if moveCount < 5 then
+                    Error $"Block B should have at least 5 moves for swap, got {moveCount}"
+                else
+                    Ok ()))
 
 /// Test: Phi with immediate source
 /// When a phi source is an immediate, we should move the immediate directly
@@ -270,16 +281,16 @@ let testPhiWithImmediate () : TestResult =
     let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
 
     // D should have no phi nodes
-    let blockD' = Map.find labelD resolvedCFG.Blocks
-    if hasPhiNodes blockD' then
-        Error "Block D should not have phi nodes after resolution"
-    else
-        // B should have a move of immediate to X2
-        let blockB' = Map.find labelB resolvedCFG.Blocks
-        if not (hasMove blockB' (phys X2) (Imm 10L)) then
-            Error "Block B should have Mov(X2, Imm 10) for phi resolution"
+    withBlock labelD resolvedCFG (fun blockD' ->
+        if hasPhiNodes blockD' then
+            Error "Block D should not have phi nodes after resolution"
         else
-            Ok ()
+            // B should have a move of immediate to X2
+            withBlock labelB resolvedCFG (fun blockB' ->
+                if not (hasMove blockB' (phys X2) (Imm 10L)) then
+                    Error "Block B should have Mov(X2, Imm 10) for phi resolution"
+                else
+                    Ok ()))
 
 /// Test: Loop phi
 /// Loop back edge needs phi resolution
@@ -318,21 +329,100 @@ let testLoopPhi () : TestResult =
     let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
 
     // B should have no phi nodes
-    let blockB' = Map.find labelB resolvedCFG.Blocks
-    if hasPhiNodes blockB' then
-        Error "Block B should not have phi nodes after resolution"
-    else
-        // A should have move v1 ← v0 (X2 ← X1)
-        let blockA' = Map.find labelA resolvedCFG.Blocks
-        if not (hasMove blockA' (phys X2) (Reg (phys X1))) then
-            Error "Block A should have Mov(X2, X1) for phi resolution"
+    withBlock labelB resolvedCFG (fun blockB' ->
+        if hasPhiNodes blockB' then
+            Error "Block B should not have phi nodes after resolution"
         else
-            // C should have move v1 ← v2 (X2 ← X3)
-            let blockC' = Map.find labelC resolvedCFG.Blocks
-            if not (hasMove blockC' (phys X2) (Reg (phys X3))) then
-                Error "Block C should have Mov(X2, X3) for phi resolution"
-            else
-                Ok ()
+            // A should have move v1 ← v0 (X2 ← X1)
+            withBlock labelA resolvedCFG (fun blockA' ->
+                if not (hasMove blockA' (phys X2) (Reg (phys X1))) then
+                    Error "Block A should have Mov(X2, X1) for phi resolution"
+                else
+                    // C should have move v1 ← v2 (X2 ← X3)
+                    withBlock labelC resolvedCFG (fun blockC' ->
+                        if not (hasMove blockC' (phys X2) (Reg (phys X3))) then
+                            Error "Block C should have Mov(X2, X3) for phi resolution"
+                        else
+                            Ok ())))
+
+/// Test: Dead phi destinations should not emit moves
+let testDeadPhiPruned () : TestResult =
+    let labelA = makeLabel "A"
+    let labelB = makeLabel "B"
+    let labelC = makeLabel "C"
+    let labelD = makeLabel "D"
+
+    let blockA = makeBranchBlock labelA [Mov (vr 0, Imm 1L)] (vr 0) labelB labelC
+    let blockB = makeJumpBlock labelB [Mov (vr 1, Imm 10L); Mov (vr 5, Imm 50L)] labelD
+    let blockC = makeJumpBlock labelC [Mov (vr 2, Imm 20L); Mov (vr 6, Imm 60L)] labelD
+    let livePhi = Phi (vr 3, [(vreg 1, labelB); (vreg 2, labelC)], None)
+    let deadPhi = Phi (vr 4, [(vreg 5, labelB); (vreg 6, labelC)], None)
+    let blockD = makeRetBlock labelD [livePhi; deadPhi; Mov (vr 7, vreg 3)]
+
+    let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
+
+    let allocation : Map<int, RegisterAllocation.Allocation> =
+        Map.ofList [
+            (0, RegisterAllocation.PhysReg X1)
+            (1, RegisterAllocation.PhysReg X2)
+            (2, RegisterAllocation.PhysReg X3)
+            (3, RegisterAllocation.PhysReg X4)
+            (4, RegisterAllocation.PhysReg X5)
+            (5, RegisterAllocation.PhysReg X6)
+            (6, RegisterAllocation.PhysReg X7)
+            (7, RegisterAllocation.PhysReg X19)
+        ]
+
+    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    withBlock labelD resolvedCFG (fun blockD' ->
+        if hasPhiNodes blockD' then
+            Error "Block D should not have phi nodes after resolution"
+        else
+            withBlock labelB resolvedCFG (fun blockB' ->
+                if hasMove blockB' (phys X5) (Reg (phys X6)) then
+                    Error "Block B should not move dead phi destination"
+                else
+                    withBlock labelC resolvedCFG (fun blockC' ->
+                        if hasMove blockC' (phys X5) (Reg (phys X7)) then
+                            Error "Block C should not move dead phi destination"
+                        else
+                            Ok ())))
+
+/// Test: Loop phi should be coalesced to avoid backedge moves
+let testLoopPhiCoalesced () : TestResult =
+    let labelEntry = makeLabel "loop_entry"
+    let labelLoop = makeLabel "loop_body"
+    let labelBack = makeLabel "loop_back"
+    let labelExit = makeLabel "loop_exit"
+
+    let blockEntry = makeJumpBlock labelEntry [Mov (vr 3, Imm 0L)] labelLoop
+    let phiInstr = Phi (vr 0, [(vreg 3, labelEntry); (vreg 2, labelBack)], None)
+    let loopInstrs = [
+        phiInstr
+        Cmp (vr 0, Imm 10L)
+        Cset (vr 4, EQ)
+        Add (vr 1, vr 0, Imm 1L)
+        Mov (vr 2, vreg 1)
+    ]
+    let blockLoop = makeBranchBlock labelLoop loopInstrs (vr 4) labelExit labelBack
+    let blockBack = makeJumpBlock labelBack [] labelLoop
+    let blockExit = makeRetBlock labelExit []
+
+    let cfg = makeCFG labelEntry [blockEntry; blockLoop; blockBack; blockExit]
+    let func : LIRSymbolic.Function = {
+        Name = "phi_coalesce_loop"
+        TypedParams = []
+        CFG = cfg
+        StackSize = 0
+        UsedCalleeSaved = []
+    }
+
+    let allocated = RegisterAllocation.allocateRegisters func
+    withBlock labelBack allocated.CFG (fun backBlock ->
+        if countMoves backBlock = 0 then
+            Ok ()
+        else
+            Error "Backedge should not need moves when phi is coalesced")
 
 let tests = [
     ("simple phi resolution", testSimplePhiResolution)
@@ -340,6 +430,8 @@ let tests = [
     ("phi swap", testPhiSwap)
     ("phi with immediate", testPhiWithImmediate)
     ("loop phi", testLoopPhi)
+    ("dead phi pruned", testDeadPhiPruned)
+    ("loop phi coalesced", testLoopPhiCoalesced)
 ]
 
 /// Run all phi resolution tests

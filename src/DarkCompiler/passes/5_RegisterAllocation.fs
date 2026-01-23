@@ -853,6 +853,41 @@ let collectPhiPreferences (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
 
     preferences
 
+/// Collect move-related coalescing pairs from CFG.
+/// Returns undirected pairs of virtual registers that are directly moved between.
+let collectMovePairs (cfg: LIRSymbolic.CFG) : (int * int) list =
+    let normalize (a: int) (b: int) =
+        if a < b then (a, b) else (b, a)
+    cfg.Blocks
+    |> Map.fold (fun acc _ block ->
+        block.Instrs
+        |> List.fold (fun acc instr ->
+            match instr with
+            | LIRSymbolic.Mov (LIR.Virtual destId, LIRSymbolic.Reg (LIR.Virtual srcId)) ->
+                Set.add (normalize destId srcId) acc
+            | _ -> acc) acc) Set.empty
+    |> Set.toList
+
+/// Collect phi-related coalescing pairs from CFG.
+/// Returns undirected pairs of virtual registers that flow into the same phi destination.
+let collectPhiPairs (cfg: LIRSymbolic.CFG) : (int * int) list =
+    let normalize (a: int) (b: int) =
+        if a < b then (a, b) else (b, a)
+    cfg.Blocks
+    |> Map.fold (fun acc _ block ->
+        block.Instrs
+        |> List.fold (fun acc instr ->
+            match instr with
+            | LIRSymbolic.Phi (LIR.Virtual destId, sources, _) ->
+                sources
+                |> List.fold (fun acc (src, _) ->
+                    match src with
+                    | LIRSymbolic.Reg (LIR.Virtual srcId) when srcId <> destId ->
+                        Set.add (normalize destId srcId) acc
+                    | _ -> acc) acc
+            | _ -> acc) acc) Set.empty
+    |> Set.toList
+
 /// Maximum Cardinality Search - computes Perfect Elimination Ordering for chordal graphs
 /// Returns vertices in PEO order (first vertex is most "central")
 /// Uses a bucket queue for linear-time selection in terms of vertices + edges.
@@ -955,6 +990,200 @@ let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * 
 let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
     let (ordering, _profile) = maximumCardinalitySearchWithProfile graph
     ordering
+
+type private CoalescedGraph = {
+    Graph: InterferenceGraph
+    RepMap: Map<int, int>
+    RepMembers: Map<int, Set<int>>
+    Preferences: Map<int, Set<int>>
+    Precolored: Map<int, int>
+}
+
+let private coalesceGraph
+    (graph: InterferenceGraph)
+    (precolored: Map<int, int>)
+    (movePairs: (int * int) list)
+    (preferences: Map<int, Set<int>>)
+    : CoalescedGraph =
+    if Set.isEmpty graph.Vertices then
+        { Graph = graph
+          RepMap = Map.empty
+          RepMembers = Map.empty
+          Preferences = Map.empty
+          Precolored = precolored }
+    else
+        let vertexList = Set.toArray graph.Vertices
+        let n = vertexList.Length
+        let vertexToIdx = vertexList |> Array.mapi (fun i v -> (v, i)) |> Map.ofArray
+
+        let parent = Array.init n id
+        let sizes = Array.create n 1
+        let members = vertexList |> Array.map (fun v -> Set.singleton v)
+        let neighbors =
+            vertexList
+            |> Array.map (fun v -> Map.tryFind v graph.Edges |> Option.defaultValue Set.empty)
+        let precolor =
+            vertexList
+            |> Array.map (fun v -> Map.tryFind v precolored)
+
+        let rec find idx =
+            let p = parent.[idx]
+            if p = idx then
+                idx
+            else
+                let root = find p
+                parent.[idx] <- root
+                root
+
+        let canMerge rootA rootB =
+            if rootA = rootB then
+                false
+            else
+                match precolor.[rootA], precolor.[rootB] with
+                | Some c1, Some c2 when c1 <> c2 -> false
+                | _ ->
+                    let neighborsA = neighbors.[rootA]
+                    let membersB = members.[rootB]
+                    if not (Set.isEmpty (Set.intersect neighborsA membersB)) then
+                        false
+                    else
+                        let neighborsB = neighbors.[rootB]
+                        let membersA = members.[rootA]
+                        Set.isEmpty (Set.intersect neighborsB membersA)
+
+        let union rootA rootB =
+            let ra, rb =
+                if sizes.[rootA] < sizes.[rootB] then
+                    (rootB, rootA)
+                else
+                    (rootA, rootB)
+            parent.[rb] <- ra
+            sizes.[ra] <- sizes.[ra] + sizes.[rb]
+            members.[ra] <- Set.union members.[ra] members.[rb]
+            neighbors.[ra] <- Set.union neighbors.[ra] neighbors.[rb]
+            match precolor.[ra], precolor.[rb] with
+            | None, Some color -> precolor.[ra] <- Some color
+            | _ -> ()
+            members.[rb] <- Set.empty
+            neighbors.[rb] <- Set.empty
+            precolor.[rb] <- None
+
+        for (u, v) in movePairs do
+            match Map.tryFind u vertexToIdx, Map.tryFind v vertexToIdx with
+            | Some idxU, Some idxV ->
+                let rootU = find idxU
+                let rootV = find idxV
+                if canMerge rootU rootV then
+                    union rootU rootV
+            | _ -> ()
+
+        let repMembers =
+            [0 .. n - 1]
+            |> List.fold (fun acc idx ->
+                if parent.[idx] = idx then
+                    let memberSet = members.[idx]
+                    if Set.isEmpty memberSet then acc
+                    else
+                        let rep = Set.minElement memberSet
+                        Map.add rep memberSet acc
+                else
+                    acc) Map.empty
+
+        let repMap =
+            repMembers
+            |> Map.fold (fun acc rep memberSet ->
+                memberSet |> Set.fold (fun acc v -> Map.add v rep acc) acc) Map.empty
+
+        let repPrecolored =
+            precolored
+            |> Map.fold (fun acc v color ->
+                match Map.tryFind v repMap with
+                | Some rep -> Map.add rep color acc
+                | None -> acc) Map.empty
+
+        let addPreference (v1: int) (v2: int) (prefs: Map<int, Set<int>>) : Map<int, Set<int>> =
+            if v1 = v2 then prefs
+            else
+                let existing1 = Map.tryFind v1 prefs |> Option.defaultValue Set.empty
+                let prefs = Map.add v1 (Set.add v2 existing1) prefs
+                let existing2 = Map.tryFind v2 prefs |> Option.defaultValue Set.empty
+                Map.add v2 (Set.add v1 existing2) prefs
+
+        let repPreferences =
+            preferences
+            |> Map.fold (fun acc v partners ->
+                match Map.tryFind v repMap with
+                | None -> acc
+                | Some repV ->
+                    partners
+                    |> Set.fold (fun acc partner ->
+                        match Map.tryFind partner repMap with
+                        | Some repP when repP <> repV -> addPreference repV repP acc
+                        | _ -> acc) acc) Map.empty
+
+        let repVertices =
+            repMembers |> Map.toSeq |> Seq.map fst |> Set.ofSeq
+
+        let addVertex (v: int) (edges: Map<int, Set<int>>) =
+            if Map.containsKey v edges then edges else Map.add v Set.empty edges
+
+        let addEdge (u: int) (v: int) (edges: Map<int, Set<int>>) =
+            if u = v then edges
+            else
+                let edges = addVertex u edges
+                let edges = addVertex v edges
+                let neighborsU =
+                    match Map.tryFind u edges with
+                    | Some neighbors -> neighbors
+                    | None -> Crash.crash $"coalesceMoves: Missing vertex {u}"
+                let neighborsV =
+                    match Map.tryFind v edges with
+                    | Some neighbors -> neighbors
+                    | None -> Crash.crash $"coalesceMoves: Missing vertex {v}"
+                let edges = Map.add u (Set.add v neighborsU) edges
+                Map.add v (Set.add u neighborsV) edges
+
+        let repEdges =
+            graph.Edges
+            |> Map.fold (fun edges v neighbors ->
+                match Map.tryFind v repMap with
+                | None -> edges
+                | Some repV ->
+                    neighbors
+                    |> Set.fold (fun edges n ->
+                        match Map.tryFind n repMap with
+                        | Some repN when repN <> repV -> addEdge repV repN edges
+                        | _ -> edges) edges) Map.empty
+            |> fun edges ->
+                repVertices |> Set.fold (fun edges v -> addVertex v edges) edges
+
+        let repGraph = { Vertices = repVertices; Edges = repEdges }
+
+        { Graph = repGraph
+          RepMap = repMap
+          RepMembers = repMembers
+          Preferences = repPreferences
+          Precolored = repPrecolored }
+
+let private expandColoring (result: ColoringResult) (repMembers: Map<int, Set<int>>) : ColoringResult =
+    let expandedColors =
+        result.Colors
+        |> Map.fold (fun acc rep color ->
+            match Map.tryFind rep repMembers with
+            | Some members ->
+                members |> Set.fold (fun acc v -> Map.add v color acc) acc
+            | None -> acc) Map.empty
+
+    let expandedSpills =
+        result.Spills
+        |> Set.fold (fun acc rep ->
+            match Map.tryFind rep repMembers with
+            | Some members -> Set.union acc members
+            | None -> acc) Set.empty
+
+    { Colors = expandedColors
+      Spills = expandedSpills
+      ChromaticNumber = result.ChromaticNumber }
 
 /// Greedy color in reverse PEO order with phi coalescing preferences
 /// For chordal graphs, this produces an optimal coloring.
@@ -1102,12 +1331,20 @@ let greedyColorReverse (graph: InterferenceGraph) (peo: int list) (precolored: M
       ChromaticNumber = if maxColor < 0 then 0 else maxColor + 1 }
 
 /// Main chordal graph coloring function with phi coalescing preferences
-let chordalGraphColor (graph: InterferenceGraph) (precolored: Map<int, int>) (numColors: int) (preferences: Map<int, Set<int>>) : ColoringResult =
+let chordalGraphColor
+    (graph: InterferenceGraph)
+    (precolored: Map<int, int>)
+    (numColors: int)
+    (preferences: Map<int, Set<int>>)
+    (movePairs: (int * int) list)
+    : ColoringResult =
     if Set.isEmpty graph.Vertices then
         { Colors = Map.empty; Spills = Set.empty; ChromaticNumber = 0 }
     else
-        let peo = maximumCardinalitySearch graph
-        greedyColorReverse graph peo precolored numColors preferences
+        let coalesced = coalesceGraph graph precolored movePairs preferences
+        let peo = maximumCardinalitySearch coalesced.Graph
+        let result = greedyColorReverse coalesced.Graph peo coalesced.Precolored numColors coalesced.Preferences
+        expandColoring result coalesced.RepMembers
 
 /// Convert chordal graph coloring result to allocation result
 /// Colors map to physical registers, spills map to stack slots
@@ -1211,7 +1448,7 @@ let chordalFloatAllocation (cfg: LIRSymbolic.CFG) (additionalVRegs: Set<int>) : 
         { FMapping = Map.empty; UsedCalleeSavedF = [] }
     else
         // No preferences for floats for now (could add FPhi coalescing later)
-        let colorResult = chordalGraphColor graphWithParams Map.empty (List.length allocatableFloatRegs) Map.empty
+        let colorResult = chordalGraphColor graphWithParams Map.empty (List.length allocatableFloatRegs) Map.empty []
         floatColoringToAllocation colorResult allocatableFloatRegs
 
 /// Apply float allocation to an FReg, converting FVirtual to FPhysical
@@ -2299,11 +2536,88 @@ let generateFloatMoveInstrsWithAllocation
 /// Resolve phi nodes by inserting parallel moves at predecessor block exits.
 /// This function:
 /// 1. Finds all phi nodes in each block
-/// 2. For each predecessor, collects all (dest, src) pairs for moves
-/// 3. Uses ParallelMoves.resolve to sequence the moves properly (handling cycles)
-/// 4. Inserts the moves at the end of each predecessor (before terminator)
-/// 5. Removes phi nodes from blocks
-let resolvePhiNodes (cfg: LIRSymbolic.CFG) (allocation: Map<int, Allocation>) (floatAllocation: FAllocationResult) : LIRSymbolic.CFG =
+/// 2. Drops phis whose destination is never used
+/// 3. For each predecessor, collects all (dest, src) pairs for moves
+/// 4. Uses ParallelMoves.resolve to sequence the moves properly (handling cycles)
+/// 5. Inserts the moves at the end of each predecessor (before terminator)
+/// 6. Removes phi nodes from blocks
+let resolvePhiNodes
+    (cfg: LIRSymbolic.CFG)
+    (allocation: Map<int, Allocation>)
+    (floatAllocation: FAllocationResult)
+    : LIRSymbolic.CFG =
+    let collectNonPhiUses (cfg: LIRSymbolic.CFG) : Set<int> =
+        cfg.Blocks
+        |> Map.fold (fun acc _ block ->
+            let instrUses =
+                block.Instrs
+                |> List.fold (fun acc instr ->
+                    match instr with
+                    | LIRSymbolic.Phi _ -> acc
+                    | LIRSymbolic.FPhi _ -> acc
+                    | _ -> Set.union acc (getUsedVRegs instr)) Set.empty
+            let termUses = getTerminatorUsedVRegs block.Terminator
+            Set.union acc (Set.union instrUses termUses)
+        ) Set.empty
+
+    let collectPhiSources (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
+        let addSource (dest: int) (src: int) (acc: Map<int, Set<int>>) =
+            let existing = Map.tryFind dest acc |> Option.defaultValue Set.empty
+            Map.add dest (Set.add src existing) acc
+
+        cfg.Blocks
+        |> Map.fold (fun acc _ block ->
+            block.Instrs
+            |> List.fold (fun acc instr ->
+                match instr with
+                | LIRSymbolic.Phi (LIR.Virtual destId, sources, _) ->
+                    sources
+                    |> List.fold (fun acc (src, _) ->
+                        match src with
+                        | LIRSymbolic.Reg (LIR.Virtual srcId) -> addSource destId srcId acc
+                        | _ -> acc) acc
+                | _ -> acc) acc
+        ) Map.empty
+
+    let collectPhysicalPhiSources (cfg: LIRSymbolic.CFG) : Set<int> =
+        cfg.Blocks
+        |> Map.fold (fun acc _ block ->
+            block.Instrs
+            |> List.fold (fun acc instr ->
+                match instr with
+                | LIRSymbolic.Phi (LIR.Physical _, sources, _) ->
+                    sources
+                    |> List.fold (fun acc (src, _) ->
+                        match src with
+                        | LIRSymbolic.Reg (LIR.Virtual srcId) -> Set.add srcId acc
+                        | _ -> acc) acc
+                | _ -> acc) acc
+        ) Set.empty
+
+    let computeNeededVRegs (cfg: LIRSymbolic.CFG) : Set<int> =
+        let phiSources = collectPhiSources cfg
+        let rootUses = Set.union (collectNonPhiUses cfg) (collectPhysicalPhiSources cfg)
+        let rec expand (needed: Set<int>) (worklist: int list) : Set<int> =
+            match worklist with
+            | [] -> needed
+            | v :: rest ->
+                match Map.tryFind v phiSources with
+                | None -> expand needed rest
+                | Some sources ->
+                    let newSources = Set.difference sources needed
+                    let needed' = Set.union needed newSources
+                    let worklist' = (Set.toList newSources) @ rest
+                    expand needed' worklist'
+
+        expand rootUses (Set.toList rootUses)
+
+    let neededVRegs = computeNeededVRegs cfg
+
+    let phiDestNeeded (dest: LIRSymbolic.Reg) : bool =
+        match dest with
+        | LIR.Virtual id -> Set.contains id neededVRegs
+        | LIR.Physical _ -> true
+
     // Get the allocation for a virtual register (register or stack slot)
     let getDestAllocation (reg: LIRSymbolic.Reg) : Allocation =
         match reg with
@@ -2333,7 +2647,11 @@ let resolvePhiNodes (cfg: LIRSymbolic.CFG) (allocation: Map<int, Allocation>) (f
             block.Instrs
             |> List.choose (fun instr ->
                 match instr with
-                | LIRSymbolic.Phi (dest, sources, valueType) -> Some (dest, sources, valueType)
+                | LIRSymbolic.Phi (dest, sources, valueType) ->
+                    if phiDestNeeded dest then
+                        Some (dest, sources, valueType)
+                    else
+                        None
                 | _ -> None))
 
     // Collect all float phi info: (dest FReg, source FRegs with labels)
@@ -2511,15 +2829,19 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
     // Step 2: Build interference graph
     let graph = buildInterferenceGraph func.CFG liveness intParamVRegs
 
-    // Step 2b: Collect phi coalescing preferences
+    // Step 2b: Collect coalescing preferences and move pairs
     let preferences = collectPhiPreferences func.CFG
+    let movePairs =
+        let moves = collectMovePairs func.CFG
+        let phiPairs = collectPhiPairs func.CFG
+        Set.ofList (moves @ phiPairs) |> Set.toList
 
     // Step 3: Run chordal graph coloring with phi coalescing
     // Use optimal register order based on calling pattern:
     // - Functions with non-tail calls: callee-saved first (save once in prologue/epilogue)
     // - Leaf functions / tail-call-only: caller-saved first (no prologue overhead)
     let regs = getAllocatableRegs func.CFG
-    let colorResult = chordalGraphColor graph Map.empty (List.length regs) preferences
+    let colorResult = chordalGraphColor graph Map.empty (List.length regs) preferences movePairs
     let result = coloringToAllocation colorResult regs
 
     // Step 3b: Parameter info already computed (needed for float allocation and param moves)
