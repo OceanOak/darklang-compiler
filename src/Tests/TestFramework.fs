@@ -29,7 +29,13 @@ type TestTiming = {
     TotalTime: TimeSpan
     CompileTime: TimeSpan option
     RuntimeTime: TimeSpan option
+    CacheHitCount: int option
     CacheMissCount: int option
+}
+
+type CacheTotals = {
+    Hits: int
+    Misses: int
 }
 
 // Summary of per-file test suite results
@@ -95,6 +101,19 @@ let formatCacheMissCount (missCountOpt: int option) : string option =
     | Some count when count > 0 -> Some $"cache-misses: {count}"
     | _ -> None
 
+let calculateCacheTotals (timings: seq<TestTiming>) : CacheTotals option =
+    let folder (hits, misses, sawData) (timing: TestTiming) =
+        match timing.CacheHitCount, timing.CacheMissCount with
+        | Some hitCount, Some missCount ->
+            (hits + hitCount, misses + missCount, true)
+        | None, None ->
+            (hits, misses, sawData)
+        | _ ->
+            Crash.crash "calculateCacheTotals: cache hit/miss counts must be recorded together"
+    let (hits, misses, sawData) =
+        timings |> Seq.fold folder (0, 0, false)
+    if sawData then Some { Hits = hits; Misses = misses } else None
+
 let addExpectedActualDetails (expected: string option) (actual: string option) : string list =
     let details = ResizeArray<string>()
     match expected, actual with
@@ -147,6 +166,7 @@ let runFileSuite
                 TotalTime = testTimer.Elapsed
                 CompileTime = None
                 RuntimeTime = None
+                CacheHitCount = None
                 CacheMissCount = None
             }
             sectionPassed <- sectionPassed + summary.Passed
@@ -194,6 +214,7 @@ let runUnitTestSuites
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
+                    CacheHitCount = None
                     CacheMissCount = None
                 }
                 unitSectionPassed <- unitSectionPassed + 1
@@ -205,6 +226,7 @@ let runUnitTestSuites
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
+                    CacheHitCount = None
                     CacheMissCount = None
                 }
                 recordTiming state {
@@ -212,6 +234,7 @@ let runUnitTestSuites
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
+                    CacheHitCount = None
                     CacheMissCount = None
                 }
                 ProgressBar.increment unitProgress false

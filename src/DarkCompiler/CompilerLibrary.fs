@@ -29,13 +29,14 @@ type PassTiming = {
 /// Recorder for compiler pass timings
 type PassTimingRecorder = PassTiming -> unit
 
-/// Cache miss details for a compilation stage
+/// Cache hit/miss details for a compilation stage
 type CacheMissInfo = {
     Stage: string
+    Hits: int
     Misses: int
 }
 
-/// Recorder for cache misses
+/// Recorder for cache hit/miss stats
 type CacheMissRecorder = CacheMissInfo -> unit
 
 /// Result of execution with timing
@@ -682,7 +683,8 @@ let private lowerToAllocatedLir
         // _start is synthesized per compile; caching it is noisy and unstable.
         name <> "_start"
 
-    let recordCacheMisses
+    let recordCacheStats
+        (cachedMap: Map<string, LIRSymbolic.Function>)
         (functionsToCompile: ANF.Function list)
         : unit =
         match cacheMissRecorder with
@@ -694,9 +696,11 @@ let private lowerToAllocatedLir
                     |> List.map (fun f -> f.Name)
                     |> List.filter isCacheableFunctionName
                     |> List.sort
-                if not (List.isEmpty missNames) then
+                let hitCount = Map.count cachedMap
+                let missCount = missNames.Length
+                if hitCount > 0 || missCount > 0 then
                     let stageLabel = if stageSuffix = "" then "user" else stageSuffix
-                    record { Stage = stageLabel; Misses = missNames.Length }
+                    record { Stage = stageLabel; Hits = hitCount; Misses = missCount }
 
     let cachePlanResult : Result<string option * Map<string, LIRSymbolic.Function> * Map<string, string> * ANF.Function list, string> =
         match optionsHashOpt with
@@ -797,7 +801,7 @@ let private lowerToAllocatedLir
 
     cachePlanResult
     |> Result.map (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
-        recordCacheMisses functionsToCompile
+        recordCacheStats cachedMap functionsToCompile
         (optionsHashOpt, cachedMap, funcHashes, functionsToCompile))
     |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
         let (startFunctions, otherFunctions) =

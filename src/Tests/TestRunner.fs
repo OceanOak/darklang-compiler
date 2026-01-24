@@ -90,6 +90,7 @@ let main args =
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
+        { Name = "Test Framework Tests"; Tests = TestFrameworkTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -213,7 +214,7 @@ let main args =
 
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
-                let result, cacheMissCountOpt =
+                let result, cacheStatsOpt =
                     match suiteContextsResult with
                     | Error err ->
                         preambleFailureResult $"Preamble build failed: {err}", None
@@ -223,8 +224,10 @@ let main args =
                             preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None
                         | Some ctx ->
                             if suiteContexts.Stdlib.CacheSettings.Enabled then
+                                let mutable hitCount = 0
                                 let mutable missCount = 0
                                 let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
+                                    hitCount <- hitCount + info.Hits
                                     missCount <- missCount + info.Misses
                                 let testResult =
                                     TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
@@ -233,7 +236,7 @@ let main args =
                                         test
                                         (Some recordPassTiming)
                                         (Some recordMiss)
-                                testResult, Some missCount
+                                testResult, Some (hitCount, missCount)
                             else
                                 let testResult =
                                     TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
@@ -248,12 +251,19 @@ let main args =
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
                 let totalTime = compileTime + runtimeTime
                 results.[i] <- Some (test, result)
+                let cacheHitCountOpt =
+                    cacheStatsOpt
+                    |> Option.map (fun (hits, _misses) -> hits)
+                let cacheMissCountOnlyOpt =
+                    cacheStatsOpt
+                    |> Option.map (fun (_hits, misses) -> misses)
                 recordTiming {
                     Name = $"{suiteName}: {test.Name}"
                     TotalTime = totalTime
                     CompileTime = Some compileTime
                     RuntimeTime = Some runtimeTime
-                    CacheMissCount = cacheMissCountOpt
+                    CacheHitCount = cacheHitCountOpt
+                    CacheMissCount = cacheMissCountOnlyOpt
                 }
                 let success =
                     match result with
@@ -671,6 +681,10 @@ let main args =
         println $"  {Colors.red}✗ Failed: {runState.Failed}{Colors.reset}"
     match coveragePercent with
     | Some pct -> println $"  {Colors.gray}📊 Stdlib coverage: {pct:F1}%%{Colors.reset}"
+    | None -> ()
+    match calculateCacheTotals runState.Timings with
+    | Some totals ->
+        println $"  {Colors.gray}cache hits: {totals.Hits}, cache misses: {totals.Misses}{Colors.reset}"
     | None -> ()
     println $"  {Colors.gray}⏱  Total time: {formatTime totalTimer.Elapsed}{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
