@@ -784,6 +784,9 @@ let private lowerToAllocatedLir
             None
 
     let functionOrder = functions |> List.map (fun f -> f.Name)
+    let isCacheableFunctionName (name: string) : bool =
+        // _start is synthesized per compile; caching it is noisy and unstable.
+        name <> "_start"
 
     let cachePlanResult : Result<string option * Map<string, LIRSymbolic.Function> * Map<string, string> * ANF.Function list, string> =
         match optionsHashOpt with
@@ -810,16 +813,22 @@ let private lowerToAllocatedLir
                 keyedFunctions
                 |> List.fold (fun acc (func, funcHash, _) -> Map.add func.Name funcHash acc) Map.empty
 
-            let keys = keyedFunctions |> List.map (fun (_, _, key) -> key)
+            let keys =
+                keyedFunctions
+                |> List.choose (fun (func, _, key) ->
+                    if isCacheableFunctionName func.Name then Some key else None)
             Cache.getFunctions<LIRSymbolic.Function> keys
             |> Result.mapError (fun err -> $"Cache read error: {err}")
             |> Result.map (fun cachedMap ->
                 let functionsToCompile =
                     keyedFunctions
                     |> List.choose (fun (func, _, _) ->
-                        match Map.tryFind func.Name cachedMap with
-                        | Some _ -> None
-                        | None -> Some func)
+                        if not (isCacheableFunctionName func.Name) then
+                            Some func
+                        else
+                            match Map.tryFind func.Name cachedMap with
+                            | Some _ -> None
+                            | None -> Some func)
                 (Some optionsHash, cachedMap, funcHashMap, functionsToCompile))
 
     let compileMissing (functionsToCompile: ANF.Function list) : Result<LIRSymbolic.Function list, string> =
@@ -872,17 +881,20 @@ let private lowerToAllocatedLir
                     let entries =
                         compiledFuncs
                         |> List.choose (fun func ->
-                            match Map.tryFind func.Name funcHashes with
-                            | None -> None
-                            | Some hash ->
-                                let key : Cache.FunctionCacheKey = {
-                                    CacheVersion = Cache.cacheVersion
-                                    CompilerKey = cacheSettings.CompilerKey
-                                    OptionsHash = optionsHash
-                                    FunctionName = func.Name
-                                    FunctionHash = hash
-                                }
-                                Some (key, func))
+                            if not (isCacheableFunctionName func.Name) then
+                                None
+                            else
+                                match Map.tryFind func.Name funcHashes with
+                                | None -> None
+                                | Some hash ->
+                                    let key : Cache.FunctionCacheKey = {
+                                        CacheVersion = Cache.cacheVersion
+                                        CompilerKey = cacheSettings.CompilerKey
+                                        OptionsHash = optionsHash
+                                        FunctionName = func.Name
+                                        FunctionHash = hash
+                                    }
+                                    Some (key, func))
                     Cache.setFunctions entries
                     |> Result.mapError (fun err -> $"Cache write error: {err}")
                 | _ -> Ok ()

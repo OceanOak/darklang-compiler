@@ -36,6 +36,7 @@
     <Compile Include="IRPrinterTests.fs" />
     <Compile Include="MIROptimizeTests.fs" />
     <Compile Include="ScriptHelperTests.fs" />
+    <Compile Include="CacheTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
     <Compile Include="EncodingTests.fs" />

@@ -22,7 +22,8 @@ Disable caching with `--no-cache` (compiler CLI) or `./run-tests --no-cache`.
 
 Only one artifact type:
 
-1. **Function artifacts**: post-register-allocation `LIRSymbolic.Function` values.
+1. **Function artifacts**: post-register-allocation `LIRSymbolic.Function` values
+   (excluding the synthesized `_start` entrypoint).
 
 This keeps the cache small and avoids storing large IR graphs or binaries.
 
