@@ -81,8 +81,8 @@ let main args =
     let lir2arm64TestFiles  = getTestFiles "passes/lir2arm64" "lir2arm64"
     let arm64encTestFiles  = getTestFiles "passes/arm64enc" "arm64enc"
 
-    let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
-    let allUnitTests : UnitTestSuite array = [|
+    let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests"; "Compiler Cache Tests" ]
+    let buildUnitTests (stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
@@ -101,6 +101,7 @@ let main args =
         { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
+        { Name = "Compiler Cache Tests"; Tests = CompilerCacheTests.tests stdlib }
     |]
 
     let enableVerification = verificationEnabled
@@ -132,6 +133,7 @@ let main args =
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
     let elapsed = timer.Elapsed
+    let allUnitTests = buildUnitTests stdlib
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
         let tests = ResizeArray<E2ETest>()

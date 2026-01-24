@@ -23,7 +23,7 @@ Disable caching with `--no-cache` (compiler CLI) or `./run-tests --no-cache`.
 Only one artifact type:
 
 1. **Function artifacts**: post-register-allocation `LIRSymbolic.Function` values
-   (excluding the synthesized `_start` entrypoint).
+   (including the synthesized `_start` entrypoint).
 
 This keeps the cache small and avoids storing large IR graphs or binaries.
 
@@ -106,14 +106,18 @@ function do not invalidate its callers unless the signature changes.
 
 ## Database Schema
 
-One table:
+Two tables:
 
 `function_cache`
 - `cache_version`, `compiler_key`, `options_hash`, `function_name`,
   `function_hash`, `data`, `created_at`
 - Primary key: all key fields above.
 
-`created_at` is informational only (no eviction policy today).
+`compiler_meta`
+- `compiler_path`, `compiler_key`, `updated_at`
+- Primary key: `compiler_path`.
+
+`created_at`/`updated_at` are informational only.
 
 ## Behavior and Invalidation
 
@@ -121,6 +125,8 @@ One table:
   SQLite connection overhead.
 - Any cache miss results in a normal compile path.
 - Cache I/O errors fail compilation unless caching is disabled via `--no-cache`.
+- If the compiler binary changes at the same path, cached entries keyed on the
+  old compiler hash are evicted.
 - Bump `Cache.cacheVersion` if the schema or keying semantics change.
 - Delete `~/.cache/dark-compiler/cache.db` to fully clear the cache.
 
@@ -134,5 +140,6 @@ One table:
 
 ## Known Limitations
 
-- No cache eviction; the database grows until manually cleared.
+- Eviction only happens when a compiler binary changes at a known path; caches
+  otherwise grow until manually cleared.
 - No cross-compiler sharing (compiler hash is part of the key).

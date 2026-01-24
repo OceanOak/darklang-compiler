@@ -63,17 +63,16 @@ let getCacheDir () : string =
 let getCacheDbPath () : string =
     Path.Combine(getCacheDir (), "cache.db")
 
-/// Compute the compiler key (SHA256 of compiler binary)
-let getCompilerKey () : Result<string, string> =
+let private getCompilerPath () : Result<string, string> =
     try
         let assembly = System.Reflection.Assembly.GetExecutingAssembly()
         let location = assembly.Location
-        use stream = File.OpenRead(location)
-        use sha256 = SHA256.Create()
-        let hash = sha256.ComputeHash(stream)
-        Ok (BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant())
+        if String.IsNullOrWhiteSpace location then
+            Error "Compiler path was empty"
+        else
+            Ok location
     with ex ->
-        Error $"Compiler key error: {ex.Message}"
+        Error $"Compiler path error: {ex.Message}"
 
 /// Key for cached function artifacts
 type FunctionCacheKey = {
@@ -110,6 +109,13 @@ let private createSchema (conn: SqliteConnection) : Result<unit, string> =
             );
 
             -- binary_cache removed; only function_cache is used
+
+            CREATE TABLE IF NOT EXISTS compiler_meta (
+                compiler_path TEXT NOT NULL,
+                compiler_key TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (compiler_path)
+            );
         """
         cmd.ExecuteNonQuery() |> ignore
         Ok ()
@@ -127,6 +133,13 @@ let private expectedFunctionCacheColumns : Set<string> =
         "created_at"
     ]
 
+let private expectedCompilerMetaColumns : Set<string> =
+    Set.ofList [
+        "compiler_path"
+        "compiler_key"
+        "updated_at"
+    ]
+
 let private getFunctionCacheColumns (conn: SqliteConnection) : Result<Set<string>, string> =
     try
         use cmd = conn.CreateCommand()
@@ -141,6 +154,37 @@ let private getFunctionCacheColumns (conn: SqliteConnection) : Result<Set<string
         Ok (loop Set.empty)
     with ex ->
         Error $"Cache schema error: {ex.Message}"
+
+let private getCompilerMetaColumns (conn: SqliteConnection) : Result<Set<string>, string> =
+    try
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- "PRAGMA table_info(compiler_meta)"
+        use reader = cmd.ExecuteReader()
+        let rec loop (acc: Set<string>) =
+            if reader.Read() then
+                let name = reader.GetString(1)
+                loop (Set.add name acc)
+            else
+                acc
+        Ok (loop Set.empty)
+    with ex ->
+        Error $"Cache schema error: {ex.Message}"
+
+let private ensureCompilerMetaSchema (conn: SqliteConnection) : Result<unit, string> =
+    getCompilerMetaColumns conn
+    |> Result.bind (fun columns ->
+        if Set.isEmpty columns then
+            createSchema conn
+        elif columns = expectedCompilerMetaColumns then
+            Ok ()
+        else
+            try
+                use cmd = conn.CreateCommand()
+                cmd.CommandText <- "DROP TABLE IF EXISTS compiler_meta"
+                cmd.ExecuteNonQuery() |> ignore
+                createSchema conn
+            with ex ->
+                Error $"Cache schema error: {ex.Message}")
 
 let private ensureSchema (conn: SqliteConnection) : Result<unit, string> =
     getFunctionCacheColumns conn
@@ -157,6 +201,7 @@ let private ensureSchema (conn: SqliteConnection) : Result<unit, string> =
                 createSchema conn
             with ex ->
                 Error $"Cache schema error: {ex.Message}")
+    |> Result.bind (fun () -> ensureCompilerMetaSchema conn)
 
 /// Run a cache operation with a fresh connection
 let private withConnection (f: SqliteConnection -> Result<'T, string>) : Result<'T, string> =
@@ -170,6 +215,96 @@ let private withConnection (f: SqliteConnection -> Result<'T, string>) : Result<
             |> Result.bind (fun () -> f conn)
         with ex ->
             Error $"Cache connection error: {ex.Message}")
+
+let private computeCompilerKey (compilerPath: string) : Result<string, string> =
+    try
+        use stream = File.OpenRead(compilerPath)
+        use sha256 = SHA256.Create()
+        let hash = sha256.ComputeHash(stream)
+        Ok (BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant())
+    with ex ->
+        Error $"Compiler key error: {ex.Message}"
+
+let private getCompilerMetaKey
+    (conn: SqliteConnection)
+    (compilerPath: string)
+    : Result<string option, string> =
+    try
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            SELECT compiler_key
+            FROM compiler_meta
+            WHERE compiler_path = $path
+        """
+        cmd.Parameters.AddWithValue("$path", compilerPath) |> ignore
+        let result = cmd.ExecuteScalar()
+        if isNull result then
+            Ok None
+        else
+            match result with
+            | :? string as key -> Ok (Some key)
+            | _ -> Error "Cache meta query error: unexpected result type"
+    with ex ->
+        Error $"Cache meta query error: {ex.Message}"
+
+let private deleteFunctionCacheByCompilerKey
+    (conn: SqliteConnection)
+    (compilerKey: string)
+    : Result<unit, string> =
+    try
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            DELETE FROM function_cache
+            WHERE compiler_key = $key
+        """
+        cmd.Parameters.AddWithValue("$key", compilerKey) |> ignore
+        cmd.ExecuteNonQuery() |> ignore
+        Ok ()
+    with ex ->
+        Error $"Cache eviction error: {ex.Message}"
+
+let private upsertCompilerMeta
+    (conn: SqliteConnection)
+    (compilerPath: string)
+    (compilerKey: string)
+    : Result<unit, string> =
+    try
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- """
+            INSERT OR REPLACE INTO compiler_meta
+            (compiler_path, compiler_key, updated_at)
+            VALUES ($path, $key, $updatedAt)
+        """
+        cmd.Parameters.AddWithValue("$path", compilerPath) |> ignore
+        cmd.Parameters.AddWithValue("$key", compilerKey) |> ignore
+        cmd.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds()) |> ignore
+        cmd.ExecuteNonQuery() |> ignore
+        Ok ()
+    with ex ->
+        Error $"Cache meta update error: {ex.Message}"
+
+let private refreshCompilerMeta
+    (conn: SqliteConnection)
+    (compilerPath: string)
+    (compilerKey: string)
+    : Result<unit, string> =
+    getCompilerMetaKey conn compilerPath
+    |> Result.bind (fun existingKeyOpt ->
+        match existingKeyOpt with
+        | Some existingKey when existingKey <> compilerKey ->
+            deleteFunctionCacheByCompilerKey conn existingKey
+        | _ -> Ok ())
+    |> Result.bind (fun () -> upsertCompilerMeta conn compilerPath compilerKey)
+
+/// Compute the compiler key (SHA256 of compiler binary)
+let getCompilerKey () : Result<string, string> =
+    getCompilerPath ()
+    |> Result.bind (fun compilerPath ->
+        computeCompilerKey compilerPath
+        |> Result.bind (fun compilerKey ->
+            withConnection (fun conn ->
+                refreshCompilerMeta conn compilerPath compilerKey
+                |> Result.map (fun () -> compilerKey))))
 
 /// Get a batch of cached function entries using a single connection
 let getFunctions<'T> (keys: FunctionCacheKey list) : Result<Map<string, 'T>, string> =

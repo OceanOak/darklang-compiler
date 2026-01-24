@@ -679,9 +679,8 @@ let private lowerToAllocatedLir
             None
 
     let functionOrder = functions |> List.map (fun f -> f.Name)
-    let isCacheableFunctionName (name: string) : bool =
-        // _start is synthesized per compile; caching it is noisy and unstable.
-        name <> "_start"
+    let isCacheableFunctionName (_name: string) : bool =
+        true
 
     let recordCacheStats
         (cachedMap: Map<string, LIRSymbolic.Function>)
