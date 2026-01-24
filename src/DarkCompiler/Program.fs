@@ -371,7 +371,7 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
             if cliOpts.IsExpression then ""
             else cliOpts.Argument |> Option.defaultValue ""
 
-        match CompilerLibrary.buildStdlibWithCache cacheSettings with
+        match CompilerLibrary.buildStdlibWithCache cacheSettings None with
         | Error err ->
             eprintln $"Compilation failed: {err}"
             1
@@ -384,6 +384,7 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
                 AllowInternal = false
                 Verbosity = verbosityToInt verbosity
                 Options = options
+                PassTimingRecorder = None
             }
             let compileReport = CompilerLibrary.compile request
 
@@ -432,7 +433,7 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                 if cliOpts.IsExpression then ""
                 else cliOpts.Argument |> Option.defaultValue ""
 
-            match CompilerLibrary.buildStdlibWithCache cacheSettings with
+            match CompilerLibrary.buildStdlibWithCache cacheSettings None with
             | Error err ->
                 { ExitCode = 1
                   Stdout = ""
@@ -447,6 +448,7 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                     AllowInternal = false
                     Verbosity = verbosityToInt verbosity
                     Options = options
+                    PassTimingRecorder = None
                 }
                 let compileReport = CompilerLibrary.compile request
                 match compileReport.Result with

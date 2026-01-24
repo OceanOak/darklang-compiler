@@ -43,6 +43,7 @@ type TestRunState = {
     mutable Failed: int
     FailedTests: ResizeArray<FailedTestInfo>
     Timings: ResizeArray<TestTiming>
+    mutable PassTimings: Map<string, TimeSpan>
 }
 
 type OutputSymbols = {
@@ -55,10 +56,18 @@ let createState () : TestRunState =
     { Passed = 0
       Failed = 0
       FailedTests = ResizeArray()
-      Timings = ResizeArray() }
+      Timings = ResizeArray()
+      PassTimings = Map.empty }
 
 let recordTiming (state: TestRunState) (timing: TestTiming) : unit =
     state.Timings.Add timing
+
+let recordPassTiming (state: TestRunState) (timing: CompilerLibrary.PassTiming) : unit =
+    let existing =
+        Map.tryFind timing.Pass state.PassTimings
+        |> Option.defaultValue TimeSpan.Zero
+    let updated = existing + timing.Elapsed
+    state.PassTimings <- Map.add timing.Pass updated state.PassTimings
 
 let recordResults
     (state: TestRunState)

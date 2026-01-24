@@ -20,6 +20,15 @@ type CompileReport = {
     CompileTime: TimeSpan
 }
 
+/// Timing for a single compiler pass
+type PassTiming = {
+    Pass: string
+    Elapsed: TimeSpan
+}
+
+/// Recorder for compiler pass timings
+type PassTimingRecorder = PassTiming -> unit
+
 /// Result of execution with timing
 type ExecutionOutput = {
     ExitCode: int
@@ -173,6 +182,16 @@ let private hashValue (value: 'T) : string =
     match Cache.hashData value with
     | Ok hash -> hash
     | Error err -> Crash.crash $"Cache hash error: {err}"
+
+let private recordPassTiming
+    (recorder: PassTimingRecorder option)
+    (pass: string)
+    (elapsedMs: float)
+    : unit =
+    match recorder with
+    | None -> ()
+    | Some record ->
+        record { Pass = pass; Elapsed = TimeSpan.FromMilliseconds(elapsedMs) }
 
 // Cache helpers
 
@@ -691,6 +710,7 @@ let private compileMirToLir
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
+    (passTimingRecorder: PassTimingRecorder option)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
     : Result<LIRSymbolic.Program, string> =
@@ -700,8 +720,10 @@ let private compileMirToLir
     if verbosity >= 1 then println $"  [3.1/8] SSA Construction{suffix}..."
     let ssaStart = sw.Elapsed.TotalMilliseconds
     let ssaProgram = SSA_Construction.convertToSSA mirProgram
+    let ssaElapsed = sw.Elapsed.TotalMilliseconds - ssaStart
+    recordPassTiming passTimingRecorder "SSA Construction" ssaElapsed
     if verbosity >= 2 then
-        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - ssaStart, 1)
+        let t = System.Math.Round(ssaElapsed, 1)
         println $"        {t}ms"
 
     let mirOptions = buildMIROptimizeOptions options
@@ -723,8 +745,10 @@ let private compileMirToLir
             MIR_Optimize.optimizeProgramWithOptions mirOptions ssaProgram
         else
             ssaProgram
+    let mirOptElapsed = sw.Elapsed.TotalMilliseconds - mirOptStart
+    recordPassTiming passTimingRecorder "MIR Optimizations" mirOptElapsed
     if verbosity >= 2 then
-        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirOptStart, 1)
+        let t = System.Math.Round(mirOptElapsed, 1)
         println $"        {t}ms"
 
     if verbosity >= 1 then println $"  [4/8] MIR → LIR{suffix}..."
@@ -733,10 +757,12 @@ let private compileMirToLir
     match lirResult with
     | Error err -> Error $"LIR conversion error: {err}"
     | Ok lirProgram ->
+        let lirElapsed = sw.Elapsed.TotalMilliseconds - lirStart
+        recordPassTiming passTimingRecorder "MIR -> LIR" lirElapsed
         if shouldDumpIR verbosity options.DumpLIR then
             printLIRSymbolicProgram "=== LIR (Low-level IR with CFG) ===" lirProgram
         if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - lirStart, 1)
+            let t = System.Math.Round(lirElapsed, 1)
             println $"        {t}ms"
 
         let lirPassLabel =
@@ -750,8 +776,10 @@ let private compileMirToLir
                 lirProgram
             else
                 LIR_Peephole.optimizeProgram lirProgram
+        let lirOptElapsed = sw.Elapsed.TotalMilliseconds - lirOptStart
+        recordPassTiming passTimingRecorder "LIR Peephole" lirOptElapsed
         if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - lirOptStart, 1)
+            let t = System.Math.Round(lirOptElapsed, 1)
             println $"        {t}ms"
         Ok optimizedLir
 
@@ -767,6 +795,7 @@ let private lowerToAllocatedLir
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
+    (passTimingRecorder: PassTimingRecorder option)
     (stageSuffix: string)
     (functions: ANF.Function list)
     (typeMap: ANF.TypeMap)
@@ -851,19 +880,23 @@ let private lowerToAllocatedLir
             | Error err -> Error $"MIR conversion error: {err}"
             | Ok (mirFuncs, variantRegistry, mirRecordRegistry) ->
                 let mirProgram = MIR.Program (mirFuncs, variantRegistry, mirRecordRegistry)
+                let mirElapsed = sw.Elapsed.TotalMilliseconds - mirStart
+                recordPassTiming passTimingRecorder "ANF -> MIR" mirElapsed
                 if shouldDumpIR verbosity options.DumpMIR then
                     printMIRProgram "=== MIR (Control Flow Graph) ===" mirProgram
                 if verbosity >= 2 then
-                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - mirStart, 1)
+                    let t = System.Math.Round(mirElapsed, 1)
                     println $"        {t}ms"
-                compileMirToLir verbosity options sw stageSuffix mirProgram
+                compileMirToLir verbosity options sw passTimingRecorder stageSuffix mirProgram
                 |> Result.bind (fun lirProgram ->
                     if verbosity >= 1 then println "  [5/8] Register Allocation..."
                     let allocStart = sw.Elapsed.TotalMilliseconds
                     let (LIRSymbolic.Program lirFuncs) = lirProgram
                     let allocatedFuncs = allocateRegistersForFunctions lirFuncs
+                    let allocElapsed = sw.Elapsed.TotalMilliseconds - allocStart
+                    recordPassTiming passTimingRecorder "Register Allocation" allocElapsed
                     if verbosity >= 2 then
-                        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - allocStart, 1)
+                        let t = System.Math.Round(allocElapsed, 1)
                         println $"        {t}ms"
                     Ok allocatedFuncs)
 
@@ -927,6 +960,7 @@ let private buildAnf
     (sw: Stopwatch)
     (registries: AST_to_ANF.Registries)
     (functions: ANF.Function list)
+    (passTimingRecorder: PassTimingRecorder option)
     : Result<ANF.Function list * ANF.TypeMap, string> =
 
     let anfOptions = buildANFOptimizeOptions options
@@ -950,8 +984,10 @@ let private buildAnf
             ANF_Optimize.optimizeProgramWithOptions anfOptions anfProgram
         else
             anfProgram
+    let anfOptElapsed = sw.Elapsed.TotalMilliseconds - anfOptStart
+    recordPassTiming passTimingRecorder "ANF Optimizations" anfOptElapsed
     if verbosity >= 2 then
-        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - anfOptStart, 1)
+        let t = System.Math.Round(anfOptElapsed, 1)
         println $"        {t}ms"
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (after optimization) ===" anfOptimized
@@ -963,8 +999,10 @@ let private buildAnf
             anfOptimized
         else
             ANF_Inlining.inlineProgramDefault anfOptimized
+    let inlineElapsed = sw.Elapsed.TotalMilliseconds - inlineStart
+    recordPassTiming passTimingRecorder "ANF Inlining" inlineElapsed
     if verbosity >= 2 then
-        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - inlineStart, 1)
+        let t = System.Math.Round(inlineElapsed, 1)
         println $"        {t}ms"
 
     let convResult = buildConversionResult anfInlined registries
@@ -974,8 +1012,10 @@ let private buildAnf
     match RefCountInsertion.insertRCInProgram convResult with
     | Error err -> Error $"Reference count insertion error: {err}"
     | Ok (anfAfterRC, typeMap) ->
+        let rcElapsed = sw.Elapsed.TotalMilliseconds - rcStart
+        recordPassTiming passTimingRecorder "Reference Count Insertion" rcElapsed
         if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - rcStart, 1)
+            let t = System.Math.Round(rcElapsed, 1)
             println $"        {t}ms"
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after RC insertion) ===" anfAfterRC
@@ -989,6 +1029,7 @@ let private applyTco
     (options: CompilerOptions)
     (sw: Stopwatch)
     (functions: ANF.Function list)
+    (passTimingRecorder: PassTimingRecorder option)
     : ANF.Function list =
     if verbosity >= 1 then println "  [2.7/8] Tail Call Detection..."
     let tcoStart = sw.Elapsed.TotalMilliseconds
@@ -998,8 +1039,10 @@ let private applyTco
             anfProgram
         else
             TailCallDetection.detectTailCallsInProgram anfProgram
+    let tcoElapsed = sw.Elapsed.TotalMilliseconds - tcoStart
+    recordPassTiming passTimingRecorder "Tail Call Detection" tcoElapsed
     if verbosity >= 2 then
-        let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - tcoStart, 1)
+        let t = System.Math.Round(tcoElapsed, 1)
         println $"        {t}ms"
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (after Tail Call Detection) ===" anfAfterTCO
@@ -1011,6 +1054,7 @@ let private generateBinary
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
+    (passTimingRecorder: PassTimingRecorder option)
     (codegenLabel: string)
     (encodeLabel: string)
     (binaryLabel: string)
@@ -1032,8 +1076,10 @@ let private generateBinary
     match codegenResult with
     | Error err -> Error $"Code generation error: {err}"
     | Ok arm64Instructions ->
+        let codegenElapsed = sw.Elapsed.TotalMilliseconds - codegenStart
+        recordPassTiming passTimingRecorder "Code Generation" codegenElapsed
         if verbosity >= 2 then
-            let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - codegenStart, 1)
+            let t = System.Math.Round(codegenElapsed, 1)
             println $"        {t}ms"
 
         if dumpAsm && verbosity >= 3 then
@@ -1050,8 +1096,10 @@ let private generateBinary
             let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
             let machineCode =
                 ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool os options.EnableLeakCheck
+            let encodeElapsed = sw.Elapsed.TotalMilliseconds - encodeStart
+            recordPassTiming passTimingRecorder "ARM64 Encoding" encodeElapsed
             if verbosity >= 2 then
-                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - encodeStart, 1)
+                let t = System.Math.Round(encodeElapsed, 1)
                 println $"        {t}ms"
 
             if dumpMachineCode && verbosity >= 3 then
@@ -1069,8 +1117,10 @@ let private generateBinary
                 match os with
                 | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
                 | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
+            let binaryElapsed = sw.Elapsed.TotalMilliseconds - binaryStart
+            recordPassTiming passTimingRecorder "Binary Generation" binaryElapsed
             if verbosity >= 2 then
-                let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - binaryStart, 1)
+                let t = System.Math.Round(binaryElapsed, 1)
                 println $"        {t}ms"
 
             Ok binary
@@ -1165,6 +1215,7 @@ type CompileRequest = {
     AllowInternal: bool
     Verbosity: int
     Options: CompilerOptions
+    PassTimingRecorder: PassTimingRecorder option
 }
 
 
@@ -1420,7 +1471,10 @@ let private loadStdlib () : Result<AST.Program, string> =
 
 /// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
-let buildStdlibWithCache (cacheSettings: CacheSettings) : Result<StdlibResult, string> =
+let buildStdlibWithCache
+    (cacheSettings: CacheSettings)
+    (passTimingRecorder: PassTimingRecorder option)
+    : Result<StdlibResult, string> =
     match loadStdlib() with
     | Error e ->
         Error e
@@ -1456,11 +1510,11 @@ let buildStdlibWithCache (cacheSettings: CacheSettings) : Result<StdlibResult, s
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
-                match buildAnf 0 stdlibOptions sw registries stdlibFunctions with
+                match buildAnf 0 stdlibOptions sw registries stdlibFunctions passTimingRecorder with
                 | Error e ->
                     Error e
                 | Ok (anfFunctions, typeMap) ->
-                    let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions
+                    let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions passTimingRecorder
                     let stdlibFuncMap =
                         tcoFunctions
                         |> List.map (fun f -> f.Name, f)
@@ -1479,6 +1533,7 @@ let buildStdlibWithCache (cacheSettings: CacheSettings) : Result<StdlibResult, s
                         0
                         stdlibOptions
                         sw
+                        passTimingRecorder
                         "stdlib"
                         tcoFunctions
                         typeMap
@@ -1512,14 +1567,19 @@ let buildStdlibWithCache (cacheSettings: CacheSettings) : Result<StdlibResult, s
                             }
 
 /// Build stdlib in isolation with default cache settings
-let buildStdlib () : Result<StdlibResult, string> =
+let buildStdlibWithTrace (passTimingRecorder: PassTimingRecorder option) : Result<StdlibResult, string> =
     defaultCacheSettings ()
-    |> Result.bind buildStdlibWithCache
+    |> Result.bind (fun cacheSettings -> buildStdlibWithCache cacheSettings passTimingRecorder)
+
+/// Build stdlib in isolation with default cache settings
+let buildStdlib () : Result<StdlibResult, string> =
+    buildStdlibWithTrace None
 
 /// Build stdlib specializations for a spec set and merge them into the stdlib result
 let buildStdlibSpecializations
     (stdlib: StdlibResult)
     (specs: Set<AST_to_ANF.SpecKey>)
+    (passTimingRecorder: PassTimingRecorder option)
     : Result<StdlibResult, string> =
     if Set.isEmpty specs then
         Ok stdlib
@@ -1572,9 +1632,9 @@ let buildStdlibSpecializations
                     |> Result.bind (fun (anfFuncs, _varGen1) ->
                         let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                         let sw = Stopwatch.StartNew()
-                        buildAnf 0 stdlibOptions sw registries anfFuncs
+                        buildAnf 0 stdlibOptions sw registries anfFuncs passTimingRecorder
                         |> Result.bind (fun (anfFunctions, typeMap) ->
-                            let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions
+                            let tcoFunctions = applyTco 0 stdlibOptions sw anfFunctions passTimingRecorder
                             let newAnfFuncMap =
                                 tcoFunctions
                                 |> List.map (fun f -> f.Name, f)
@@ -1594,6 +1654,7 @@ let buildStdlibSpecializations
                                 0
                                 stdlibOptions
                                 sw
+                                passTimingRecorder
                                 "stdlib_specializations"
                                 tcoFunctions
                                 typeMap
@@ -1650,6 +1711,7 @@ type private UserCompilePlan = {
     AllowInternal: bool
     Verbosity: int
     Options: CompilerOptions
+    PassTimingRecorder: PassTimingRecorder option
     Stdlib: StdlibResult
     BaseContext: PipelineContext
     Monomorphization: MonomorphizationMode
@@ -1672,6 +1734,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
             if plan.Verbosity >= 1 then println plan.Labels.Parse
             let parseResult = Parser.parseString plan.AllowInternal plan.Source
             let parseTime = sw.Elapsed.TotalMilliseconds
+            recordPassTiming plan.PassTimingRecorder "Parse" parseTime
             if plan.Verbosity >= 2 then
                 let t = System.Math.Round(parseTime, 1)
                 println $"        {t}ms"
@@ -1683,6 +1746,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                 if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
                 let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseContext.TypeCheckEnv userAst
                 let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
+                recordPassTiming plan.PassTimingRecorder "Type Checking" typeCheckTime
                 if plan.Verbosity >= 2 then
                     let t = System.Math.Round(typeCheckTime, 1)
                     println $"        {t}ms"
@@ -1702,6 +1766,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             plan.Monomorphization
                             typedUserAst
                     let anfTime = sw.Elapsed.TotalMilliseconds - parseTime - typeCheckTime
+                    recordPassTiming plan.PassTimingRecorder "AST -> ANF" anfTime
                     if plan.Verbosity >= 2 then
                         let t = System.Math.Round(anfTime, 1)
                         println $"        {t}ms"
@@ -1734,6 +1799,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                 sw
                                 userRegistries
                                 (entryFunction :: functionsToCompile)
+                                plan.PassTimingRecorder
                         match anfResult with
                         | Error err -> Error err
                         | Ok (anfFunctions, typeMap) ->
@@ -1742,14 +1808,16 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             match PrintInsertion.insertPrintInEntry "_start" programType anfFunctions with
                             | Error err -> Error $"Print insertion error: {err}"
                             | Ok printedFunctions ->
+                                let printElapsed = sw.Elapsed.TotalMilliseconds - printStart
+                                recordPassTiming plan.PassTimingRecorder "Print Insertion" printElapsed
                                 if plan.Verbosity >= 2 then
-                                    let t = System.Math.Round(sw.Elapsed.TotalMilliseconds - printStart, 1)
+                                    let t = System.Math.Round(printElapsed, 1)
                                     println $"        {t}ms"
                                 if shouldDumpIR plan.Verbosity plan.Options.DumpANF then
                                     let printProgram = ANF.Program (printedFunctions, ANF.Return ANF.UnitLiteral)
                                     printANFProgram "=== ANF (after Print insertion) ===" printProgram
 
-                                let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions
+                                let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions plan.PassTimingRecorder
                                 let userDependencyHashes =
                                     if plan.Stdlib.CacheSettings.Enabled then
                                         buildFunctionDependencyHashes
@@ -1766,6 +1834,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         plan.Verbosity
                                         plan.Options
                                         sw
+                                        plan.PassTimingRecorder
                                         plan.Labels.StageSuffix
                                         tcoFunctions
                                         typeMap
@@ -1784,8 +1853,15 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         let finalUserFuncs =
                                             if plan.TreeShakeUserFunctions then
                                                 if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
-                                                if plan.Options.DisableFunctionTreeShaking then allUserFuncs
-                                                else FunctionTreeShaking.filterUserFunctions (Some "_start") allUserFuncs
+                                                let treeShakeStart = sw.Elapsed.TotalMilliseconds
+                                                let shakenUserFuncs =
+                                                    if plan.Options.DisableFunctionTreeShaking then
+                                                        allUserFuncs
+                                                    else
+                                                        FunctionTreeShaking.filterUserFunctions (Some "_start") allUserFuncs
+                                                let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
+                                                recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
+                                                shakenUserFuncs
                                             else
                                                 allUserFuncs
 
@@ -1799,10 +1875,15 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         let reachableStdlib =
                                             if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
                                             else
+                                                let treeShakeStart = sw.Elapsed.TotalMilliseconds
                                                 FunctionTreeShaking.filterStdlibFunctions
                                                     plan.Stdlib.StdlibCallGraph
                                                     finalUserFuncs
                                                     plan.Stdlib.AllocatedFunctions
+                                                |> fun shakenStdlib ->
+                                                    let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
+                                                    recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
+                                                    shakenStdlib
 
                                         // Combine reachable stdlib functions with user functions
                                         let allFuncs = reachableStdlib @ finalUserFuncs
@@ -1815,6 +1896,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                                 plan.Verbosity
                                                 plan.Options
                                                 sw
+                                                plan.PassTimingRecorder
                                                 "  [6/8] Code Generation..."
                                                 "  [7/7] ARM64 Encoding..."
                                                 "  [7/7] Binary Generation ({format})..."
@@ -1844,6 +1926,7 @@ let buildPreambleContext
     (preamble: string)
     (_sourceFile: string)
     (_funcLineMap: Map<string, int>)
+    (passTimingRecorder: PassTimingRecorder option)
     : Result<PreambleContext, string> =
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
@@ -1892,7 +1975,7 @@ let buildPreambleContext
                     let pipelineContext = buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries
                     let preambleOptions = defaultOptions
                     let sw = Stopwatch.StartNew()
-                    match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions with
+                    match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
                     | Error err ->
                         let rcPrefix = "Reference count insertion error: "
                         let msg =
@@ -1903,7 +1986,7 @@ let buildPreambleContext
                                 $"Preamble {err}"
                         Error msg
                     | Ok (preambleFunctions, typeMap) ->
-                        let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
+                        let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
                         let preambleDependencyHashes =
                             if stdlib.CacheSettings.Enabled then
                                 buildFunctionDependencyHashes
@@ -1919,6 +2002,7 @@ let buildPreambleContext
                             0
                             preambleOptions
                             sw
+                            passTimingRecorder
                             "preamble"
                             tcoFunctions
                             typeMap
@@ -1960,6 +2044,7 @@ let buildPreambleContextFromAnalysis
     (specialization: AST_to_ANF.SpecializationResult)
     (_sourceFile: string)
     (_funcLineMap: Map<string, int>)
+    (passTimingRecorder: PassTimingRecorder option)
     : Result<PreambleContext, string> =
     let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
 
@@ -1986,7 +2071,7 @@ let buildPreambleContextFromAnalysis
         let pipelineContext = buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries
         let preambleOptions = defaultOptions
         let sw = Stopwatch.StartNew()
-        match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions with
+        match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
         | Error err ->
             let rcPrefix = "Reference count insertion error: "
             let msg =
@@ -1997,7 +2082,7 @@ let buildPreambleContextFromAnalysis
                     $"Preamble {err}"
             Error msg
         | Ok (preambleFunctions, typeMap) ->
-            let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions
+            let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
             let preambleDependencyHashes =
                 if stdlib.CacheSettings.Enabled then
                     buildFunctionDependencyHashes
@@ -2013,6 +2098,7 @@ let buildPreambleContextFromAnalysis
                 0
                 preambleOptions
                 sw
+                passTimingRecorder
                 "preamble"
                 tcoFunctions
                 typeMap
@@ -2098,6 +2184,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         AllowInternal = request.AllowInternal
         Verbosity = request.Verbosity
         Options = request.Options
+        PassTimingRecorder = request.PassTimingRecorder
         Stdlib = stdlib
         BaseContext = baseContext
         Monomorphization = monomorphization
@@ -2261,13 +2348,13 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
                     FuncParams = userOnly.FuncParams
                     ModuleRegistry = userOnly.ModuleRegistry
                 }
-                match buildAnf 0 coverageOptions sw userRegistries (entryFunction :: userOnly.UserFunctions) with
+                match buildAnf 0 coverageOptions sw userRegistries (entryFunction :: userOnly.UserFunctions) None with
                 | Error err -> Error err
                 | Ok (userFunctions, _typeMap) ->
                     match PrintInsertion.insertPrintInEntry "_start" programType userFunctions with
                     | Error err -> Error $"Print insertion error: {err}"
                     | Ok printedFunctions ->
-                        let tcoFunctions = applyTco 0 coverageOptions sw printedFunctions
+                        let tcoFunctions = applyTco 0 coverageOptions sw printedFunctions None
                         let reachableStdlibNames =
                             ANFDeadCodeElimination.getReachableStdlib stdlib.StdlibANFCallGraph tcoFunctions
                         Ok reachableStdlibNames

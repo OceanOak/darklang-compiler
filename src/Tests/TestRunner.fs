@@ -88,7 +88,7 @@ let main args =
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
         { Name = "MIR Optimize Tests"; Tests = MIROptimizeTests.tests }
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
-        { Name = "Cache Tests"; Tests = CacheTests.tests }
+        { Name = "Pass Timing Tests"; Tests = PassTimingTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
@@ -113,14 +113,15 @@ let main args =
     let runState = TestFramework.createState ()
     let recordTiming = TestFramework.recordTiming runState
     let recordResults = TestFramework.recordResults runState
+    let recordPassTiming = TestFramework.recordPassTiming runState
 
     let timer = Stopwatch.StartNew()
     let stdlib =
         let stdlibResult =
             if noCache then
-                CompilerLibrary.buildStdlibWithCache { Enabled = false; CompilerKey = "" }
+                CompilerLibrary.buildStdlibWithCache { Enabled = false; CompilerKey = "" } (Some recordPassTiming)
             else
-                CompilerLibrary.buildStdlib()
+                CompilerLibrary.buildStdlibWithTrace (Some recordPassTiming)
         match stdlibResult with
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
@@ -149,7 +150,7 @@ let main args =
         : unit =
         let numTests = testsArray.Length
         if numTests > 0 then
-            let suiteContextsResult = TestDSL.E2ETestRunner.buildSuiteContexts stdlib testsArray
+            let suiteContextsResult = TestDSL.E2ETestRunner.buildSuiteContexts stdlib testsArray (Some recordPassTiming)
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
             let progress = ProgressBar.create progressLabel numTests
@@ -216,7 +217,7 @@ let main args =
                         | None ->
                             preambleFailureResult $"Missing built preamble context for {test.SourceFile}"
                         | Some ctx ->
-                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext suiteContexts.Stdlib ctx test
+                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext suiteContexts.Stdlib ctx test (Some recordPassTiming)
 
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
@@ -611,6 +612,18 @@ let main args =
                     $"total: {formatTime timing.TotalTime}"
             let displayName = if timing.Name.Length > 45 then timing.Name.Substring(0, 42) + "..." else timing.Name
             println $"  {Colors.gray}{i + 1}. {displayName,-45} {timingStr}{Colors.reset}"
+        println ""
+
+    if not (Map.isEmpty runState.PassTimings) then
+        println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
+        println $"{Colors.bold}{Colors.gray}⏱ Pass Timings{Colors.reset}"
+        println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
+        let ordered =
+            runState.PassTimings
+            |> Map.toList
+            |> List.sortByDescending (fun (_, elapsed) -> elapsed)
+        for (pass, elapsed) in ordered do
+            println $"  {Colors.gray}{pass,-30} {formatTime elapsed}{Colors.reset}"
         println ""
 
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"

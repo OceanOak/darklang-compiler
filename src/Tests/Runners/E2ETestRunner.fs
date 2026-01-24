@@ -164,6 +164,7 @@ let private buildPreamblePlan
 let buildSuiteContexts
     (stdlib: CompilerLibrary.StdlibResult)
     (tests: E2ETest array)
+    (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
     : Result<SuiteContext, string> =
     let groupedTests =
         tests
@@ -185,7 +186,7 @@ let buildSuiteContexts
 
     plansResult
     |> Result.bind (fun (plans, stdlibSpecs) ->
-        CompilerLibrary.buildStdlibSpecializations stdlib stdlibSpecs
+        CompilerLibrary.buildStdlibSpecializations stdlib stdlibSpecs passTimingRecorder
         |> Result.bind (fun stdlibWithSpecs ->
             let buildEmptyContext () : CompilerLibrary.PreambleContext =
                 {
@@ -212,6 +213,7 @@ let buildSuiteContexts
                                         plan.Specialization
                                         plan.Spec.SourceFile
                                         plan.Spec.FunctionLineMap
+                                        passTimingRecorder
                                     |> Result.mapError (fun err ->
                                         $"Preamble build error ({plan.Spec.SourceFile}): {err}")
                             ctxResult
@@ -329,6 +331,7 @@ let runE2ETestWithPreambleContext
     (stdlib: CompilerLibrary.StdlibResult)
     (preambleCtx: CompilerLibrary.PreambleContext)
     (test: E2ETest)
+    (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
     : E2ETestResult =
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
@@ -340,6 +343,7 @@ let runE2ETestWithPreambleContext
         AllowInternal = allowInternal
         Verbosity = 0
         Options = options
+        PassTimingRecorder = passTimingRecorder
     }
     let run = compileAndRun request
     evaluateExpectations test run
