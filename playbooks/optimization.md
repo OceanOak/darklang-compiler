@@ -4,11 +4,9 @@ The compiler has many documented optimization opportunities in `docs/investigati
 
 You are going to implement EXACTLY ONE optimization.
 
-1. Use this process. (Ignore WORKFLOW.md)
-
 2. Read all investigation files in `docs/investigations/benchmark-*.md`. Create a list of all optimization opportunities that have "Low" complexity. From this list, choose ONE optimization at random (do not pick deterministically or by perceived easiness).
 
-3. PLAN THE IMPLEMENTATION using ultrathink. Before writing any code:
+3. PLAN THE IMPLEMENTATION. Before writing any code:
 
    - Read the relevant investigation file thoroughly
    - Identify the exact files to modify (usually in `src/DarkCompiler/passes/`)
@@ -64,6 +62,22 @@ You are going to implement EXACTLY ONE optimization.
     - Commit the code, tests, and updated RESULTS.md
     - Include a detailed commit message explaining the optimization
     - Land using ./scripts/land-in-main.sh
+
+Include before/after benchmark data in the commit message:
+
+```
+Enable DCE + constant folding optimizations
+
+Benchmark improvement:
+- factorial: 7.35M → 6.92M instructions (-5.8%)
+- fib: 1015M → 955M instructions (-5.9%)
+- sum_to_n: 39M → 36M instructions (-7.7%)
+
+Baseline: commit abc123
+After: commit def456
+```
+
+
 
 ## Policies for implementing optimizations
 

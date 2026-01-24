@@ -4,8 +4,6 @@ This compiler aims to match the official Darklang interpreter in both syntax and
 
 You are going to fix EXACTLY ONE difference (syntactic or semantic).
 
-1. Use this process. (Ignore WORKFLOW.md)
-
 2. Pick a random E2E test file from `src/Tests/e2e/`. Read through the tests one by one, and for each test, check if it would be skipped by `scripts/validate-darklang.py`. Stop at the FIRST test that would be skipped. Common skip reasons:
 
    **Tooling differences (skip these - different testing model):**

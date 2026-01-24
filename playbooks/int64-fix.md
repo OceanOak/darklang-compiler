@@ -4,8 +4,6 @@ The compiler is filled with places where a default TInt64 type is used. This lea
 
 You are going to resolve EXACTLY ONE type checking issue.
 
-1. Use this process. (Ignore WORKFLOW.md)
-
 2. Find a place in the compiler where the compiler has chosen TInt64 as a default type, even though it is incorrect. Choose at random, do not pick deterministically, including by difficulty.
 
 3. Remove the default type assumption, using Result types if possible for error handling, and the `crash` function if that isn't possible. Add an E2E test which highlights the problem.
