@@ -673,3 +673,93 @@ def chainCalls263(n: Int64) : Int64 =
     c
 
 chainCalls263(5) = 65
+
+
+// ===================================================================
+// SaveRegs Float First-Register-Only Offset Tests (Mutation #265)
+// ===================================================================
+
+// Mutation #265 targets the offset calculation in SaveRegs for float registers
+// in the (true, false) case - when only the FIRST register of a pair is live:
+//   [ARM64.STR_fp (lirPhysFPRegToARM64FReg f1, ARM64.SP, baseFloatOffset + offset)]
+// The mutation changes + to -, which would store at baseFloatOffset - offset
+// instead of baseFloatOffset + offset, corrupting memory.
+//
+// Float register pairs layout: (D0,D1)@0, (D2,D3)@16, (D4,D5)@32, (D6,D7)@48
+// When only D2 is live (not D3), it should be stored at baseFloatOffset + 16
+// With mutation: baseFloatOffset - 16 (corruption or invalid access)
+//
+// To trigger this, we need a float value in an even-position register (D2, D4, D6)
+// that survives a function call, while its pair partner is NOT live.
+
+// Helper function for float across call tests
+def identityFloat265(x: Float) : Float = x
+def identityInt265(x: Int64) : Int64 = x
+
+// Test with single float value surviving a call
+// This puts a float in D0 (or another register), and should test save/restore
+def singleFloatAcrossCall265(f: Float) : Float =
+    let value = f + 100.0 in
+    let _ = identityInt265(0) in
+    value
+
+singleFloatAcrossCall265(42.0) = 142.0
+
+// Test with 3 float values - odd count increases chance of unpaired register
+// If 3 floats are live: D0+D1 paired, D2 alone (triggers the mutation)
+def threeFloatsAcrossCall265(x: Float) : Float =
+    let a = x + 1.0 in
+    let b = x + 2.0 in
+    let c = x + 3.0 in
+    let _ = identityInt265(0) in
+    a + b + c
+
+threeFloatsAcrossCall265(10.0) = 36.0
+
+// Test with 5 float values - more chance of hitting unpaired second register in pair
+def fiveFloatsAcrossCall265(x: Float) : Float =
+    let v1 = x + 1.0 in
+    let v2 = x + 2.0 in
+    let v3 = x + 3.0 in
+    let v4 = x + 4.0 in
+    let v5 = x + 5.0 in
+    let _ = identityInt265(0) in
+    v1 + v2 + v3 + v4 + v5
+
+fiveFloatsAcrossCall265(10.0) = 65.0
+
+// Asymmetric float liveness - one float used before call, one after
+// This creates asymmetric liveness that can hit (true, false) branch
+def asymmetricFloatLiveness265(a: Float, b: Float) : Float =
+    let first = a + 1.0 in
+    let second = b + 1.0 in
+    let _ = identityFloat265(first) in
+    second
+
+asymmetricFloatLiveness265(10.0, 20.0) = 21.0
+
+// Chain of calls with floats to stress test SaveRegs/RestoreRegs
+def chainFloatCalls265(n: Float) : Float =
+    let a = n + 10.0 in
+    let _ = identityInt265(0) in
+    let b = a + 20.0 in
+    let _ = identityInt265(0) in
+    let c = b + 30.0 in
+    let _ = identityInt265(0) in
+    c
+
+chainFloatCalls265(5.0) = 65.0
+
+// 7 float values - maximizes chance of having D6 live without D7
+def sevenFloatsAcrossCall265(x: Float) : Float =
+    let v1 = x + 1.0 in
+    let v2 = x + 2.0 in
+    let v3 = x + 3.0 in
+    let v4 = x + 4.0 in
+    let v5 = x + 5.0 in
+    let v6 = x + 6.0 in
+    let v7 = x + 7.0 in
+    let _ = identityInt265(0) in
+    v1 + v2 + v3 + v4 + v5 + v6 + v7
+
+sevenFloatsAcrossCall265(10.0) = 98.0
