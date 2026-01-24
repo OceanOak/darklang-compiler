@@ -308,101 +308,46 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     | RefCountIncString _ -> Some AST.TUnit  // Returns unit
     | RefCountDecString _ -> Some AST.TUnit  // Returns unit
 
-/// Check if sourceId is transitively an alias of targetId
-/// The aliases map is: aliases[x] = y means "x is an alias of y" (from Let x = Atom (Var y))
-/// We follow the chain from sourceId to see if it reaches targetId
-let rec isTransitiveAliasOf (aliases: Map<TempId, TempId>) (sourceId: TempId) (targetId: TempId) : bool =
-    if sourceId = targetId then true
-    else
-        match Map.tryFind sourceId aliases with
-        | Some nextId -> isTransitiveAliasOf aliases nextId targetId
-        | None -> false
+/// Return analysis annotation for AExpr nodes
+type ReturnAnnotatedExpr =
+    | RReturn of Atom * Set<TempId>
+    | RLet of TempId * CExpr * ReturnAnnotatedExpr * Set<TempId>
+    | RIf of Atom * ReturnAnnotatedExpr * ReturnAnnotatedExpr * Set<TempId>
 
-/// Check if an atom is returned in the expression, following aliases
-/// An alias is a binding like "let x = Atom (Var y)" which means x is an alias of y
-let rec isAtomReturnedWithAliases (aliases: Map<TempId, TempId>) (atom: Atom) (expr: AExpr) : bool =
+/// Get the set of returned TempIds for a return-annotated expression
+let returnedSet (expr: ReturnAnnotatedExpr) : Set<TempId> =
     match expr with
-    | Return retAtom ->
-        // Check if the returned atom is our target or a transitive alias of it
-        match atom, retAtom with
-        | Var targetId, Var retId ->
-            // Check if retId is the same as targetId or transitively aliases to it
-            isTransitiveAliasOf aliases retId targetId
-        | _, _ -> retAtom = atom
-    | Let (boundId, cexpr, body) ->
-        // Check if this is an alias binding (let x = Atom (Var y))
-        let aliases' =
-            match cexpr with
-            | Atom (Var sourceId) -> Map.add boundId sourceId aliases
-            | _ -> aliases
-        isAtomReturnedWithAliases aliases' atom body
-    | If (_, thenBranch, elseBranch) ->
-        isAtomReturnedWithAliases aliases atom thenBranch ||
-        isAtomReturnedWithAliases aliases atom elseBranch
+    | RReturn (_, returned) -> returned
+    | RLet (_, _, _, returned) -> returned
+    | RIf (_, _, _, returned) -> returned
 
-/// Check if an atom is returned in the expression
-let isAtomReturned (atom: Atom) (expr: AExpr) : bool =
-    isAtomReturnedWithAliases Map.empty atom expr
+/// Collect the alias chain for a TempId (includes the TempId itself)
+let rec collectAliasChain (aliases: Map<TempId, TempId>) (tempId: TempId) : Set<TempId> =
+    match Map.tryFind tempId aliases with
+    | Some nextId -> Set.add tempId (collectAliasChain aliases nextId)
+    | None -> Set.singleton tempId
 
-/// Check if a TempId is returned in the expression
-let isTempReturned (tempId: TempId) (expr: AExpr) : bool =
-    isAtomReturned (Var tempId) expr
-
-/// Insert RefCountDec before all Return points in an expression
-/// This ensures Dec happens AFTER the body is evaluated but BEFORE returning
-/// Returns (transformed expr, varGen, list of new TempIds created for Dec operations)
-let rec insertDecBeforeReturn (tempId: TempId) (size: int) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * TempId list =
+/// Analyze return values and track alias chains in a single pass
+let rec analyzeReturns (aliases: Map<TempId, TempId>) (expr: AExpr) : ReturnAnnotatedExpr =
     match expr with
     | Return atom ->
-        // Insert Dec right before Return
-        let (dummyId, varGen') = freshVar varGen
-        (Let (dummyId, RefCountDec (Var tempId, size), Return atom), varGen', [dummyId])
-    | Let (x, c, body) ->
-        // Recurse into body
-        let (body', varGen', newIds) = insertDecBeforeReturn tempId size body varGen
-        (Let (x, c, body'), varGen', newIds)
-    | If (cond, thenBr, elseBr) ->
-        // Insert in both branches
-        let (thenBr', varGen1, thenIds) = insertDecBeforeReturn tempId size thenBr varGen
-        let (elseBr', varGen2, elseIds) = insertDecBeforeReturn tempId size elseBr varGen1
-        (If (cond, thenBr', elseBr'), varGen2, thenIds @ elseIds)
-
-/// Insert RefCountInc before Return when returning a parameter (or alias)
-/// Returns (transformed expr, varGen, list of new TempIds created)
-let rec insertIncBeforeReturnForAtom
-    (aliases: Map<TempId, TempId>)
-    (targetId: TempId)
-    (size: int)
-    (expr: AExpr)
-    (varGen: VarGen)
-    : AExpr * VarGen * TempId list =
-    match expr with
-    | Return (Var retId as retAtom) ->
-        if isTransitiveAliasOf aliases retId targetId then
-            let (dummyId, varGen') = freshVar varGen
-            let incExpr = RefCountInc (Var retId, size)
-            (Let (dummyId, incExpr, Return retAtom), varGen', [dummyId])
-        else
-            (expr, varGen, [])
-    | Return _ ->
-        (expr, varGen, [])
-    | Let (boundId, cexpr, body) ->
+        let returned =
+            match atom with
+            | Var tid -> collectAliasChain aliases tid
+            | _ -> Set.empty
+        RReturn (atom, returned)
+    | Let (tempId, cexpr, body) ->
         let aliases' =
             match cexpr with
-            | Atom (Var sourceId) -> Map.add boundId sourceId aliases
+            | Atom (Var sourceId) -> Map.add tempId sourceId aliases
             | _ -> aliases
-        let (body', varGen', newIds) = insertIncBeforeReturnForAtom aliases' targetId size body varGen
-        (Let (boundId, cexpr, body'), varGen', newIds)
-    | If (cond, thenBr, elseBr) ->
-        let (thenBr', varGen1, thenIds) = insertIncBeforeReturnForAtom aliases targetId size thenBr varGen
-        let (elseBr', varGen2, elseIds) = insertIncBeforeReturnForAtom aliases targetId size elseBr varGen1
-        (If (cond, thenBr', elseBr'), varGen2, thenIds @ elseIds)
-
-/// Insert RefCountDec for a TempId at all return points
-/// Returns (transformed expr, varGen, list of new TempIds created)
-let wrapWithDecAndTrack (tempId: TempId) (typ: AST.Type) (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * TempId list =
-    let size = payloadSize typ ctx.TypeReg
-    insertDecBeforeReturn tempId size expr varGen
+        let bodyInfo = analyzeReturns aliases' body
+        RLet (tempId, cexpr, bodyInfo, returnedSet bodyInfo)
+    | If (cond, thenBranch, elseBranch) ->
+        let thenInfo = analyzeReturns aliases thenBranch
+        let elseInfo = analyzeReturns aliases elseBranch
+        let returned = Set.union (returnedSet thenInfo) (returnedSet elseInfo)
+        RIf (cond, thenInfo, elseInfo, returned)
 
 /// Check if a CExpr is a borrowing/aliasing operation
 /// Borrowed/aliased values should NOT get their own RefCountDec - the original value owns the memory
@@ -418,124 +363,197 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
         funcName = "Stdlib.__FingerTree.head"
     | _ -> false
 
+/// Insert RefCountInc for returned parameters at a Return node
+let insertParamIncsAtReturn
+    (paramIncs: (TempId * int) list)
+    (returned: Set<TempId>)
+    (expr: AExpr)
+    (varGen: VarGen)
+    (types: Map<TempId, AST.Type>)
+    : AExpr * VarGen * Map<TempId, AST.Type> =
+    let active =
+        paramIncs
+        |> List.filter (fun (tempId, _) -> Set.contains tempId returned)
+    List.foldBack
+        (fun (tempId, size) (accExpr, accVarGen, accTypes) ->
+            let (dummyId, varGen') = freshVar accVarGen
+            let incExpr = RefCountInc (Var tempId, size)
+            let accExpr' = Let (dummyId, incExpr, accExpr)
+            (accExpr', varGen', Map.add dummyId AST.TUnit accTypes))
+        active
+        (expr, varGen, types)
+
+/// Insert RefCountDec operations before a Return using the current dec stack
+let insertReturnDecs
+    (returnDecs: (TempId * int) list)
+    (expr: AExpr)
+    (varGen: VarGen)
+    (types: Map<TempId, AST.Type>)
+    : AExpr * VarGen * Map<TempId, AST.Type> =
+    let decsInOrder = List.rev returnDecs
+    List.fold
+        (fun (accExpr, accVarGen, accTypes) (tempId, size) ->
+            let (dummyId, varGen') = freshVar accVarGen
+            let decExpr = RefCountDec (Var tempId, size)
+            let accExpr' = Let (dummyId, decExpr, accExpr)
+            (accExpr', varGen', Map.add dummyId AST.TUnit accTypes))
+        (expr, varGen, types)
+        decsInOrder
+
+/// Stored state for rebuilding a Let while unwinding an expression spine
+type LetFrame = {
+    TempId: TempId
+    CExpr: CExpr
+    Ctx: TypeContext
+    MaybeType: AST.Type option
+    BodyReturned: Set<TempId>
+    BindingTypes: Map<TempId, AST.Type>
+}
+
+/// Apply a single Let frame around an expression (uses current varGen/types)
+let applyLetFrame
+    (frame: LetFrame)
+    (expr: AExpr, varGen: VarGen, types: Map<TempId, AST.Type>)
+    : AExpr * VarGen * Map<TempId, AST.Type> =
+    let (incBindings, varGen1) =
+        match frame.CExpr with
+        | TupleAlloc elems ->
+            let rec collectIncs (atoms: Atom list) (vg: VarGen) (acc: (TempId * CExpr) list) =
+                match atoms with
+                | [] -> (List.rev acc, vg)
+                | atom :: rest ->
+                    match atom with
+                    | Var tid ->
+                        match tryGetType frame.Ctx tid with
+                        | Some t when isHeapType t ->
+                            let size = payloadSize t frame.Ctx.TypeReg
+                            let (dummyId, vg') = freshVar vg
+                            collectIncs rest vg' ((dummyId, RefCountInc (Var tid, size)) :: acc)
+                        | _ ->
+                            collectIncs rest vg acc
+                    | _ ->
+                        collectIncs rest vg acc
+            collectIncs elems varGen []
+        | _ -> ([], varGen)
+
+    let typesWithIncs =
+        incBindings
+        |> List.fold (fun m (tid, _) -> Map.add tid AST.TUnit m) types
+
+    let (returnIncBinding, varGen2, typesWithReturnInc) =
+        match frame.MaybeType with
+        | Some t when isHeapType t && Set.contains frame.TempId frame.BodyReturned && isBorrowingExpr frame.CExpr ->
+            let size = payloadSize t frame.Ctx.TypeReg
+            let (incId, vg) = freshVar varGen1
+            let incExpr = RefCountInc (Var frame.TempId, size)
+            ([(incId, incExpr)], vg, Map.add incId AST.TUnit typesWithIncs)
+        | _ ->
+            ([], varGen1, typesWithIncs)
+
+    let bodyWithReturnInc = wrapBindings returnIncBinding expr
+    let letExpr = Let (frame.TempId, frame.CExpr, bodyWithReturnInc)
+    let exprWithIncs = wrapBindings incBindings letExpr
+    let mergedTypes = Map.fold (fun m k v -> Map.add k v m) frame.BindingTypes typesWithReturnInc
+    (exprWithIncs, varGen2, mergedTypes)
+
+/// Apply a stack of Let frames (innermost-first)
+let applyLetFrames
+    (frames: LetFrame list)
+    (expr: AExpr, varGen: VarGen, types: Map<TempId, AST.Type>)
+    : AExpr * VarGen * Map<TempId, AST.Type> =
+    List.fold (fun state frame -> applyLetFrame frame state) (expr, varGen, types) frames
+
+/// Insert reference counting operations using return analysis and a dec stack
+/// Returns (transformed expr, varGen, types defined in this subtree)
+let rec insertRCWithAnalysis
+    (ctx: TypeContext)
+    (expr: ReturnAnnotatedExpr)
+    (varGen: VarGen)
+    (returnDecs: (TempId * int) list)
+    (paramIncs: (TempId * int) list)
+    : AExpr * VarGen * Map<TempId, AST.Type> =
+    let rec descend
+        (ctx: TypeContext)
+        (expr: ReturnAnnotatedExpr)
+        (varGen: VarGen)
+        (returnDecs: (TempId * int) list)
+        (frames: LetFrame list)
+        : AExpr * VarGen * Map<TempId, AST.Type> =
+        match expr with
+        | RReturn (atom, returned) ->
+            let baseExpr = Return atom
+            let (withParamIncs, varGen1, types1) = insertParamIncsAtReturn paramIncs returned baseExpr varGen Map.empty
+            let (withDecs, varGen2, types2) = insertReturnDecs returnDecs withParamIncs varGen1 types1
+            applyLetFrames frames (withDecs, varGen2, types2)
+
+        | RIf (cond, thenBranch, elseBranch, _) ->
+            let (thenBranch', varGen1, types1) = insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs
+            let (elseBranch', varGen2, types2) = insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs
+            let mergedTypes = Map.fold (fun m k v -> Map.add k v m) types1 types2
+            applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, mergedTypes)
+
+        | RLet (tempId, cexpr, bodyInfo, _) ->
+            // First, infer the type of this binding and add to context
+            let maybeType = inferCExprType ctx cexpr
+            // Use a TypedAtom alias in the body to preserve the intended payload type
+            // when TupleGet cannot infer it from a multi-parameter sum.
+            let inferredType =
+                match maybeType with
+                | Some t -> t
+                | None ->
+                    match cexpr, bodyInfo with
+                    | TupleGet _, RLet (_, TypedAtom (Var sourceId, aliasType), _, _) when sourceId = tempId ->
+                        aliasType
+                    | _ ->
+                        // Fallback for cases where inference is still incomplete.
+                        // TODO: remove this once all CExprs are fully typed.
+                        AST.TInt64
+            let ctx' = addType ctx tempId inferredType
+            let ctxWithAliases =
+                match cexpr with
+                | TypedAtom (Var sourceId, aliasType) -> addType ctx' sourceId aliasType
+                | _ -> ctx'
+
+            let bindingTypes =
+                match cexpr with
+                | TypedAtom (Var sourceId, aliasType) ->
+                    Map.empty |> Map.add tempId inferredType |> Map.add sourceId aliasType
+                | _ ->
+                    Map.add tempId inferredType Map.empty
+
+            // Track closure function names for later ClosureCall type resolution
+            let ctx'' =
+                match cexpr with
+                | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithAliases tempId funcName
+                | _ -> ctxWithAliases
+
+            let bodyReturned = returnedSet bodyInfo
+            let returnDecs' =
+                match maybeType with
+                | Some t when isHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
+                    let size = payloadSize t ctx'.TypeReg
+                    (tempId, size) :: returnDecs
+                | _ -> returnDecs
+
+            let frame = {
+                TempId = tempId
+                CExpr = cexpr
+                Ctx = ctx
+                MaybeType = maybeType
+                BodyReturned = bodyReturned
+                BindingTypes = bindingTypes
+            }
+
+            // Process the body iteratively, then rebuild on the way back out
+            descend ctx'' bodyInfo varGen returnDecs' (frame :: frames)
+
+    descend ctx expr varGen returnDecs []
+
 /// Insert reference counting operations into an AExpr
 /// Returns (transformed expr, varGen, accumulated TempTypes)
-let rec insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * Map<TempId, AST.Type> =
-    match expr with
-    | Return _ ->
-        // Nothing to do at return - return current accumulated types
-        (expr, varGen, ctx.TempTypes)
-
-    | If (cond, thenBranch, elseBranch) ->
-        // Process both branches
-        let (thenBranch', varGen1, types1) = insertRC ctx thenBranch varGen
-        let ctx1 = { ctx with TempTypes = types1 }
-        let (elseBranch', varGen2, types2) = insertRC ctx1 elseBranch varGen1
-        (If (cond, thenBranch', elseBranch'), varGen2, types2)
-
-    | Let (tempId, cexpr, body) ->
-        // First, infer the type of this binding and add to context
-        let maybeType = inferCExprType ctx cexpr
-        // Use a TypedAtom alias in the body to preserve the intended payload type
-        // when TupleGet cannot infer it from a multi-parameter sum.
-        let inferredType =
-            match maybeType with
-            | Some t -> t
-            | None ->
-                match cexpr, body with
-                | TupleGet _, Let (aliasId, TypedAtom (Var sourceId, aliasType), _) when sourceId = tempId ->
-                    aliasType
-                | _ ->
-                    // Fallback for cases where inference is still incomplete.
-                    // TODO: remove this once all CExprs are fully typed.
-                    AST.TInt64
-        let ctx' = addType ctx tempId inferredType
-        let ctxWithAliases =
-            match cexpr with
-            | TypedAtom (Var sourceId, aliasType) -> addType ctx' sourceId aliasType
-            | _ -> ctx'
-
-        // Track closure function names for later ClosureCall type resolution
-        let ctx'' =
-            match cexpr with
-            | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithAliases tempId funcName
-            | _ -> ctxWithAliases
-
-        // Process the body recursively
-        let (body', varGen1, accTypes) = insertRC ctx'' body varGen
-
-        // For TupleAlloc, insert RefCountInc for heap-typed elements.
-        // This is necessary because the new tuple stores a reference to the element,
-        // so the element's refcount should reflect this additional reference.
-        // Without this, if the original owner of the element decrements it, the
-        // element could be freed while the tuple still holds a pointer to it.
-        // Note: RefCountInc in codegen safely handles null pointers (e.g., empty list = 0).
-        let (incBindings, varGen2) =
-            match cexpr with
-            | TupleAlloc elems ->
-                let rec collectIncs (atoms: Atom list) (vg: VarGen) (acc: (TempId * CExpr) list) =
-                    match atoms with
-                    | [] -> (List.rev acc, vg)
-                    | atom :: rest ->
-                        match atom with
-                        | Var tid ->
-                            // Check if this variable is heap-typed
-                            match tryGetType ctx tid with
-                            | Some t when isHeapType t ->
-                                // Insert RefCountInc for this heap element
-                                let size = payloadSize t ctx.TypeReg
-                                let (dummyId, vg') = freshVar vg
-                                collectIncs rest vg' ((dummyId, RefCountInc (Var tid, size)) :: acc)
-                            | _ ->
-                                collectIncs rest vg acc
-                        | _ ->
-                            // Literals don't need refcount operations
-                            collectIncs rest vg acc
-                collectIncs elems varGen1 []
-            | _ -> ([], varGen1)
-
-        // Add incBinding TempIds to accTypes with TUnit (RefCountInc returns unit)
-        let accTypesWithIncs =
-            incBindings
-            |> List.fold (fun m (tid, _) -> Map.add tid AST.TUnit m) accTypes
-
-        // If a borrowed heap value is returned, we need to increment its refcount.
-        // This is because the borrowed-from source may be decremented, which would free
-        // the borrowed value before the caller can use the return value.
-        // For example: returning a string extracted from a list - without this Inc,
-        // when the list is decremented, the string inside would be freed.
-        let (returnIncBinding, varGen2a, accTypesWithReturnInc) =
-            match maybeType with
-            | Some t when isHeapType t && isTempReturned tempId body' && isBorrowingExpr cexpr ->
-                // Borrowed heap value is returned - need to Inc to ensure it survives
-                let size = payloadSize t ctx'.TypeReg
-                let (incId, vg) = freshVar varGen2
-                let incExpr = RefCountInc (Var tempId, size)
-                ([(incId, incExpr)], vg, Map.add incId AST.TUnit accTypesWithIncs)
-            | _ ->
-                ([], varGen2, accTypesWithIncs)
-
-        // Check if this TempId is heap-typed, not returned, and not borrowed
-        // Borrowed values don't own their memory - the parent does
-        match maybeType with
-        | Some t when isHeapType t && not (isTempReturned tempId body') && not (isBorrowingExpr cexpr) ->
-            // Insert Dec after body completes but value isn't returned
-            let (bodyWithDec, varGen3, decTempIds) = wrapWithDecAndTrack tempId t ctx' body' varGen2a
-            // Add Dec TempIds to accTypes with TUnit
-            let accTypesWithDecs =
-                decTempIds
-                |> List.fold (fun m tid -> Map.add tid AST.TUnit m) accTypesWithReturnInc
-            // Wrap with Inc bindings, returnInc bindings, then the Let, then Dec
-            let bodyWithReturnInc = wrapBindings returnIncBinding bodyWithDec
-            let letExpr = Let (tempId, cexpr, bodyWithReturnInc)
-            let exprWithIncs = wrapBindings incBindings letExpr
-            (exprWithIncs, varGen3, accTypesWithDecs)
-        | _ ->
-            // Wrap with Inc bindings, returnInc bindings, then the Let
-            let bodyWithReturnInc = wrapBindings returnIncBinding body'
-            let letExpr = Let (tempId, cexpr, bodyWithReturnInc)
-            let exprWithIncs = wrapBindings incBindings letExpr
-            (exprWithIncs, varGen2a, accTypesWithReturnInc)
+let insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * Map<TempId, AST.Type> =
+    let analyzed = analyzeReturns Map.empty expr
+    insertRCWithAnalysis ctx analyzed varGen [] []
 
 /// Insert RC operations into a function
 /// Returns (transformed function, varGen, accumulated TempTypes)
@@ -545,29 +563,24 @@ let insertRCInFunction (ctx: TypeContext) (func: Function) (varGen: VarGen) : Fu
         func.TypedParams
         |> List.fold (fun c tp -> addType c tp.Id tp.Type) ctx
 
-    // Process function body
-    let (body', varGen', accTypes) = insertRC ctx' func.Body varGen
-
-    let (bodyWithParamIncs, varGen'', accTypes') =
+    let bodyInfo = analyzeReturns Map.empty func.Body
+    let paramIncs =
         func.TypedParams
-        |> List.fold
-            (fun (bodyAcc, vgAcc, typesAcc) param ->
-                let shouldInsertParamReturnInc =
-                    match param.Type with
-                    | AST.TDict _ -> false  // Dict pointers are tagged; RC ops expect raw pointers.
-                    | _ -> isHeapType param.Type
-                if shouldInsertParamReturnInc && isTempReturned param.Id bodyAcc then
-                    let size = payloadSize param.Type ctx'.TypeReg
-                    let (body', vg', newIds) =
-                        insertIncBeforeReturnForAtom Map.empty param.Id size bodyAcc vgAcc
-                    let typesAcc' =
-                        newIds |> List.fold (fun m tid -> Map.add tid AST.TUnit m) typesAcc
-                    (body', vg', typesAcc')
-                else
-                    (bodyAcc, vgAcc, typesAcc))
-            (body', varGen', accTypes)
+        |> List.choose (fun param ->
+            match param.Type with
+            | AST.TDict _ -> None  // Dict pointers are tagged; RC ops expect raw pointers.
+            | _ when isHeapType param.Type ->
+                let size = payloadSize param.Type ctx'.TypeReg
+                Some (param.Id, size)
+            | _ -> None)
 
-    ({ func with Body = bodyWithParamIncs }, varGen'', accTypes')
+    // Process function body with return analysis
+    let (body', varGen', accTypes) = insertRCWithAnalysis ctx' bodyInfo varGen [] paramIncs
+    let paramTypes =
+        func.TypedParams
+        |> List.fold (fun m tp -> Map.add tp.Id tp.Type m) Map.empty
+    let mergedTypes = Map.fold (fun m k v -> Map.add k v m) paramTypes accTypes
+    ({ func with Body = body' }, varGen', mergedTypes)
 
 // ============================================================================
 // TypeMap Completeness Verification
@@ -612,7 +625,7 @@ let insertRCInProgram (result: ConversionResult) : Result<ANF.Program * ANF.Type
         match funcs with
         | [] -> (List.rev accFuncs, vg, accTypes)
         | f :: rest ->
-            let (f', vg', types) = insertRCInFunction { ctx with TempTypes = accTypes } f vg
+            let (f', vg', types) = insertRCInFunction ctx f vg
             // Merge accumulated types
             let mergedTypes = Map.fold (fun m k v -> Map.add k v m) accTypes types
             processFuncs rest vg' (f' :: accFuncs) mergedTypes
@@ -620,7 +633,7 @@ let insertRCInProgram (result: ConversionResult) : Result<ANF.Program * ANF.Type
     let (functions', varGen1, typesFromFuncs) = processFuncs functions varGen [] Map.empty
 
     // Process main expression
-    let (mainExpr', _, typesFromMain) = insertRC { ctx with TempTypes = typesFromFuncs } mainExpr varGen1
+    let (mainExpr', _, typesFromMain) = insertRC ctx mainExpr varGen1
 
     // Final merged TypeMap
     let finalTypeMap = Map.fold (fun m k v -> Map.add k v m) typesFromFuncs typesFromMain
