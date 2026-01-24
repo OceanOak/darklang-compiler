@@ -400,13 +400,21 @@ let private buildTypeHash
     let typesSorted = typesUsed |> Set.toList |> List.sort
     hashValue (typesSorted, recordDefs, sumDefs)
 
+let private buildFunctionSignatureHash
+    (funcType: AST.Type)
+    (registries: AST_to_ANF.Registries)
+    (sumTypeDefs: Map<string, string list * (string * int * AST.Type option) list>)
+    : string =
+    let typeHash = buildTypeHash (Set.singleton funcType) registries sumTypeDefs
+    hashValue (funcType, typeHash)
+
 let private buildFunctionDependencyHashes
     (functions: ANF.Function list)
     (typeMap: ANF.TypeMap)
     (registries: AST_to_ANF.Registries)
-    (externalFunctionHashes: Map<string, string>)
+    (_externalFunctionHashes: Map<string, string>)
     : Map<string, string> =
-    // Compute dependency hashes from function bodies, types, and callee hashes (SCC-aware).
+    // Compute dependency hashes from function bodies, types, and callee signatures.
     if List.isEmpty functions then
         Map.empty
     else
@@ -433,212 +441,59 @@ let private buildFunctionDependencyHashes
                 func.Name, buildTypeHash typesUsed registries sumTypeDefs)
             |> Map.ofList
 
+        let signatureHashes =
+            functions
+            |> List.map (fun func ->
+                let paramTypes = func.TypedParams |> List.map (fun p -> p.Type)
+                let funcType = AST.TFunction (paramTypes, func.ReturnType)
+                func.Name, buildFunctionSignatureHash funcType registries sumTypeDefs)
+            |> Map.ofList
+
         let externalNames =
             externalCallGraph
             |> Map.fold (fun acc _ names -> Set.union acc names) Set.empty
 
-        let externalHashes =
+        let externalSignatureHashes =
             externalNames
             |> Set.toList
             |> List.sort
             |> List.map (fun name ->
-                match Map.tryFind name externalFunctionHashes with
-                | Some hash -> (name, hash)
-                | None ->
-                    match Map.tryFind name registries.FuncReg with
-                    | Some funcType ->
-                        let typeHash = buildTypeHash (Set.singleton funcType) registries sumTypeDefs
-                        (name, hashValue (funcType, typeHash))
-                    | None ->
-                        Crash.crash $"Cache: external function '{name}' not found in registry")
+                match Map.tryFind name registries.FuncReg with
+                | Some funcType -> (name, buildFunctionSignatureHash funcType registries sumTypeDefs)
+                | None -> Crash.crash $"Cache: external function '{name}' not found in registry")
             |> Map.ofList
 
-        let buildReverseCallGraph (graph: Map<string, Set<string>>) : Map<string, Set<string>> =
-            graph
-            |> Map.fold (fun acc caller callees ->
-                callees
-                |> Set.fold (fun acc' callee ->
-                    let existing = Map.tryFind callee acc' |> Option.defaultValue Set.empty
-                    Map.add callee (Set.add caller existing) acc'
-                ) acc
-            ) Map.empty
+        let buildDeps (name: string) : string =
+            let bodyHash =
+                match Map.tryFind name bodyHashes with
+                | Some hash -> hash
+                | None -> Crash.crash $"Cache: missing body hash for {name}"
+            let typeHash =
+                match Map.tryFind name typeHashes with
+                | Some hash -> hash
+                | None -> Crash.crash $"Cache: missing type hash for {name}"
+            let internalDeps =
+                Map.tryFind name internalCallGraph
+                |> Option.defaultValue Set.empty
+                |> Set.toList
+                |> List.sort
+                |> List.map (fun callee ->
+                    match Map.tryFind callee signatureHashes with
+                    | Some hash -> (callee, hash)
+                    | None -> Crash.crash $"Cache: missing signature hash for internal callee {callee}")
+            let externalDeps =
+                Map.tryFind name externalCallGraph
+                |> Option.defaultValue Set.empty
+                |> Set.toList
+                |> List.sort
+                |> List.map (fun callee ->
+                    match Map.tryFind callee externalSignatureHashes with
+                    | Some hash -> (callee, hash)
+                    | None -> Crash.crash $"Cache: missing signature hash for external callee {callee}")
+            hashValue (name, bodyHash, typeHash, internalDeps, externalDeps)
 
-        let rec dfsFinishOrder
-            (graph: Map<string, Set<string>>)
-            (node: string)
-            (visited: Set<string>)
-            (order: string list)
-            : Set<string> * string list =
-            if Set.contains node visited then
-                (visited, order)
-            else
-                let visited' = Set.add node visited
-                let neighbors =
-                    Map.tryFind node graph
-                    |> Option.defaultValue Set.empty
-                    |> Set.toList
-                    |> List.sort
-                let (visited'', order') =
-                    neighbors
-                    |> List.fold (fun (v, o) neighbor -> dfsFinishOrder graph neighbor v o) (visited', order)
-                (visited'', node :: order')
-
-        let rec dfsCollectScc
-            (graph: Map<string, Set<string>>)
-            (node: string)
-            (visited: Set<string>)
-            (scc: Set<string>)
-            : Set<string> * Set<string> =
-            if Set.contains node visited then
-                (visited, scc)
-            else
-                let visited' = Set.add node visited
-                let scc' = Set.add node scc
-                let neighbors =
-                    Map.tryFind node graph
-                    |> Option.defaultValue Set.empty
-                    |> Set.toList
-                    |> List.sort
-                neighbors
-                |> List.fold (fun (v, c) neighbor -> dfsCollectScc graph neighbor v c) (visited', scc')
-
-        let findSccs (graph: Map<string, Set<string>>) (nodes: Set<string>) : Set<string> list =
-            let names = nodes |> Set.toList |> List.sort
-            let (_, finishOrder) =
-                names |> List.fold (fun (visited, order) name -> dfsFinishOrder graph name visited order) (Set.empty, [])
-            let reverseGraph = buildReverseCallGraph graph
-            let (_, sccs) =
-                finishOrder
-                |> List.fold (fun (visited, components) name ->
-                    if Set.contains name visited then
-                        (visited, components)
-                    else
-                        let (visited', scc) = dfsCollectScc reverseGraph name visited Set.empty
-                        (visited', scc :: components)
-                ) (Set.empty, [])
-            sccs
-
-        let sccs = findSccs internalCallGraph funcNames
-        let sccInfos =
-            sccs
-            |> List.map (fun scc ->
-                let names = scc |> Set.toList |> List.sort
-                let key = String.concat "|" names
-                (key, names, scc))
-
-        let sccInfoMap =
-            sccInfos
-            |> List.map (fun (key, names, sccSet) -> key, (names, sccSet))
-            |> Map.ofList
-
-        let sccKeyByFunc =
-            sccInfos
-            |> List.collect (fun (key, names, _) -> names |> List.map (fun name -> name, key))
-            |> Map.ofList
-
-        let sccDeps =
-            internalCallGraph
-            |> Map.fold (fun acc caller callees ->
-                let callerKey =
-                    match Map.tryFind caller sccKeyByFunc with
-                    | Some key -> key
-                    | None -> Crash.crash $"Cache: missing SCC key for function {caller}"
-                let depKeys =
-                    callees
-                    |> Set.toList
-                    |> List.choose (fun callee ->
-                        match Map.tryFind callee sccKeyByFunc with
-                        | Some key when key <> callerKey -> Some key
-                        | Some _ -> None
-                        | None -> Crash.crash $"Cache: missing SCC key for callee {callee}")
-                    |> Set.ofList
-                let existing = Map.tryFind callerKey acc |> Option.defaultValue Set.empty
-                Map.add callerKey (Set.union existing depKeys) acc
-            ) Map.empty
-
-        let sccDepsAll =
-            sccInfos
-            |> List.fold (fun acc (key, _, _) ->
-                if Map.containsKey key acc then acc else Map.add key Set.empty acc
-            ) sccDeps
-
-        let rec dfsScc
-            (graph: Map<string, Set<string>>)
-            (node: string)
-            (visited: Set<string>)
-            (order: string list)
-            : Set<string> * string list =
-            if Set.contains node visited then
-                (visited, order)
-            else
-                let visited' = Set.add node visited
-                let neighbors =
-                    Map.tryFind node graph
-                    |> Option.defaultValue Set.empty
-                    |> Set.toList
-                    |> List.sort
-                let (visited'', order') =
-                    neighbors |> List.fold (fun (v, o) n -> dfsScc graph n v o) (visited', order)
-                (visited'', node :: order')
-
-        let sccOrder =
-            let keys = sccInfos |> List.map (fun (key, _, _) -> key) |> List.sort
-            let (_, order) = keys |> List.fold (fun (v, o) key -> dfsScc sccDepsAll key v o) (Set.empty, [])
-            List.rev order
-
-        let sccHashMap =
-            sccOrder
-            |> List.fold (fun acc key ->
-                let (names, sccSet) =
-                    match Map.tryFind key sccInfoMap with
-                    | Some info -> info
-                    | None -> Crash.crash $"Cache: missing SCC info for {key}"
-
-                let internalDeps =
-                    Map.tryFind key sccDepsAll
-                    |> Option.defaultValue Set.empty
-                    |> Set.toList
-                    |> List.sort
-                    |> List.map (fun depKey ->
-                        match Map.tryFind depKey acc with
-                        | Some depHash -> (depKey, depHash)
-                        | None -> Crash.crash $"Cache: missing dependency hash for SCC {depKey}")
-
-                let functionParts =
-                    names
-                    |> List.map (fun name ->
-                        let bodyHash =
-                            match Map.tryFind name bodyHashes with
-                            | Some hash -> hash
-                            | None -> Crash.crash $"Cache: missing body hash for {name}"
-                        let typeHash =
-                            match Map.tryFind name typeHashes with
-                            | Some hash -> hash
-                            | None -> Crash.crash $"Cache: missing type hash for {name}"
-                        (name, bodyHash, typeHash))
-
-                let externalDeps =
-                    sccSet
-                    |> Set.fold (fun accNames name ->
-                        let callees = Map.tryFind name externalCallGraph |> Option.defaultValue Set.empty
-                        Set.union accNames callees
-                    ) Set.empty
-                    |> Set.toList
-                    |> List.sort
-                    |> List.map (fun name ->
-                        match Map.tryFind name externalHashes with
-                        | Some hash -> (name, hash)
-                        | None -> Crash.crash $"Cache: missing external hash for {name}")
-
-                let sccHash = hashValue (functionParts, internalDeps, externalDeps)
-                Map.add key sccHash acc
-            ) Map.empty
-
-        sccInfos
-        |> List.collect (fun (key, names, _) ->
-            match Map.tryFind key sccHashMap with
-            | Some hash -> names |> List.map (fun name -> name, hash)
-            | None -> Crash.crash $"Cache: missing SCC hash for {key}")
+        functions
+        |> List.map (fun func -> func.Name, buildDeps func.Name)
         |> Map.ofList
 
 /// Determine whether to dump a specific IR, based on verbosity or explicit option

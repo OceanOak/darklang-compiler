@@ -25,12 +25,10 @@ The dependency hash includes:
 
 - function body hash (post-inlining ANF body + signature)
 - function type hash (types used in body + registry definitions)
-- hashes of transitive callees (SCC-aware)
+- signature hashes of direct callees (post-inlining call graph)
 
-External functions are hashed via:
-
-- provided external dependency hashes when available, or
-- function type + associated record/sum type definitions.
+External functions are hashed via function type + associated record/sum type
+definitions.
 
 This placement ensures that any inlining changes (caller body changes due to
 callee changes) are captured, because the body hash is taken after inlining.
@@ -59,12 +57,8 @@ presence), so either:
 
 - we still run inlining to compute a post-inline body hash, which removes any
   savings, or
-- we include all direct callees in the dependency hash, even if inlining
-  would not apply.
-
-The second option is conservative and safe but causes extra invalidations:
-callee changes would invalidate callers even when the call would not be
-inlined. This reduces cache hit rates, especially for large call graphs.
+- we include direct callee signatures in the dependency hash, which still does
+  not capture inlining decisions without running the inliner.
 
 ### 2) Pre-ANF Optimization (Post-ANF Conversion)
 

@@ -40,7 +40,7 @@ This keeps the cache small and avoids storing large IR graphs or binaries.
 - **Minimal artifacts**: only store LIRSymbolic functions (no binaries or
   intermediate IR programs).
 - **Dependency-based invalidation**: cache keys are derived from the function's
-  body, the types it touches, and the hashes of its callees.
+  body, the types it touches, and the signatures of its non-inlined callees.
 - **Compiler hash**: SHA256 of the compiler binary invalidates the entire cache
   on compiler changes.
 - **Post-inlining inputs**: hashes are computed from ANF after inlining, so
@@ -56,7 +56,7 @@ This keeps the cache small and avoids storing large IR graphs or binaries.
 
 All cache entries include:
 
-- Cache version (`v2`)
+- Cache version (`v4`)
 - Compiler hash (SHA256 of the compiler binary)
 
 ### Function Cache Keys
@@ -82,22 +82,17 @@ Each function's dependency hash is built from:
   - explicit types in ANF (TypedAtom/Print/RawGet/RawSet),
   - TempId types from the RC TypeMap,
   - record and sum type definitions referenced by those types.
-- **Callee hashes**:
-  - **Internal callees**: dependency hashes of other functions in the same
-    compilation batch (call graph extracted from ANF).
-  - **External callees**: if available, dependency hashes from stdlib/preamble
-    caches; otherwise, a hash of the external function's type plus its type
-    dependencies.
+- **Callee hashes** (post-inlining call graph, so only non-inlined calls remain):
+  - **Internal callees**: signature hashes of other functions in the same
+    compilation batch (function type plus type dependencies).
+  - **External callees**: signature hashes of stdlib/preamble functions
+    (function type plus type dependencies).
 
-### Recursion and SCCs
+### Recursion
 
-Mutually recursive functions share a single dependency hash computed from:
-
-- all member body/type hashes, and
-- hashes of any callees outside the SCC.
-
-This ensures any change in a recursive cycle invalidates all functions in that
-cycle.
+Recursive functions are hashed independently. Calls to other functions (including
+mutual recursion) contribute only signature hashes, so body changes in one
+function do not invalidate its callers unless the signature changes.
 
 ## Hashing and Serialization
 

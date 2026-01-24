@@ -14,7 +14,7 @@ open MessagePack
 open MessagePack.FSharp
 open MessagePack.Resolvers
 
-let cacheVersion = "v3"
+let cacheVersion = "v4"
 
 // MessagePack configuration with contractless resolver for F# types
 let private resolver =
