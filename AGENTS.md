@@ -94,6 +94,7 @@ Focus near-exclusively on end-to-end language tests in `src/Tests/e2e/`. If writ
 - Change test cases to avoid hitting bugs
 - Use workarounds to allow failing tests to pass without fixing the issue.
 - Implement features without a test demonstrating them first
+- NEVER add tests that compile the entire stdlib
 
 **Running tests:**
 

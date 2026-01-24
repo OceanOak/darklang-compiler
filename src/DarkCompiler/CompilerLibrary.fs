@@ -926,12 +926,39 @@ let private lowerToAllocatedLir
                         println $"        {t}ms"
                     Ok allocatedFuncs)
 
+    let compileMissingWithTiming
+        (label: string)
+        (functionsToCompile: ANF.Function list)
+        : Result<LIRSymbolic.Function list, string> =
+        if List.isEmpty functionsToCompile then
+            Ok []
+        else
+            let startTime = sw.Elapsed.TotalMilliseconds
+            compileMissing functionsToCompile
+            |> Result.map (fun compiled ->
+                let elapsed = sw.Elapsed.TotalMilliseconds - startTime
+                recordPassTiming passTimingRecorder label elapsed
+                compiled)
+
     cachePlanResult
     |> Result.map (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
         recordCacheMisses functionsToCompile
         (optionsHashOpt, cachedMap, funcHashes, functionsToCompile))
     |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
-        compileMissing functionsToCompile
+        let (startFunctions, otherFunctions) =
+            functionsToCompile |> List.partition (fun func -> func.Name = "_start")
+
+        let compileResult =
+            match passTimingRecorder, startFunctions with
+            | Some _, _ :: _ ->
+                compileMissingWithTiming "Start Function Compilation" startFunctions
+                |> Result.bind (fun compiledStart ->
+                    compileMissing otherFunctions
+                    |> Result.map (fun compiledOther -> compiledStart @ compiledOther))
+            | _ ->
+                compileMissing functionsToCompile
+
+        compileResult
         |> Result.bind (fun compiledFuncs ->
             let compiledMap =
                 compiledFuncs
