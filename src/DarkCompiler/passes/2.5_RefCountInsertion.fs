@@ -198,11 +198,13 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
         // Closure is a tuple-like structure: (func_ptr, cap1, cap2, ...)
         // Return a tuple type for ref counting purposes
         let captureTypes = captures |> List.map (inferAtomType ctx)
-        if List.forall Option.isSome captureTypes then
-            let concreteTypes = captureTypes |> List.map Option.get
-            Some (AST.TTuple (AST.TInt64 :: concreteTypes))
-        else
-            Crash.crash "RefCountInsertion: could not infer closure capture types"
+        let concreteTypes =
+            captureTypes
+            |> List.map (function
+                | Some typ -> typ
+                | None ->
+                    Crash.crash "RefCountInsertion: could not infer closure capture types")
+        Some (AST.TTuple (AST.TInt64 :: concreteTypes))
     | ClosureCall (closureAtom, _) ->
         // Try to find the closure's function name and look up return type
         match tryGetClosureFunc ctx closureAtom with
