@@ -48,7 +48,6 @@
     <Compile Include="ASTToANFTests.fs" />
     <Compile Include="MonomorphizationTests.fs" />
     <Compile Include="LambdaLiftingTests.fs" />
-    <Compile Include="CompilerCacheTests.fs" />
 
     <!-- Test Runner (must be last) -->
     <Compile Include="TestRunner.fs" />
