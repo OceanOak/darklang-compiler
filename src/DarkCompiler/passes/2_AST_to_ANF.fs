@@ -975,6 +975,76 @@ let replaceTypeAppsInProgramWithRegistry (specRegistry: SpecRegistry) (program: 
 
     loop topLevels []
 
+/// Check if a program needs lambda lowering (lambda inlining + lifting)
+/// based on lambdas, closures, or function values.
+let programNeedsLambdaLowering (knownFuncNames: Set<string>) (program: AST.Program) : bool =
+    let rec exprNeedsLambdaLowering (bound: Set<string>) (expr: AST.Expr) : bool =
+        match expr with
+        | AST.Lambda _ | AST.Apply _ | AST.FuncRef _ | AST.Closure _ ->
+            true
+        | AST.Var name ->
+            Set.contains name knownFuncNames && not (Set.contains name bound)
+        | AST.Let (name, value, body) ->
+            exprNeedsLambdaLowering bound value
+            || exprNeedsLambdaLowering (Set.add name bound) body
+        | AST.If (cond, thenBranch, elseBranch) ->
+            exprNeedsLambdaLowering bound cond
+            || exprNeedsLambdaLowering bound thenBranch
+            || exprNeedsLambdaLowering bound elseBranch
+        | AST.BinOp (_, left, right) ->
+            exprNeedsLambdaLowering bound left
+            || exprNeedsLambdaLowering bound right
+        | AST.UnaryOp (_, inner) ->
+            exprNeedsLambdaLowering bound inner
+        | AST.Call (_, args)
+        | AST.TypeApp (_, _, args) ->
+            args |> List.exists (exprNeedsLambdaLowering bound)
+        | AST.TupleLiteral elems
+        | AST.ListLiteral elems ->
+            elems |> List.exists (exprNeedsLambdaLowering bound)
+        | AST.ListCons (headElements, tail) ->
+            (headElements |> List.exists (exprNeedsLambdaLowering bound))
+            || exprNeedsLambdaLowering bound tail
+        | AST.TupleAccess (tuple, _) ->
+            exprNeedsLambdaLowering bound tuple
+        | AST.RecordLiteral (_, fields) ->
+            fields |> List.exists (fun (_, e) -> exprNeedsLambdaLowering bound e)
+        | AST.RecordUpdate (record, updates) ->
+            exprNeedsLambdaLowering bound record
+            || (updates |> List.exists (fun (_, e) -> exprNeedsLambdaLowering bound e))
+        | AST.RecordAccess (record, _) ->
+            exprNeedsLambdaLowering bound record
+        | AST.Constructor (_, _, payload) ->
+            payload |> Option.exists (exprNeedsLambdaLowering bound)
+        | AST.Match (scrutinee, cases) ->
+            exprNeedsLambdaLowering bound scrutinee
+            || (cases |> List.exists (fun (mc: AST.MatchCase) ->
+                (mc.Guard |> Option.map (exprNeedsLambdaLowering bound) |> Option.defaultValue false)
+                || exprNeedsLambdaLowering bound mc.Body))
+        | AST.InterpolatedString parts ->
+            parts |> List.exists (fun part ->
+                match part with
+                | AST.StringText _ -> false
+                | AST.StringExpr e -> exprNeedsLambdaLowering bound e)
+        | _ ->
+            false
+
+    let (AST.Program topLevels) = program
+    let rec loop (remaining: AST.TopLevel list) : bool =
+        match remaining with
+        | [] -> false
+        | tl :: rest ->
+            match tl with
+            | AST.FunctionDef f ->
+                let paramNames = f.Params |> List.map fst |> Set.ofList
+                if exprNeedsLambdaLowering paramNames f.Body then true else loop rest
+            | AST.Expression e ->
+                if exprNeedsLambdaLowering Set.empty e then true else loop rest
+            | AST.TypeDef _ ->
+                loop rest
+
+    loop topLevels
+
 // =============================================================================
 // Lambda Inlining
 // =============================================================================

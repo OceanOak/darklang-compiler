@@ -1223,8 +1223,22 @@ let private prepareProgramForAnf
                 AST_to_ANF.replaceTypeAppsInProgramWithRegistry combinedSpecRegistry programWithSpecializations
     monomorphizedResult
     |> Result.bind (fun monomorphized ->
-        let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
-        liftLambdasWithBase baseRegistries inlined)
+        let baseFuncNames =
+            baseRegistries.FuncParams
+            |> Map.toList
+            |> List.map fst
+            |> Set.ofList
+        let (AST.Program topLevels) = monomorphized
+        let localFuncNames =
+            topLevels
+            |> List.choose (function AST.FunctionDef f -> Some f.Name | _ -> None)
+            |> Set.ofList
+        let knownFuncNames = Set.union baseFuncNames localFuncNames
+        if AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized then
+            let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
+            liftLambdasWithBase baseRegistries inlined
+        else
+            Ok monomorphized)
 
 let private buildRegistriesForProgram
     (moduleRegistry: AST.ModuleRegistry)
