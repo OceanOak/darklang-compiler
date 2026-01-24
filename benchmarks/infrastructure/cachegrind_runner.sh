@@ -10,7 +10,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCHMARKS_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_ROOT="$(dirname "$BENCHMARKS_DIR")"
 BENCHMARK=$1
 OUTPUT_DIR=$2
 source "$SCRIPT_DIR/pretty.sh"
@@ -143,6 +142,9 @@ verify_output() {
 pretty_section "Running cachegrind benchmark for $BENCHMARK..."
 
 RESULTS_FILE_PATH="$OUTPUT_DIR/${BENCHMARK}_cachegrind.json"
+CACHEGRIND_OUT_DIR="$OUTPUT_DIR/cachegrind"
+mkdir -p "$CACHEGRIND_OUT_DIR"
+CACHEGRIND_OUT_FILES=()
 STARTED_RESULTS=false
 FINALIZED_RESULTS=false
 
@@ -154,7 +156,10 @@ finalize_results_file() {
 }
 
 clean_cachegrind_files() {
-    rm -f "$PROJECT_ROOT"/cachegrind.out.*
+    local file
+    for file in "${CACHEGRIND_OUT_FILES[@]}"; do
+        rm -f "$file"
+    done
 }
 
 on_exit() {
@@ -163,8 +168,6 @@ on_exit() {
 }
 
 trap on_exit EXIT
-
-clean_cachegrind_files
 
 # Create output file for parsed results
 echo "{\"benchmark\": \"$BENCHMARK\", \"results\": [" > "$RESULTS_FILE_PATH"
@@ -190,7 +193,10 @@ for impl in $IMPLS; do
         pretty_info "Running cachegrind on $impl..."
 
         # Run cachegrind and capture stderr (where stats are printed)
-        CG_OUTPUT=$(valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes "$BINARY" 2>&1)
+        CACHEGRIND_OUT_FILE="$CACHEGRIND_OUT_DIR/${BENCHMARK}_${impl}.out"
+        rm -f "$CACHEGRIND_OUT_FILE"
+        CACHEGRIND_OUT_FILES+=("$CACHEGRIND_OUT_FILE")
+        CG_OUTPUT=$(valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes --cachegrind-out-file="$CACHEGRIND_OUT_FILE" "$BINARY" 2>&1)
 
         # Parse the output
         I_REFS=$(echo "$CG_OUTPUT" | grep "I refs:" | sed 's/.*I refs:[[:space:]]*//' | tr -d ',')
@@ -248,7 +254,10 @@ if should_run_lang "python" && [ -f "$PROBLEM_DIR/python/main.py" ]; then
         pretty_info "Running cachegrind on python (timeout: ${PYTHON_TIMEOUT}s)..."
 
         # Use timeout to avoid hanging on slow benchmarks
-        if CG_OUTPUT=$(timeout "$PYTHON_TIMEOUT" valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes python3 "$PROBLEM_DIR/python/main.py" 2>&1); then
+        CACHEGRIND_OUT_FILE="$CACHEGRIND_OUT_DIR/${BENCHMARK}_python.out"
+        rm -f "$CACHEGRIND_OUT_FILE"
+        CACHEGRIND_OUT_FILES+=("$CACHEGRIND_OUT_FILE")
+        if CG_OUTPUT=$(timeout "$PYTHON_TIMEOUT" valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes --cachegrind-out-file="$CACHEGRIND_OUT_FILE" python3 "$PROBLEM_DIR/python/main.py" 2>&1); then
             PYTHON_SUCCESS=true
         else
             EXIT_CODE=$?
@@ -315,7 +324,10 @@ if should_run_lang "node" && [ -f "$PROBLEM_DIR/node/main.js" ]; then
         pretty_info "Running cachegrind on node (timeout: ${NODE_TIMEOUT}s)..."
 
         # Use timeout to avoid hanging on slow benchmarks
-        if CG_OUTPUT=$(timeout "$NODE_TIMEOUT" valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes node "$PROBLEM_DIR/node/main.js" 2>&1); then
+        CACHEGRIND_OUT_FILE="$CACHEGRIND_OUT_DIR/${BENCHMARK}_node.out"
+        rm -f "$CACHEGRIND_OUT_FILE"
+        CACHEGRIND_OUT_FILES+=("$CACHEGRIND_OUT_FILE")
+        if CG_OUTPUT=$(timeout "$NODE_TIMEOUT" valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes --cachegrind-out-file="$CACHEGRIND_OUT_FILE" node "$PROBLEM_DIR/node/main.js" 2>&1); then
             NODE_SUCCESS=true
         else
             EXIT_CODE=$?

@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-23 23:03:01
-**Commit:** `f955bcea` - Implement linear-time SSA regalloc
+**Last Updated:** 2026-01-24 10:46:24
+**Commit:** `e9f6acc8` - Fix phi coalescing and prune dead phis
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

@@ -1,11 +1,12 @@
 #!/bin/bash
 # Main entry point for running benchmarks
-# Usage: ./benchmarks/run_benchmarks.sh [--hyperfine] [--refresh-baseline[=lang1,lang2]] [benchmark_name|all]
+# Usage: ./benchmarks/run_benchmarks.sh [--hyperfine] [--refresh-baseline[=lang1,lang2]] [--jobs[=N]] [benchmark_name|all]
 #
 # Options:
 #   --hyperfine              Use hyperfine for timing (default: cachegrind for instruction counts)
 #   --refresh-baseline       Re-run all baseline languages (default: use cached values)
 #   --refresh-baseline=LANGS Re-run specific languages only (comma-separated: rust,go,python,node,ocaml)
+#   --jobs, --jobs=N         Run up to N benchmarks in parallel (default: CPU count)
 #   --list                   Print the benchmarks that would run and exit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +21,7 @@ BUILD_FAILURES=()
 RUN_FAILURES=()
 PROCESS_FAILURES=()
 LIST_ONLY=false
+JOB_COUNT=""
 SKIP_BENCHMARKS=("quicksort")
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +38,18 @@ while [[ $# -gt 0 ]]; do
             export REFRESH_BASELINE="${1#*=}"
             shift
             ;;
+        --jobs)
+            if [ -z "${2:-}" ]; then
+                pretty_fail "--jobs requires a value"
+                exit 1
+            fi
+            JOB_COUNT="$2"
+            shift 2
+            ;;
+        --jobs=*)
+            JOB_COUNT="${1#*=}"
+            shift
+            ;;
         --list)
             LIST_ONLY=true
             shift
@@ -47,14 +61,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-clean_cachegrind_files() {
-    rm -f "$PROJECT_ROOT"/cachegrind.out.*
+default_job_count() {
+    local count=""
+    count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+    if [ -z "$count" ]; then
+        count=$(sysctl -n hw.ncpu 2>/dev/null || true)
+    fi
+    case "$count" in
+        ''|*[!0-9]*) count="" ;;
+    esac
+    if [ -z "$count" ] || [ "$count" -lt 1 ]; then
+        count=4
+    fi
+    echo "$count"
 }
-
-if [ "$USE_CACHEGRIND" = true ]; then
-    trap clean_cachegrind_files EXIT
-    clean_cachegrind_files
-fi
 
 OUTPUT_DIR="$SCRIPT_DIR/results/$(date +%Y-%m-%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
@@ -99,6 +119,33 @@ if [ "$LIST_ONLY" = true ]; then
     exit 0
 fi
 
+if [ -z "$JOB_COUNT" ]; then
+    if [ -n "${BENCHMARK_JOBS:-}" ]; then
+        JOB_COUNT="$BENCHMARK_JOBS"
+    else
+        if [ "$USE_CACHEGRIND" = true ]; then
+            JOB_COUNT=$(default_job_count)
+        else
+            JOB_COUNT=1
+        fi
+    fi
+fi
+
+case "$JOB_COUNT" in
+    ''|*[!0-9]*)
+        pretty_fail "Invalid job count: $JOB_COUNT"
+        exit 1
+        ;;
+esac
+
+if [ "$JOB_COUNT" -lt 1 ]; then
+    pretty_fail "Job count must be at least 1"
+    exit 1
+fi
+
+STATUS_DIR="$OUTPUT_DIR/status"
+mkdir -p "$STATUS_DIR"
+
 if [ "$USE_CACHEGRIND" = true ]; then
     if [ "$REFRESH_BASELINE" = "false" ]; then
         export RUN_BASELINES=false
@@ -115,35 +162,103 @@ else
     pretty_section "Mode: Hyperfine (timing)"
 fi
 pretty_info "Benchmarks to run: $BENCHMARKS"
+pretty_info "Parallel jobs: $JOB_COUNT"
 if [ "${#SKIPPED_BENCHMARKS[@]}" -ne 0 ]; then
     pretty_warn "Skipping benchmarks: ${SKIPPED_BENCHMARKS[*]}"
 fi
 echo ""
 
-for bench in $BENCHMARKS; do
+JOB_PIDS=()
+
+run_benchmark_job() {
+    local bench="$1"
+    local status_file="$STATUS_DIR/${bench}.status"
+    : > "$status_file"
+
     pretty_header "Benchmark: $bench"
 
     # Build all implementations
     if ! "$SCRIPT_DIR/infrastructure/build_all.sh" "$bench"; then
-        BUILD_FAILURES+=("$bench")
+        echo "BUILD_FAIL" >> "$status_file"
         pretty_warn "Build failed for $bench (continuing)"
     fi
 
     # Run benchmark
     if [ "$USE_CACHEGRIND" = true ]; then
         if ! "$SCRIPT_DIR/infrastructure/cachegrind_runner.sh" "$bench" "$OUTPUT_DIR"; then
-            RUN_FAILURES+=("$bench")
+            echo "RUN_FAIL" >> "$status_file"
             pretty_warn "Cachegrind failed for $bench (continuing)"
         fi
     else
         if ! "$SCRIPT_DIR/infrastructure/hyperfine_runner.sh" "$bench" "$OUTPUT_DIR"; then
-            RUN_FAILURES+=("$bench")
+            echo "RUN_FAIL" >> "$status_file"
             pretty_warn "Hyperfine failed for $bench (continuing)"
         fi
     fi
 
     echo ""
+}
+
+reap_finished_job() {
+    local i
+    for i in "${!JOB_PIDS[@]}"; do
+        local pid="${JOB_PIDS[$i]}"
+        local state
+        state=$(ps -p "$pid" -o stat= 2>/dev/null | tr -d '[:space:]')
+        if [ -z "$state" ] || [[ "$state" == Z* ]]; then
+            wait "$pid" || true
+            unset 'JOB_PIDS[$i]'
+            JOB_PIDS=("${JOB_PIDS[@]}")
+            return 0
+        fi
+    done
+    return 1
+}
+
+wait_for_available_slot() {
+    while [ "${#JOB_PIDS[@]}" -ge "$JOB_COUNT" ]; do
+        if ! reap_finished_job; then
+            sleep 0.1
+        fi
+    done
+}
+
+wait_for_all_jobs() {
+    local pid
+    for pid in "${JOB_PIDS[@]}"; do
+        wait "$pid" || true
+    done
+    JOB_PIDS=()
+}
+
+for bench in $BENCHMARKS; do
+    if [ "$JOB_COUNT" -le 1 ]; then
+        run_benchmark_job "$bench"
+    else
+        wait_for_available_slot
+        run_benchmark_job "$bench" &
+        JOB_PIDS+=("$!")
+    fi
 done
+
+if [ "$JOB_COUNT" -gt 1 ]; then
+    wait_for_all_jobs
+fi
+
+for bench in $BENCHMARKS; do
+    status_file="$STATUS_DIR/${bench}.status"
+    if [ ! -f "$status_file" ]; then
+        RUN_FAILURES+=("$bench")
+        continue
+    fi
+    if grep -q "BUILD_FAIL" "$status_file"; then
+        BUILD_FAILURES+=("$bench")
+    fi
+    if grep -q "RUN_FAIL" "$status_file"; then
+        RUN_FAILURES+=("$bench")
+    fi
+done
+rm -rf "$STATUS_DIR"
 
 # Process results
 pretty_info "Processing results..."

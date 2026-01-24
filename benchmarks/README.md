@@ -34,6 +34,9 @@ python3 --version
 # Run with hyperfine for timing instead
 ./benchmarks/run_benchmarks.sh --hyperfine
 ./benchmarks/run_benchmarks.sh --hyperfine fib
+
+# Run benchmarks in parallel (defaults to CPU count if omitted)
+./benchmarks/run_benchmarks.sh --jobs 4
 ```
 
 ## Benchmark Modes
@@ -51,6 +54,17 @@ This is the primary way we are tracking performance.
 ### Timing Mode (`--hyperfine`)
 
 Uses **hyperfine** to measure wall-clock execution time. Fast but results vary between runs.
+
+## Parallelism (`--jobs`)
+
+Benchmarks are deterministic, so you can run multiple benchmarks at once:
+
+```bash
+./benchmarks/run_benchmarks.sh --jobs 8
+```
+
+Set `BENCHMARK_JOBS` to change the default without passing a flag.
+For `--hyperfine`, the default is `--jobs 1` to avoid timing skew.
 
 ## Directory Structure
 
@@ -77,6 +91,7 @@ benchmarks/
   results/                   # Benchmark results by timestamp
     YYYY-MM-DD_HHMMSS/
       compiler_version.txt   # Git commit of compiler
+      cachegrind/            # Temporary cachegrind output files (cleaned after run)
       *_hyperfine.json       # Raw hyperfine output
       *_summary.md           # Per-benchmark markdown
       summary.md             # Overall summary
