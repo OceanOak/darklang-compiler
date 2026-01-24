@@ -332,6 +332,7 @@ let runE2ETestWithPreambleContext
     (preambleCtx: CompilerLibrary.PreambleContext)
     (test: E2ETest)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
+    (cacheMissRecorder: CompilerLibrary.CacheMissRecorder option)
     : E2ETestResult =
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
@@ -344,6 +345,7 @@ let runE2ETestWithPreambleContext
         Verbosity = 0
         Options = options
         PassTimingRecorder = passTimingRecorder
+        CacheMissRecorder = cacheMissRecorder
     }
     let run = compileAndRun request
     evaluateExpectations test run

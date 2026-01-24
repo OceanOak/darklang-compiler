@@ -29,6 +29,7 @@ type TestTiming = {
     TotalTime: TimeSpan
     CompileTime: TimeSpan option
     RuntimeTime: TimeSpan option
+    CacheMissCount: int option
 }
 
 // Summary of per-file test suite results
@@ -89,6 +90,11 @@ let formatTime (elapsed: TimeSpan) =
         let seconds = elapsed.TotalSeconds.ToString("0.00")
         $"{seconds}s"
 
+let formatCacheMissCount (missCountOpt: int option) : string option =
+    match missCountOpt with
+    | Some count when count > 0 -> Some $"cache-misses: {count}"
+    | _ -> None
+
 let addExpectedActualDetails (expected: string option) (actual: string option) : string list =
     let details = ResizeArray<string>()
     match expected, actual with
@@ -136,7 +142,13 @@ let runFileSuite
                 | Error msg ->
                     testTimer.Stop()
                     handleError progress testPath testName testTimer.Elapsed msg
-            recordTiming state { Name = formatTimingName testName; TotalTime = testTimer.Elapsed; CompileTime = None; RuntimeTime = None }
+            recordTiming state {
+                Name = formatTimingName testName
+                TotalTime = testTimer.Elapsed
+                CompileTime = None
+                RuntimeTime = None
+                CacheMissCount = None
+            }
             sectionPassed <- sectionPassed + summary.Passed
             sectionFailed <- sectionFailed + summary.Failed
             recordResults state summary.Passed summary.Failed summary.FailedTests
@@ -177,13 +189,31 @@ let runUnitTestSuites
             match runTest() with
             | Ok () ->
                 timer.Stop()
-                recordTiming state { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
+                recordTiming state {
+                    Name = $"Unit: {displayName}"
+                    TotalTime = timer.Elapsed
+                    CompileTime = None
+                    RuntimeTime = None
+                    CacheMissCount = None
+                }
                 unitSectionPassed <- unitSectionPassed + 1
                 ProgressBar.increment unitProgress true
             | Error msg ->
                 timer.Stop()
-                recordTiming state { Name = $"Unit: {suite.Name}: {testName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
-                recordTiming state { Name = $"Unit: {displayName}"; TotalTime = timer.Elapsed; CompileTime = None; RuntimeTime = None }
+                recordTiming state {
+                    Name = $"Unit: {suite.Name}: {testName}"
+                    TotalTime = timer.Elapsed
+                    CompileTime = None
+                    RuntimeTime = None
+                    CacheMissCount = None
+                }
+                recordTiming state {
+                    Name = $"Unit: {displayName}"
+                    TotalTime = timer.Elapsed
+                    CompileTime = None
+                    RuntimeTime = None
+                    CacheMissCount = None
+                }
                 ProgressBar.increment unitProgress false
                 ProgressBar.finish unitProgress
                 println $"  {displayName}... {Colors.red}{symbols.Fail} FAIL{Colors.reset} {Colors.gray}({formatTime timer.Elapsed}){Colors.reset}"

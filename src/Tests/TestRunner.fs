@@ -116,11 +116,17 @@ let main args =
 
     let timer = Stopwatch.StartNew()
     let stdlib =
-        let stdlibResult =
+        let buildCacheSettings (enabled: bool) (compilerKey: string) : CompilerLibrary.CacheSettings =
+            { Enabled = enabled; CompilerKey = compilerKey }
+        let cacheSettingsResult =
             if noCache then
-                CompilerLibrary.buildStdlibWithCache { Enabled = false; CompilerKey = "" } (Some recordPassTiming)
+                Ok (buildCacheSettings false "")
             else
-                CompilerLibrary.buildStdlibWithTrace (Some recordPassTiming)
+                Cache.getCompilerKey ()
+                |> Result.map (fun key -> buildCacheSettings true key)
+        let stdlibResult =
+            cacheSettingsResult
+            |> Result.bind (fun settings -> CompilerLibrary.buildStdlibWithCache settings (Some recordPassTiming))
         match stdlibResult with
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
@@ -207,22 +213,48 @@ let main args =
 
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
-                let result =
+                let result, cacheMissCountOpt =
                     match suiteContextsResult with
                     | Error err ->
-                        preambleFailureResult $"Preamble build failed: {err}"
+                        preambleFailureResult $"Preamble build failed: {err}", None
                     | Ok suiteContexts ->
                         match Map.tryFind test.SourceFile suiteContexts.PreambleContexts with
                         | None ->
-                            preambleFailureResult $"Missing built preamble context for {test.SourceFile}"
+                            preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None
                         | Some ctx ->
-                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext suiteContexts.Stdlib ctx test (Some recordPassTiming)
+                            if suiteContexts.Stdlib.CacheSettings.Enabled then
+                                let mutable missCount = 0
+                                let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
+                                    missCount <- missCount + info.Misses
+                                let testResult =
+                                    TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                        suiteContexts.Stdlib
+                                        ctx
+                                        test
+                                        (Some recordPassTiming)
+                                        (Some recordMiss)
+                                testResult, Some missCount
+                            else
+                                let testResult =
+                                    TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                        suiteContexts.Stdlib
+                                        ctx
+                                        test
+                                        (Some recordPassTiming)
+                                        None
+                                testResult, None
 
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
                 let totalTime = compileTime + runtimeTime
                 results.[i] <- Some (test, result)
-                recordTiming { Name = $"{suiteName}: {test.Name}"; TotalTime = totalTime; CompileTime = Some compileTime; RuntimeTime = Some runtimeTime }
+                recordTiming {
+                    Name = $"{suiteName}: {test.Name}"
+                    TotalTime = totalTime
+                    CompileTime = Some compileTime
+                    RuntimeTime = Some runtimeTime
+                    CacheMissCount = cacheMissCountOpt
+                }
                 let success =
                     match result with
                     | Ok _ -> true
@@ -603,12 +635,16 @@ let main args =
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
         let slowest = runState.Timings |> Seq.sortByDescending (fun t -> t.TotalTime) |> Seq.truncate 5 |> Seq.toList
         for (i, timing) in slowest |> List.indexed do
-            let timingStr =
+            let baseTimingStr =
                 match timing.CompileTime, timing.RuntimeTime with
                 | Some ct, Some rt ->
                     $"compile: {formatTime ct}  run: {formatTime rt}  total: {formatTime timing.TotalTime}"
                 | _ ->
                     $"total: {formatTime timing.TotalTime}"
+            let timingStr =
+                match formatCacheMissCount timing.CacheMissCount with
+                | Some cacheSuffix -> $"{baseTimingStr}  {cacheSuffix}"
+                | None -> baseTimingStr
             let displayName = if timing.Name.Length > 45 then timing.Name.Substring(0, 42) + "..." else timing.Name
             println $"  {Colors.gray}{i + 1}. {displayName,-45} {timingStr}{Colors.reset}"
         println ""

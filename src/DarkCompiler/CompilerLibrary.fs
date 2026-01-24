@@ -29,6 +29,15 @@ type PassTiming = {
 /// Recorder for compiler pass timings
 type PassTimingRecorder = PassTiming -> unit
 
+/// Cache miss details for a compilation stage
+type CacheMissInfo = {
+    Stage: string
+    Misses: int
+}
+
+/// Recorder for cache misses
+type CacheMissRecorder = CacheMissInfo -> unit
+
 /// Result of execution with timing
 type ExecutionOutput = {
     ExitCode: int
@@ -796,6 +805,7 @@ let private lowerToAllocatedLir
     (options: CompilerOptions)
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
+    (cacheMissRecorder: CacheMissRecorder option)
     (stageSuffix: string)
     (functions: ANF.Function list)
     (typeMap: ANF.TypeMap)
@@ -816,6 +826,22 @@ let private lowerToAllocatedLir
     let isCacheableFunctionName (name: string) : bool =
         // _start is synthesized per compile; caching it is noisy and unstable.
         name <> "_start"
+
+    let recordCacheMisses
+        (functionsToCompile: ANF.Function list)
+        : unit =
+        match cacheMissRecorder with
+        | None -> ()
+        | Some record ->
+            if cacheSettings.Enabled then
+                let missNames =
+                    functionsToCompile
+                    |> List.map (fun f -> f.Name)
+                    |> List.filter isCacheableFunctionName
+                    |> List.sort
+                if not (List.isEmpty missNames) then
+                    let stageLabel = if stageSuffix = "" then "user" else stageSuffix
+                    record { Stage = stageLabel; Misses = missNames.Length }
 
     let cachePlanResult : Result<string option * Map<string, LIRSymbolic.Function> * Map<string, string> * ANF.Function list, string> =
         match optionsHashOpt with
@@ -901,6 +927,9 @@ let private lowerToAllocatedLir
                     Ok allocatedFuncs)
 
     cachePlanResult
+    |> Result.map (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
+        recordCacheMisses functionsToCompile
+        (optionsHashOpt, cachedMap, funcHashes, functionsToCompile))
     |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
         compileMissing functionsToCompile
         |> Result.bind (fun compiledFuncs ->
@@ -1216,6 +1245,7 @@ type CompileRequest = {
     Verbosity: int
     Options: CompilerOptions
     PassTimingRecorder: PassTimingRecorder option
+    CacheMissRecorder: CacheMissRecorder option
 }
 
 
@@ -1534,6 +1564,7 @@ let buildStdlibWithCache
                         stdlibOptions
                         sw
                         passTimingRecorder
+                        None
                         "stdlib"
                         tcoFunctions
                         typeMap
@@ -1655,6 +1686,7 @@ let buildStdlibSpecializations
                                 stdlibOptions
                                 sw
                                 passTimingRecorder
+                                None
                                 "stdlib_specializations"
                                 tcoFunctions
                                 typeMap
@@ -1712,6 +1744,7 @@ type private UserCompilePlan = {
     Verbosity: int
     Options: CompilerOptions
     PassTimingRecorder: PassTimingRecorder option
+    CacheMissRecorder: CacheMissRecorder option
     Stdlib: StdlibResult
     BaseContext: PipelineContext
     Monomorphization: MonomorphizationMode
@@ -1835,6 +1868,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         plan.Options
                                         sw
                                         plan.PassTimingRecorder
+                                        plan.CacheMissRecorder
                                         plan.Labels.StageSuffix
                                         tcoFunctions
                                         typeMap
@@ -2003,6 +2037,7 @@ let buildPreambleContext
                             preambleOptions
                             sw
                             passTimingRecorder
+                            None
                             "preamble"
                             tcoFunctions
                             typeMap
@@ -2099,6 +2134,7 @@ let buildPreambleContextFromAnalysis
                 preambleOptions
                 sw
                 passTimingRecorder
+                None
                 "preamble"
                 tcoFunctions
                 typeMap
@@ -2185,6 +2221,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         Verbosity = request.Verbosity
         Options = request.Options
         PassTimingRecorder = request.PassTimingRecorder
+        CacheMissRecorder = request.CacheMissRecorder
         Stdlib = stdlib
         BaseContext = baseContext
         Monomorphization = monomorphization

@@ -385,6 +385,7 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
                 Verbosity = verbosityToInt verbosity
                 Options = options
                 PassTimingRecorder = None
+                CacheMissRecorder = None
             }
             let compileReport = CompilerLibrary.compile request
 
@@ -449,6 +450,7 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                     Verbosity = verbosityToInt verbosity
                     Options = options
                     PassTimingRecorder = None
+                    CacheMissRecorder = None
                 }
                 let compileReport = CompilerLibrary.compile request
                 match compileReport.Result with
