@@ -272,15 +272,6 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | DateNow -> Set.empty      // No atoms
     | FloatToString atom -> collectAtomUses atom
 
-/// Collect all TempIds used in an AExpr
-let rec collectAExprUses (aexpr: AExpr) : Set<TempId> =
-    match aexpr with
-    | Return atom -> collectAtomUses atom
-    | Let (_, cexpr, body) ->
-        Set.union (collectCExprUses cexpr) (collectAExprUses body)
-    | If (cond, thenBranch, elseBranch) ->
-        Set.unionMany [collectAtomUses cond; collectAExprUses thenBranch; collectAExprUses elseBranch]
-
 /// Substitute atom in another atom
 let substAtom (env: Map<TempId, Atom>) (atom: Atom) : Atom =
     match atom with
@@ -366,45 +357,70 @@ let optimizeCExpr (options: OptimizeOptions) (env: ConstEnv) (cexpr: CExpr) : CE
         else
             (cexpr', cexpr' <> cexpr)
 
-/// Optimize an AExpr
-let rec optimizeAExpr (options: OptimizeOptions) (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
+type OptimizeAExprResult = {
+    Expr: AExpr
+    Changed: bool
+    Uses: Set<TempId>
+}
+
+/// Optimize an AExpr, returning optimized expression, change flag, and used TempIds
+let rec private optimizeAExprWithUses (options: OptimizeOptions) (env: ConstEnv) (aexpr: AExpr) : OptimizeAExprResult =
     match aexpr with
     | Return atom ->
         let atom' = substAtom env atom
-        (Return atom', atom' <> atom)
+        {
+            Expr = Return atom'
+            Changed = atom' <> atom
+            Uses = collectAtomUses atom'
+        }
 
     | Let (tid, cexpr, body) ->
         // Optimize the CExpr
         let (cexpr', cexprChanged) = optimizeCExpr options env cexpr
 
         // Check for copy propagation: if cexpr is just an Atom, substitute it
-        let (env', cexpr'', skipBinding) =
+        let (env', skipBinding) =
             match cexpr' with
             | Atom a when options.EnableCopyProp && not (hasSideEffects cexpr') ->
                 // Copy propagation: don't emit binding, just substitute
-                (Map.add tid a env, cexpr', true)
+                (Map.add tid a env, true)
             | Atom (IntLiteral _ | BoolLiteral _ | FloatLiteral _ | StringLiteral _ | UnitLiteral as constAtom)
                 when options.EnableConstProp ->
                 // Constant propagation
-                (Map.add tid constAtom env, cexpr', false)
+                (Map.add tid constAtom env, false)
             | _ ->
-                (env, cexpr', false)
+                (env, false)
 
         // Optimize the body
-        let (body', bodyChanged) = optimizeAExpr options env' body
+        let bodyResult = optimizeAExprWithUses options env' body
 
         // Dead code elimination: if tid is not used in body and cexpr has no side effects
-        let usesInBody = collectAExprUses body'
+        let usesInBody = bodyResult.Uses
         let isDead = options.EnableDCE && not (Set.contains tid usesInBody) && not (hasSideEffects cexpr')
+        let usesInBodyWithoutTid = Set.remove tid usesInBody
 
         if skipBinding then
             // Copy propagation: skip this binding entirely
-            (body', true)
+            {
+                Expr = bodyResult.Expr
+                Changed = true
+                Uses = usesInBodyWithoutTid
+            }
         elif isDead then
             // Dead code elimination
-            (body', true)
+            {
+                Expr = bodyResult.Expr
+                Changed = true
+                Uses = usesInBodyWithoutTid
+            }
         else
-            (Let (tid, cexpr', body'), cexprChanged || bodyChanged)
+            let usesInCExpr = collectCExprUses cexpr'
+            let uses = Set.union usesInCExpr usesInBodyWithoutTid
+            {
+                Expr = Let (tid, cexpr', bodyResult.Expr)
+                Changed = cexprChanged || bodyResult.Changed
+                Uses = uses
+            }
 
     | If (cond, thenBranch, elseBranch) ->
         let cond' = substAtom env cond
@@ -412,15 +428,33 @@ let rec optimizeAExpr (options: OptimizeOptions) (env: ConstEnv) (aexpr: AExpr) 
         // Fold constant conditions
         match cond' with
         | BoolLiteral true when options.EnableConstFolding ->
-            let (thenBranch', _) = optimizeAExpr options env thenBranch
-            (thenBranch', true)
+            let thenResult = optimizeAExprWithUses options env thenBranch
+            {
+                Expr = thenResult.Expr
+                Changed = true
+                Uses = thenResult.Uses
+            }
         | BoolLiteral false when options.EnableConstFolding ->
-            let (elseBranch', _) = optimizeAExpr options env elseBranch
-            (elseBranch', true)
+            let elseResult = optimizeAExprWithUses options env elseBranch
+            {
+                Expr = elseResult.Expr
+                Changed = true
+                Uses = elseResult.Uses
+            }
         | _ ->
-            let (thenBranch', thenChanged) = optimizeAExpr options env thenBranch
-            let (elseBranch', elseChanged) = optimizeAExpr options env elseBranch
-            (If (cond', thenBranch', elseBranch'), cond' <> cond || thenChanged || elseChanged)
+            let thenResult = optimizeAExprWithUses options env thenBranch
+            let elseResult = optimizeAExprWithUses options env elseBranch
+            let uses = Set.unionMany [collectAtomUses cond'; thenResult.Uses; elseResult.Uses]
+            {
+                Expr = If (cond', thenResult.Expr, elseResult.Expr)
+                Changed = cond' <> cond || thenResult.Changed || elseResult.Changed
+                Uses = uses
+            }
+
+/// Optimize an AExpr
+let optimizeAExpr (options: OptimizeOptions) (env: ConstEnv) (aexpr: AExpr) : AExpr * bool =
+    let result = optimizeAExprWithUses options env aexpr
+    (result.Expr, result.Changed)
 
 /// Optimize a function
 let optimizeFunction (options: OptimizeOptions) (func: Function) : Function * bool =
@@ -447,8 +481,7 @@ let optimizeProgramWithOptions (options: OptimizeOptions) (program: Program) : P
     let functions' = functions |> List.map (fun f -> optimizeToFixedPoint options f 10)
 
     // Optimize main expression
-    let (mainExpr', _) = optimizeAExpr options Map.empty mainExpr
-    let mainFunc = { Name = "__main__"; TypedParams = []; ReturnType = AST.TUnit; Body = mainExpr' }
+    let mainFunc = { Name = "__main__"; TypedParams = []; ReturnType = AST.TUnit; Body = mainExpr }
     let mainOptimized = optimizeToFixedPoint options mainFunc 10
 
     Program (functions', mainOptimized.Body)
