@@ -30,7 +30,7 @@ The decision was made to prioritize simplicity over compilation speed.
 **Files affected**:
 - `Cache.fs` - Deleted entirely
 - `DarkCompiler.fsproj` - Removed MessagePack and Microsoft.Data.Sqlite package references
-- `AST.fs`, `LIRSymbolic.fs` - Removed `[<MessagePackObject>]` attributes
+- `AST.fs`, `LIR.fs` - Removed `[<MessagePackObject>]` attributes
 - `ANF_Inlining.fs` - Removed `buildDependencyHashMap`, `computeDependencyHash` functions
 
 ### 2. Parallelization (`ResultList.fs`)
@@ -109,7 +109,7 @@ If compilation speed becomes a problem again, consider:
 | `src/DarkCompiler/CompilerLibrary.fs` | Major simplification |
 | `src/DarkCompiler/Stdlib.fs` | Removed lazy singleton |
 | `src/DarkCompiler/AST.fs` | Removed MessagePack attributes |
-| `src/DarkCompiler/LIRSymbolic.fs` | Removed MessagePack attributes |
+| `src/DarkCompiler/LIR.fs` | Removed MessagePack attributes |
 | `src/DarkCompiler/passes/2.4_ANF_Inlining.fs` | Removed dependency hash functions |
 | `src/DarkCompiler/passes/3_ANF_to_MIR.fs` | Sequential mapping |
 | `src/DarkCompiler/passes/4_MIR_to_LIR.fs` | Sequential mapping |

@@ -112,7 +112,7 @@ let TempId 8 = 3 * t0
 
 **Files to Modify:**
 - `src/DarkCompiler/passes/2.3_ANF_Optimize.fs` (strength reduction patterns)
-- `src/DarkCompiler/LIRSymbolic.fs` (add Add_shifted instruction)
+- `src/DarkCompiler/LIR.fs` (add Add_shifted instruction)
 - `src/DarkCompiler/passes/6_CodeGen.fs` (emit ADD with LSL)
 - `src/DarkCompiler/ARM64.fs` (ADD with shifted register)
 
@@ -153,7 +153,7 @@ Both branches compute their results then jump back to the loop.
 
 **Files to Modify:**
 - `src/DarkCompiler/passes/3.5_MIR_Optimize.fs` (if-conversion)
-- `src/DarkCompiler/LIRSymbolic.fs` (add Csel/Csinc instructions)
+- `src/DarkCompiler/LIR.fs` (add Csel/Csinc instructions)
 - `src/DarkCompiler/passes/4_MIR_to_LIR.fs` (lower IfValue to Csel)
 - `src/DarkCompiler/passes/6_CodeGen.fs` (emit CSEL/CSINC)
 - `src/DarkCompiler/ARM64.fs` (CSEL encoding)

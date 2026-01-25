@@ -12,20 +12,19 @@
 module ParallelMoveTests
 
 open LIR
-open LIRSymbolic
 open ARM64Symbolic
 
 /// Test result type
 type TestResult = Result<unit, string>
 
 /// Helper to convert LIR TailArgMoves to ARM64 instructions via CodeGen
-let convertTailArgMoves (moves: (LIR.PhysReg * LIRSymbolic.Operand) list) : Result<ARM64Symbolic.Instr list, string> =
+let convertTailArgMoves (moves: (LIR.PhysReg * LIR.Operand) list) : Result<ARM64Symbolic.Instr list, string> =
     let ctx : CodeGen.CodeGenContext = {
         Options = CodeGen.defaultOptions
         StackSize = 0
         UsedCalleeSaved = []
     }
-    CodeGen.convertInstr ctx (LIRSymbolic.TailArgMoves moves)
+    CodeGen.convertInstr ctx (LIR.TailArgMoves moves)
 
 /// Helper to check if ARM64 instruction is a MOV_reg
 let isMoveReg (instr: ARM64Symbolic.Instr) : bool =
@@ -45,7 +44,7 @@ let getMoveRegPair (instr: ARM64Symbolic.Instr) : (ARM64.Reg * ARM64.Reg) option
 
 /// Simple move: X1 ← X2 (no conflict)
 let testSimpleMove () : TestResult =
-    let moves = [(LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X2))]
+    let moves = [(LIR.X1, LIR.Reg (LIR.Physical LIR.X2))]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
     | Ok instrs ->
@@ -61,8 +60,8 @@ let testSimpleMove () : TestResult =
 /// To achieve this sequentially: first read X2 into X1, then overwrite X2 with X3
 let testChainMoves () : TestResult =
     let moves = [
-        (LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X2))
-        (LIR.X2, LIRSymbolic.Reg (LIR.Physical LIR.X3))
+        (LIR.X1, LIR.Reg (LIR.Physical LIR.X2))
+        (LIR.X2, LIR.Reg (LIR.Physical LIR.X3))
     ]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
@@ -87,8 +86,8 @@ let testChainMoves () : TestResult =
 /// Two-way swap cycle: X1←X2, X2←X1 (needs temp X16)
 let testTwoWaySwap () : TestResult =
     let moves = [
-        (LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X2))
-        (LIR.X2, LIRSymbolic.Reg (LIR.Physical LIR.X1))
+        (LIR.X1, LIR.Reg (LIR.Physical LIR.X2))
+        (LIR.X2, LIR.Reg (LIR.Physical LIR.X1))
     ]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
@@ -107,9 +106,9 @@ let testTwoWaySwap () : TestResult =
 /// Three-way cycle: X1←X2, X2←X3, X3←X1 (needs temp)
 let testThreeWayCycle () : TestResult =
     let moves = [
-        (LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X2))
-        (LIR.X2, LIRSymbolic.Reg (LIR.Physical LIR.X3))
-        (LIR.X3, LIRSymbolic.Reg (LIR.Physical LIR.X1))
+        (LIR.X1, LIR.Reg (LIR.Physical LIR.X2))
+        (LIR.X2, LIR.Reg (LIR.Physical LIR.X3))
+        (LIR.X3, LIR.Reg (LIR.Physical LIR.X1))
     ]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
@@ -123,7 +122,7 @@ let testThreeWayCycle () : TestResult =
 
 /// Self-move: X1←X1 (should be eliminated as no-op)
 let testSelfMoveEliminated () : TestResult =
-    let moves = [(LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X1))]
+    let moves = [(LIR.X1, LIR.Reg (LIR.Physical LIR.X1))]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
     | Ok instrs ->
@@ -137,9 +136,9 @@ let testSelfMoveEliminated () : TestResult =
 /// Mixed: cycle + independent move
 let testMixedCycleAndIndependent () : TestResult =
     let moves = [
-        (LIR.X1, LIRSymbolic.Reg (LIR.Physical LIR.X2))
-        (LIR.X2, LIRSymbolic.Reg (LIR.Physical LIR.X1))
-        (LIR.X3, LIRSymbolic.Reg (LIR.Physical LIR.X4))
+        (LIR.X1, LIR.Reg (LIR.Physical LIR.X2))
+        (LIR.X2, LIR.Reg (LIR.Physical LIR.X1))
+        (LIR.X3, LIR.Reg (LIR.Physical LIR.X4))
     ]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
@@ -153,7 +152,7 @@ let testMixedCycleAndIndependent () : TestResult =
 
 /// Move from immediate (no conflict possible)
 let testMoveFromImmediate () : TestResult =
-    let moves = [(LIR.X1, LIRSymbolic.Imm 42L)]
+    let moves = [(LIR.X1, LIR.Imm 42L)]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
     | Ok instrs ->
@@ -165,7 +164,7 @@ let testMoveFromImmediate () : TestResult =
 
 /// Move from stack slot
 let testMoveFromStackSlot () : TestResult =
-    let moves = [(LIR.X1, LIRSymbolic.StackSlot (-8))]
+    let moves = [(LIR.X1, LIR.StackSlot (-8))]
     match convertTailArgMoves moves with
     | Error e -> Error $"Failed to convert: {e}"
     | Ok instrs ->

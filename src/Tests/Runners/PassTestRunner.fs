@@ -15,7 +15,7 @@ open TestDSL.LIRParser
 open TestDSL.ARM64SymbolicParser
 open ANF
 open MIR
-open LIRSymbolic
+open LIR
 open ARM64Symbolic
 open ANF_to_MIR
 open MIR_to_LIR
@@ -35,21 +35,21 @@ let prettyPrintMIR (program: MIR.Program) : string =
     formatMIR program
 
 /// Pretty-print LIR program with shared formatter
-let prettyPrintLIR (program: LIRSymbolic.Program) : string =
-    formatLIRSymbolic program
+let prettyPrintLIR (program: LIR.Program) : string =
+    formatLIR program
 
 /// Rename all functions in an LIR program
-let renameLIRFunctions (name: string) (program: LIRSymbolic.Program) : LIRSymbolic.Program =
-    let (LIRSymbolic.Program functions) = program
+let renameLIRFunctions (name: string) (program: LIR.Program) : LIR.Program =
+    let (LIR.Program functions) = program
     let renamed = functions |> List.map (fun func -> { func with Name = name })
-    LIRSymbolic.Program renamed
+    LIR.Program renamed
 
 /// Pretty-print ANF program with shared formatter
 let prettyPrintANF (program: ANF.Program) : string =
     formatANF program
 
 /// Load MIR→LIR test from file
-let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIRSymbolic.Program, string> =
+let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIR.Program, string> =
     if not (File.Exists path) then
         Error $"Test file not found: {path}"
     else
@@ -70,7 +70,7 @@ let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIRSymbolic.Program, s
                     | Ok lirProgram -> Ok (mirProgram, lirProgram)
 
 /// Run MIR→LIR test
-let runMIR2LIRTest (input: MIR.Program) (expected: LIRSymbolic.Program) : PassTestResult =
+let runMIR2LIRTest (input: MIR.Program) (expected: LIR.Program) : PassTestResult =
     match MIR_to_LIR.toLIR input with
     | Error err ->
         { Success = false
@@ -345,7 +345,7 @@ let prettyPrintARM64 (instrs: ARM64Symbolic.Instr list) : string =
     |> String.concat "\n"
 
 /// Load LIR→ARM64 test from file
-let loadLIR2ARM64Test (path: string) : Result<LIRSymbolic.Program * ARM64Symbolic.Instr list, string> =
+let loadLIR2ARM64Test (path: string) : Result<LIR.Program * ARM64Symbolic.Instr list, string> =
     if not (File.Exists path) then
         Error $"Test file not found: {path}"
     else
@@ -368,7 +368,7 @@ let loadLIR2ARM64Test (path: string) : Result<LIRSymbolic.Program * ARM64Symboli
                         Ok (renamedProgram, arm64Instrs)
 
 /// Run LIR→ARM64 test
-let runLIR2ARM64Test (input: LIRSymbolic.Program) (expected: ARM64Symbolic.Instr list) : PassTestResult =
+let runLIR2ARM64Test (input: LIR.Program) (expected: ARM64Symbolic.Instr list) : PassTestResult =
     match CodeGen.generateARM64 input with
     | Error err ->
         { Success = false

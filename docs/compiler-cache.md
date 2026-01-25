@@ -22,7 +22,7 @@ Disable caching with `--no-cache` (compiler CLI) or `./run-tests --no-cache`.
 
 Only one artifact type:
 
-1. **Function artifacts**: post-register-allocation `LIRSymbolic.Function` values
+1. **Function artifacts**: post-register-allocation `LIR.Function` values
    (including the synthesized `_start` entrypoint).
 
 This keeps the cache small and avoids storing large IR graphs or binaries.
@@ -37,7 +37,7 @@ This keeps the cache small and avoids storing large IR graphs or binaries.
 ## Design Choices and Assumptions
 
 - **SQLite 3**: simple, local, cross-platform, no extra services.
-- **Minimal artifacts**: only store LIRSymbolic functions (no binaries or
+- **Minimal artifacts**: only store LIR functions (no binaries or
   intermediate IR programs).
 - **Dependency-based invalidation**: cache keys are derived from the function's
   body, the types it touches, and the signatures of its non-inlined callees.
@@ -136,7 +136,7 @@ Two tables:
 - Intermediate IRs (AST/ANF/MIR/LIR programs).
 - Final binaries (Mach-O/ELF).
 - String/float pools (they are per-program; cached functions are stored in
-  symbolic LIR before pool resolution).
+  LIR before pool resolution).
 
 ## Known Limitations
 

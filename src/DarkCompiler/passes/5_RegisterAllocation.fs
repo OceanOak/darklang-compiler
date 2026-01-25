@@ -92,86 +92,86 @@ type McsProfile = {
 // ============================================================================
 
 /// Get virtual register IDs used (read) by an instruction
-let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
-    let regToVReg (reg: LIRSymbolic.Reg) : int option =
+let getUsedVRegs (instr: LIR.Instr) : Set<int> =
+    let regToVReg (reg: LIR.Reg) : int option =
         match reg with
         | LIR.Virtual id -> Some id
         | LIR.Physical _ -> None
 
-    let operandToVReg (op: LIRSymbolic.Operand) : int option =
+    let operandToVReg (op: LIR.Operand) : int option =
         match op with
-        | LIRSymbolic.Reg reg -> regToVReg reg
+        | LIR.Reg reg -> regToVReg reg
         | _ -> None
 
     match instr with
-    | LIRSymbolic.Mov (_, src) ->
+    | LIR.Mov (_, src) ->
         operandToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.Store (_, src) ->
+    | LIR.Store (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.Add (_, left, right) | LIRSymbolic.Sub (_, left, right) ->
+    | LIR.Add (_, left, right) | LIR.Sub (_, left, right) ->
         let l = regToVReg left |> Option.toList
         let r = operandToVReg right |> Option.toList
         Set.ofList (l @ r)
-    | LIRSymbolic.Mul (_, left, right) | LIRSymbolic.Sdiv (_, left, right)
-    | LIRSymbolic.And (_, left, right) | LIRSymbolic.Orr (_, left, right) | LIRSymbolic.Eor (_, left, right)
-    | LIRSymbolic.Lsl (_, left, right) | LIRSymbolic.Lsr (_, left, right) ->
+    | LIR.Mul (_, left, right) | LIR.Sdiv (_, left, right)
+    | LIR.And (_, left, right) | LIR.Orr (_, left, right) | LIR.Eor (_, left, right)
+    | LIR.Lsl (_, left, right) | LIR.Lsr (_, left, right) ->
         let l = regToVReg left |> Option.toList
         let r = regToVReg right |> Option.toList
         Set.ofList (l @ r)
-    | LIRSymbolic.Lsl_imm (_, src, _) | LIRSymbolic.Lsr_imm (_, src, _) | LIRSymbolic.And_imm (_, src, _) ->
+    | LIR.Lsl_imm (_, src, _) | LIR.Lsr_imm (_, src, _) | LIR.And_imm (_, src, _) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.Msub (_, mulLeft, mulRight, sub) ->
+    | LIR.Msub (_, mulLeft, mulRight, sub) ->
         let ml = regToVReg mulLeft |> Option.toList
         let mr = regToVReg mulRight |> Option.toList
         let s = regToVReg sub |> Option.toList
         Set.ofList (ml @ mr @ s)
-    | LIRSymbolic.Madd (_, mulLeft, mulRight, add) ->
+    | LIR.Madd (_, mulLeft, mulRight, add) ->
         let ml = regToVReg mulLeft |> Option.toList
         let mr = regToVReg mulRight |> Option.toList
         let a = regToVReg add |> Option.toList
         Set.ofList (ml @ mr @ a)
-    | LIRSymbolic.Cmp (left, right) ->
+    | LIR.Cmp (left, right) ->
         let l = regToVReg left |> Option.toList
         let r = operandToVReg right |> Option.toList
         Set.ofList (l @ r)
-    | LIRSymbolic.Cset (_, _) -> Set.empty
-    | LIRSymbolic.Mvn (_, src) ->
+    | LIR.Cset (_, _) -> Set.empty
+    | LIR.Mvn (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.Sxtb (_, src) | LIRSymbolic.Sxth (_, src) | LIRSymbolic.Sxtw (_, src)
-    | LIRSymbolic.Uxtb (_, src) | LIRSymbolic.Uxth (_, src) | LIRSymbolic.Uxtw (_, src) ->
+    | LIR.Sxtb (_, src) | LIR.Sxth (_, src) | LIR.Sxtw (_, src)
+    | LIR.Uxtb (_, src) | LIR.Uxth (_, src) | LIR.Uxtw (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.Call (_, _, args) ->
+    | LIR.Call (_, _, args) ->
         args |> List.choose operandToVReg |> Set.ofList
-    | LIRSymbolic.TailCall (_, args) ->
+    | LIR.TailCall (_, args) ->
         args |> List.choose operandToVReg |> Set.ofList
-    | LIRSymbolic.IndirectCall (_, func, args) ->
+    | LIR.IndirectCall (_, func, args) ->
         let funcVReg = regToVReg func |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
         Set.ofList (funcVReg @ argsVRegs)
-    | LIRSymbolic.IndirectTailCall (func, args) ->
+    | LIR.IndirectTailCall (func, args) ->
         let funcVReg = regToVReg func |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
         Set.ofList (funcVReg @ argsVRegs)
-    | LIRSymbolic.ClosureAlloc (_, _, captures) ->
+    | LIR.ClosureAlloc (_, _, captures) ->
         captures |> List.choose operandToVReg |> Set.ofList
-    | LIRSymbolic.ClosureCall (_, closure, args) ->
+    | LIR.ClosureCall (_, closure, args) ->
         let closureVReg = regToVReg closure |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
         Set.ofList (closureVReg @ argsVRegs)
-    | LIRSymbolic.ClosureTailCall (closure, args) ->
+    | LIR.ClosureTailCall (closure, args) ->
         let closureVReg = regToVReg closure |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
         Set.ofList (closureVReg @ argsVRegs)
-    | LIRSymbolic.PrintInt64 reg | LIRSymbolic.PrintBool reg
-    | LIRSymbolic.PrintInt64NoNewline reg | LIRSymbolic.PrintBoolNoNewline reg
-    | LIRSymbolic.PrintHeapStringNoNewline reg | LIRSymbolic.PrintList (reg, _)
-    | LIRSymbolic.PrintSum (reg, _) | LIRSymbolic.PrintRecord (reg, _, _) ->
+    | LIR.PrintInt64 reg | LIR.PrintBool reg
+    | LIR.PrintInt64NoNewline reg | LIR.PrintBoolNoNewline reg
+    | LIR.PrintHeapStringNoNewline reg | LIR.PrintList (reg, _)
+    | LIR.PrintSum (reg, _) | LIR.PrintRecord (reg, _, _) ->
         regToVReg reg |> Option.toList |> Set.ofList
-    | LIRSymbolic.PrintFloatNoNewline _ -> Set.empty  // FP register, not GP
-    | LIRSymbolic.PrintChars _ -> Set.empty  // No registers used
-    | LIRSymbolic.PrintBytes reg -> regToVReg reg |> Option.toList |> Set.ofList
-    | LIRSymbolic.HeapAlloc (_, _) -> Set.empty
-    | LIRSymbolic.HeapStore (addr, _, src, valueType) ->
+    | LIR.PrintFloatNoNewline _ -> Set.empty  // FP register, not GP
+    | LIR.PrintChars _ -> Set.empty  // No registers used
+    | LIR.PrintBytes reg -> regToVReg reg |> Option.toList |> Set.ofList
+    | LIR.HeapAlloc (_, _) -> Set.empty
+    | LIR.HeapStore (addr, _, src, valueType) ->
         let a = regToVReg addr |> Option.toList
         // For float values, the src register is an FVirtual (handled by float allocation)
         // so we don't include it in integer liveness
@@ -180,138 +180,138 @@ let getUsedVRegs (instr: LIRSymbolic.Instr) : Set<int> =
             | Some AST.TFloat64 -> []
             | _ -> operandToVReg src |> Option.toList
         Set.ofList (a @ s)
-    | LIRSymbolic.HeapLoad (_, addr, _) ->
+    | LIR.HeapLoad (_, addr, _) ->
         regToVReg addr |> Option.toList |> Set.ofList
-    | LIRSymbolic.RefCountInc (addr, _) ->
+    | LIR.RefCountInc (addr, _) ->
         regToVReg addr |> Option.toList |> Set.ofList
-    | LIRSymbolic.RefCountDec (addr, _) ->
+    | LIR.RefCountDec (addr, _) ->
         regToVReg addr |> Option.toList |> Set.ofList
-    | LIRSymbolic.StringConcat (_, left, right) ->
+    | LIR.StringConcat (_, left, right) ->
         let l = operandToVReg left |> Option.toList
         let r = operandToVReg right |> Option.toList
         Set.ofList (l @ r)
-    | LIRSymbolic.PrintHeapString reg ->
+    | LIR.PrintHeapString reg ->
         regToVReg reg |> Option.toList |> Set.ofList
-    | LIRSymbolic.FileReadText (_, path) ->
+    | LIR.FileReadText (_, path) ->
         operandToVReg path |> Option.toList |> Set.ofList
-    | LIRSymbolic.FileExists (_, path) ->
+    | LIR.FileExists (_, path) ->
         operandToVReg path |> Option.toList |> Set.ofList
-    | LIRSymbolic.FileWriteText (_, path, content) ->
+    | LIR.FileWriteText (_, path, content) ->
         let p = operandToVReg path |> Option.toList
         let c = operandToVReg content |> Option.toList
         Set.ofList (p @ c)
-    | LIRSymbolic.FileAppendText (_, path, content) ->
+    | LIR.FileAppendText (_, path, content) ->
         let p = operandToVReg path |> Option.toList
         let c = operandToVReg content |> Option.toList
         Set.ofList (p @ c)
-    | LIRSymbolic.FileDelete (_, path) ->
+    | LIR.FileDelete (_, path) ->
         operandToVReg path |> Option.toList |> Set.ofList
-    | LIRSymbolic.FileSetExecutable (_, path) ->
+    | LIR.FileSetExecutable (_, path) ->
         operandToVReg path |> Option.toList |> Set.ofList
-    | LIRSymbolic.FileWriteFromPtr (_, path, ptr, length) ->
+    | LIR.FileWriteFromPtr (_, path, ptr, length) ->
         let p = operandToVReg path |> Option.toList
         let ptr' = regToVReg ptr |> Option.toList
         let len = regToVReg length |> Option.toList
         Set.ofList (p @ ptr' @ len)
-    | LIRSymbolic.RawAlloc (_, numBytes) ->
+    | LIR.RawAlloc (_, numBytes) ->
         regToVReg numBytes |> Option.toList |> Set.ofList
-    | LIRSymbolic.RawFree ptr ->
+    | LIR.RawFree ptr ->
         regToVReg ptr |> Option.toList |> Set.ofList
-    | LIRSymbolic.RawGet (_, ptr, byteOffset) ->
+    | LIR.RawGet (_, ptr, byteOffset) ->
         let p = regToVReg ptr |> Option.toList
         let o = regToVReg byteOffset |> Option.toList
         Set.ofList (p @ o)
-    | LIRSymbolic.RawGetByte (_, ptr, byteOffset) ->
+    | LIR.RawGetByte (_, ptr, byteOffset) ->
         let p = regToVReg ptr |> Option.toList
         let o = regToVReg byteOffset |> Option.toList
         Set.ofList (p @ o)
-    | LIRSymbolic.RawSet (ptr, byteOffset, value) ->
+    | LIR.RawSet (ptr, byteOffset, value) ->
         let p = regToVReg ptr |> Option.toList
         let o = regToVReg byteOffset |> Option.toList
         let v = regToVReg value |> Option.toList
         Set.ofList (p @ o @ v)
-    | LIRSymbolic.RawSetByte (ptr, byteOffset, value) ->
+    | LIR.RawSetByte (ptr, byteOffset, value) ->
         let p = regToVReg ptr |> Option.toList
         let o = regToVReg byteOffset |> Option.toList
         let v = regToVReg value |> Option.toList
         Set.ofList (p @ o @ v)
     // Int64ToFloat uses an integer source register
-    | LIRSymbolic.Int64ToFloat (_, src) ->
+    | LIR.Int64ToFloat (_, src) ->
         regToVReg src |> Option.toList |> Set.ofList
-    | LIRSymbolic.RefCountIncString str ->
+    | LIR.RefCountIncString str ->
         operandToVReg str |> Option.toList |> Set.ofList
-    | LIRSymbolic.RefCountDecString str ->
+    | LIR.RefCountDecString str ->
         operandToVReg str |> Option.toList |> Set.ofList
-    | LIRSymbolic.RandomInt64 _ ->
+    | LIR.RandomInt64 _ ->
         Set.empty  // No operands to read
-    | LIRSymbolic.DateNow _ ->
+    | LIR.DateNow _ ->
         Set.empty  // No operands to read
-    | LIRSymbolic.FloatToString _ ->
+    | LIR.FloatToString _ ->
         Set.empty  // Float value is in FP register, tracked by getUsedFVRegs
     // ArgMoves/TailArgMoves contain operands that use virtual registers
-    | LIRSymbolic.ArgMoves moves ->
+    | LIR.ArgMoves moves ->
         moves |> List.choose (fun (_, op) -> operandToVReg op) |> Set.ofList
-    | LIRSymbolic.TailArgMoves moves ->
+    | LIR.TailArgMoves moves ->
         moves |> List.choose (fun (_, op) -> operandToVReg op) |> Set.ofList
     // Phi sources are NOT regular uses - they are used at predecessor exits, not at the phi's block
     // The liveness analysis handles phi sources specially in computeLiveness
-    | LIRSymbolic.Phi _ -> Set.empty
+    | LIR.Phi _ -> Set.empty
     | _ -> Set.empty
 
 /// Get virtual register ID defined (written) by an instruction
-let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
-    let regToVReg (reg: LIRSymbolic.Reg) : int option =
+let getDefinedVReg (instr: LIR.Instr) : int option =
+    let regToVReg (reg: LIR.Reg) : int option =
         match reg with
         | LIR.Virtual id -> Some id
         | LIR.Physical _ -> None
 
     match instr with
-    | LIRSymbolic.Mov (dest, _) -> regToVReg dest
-    | LIRSymbolic.Add (dest, _, _) | LIRSymbolic.Sub (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.Mul (dest, _, _) | LIRSymbolic.Sdiv (dest, _, _) | LIRSymbolic.Msub (dest, _, _, _) | LIRSymbolic.Madd (dest, _, _, _) -> regToVReg dest
-    | LIRSymbolic.Cset (dest, _) -> regToVReg dest
-    | LIRSymbolic.And (dest, _, _) | LIRSymbolic.And_imm (dest, _, _) | LIRSymbolic.Orr (dest, _, _) | LIRSymbolic.Eor (dest, _, _)
-    | LIRSymbolic.Lsl (dest, _, _) | LIRSymbolic.Lsr (dest, _, _) | LIRSymbolic.Lsl_imm (dest, _, _) | LIRSymbolic.Lsr_imm (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.Mvn (dest, _) -> regToVReg dest
-    | LIRSymbolic.Sxtb (dest, _) | LIRSymbolic.Sxth (dest, _) | LIRSymbolic.Sxtw (dest, _)
-    | LIRSymbolic.Uxtb (dest, _) | LIRSymbolic.Uxth (dest, _) | LIRSymbolic.Uxtw (dest, _) -> regToVReg dest
-    | LIRSymbolic.Call (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.TailCall _ -> None  // Tail calls don't return to caller
-    | LIRSymbolic.IndirectCall (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.IndirectTailCall _ -> None  // Indirect tail calls don't return to caller
-    | LIRSymbolic.ClosureAlloc (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.ClosureCall (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.ClosureTailCall _ -> None  // Closure tail calls don't return to caller
-    | LIRSymbolic.HeapAlloc (dest, _) -> regToVReg dest
-    | LIRSymbolic.HeapLoad (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.StringConcat (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.LoadFuncAddr (dest, _) -> regToVReg dest
-    | LIRSymbolic.FileReadText (dest, _) -> regToVReg dest
-    | LIRSymbolic.FileExists (dest, _) -> regToVReg dest
-    | LIRSymbolic.FileWriteText (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.FileAppendText (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.FileDelete (dest, _) -> regToVReg dest
-    | LIRSymbolic.FileSetExecutable (dest, _) -> regToVReg dest
-    | LIRSymbolic.FileWriteFromPtr (dest, _, _, _) -> regToVReg dest
-    | LIRSymbolic.RawAlloc (dest, _) -> regToVReg dest
-    | LIRSymbolic.RawGet (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.RawGetByte (dest, _, _) -> regToVReg dest
-    | LIRSymbolic.RawFree _ -> None
-    | LIRSymbolic.RawSet _ -> None
-    | LIRSymbolic.RawSetByte _ -> None
+    | LIR.Mov (dest, _) -> regToVReg dest
+    | LIR.Add (dest, _, _) | LIR.Sub (dest, _, _) -> regToVReg dest
+    | LIR.Mul (dest, _, _) | LIR.Sdiv (dest, _, _) | LIR.Msub (dest, _, _, _) | LIR.Madd (dest, _, _, _) -> regToVReg dest
+    | LIR.Cset (dest, _) -> regToVReg dest
+    | LIR.And (dest, _, _) | LIR.And_imm (dest, _, _) | LIR.Orr (dest, _, _) | LIR.Eor (dest, _, _)
+    | LIR.Lsl (dest, _, _) | LIR.Lsr (dest, _, _) | LIR.Lsl_imm (dest, _, _) | LIR.Lsr_imm (dest, _, _) -> regToVReg dest
+    | LIR.Mvn (dest, _) -> regToVReg dest
+    | LIR.Sxtb (dest, _) | LIR.Sxth (dest, _) | LIR.Sxtw (dest, _)
+    | LIR.Uxtb (dest, _) | LIR.Uxth (dest, _) | LIR.Uxtw (dest, _) -> regToVReg dest
+    | LIR.Call (dest, _, _) -> regToVReg dest
+    | LIR.TailCall _ -> None  // Tail calls don't return to caller
+    | LIR.IndirectCall (dest, _, _) -> regToVReg dest
+    | LIR.IndirectTailCall _ -> None  // Indirect tail calls don't return to caller
+    | LIR.ClosureAlloc (dest, _, _) -> regToVReg dest
+    | LIR.ClosureCall (dest, _, _) -> regToVReg dest
+    | LIR.ClosureTailCall _ -> None  // Closure tail calls don't return to caller
+    | LIR.HeapAlloc (dest, _) -> regToVReg dest
+    | LIR.HeapLoad (dest, _, _) -> regToVReg dest
+    | LIR.StringConcat (dest, _, _) -> regToVReg dest
+    | LIR.LoadFuncAddr (dest, _) -> regToVReg dest
+    | LIR.FileReadText (dest, _) -> regToVReg dest
+    | LIR.FileExists (dest, _) -> regToVReg dest
+    | LIR.FileWriteText (dest, _, _) -> regToVReg dest
+    | LIR.FileAppendText (dest, _, _) -> regToVReg dest
+    | LIR.FileDelete (dest, _) -> regToVReg dest
+    | LIR.FileSetExecutable (dest, _) -> regToVReg dest
+    | LIR.FileWriteFromPtr (dest, _, _, _) -> regToVReg dest
+    | LIR.RawAlloc (dest, _) -> regToVReg dest
+    | LIR.RawGet (dest, _, _) -> regToVReg dest
+    | LIR.RawGetByte (dest, _, _) -> regToVReg dest
+    | LIR.RawFree _ -> None
+    | LIR.RawSet _ -> None
+    | LIR.RawSetByte _ -> None
     // FloatToInt64 defines an integer destination register
-    | LIRSymbolic.FloatToInt64 (dest, _) -> regToVReg dest
+    | LIR.FloatToInt64 (dest, _) -> regToVReg dest
     // FloatToBits defines an integer destination register
-    | LIRSymbolic.FloatToBits (dest, _) -> regToVReg dest
+    | LIR.FloatToBits (dest, _) -> regToVReg dest
     // FpToGp defines an integer destination register
-    | LIRSymbolic.FpToGp (dest, _) -> regToVReg dest
-    | LIRSymbolic.RefCountIncString _ -> None
-    | LIRSymbolic.RefCountDecString _ -> None
-    | LIRSymbolic.RandomInt64 dest -> regToVReg dest
-    | LIRSymbolic.DateNow dest -> regToVReg dest
-    | LIRSymbolic.FloatToString (dest, _) -> regToVReg dest
+    | LIR.FpToGp (dest, _) -> regToVReg dest
+    | LIR.RefCountIncString _ -> None
+    | LIR.RefCountDecString _ -> None
+    | LIR.RandomInt64 dest -> regToVReg dest
+    | LIR.DateNow dest -> regToVReg dest
+    | LIR.FloatToString (dest, _) -> regToVReg dest
     // Phi defines its destination at block entry
-    | LIRSymbolic.Phi (dest, _, _) -> regToVReg dest
+    | LIR.Phi (dest, _, _) -> regToVReg dest
     | _ -> None
 
 // ============================================================================
@@ -319,85 +319,85 @@ let getDefinedVReg (instr: LIRSymbolic.Instr) : int option =
 // ============================================================================
 
 /// Get FVirtual register IDs used (read) by an instruction
-let getUsedFVRegs (instr: LIRSymbolic.Instr) : Set<int> =
+let getUsedFVRegs (instr: LIR.Instr) : Set<int> =
     let fregToId (freg: LIR.FReg) : int option =
         match freg with
         | LIR.FVirtual id -> Some id
         | LIR.FPhysical _ -> None
 
     match instr with
-    | LIRSymbolic.FMov (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIRSymbolic.FAdd (_, left, right) | LIRSymbolic.FSub (_, left, right)
-    | LIRSymbolic.FMul (_, left, right) | LIRSymbolic.FDiv (_, left, right) ->
+    | LIR.FMov (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIR.FAdd (_, left, right) | LIR.FSub (_, left, right)
+    | LIR.FMul (_, left, right) | LIR.FDiv (_, left, right) ->
         [fregToId left; fregToId right] |> List.choose id |> Set.ofList
-    | LIRSymbolic.FNeg (_, src) | LIRSymbolic.FAbs (_, src) | LIRSymbolic.FSqrt (_, src) ->
+    | LIR.FNeg (_, src) | LIR.FAbs (_, src) | LIR.FSqrt (_, src) ->
         fregToId src |> Option.toList |> Set.ofList
-    | LIRSymbolic.FCmp (left, right) ->
+    | LIR.FCmp (left, right) ->
         [fregToId left; fregToId right] |> List.choose id |> Set.ofList
-    | LIRSymbolic.FloatToInt64 (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIRSymbolic.FloatToBits (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIRSymbolic.FpToGp (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIRSymbolic.PrintFloat freg | LIRSymbolic.PrintFloatNoNewline freg ->
+    | LIR.FloatToInt64 (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIR.FloatToBits (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIR.FpToGp (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIR.PrintFloat freg | LIR.PrintFloatNoNewline freg ->
         fregToId freg |> Option.toList |> Set.ofList
-    | LIRSymbolic.FArgMoves moves ->
+    | LIR.FArgMoves moves ->
         moves |> List.choose (fun (_, src) -> fregToId src) |> Set.ofList
-    | LIRSymbolic.FPhi _ -> Set.empty  // Phi sources handled specially
-    | LIRSymbolic.FloatToString (_, value) -> fregToId value |> Option.toList |> Set.ofList
+    | LIR.FPhi _ -> Set.empty  // Phi sources handled specially
+    | LIR.FloatToString (_, value) -> fregToId value |> Option.toList |> Set.ofList
     // HeapStore with float value: the Virtual register ID is shared with FVirtual
-    | LIRSymbolic.HeapStore (_, _, LIRSymbolic.Reg (LIR.Virtual vregId), Some AST.TFloat64) -> Set.singleton vregId
+    | LIR.HeapStore (_, _, LIR.Reg (LIR.Virtual vregId), Some AST.TFloat64) -> Set.singleton vregId
     | _ -> Set.empty
 
 /// Get FVirtual register ID defined (written) by an instruction
-let getDefinedFVReg (instr: LIRSymbolic.Instr) : int option =
+let getDefinedFVReg (instr: LIR.Instr) : int option =
     let fregToId (freg: LIR.FReg) : int option =
         match freg with
         | LIR.FVirtual id -> Some id
         | LIR.FPhysical _ -> None
 
     match instr with
-    | LIRSymbolic.FMov (dest, _) -> fregToId dest
-    | LIRSymbolic.FAdd (dest, _, _) | LIRSymbolic.FSub (dest, _, _)
-    | LIRSymbolic.FMul (dest, _, _) | LIRSymbolic.FDiv (dest, _, _) -> fregToId dest
-    | LIRSymbolic.FNeg (dest, _) | LIRSymbolic.FAbs (dest, _) | LIRSymbolic.FSqrt (dest, _) -> fregToId dest
-    | LIRSymbolic.FLoad (dest, _) -> fregToId dest
-    | LIRSymbolic.Int64ToFloat (dest, _) -> fregToId dest
-    | LIRSymbolic.GpToFp (dest, _) -> fregToId dest
-    | LIRSymbolic.FPhi (dest, _) -> fregToId dest
+    | LIR.FMov (dest, _) -> fregToId dest
+    | LIR.FAdd (dest, _, _) | LIR.FSub (dest, _, _)
+    | LIR.FMul (dest, _, _) | LIR.FDiv (dest, _, _) -> fregToId dest
+    | LIR.FNeg (dest, _) | LIR.FAbs (dest, _) | LIR.FSqrt (dest, _) -> fregToId dest
+    | LIR.FLoad (dest, _) -> fregToId dest
+    | LIR.Int64ToFloat (dest, _) -> fregToId dest
+    | LIR.GpToFp (dest, _) -> fregToId dest
+    | LIR.FPhi (dest, _) -> fregToId dest
     | _ -> None
 
 /// Get virtual register used by terminator
-let getTerminatorUsedVRegs (term: LIRSymbolic.Terminator) : Set<int> =
+let getTerminatorUsedVRegs (term: LIR.Terminator) : Set<int> =
     match term with
-    | LIRSymbolic.Branch (LIR.Virtual id, _, _) -> Set.singleton id
-    | LIRSymbolic.BranchZero (LIR.Virtual id, _, _) -> Set.singleton id
-    | LIRSymbolic.BranchBitZero (LIR.Virtual id, _, _, _) -> Set.singleton id
-    | LIRSymbolic.BranchBitNonZero (LIR.Virtual id, _, _, _) -> Set.singleton id
-    | LIRSymbolic.CondBranch _ -> Set.empty  // CondBranch uses condition flags, not a register
+    | LIR.Branch (LIR.Virtual id, _, _) -> Set.singleton id
+    | LIR.BranchZero (LIR.Virtual id, _, _) -> Set.singleton id
+    | LIR.BranchBitZero (LIR.Virtual id, _, _, _) -> Set.singleton id
+    | LIR.BranchBitNonZero (LIR.Virtual id, _, _, _) -> Set.singleton id
+    | LIR.CondBranch _ -> Set.empty  // CondBranch uses condition flags, not a register
     | _ -> Set.empty
 
 /// Get successor labels for a terminator
-let getSuccessors (term: LIRSymbolic.Terminator) : LIR.Label list =
+let getSuccessors (term: LIR.Terminator) : LIR.Label list =
     match term with
-    | LIRSymbolic.Ret -> []
-    | LIRSymbolic.Branch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
-    | LIRSymbolic.BranchZero (_, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
-    | LIRSymbolic.BranchBitZero (_, _, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
-    | LIRSymbolic.BranchBitNonZero (_, _, nonZeroLabel, zeroLabel) -> [nonZeroLabel; zeroLabel]
-    | LIRSymbolic.CondBranch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
-    | LIRSymbolic.Jump label -> [label]
+    | LIR.Ret -> []
+    | LIR.Branch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
+    | LIR.BranchZero (_, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
+    | LIR.BranchBitZero (_, _, zeroLabel, nonZeroLabel) -> [zeroLabel; nonZeroLabel]
+    | LIR.BranchBitNonZero (_, _, nonZeroLabel, zeroLabel) -> [nonZeroLabel; zeroLabel]
+    | LIR.CondBranch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
+    | LIR.Jump label -> [label]
 
 /// Get phi uses grouped by predecessor label
 /// Returns a map from predecessor label to the set of VRegIds used from that predecessor
-let getPhiUsesByPredecessor (block: LIRSymbolic.BasicBlock) : Map<LIR.Label, Set<int>> =
-    let operandToVReg (op: LIRSymbolic.Operand) : int option =
+let getPhiUsesByPredecessor (block: LIR.BasicBlock) : Map<LIR.Label, Set<int>> =
+    let operandToVReg (op: LIR.Operand) : int option =
         match op with
-        | LIRSymbolic.Reg (LIR.Virtual id) -> Some id
+        | LIR.Reg (LIR.Virtual id) -> Some id
         | _ -> None
 
     block.Instrs
     |> List.choose (fun instr ->
         match instr with
-        | LIRSymbolic.Phi (_, sources, _) ->
+        | LIR.Phi (_, sources, _) ->
             Some (sources |> List.choose (fun (op, predLabel) ->
                 operandToVReg op |> Option.map (fun vregId -> (predLabel, vregId))))
         | _ -> None)
@@ -408,7 +408,7 @@ let getPhiUsesByPredecessor (block: LIRSymbolic.BasicBlock) : Map<LIR.Label, Set
 
 /// Get FPhi uses grouped by predecessor label
 /// Returns a map from predecessor label to the set of FVRegIds used from that predecessor
-let getFPhiUsesByPredecessor (block: LIRSymbolic.BasicBlock) : Map<LIR.Label, Set<int>> =
+let getFPhiUsesByPredecessor (block: LIR.BasicBlock) : Map<LIR.Label, Set<int>> =
     let fregToId (freg: LIR.FReg) : int option =
         match freg with
         | LIR.FVirtual id -> Some id
@@ -417,7 +417,7 @@ let getFPhiUsesByPredecessor (block: LIRSymbolic.BasicBlock) : Map<LIR.Label, Se
     block.Instrs
     |> List.choose (fun instr ->
         match instr with
-        | LIRSymbolic.FPhi (_, sources) ->
+        | LIR.FPhi (_, sources) ->
             Some (sources |> List.choose (fun (freg, predLabel) ->
                 fregToId freg |> Option.map (fun id -> (predLabel, id))))
         | _ -> None)
@@ -429,7 +429,7 @@ let getFPhiUsesByPredecessor (block: LIRSymbolic.BasicBlock) : Map<LIR.Label, Se
 /// Compute GEN and KILL sets for a basic block
 /// GEN = variables used before being defined
 /// KILL = variables defined
-let computeGenKill (block: LIRSymbolic.BasicBlock) : Set<int> * Set<int> =
+let computeGenKill (block: LIR.BasicBlock) : Set<int> * Set<int> =
     // Process instructions in forward order
     let mutable gen = Set.empty
     let mutable kill = Set.empty
@@ -458,7 +458,7 @@ let computeGenKill (block: LIRSymbolic.BasicBlock) : Set<int> * Set<int> =
 
 /// Compute liveness using backward dataflow analysis
 /// Handles SSA phi nodes: phi sources are live at predecessor exits, not at phi's block entry
-let computeLiveness (cfg: LIRSymbolic.CFG) : Map<LIR.Label, BlockLiveness> =
+let computeLiveness (cfg: LIR.CFG) : Map<LIR.Label, BlockLiveness> =
     // Initialize with empty sets
     let mutable liveness : Map<LIR.Label, BlockLiveness> =
         cfg.Blocks
@@ -519,7 +519,7 @@ let computeLiveness (cfg: LIRSymbolic.CFG) : Map<LIR.Label, BlockLiveness> =
 /// Compute float GEN and KILL sets for a basic block
 /// GEN = float variables used before being defined
 /// KILL = float variables defined
-let computeFloatGenKill (block: LIRSymbolic.BasicBlock) : Set<int> * Set<int> =
+let computeFloatGenKill (block: LIR.BasicBlock) : Set<int> * Set<int> =
     let mutable gen = Set.empty
     let mutable kill = Set.empty
 
@@ -539,7 +539,7 @@ let computeFloatGenKill (block: LIRSymbolic.BasicBlock) : Set<int> * Set<int> =
 
 /// Compute float liveness using backward dataflow analysis
 /// Handles SSA FPhi nodes: phi sources are live at predecessor exits, not at phi's block entry
-let computeFloatLiveness (cfg: LIRSymbolic.CFG) : Map<LIR.Label, BlockLiveness> =
+let computeFloatLiveness (cfg: LIR.CFG) : Map<LIR.Label, BlockLiveness> =
     let mutable liveness : Map<LIR.Label, BlockLiveness> =
         cfg.Blocks |> Map.map (fun _ _ -> { LiveIn = Set.empty; LiveOut = Set.empty })
 
@@ -583,7 +583,7 @@ let computeFloatLiveness (cfg: LIRSymbolic.CFG) : Map<LIR.Label, BlockLiveness> 
 
 /// Compute liveness at each instruction index within a block
 /// Returns a list of live VReg sets, one per instruction (same order as Instrs)
-let computeInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Set<int>) : Set<int> list =
+let computeInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set<int> list =
     // Walk backwards from the terminator, tracking liveness
     let mutable live = liveOut
 
@@ -615,7 +615,7 @@ let computeInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Set<int
 
 /// Compute float liveness at each instruction index within a block
 /// Returns a list of live FVirtual ID sets, one per instruction (same order as Instrs)
-let computeFloatInstructionLiveness (block: LIRSymbolic.BasicBlock) (liveOut: Set<int>) : Set<int> list =
+let computeFloatInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set<int> list =
     let mutable live = liveOut
 
     let instrsReversed = List.rev block.Instrs
@@ -654,14 +654,14 @@ let calleeSavedRegs = [
 ]
 
 /// Check if an instruction is a non-tail call (requires SaveRegs/RestoreRegs)
-let isNonTailCall (instr: LIRSymbolic.Instr) : bool =
+let isNonTailCall (instr: LIR.Instr) : bool =
     match instr with
-    | LIRSymbolic.Call _ | LIRSymbolic.IndirectCall _ | LIRSymbolic.ClosureCall _ -> true
+    | LIR.Call _ | LIR.IndirectCall _ | LIR.ClosureCall _ -> true
     | _ -> false
 
 /// Check if a function has any non-tail calls
 /// If it does, we prefer callee-saved registers to avoid per-call save/restore overhead
-let hasNonTailCalls (cfg: LIRSymbolic.CFG) : bool =
+let hasNonTailCalls (cfg: LIR.CFG) : bool =
     cfg.Blocks
     |> Map.exists (fun _ block ->
         block.Instrs |> List.exists isNonTailCall)
@@ -669,7 +669,7 @@ let hasNonTailCalls (cfg: LIRSymbolic.CFG) : bool =
 /// Get the optimal register allocation order based on calling pattern
 /// - Functions with non-tail calls: prefer callee-saved (save once in prologue/epilogue)
 /// - Leaf functions / tail-call-only: prefer caller-saved (no prologue/epilogue overhead)
-let getAllocatableRegs (cfg: LIRSymbolic.CFG) : LIR.PhysReg list =
+let getAllocatableRegs (cfg: LIR.CFG) : LIR.PhysReg list =
     if hasNonTailCalls cfg then
         // Callee-saved first for call-heavy functions
         calleeSavedRegs @ callerSavedRegs
@@ -685,7 +685,7 @@ let getAllocatableRegs (cfg: LIRSymbolic.CFG) : LIR.PhysReg list =
 /// Two variables interfere if their live ranges overlap.
 /// In SSA form, it is sufficient to add edges from each definition to live-out variables.
 let buildInterferenceGraph
-    (cfg: LIRSymbolic.CFG)
+    (cfg: LIR.CFG)
     (liveness: Map<LIR.Label, BlockLiveness>)
     (entryDefs: Set<int>)
     : InterferenceGraph =
@@ -765,7 +765,7 @@ let buildInterferenceGraph
 /// Build float interference graph from CFG and float liveness information
 /// Two float variables interfere if they are both live at any program point
 let buildFloatInterferenceGraph
-    (cfg: LIRSymbolic.CFG)
+    (cfg: LIR.CFG)
     (liveness: Map<LIR.Label, BlockLiveness>)
     (entryDefs: Set<int>)
     : InterferenceGraph =
@@ -828,7 +828,7 @@ let buildFloatInterferenceGraph
 /// Returns Map<vregId, Set<vregId>> where each vreg maps to vregs it should prefer
 /// to share a color with.
 /// For each Phi(dest, sources), the dest should prefer the same color as sources.
-let collectPhiPreferences (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
+let collectPhiPreferences (cfg: LIR.CFG) : Map<int, Set<int>> =
     let mutable preferences = Map.empty<int, Set<int>>
 
     let addPreference (v1: int) (v2: int) =
@@ -842,11 +842,11 @@ let collectPhiPreferences (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
         let block = kvp.Value
         for instr in block.Instrs do
             match instr with
-            | LIRSymbolic.Phi (LIR.Virtual destId, sources, _) ->
+            | LIR.Phi (LIR.Virtual destId, sources, _) ->
                 // Add preferences between dest and each virtual register source
                 for (src, _) in sources do
                     match src with
-                    | LIRSymbolic.Reg (LIR.Virtual srcId) ->
+                    | LIR.Reg (LIR.Virtual srcId) ->
                         addPreference destId srcId
                     | _ -> ()
             | _ -> ()
@@ -855,7 +855,7 @@ let collectPhiPreferences (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
 
 /// Collect move-related coalescing pairs from CFG.
 /// Returns undirected pairs of virtual registers that are directly moved between.
-let collectMovePairs (cfg: LIRSymbolic.CFG) : (int * int) list =
+let collectMovePairs (cfg: LIR.CFG) : (int * int) list =
     let normalize (a: int) (b: int) =
         if a < b then (a, b) else (b, a)
     cfg.Blocks
@@ -863,14 +863,14 @@ let collectMovePairs (cfg: LIRSymbolic.CFG) : (int * int) list =
         block.Instrs
         |> List.fold (fun acc instr ->
             match instr with
-            | LIRSymbolic.Mov (LIR.Virtual destId, LIRSymbolic.Reg (LIR.Virtual srcId)) ->
+            | LIR.Mov (LIR.Virtual destId, LIR.Reg (LIR.Virtual srcId)) ->
                 Set.add (normalize destId srcId) acc
             | _ -> acc) acc) Set.empty
     |> Set.toList
 
 /// Collect phi-related coalescing pairs from CFG.
 /// Returns undirected pairs of virtual registers that flow into the same phi destination.
-let collectPhiPairs (cfg: LIRSymbolic.CFG) : (int * int) list =
+let collectPhiPairs (cfg: LIR.CFG) : (int * int) list =
     let normalize (a: int) (b: int) =
         if a < b then (a, b) else (b, a)
     cfg.Blocks
@@ -878,11 +878,11 @@ let collectPhiPairs (cfg: LIRSymbolic.CFG) : (int * int) list =
         block.Instrs
         |> List.fold (fun acc instr ->
             match instr with
-            | LIRSymbolic.Phi (LIR.Virtual destId, sources, _) ->
+            | LIR.Phi (LIR.Virtual destId, sources, _) ->
                 sources
                 |> List.fold (fun acc (src, _) ->
                     match src with
-                    | LIRSymbolic.Reg (LIR.Virtual srcId) when srcId <> destId ->
+                    | LIR.Reg (LIR.Virtual srcId) when srcId <> destId ->
                         Set.add (normalize destId srcId) acc
                     | _ -> acc) acc
             | _ -> acc) acc) Set.empty
@@ -1432,7 +1432,7 @@ let floatColoringToAllocation (colorResult: ColoringResult) (registers: LIR.Phys
 /// Run chordal graph coloring for float register allocation
 /// additionalVRegs: FVirtual IDs that must be allocated (e.g., float parameters)
 /// even if they don't appear in the CFG instructions
-let chordalFloatAllocation (cfg: LIRSymbolic.CFG) (additionalVRegs: Set<int>) : FAllocationResult =
+let chordalFloatAllocation (cfg: LIR.CFG) (additionalVRegs: Set<int>) : FAllocationResult =
     let liveness = computeFloatLiveness cfg
     let graph = buildFloatInterferenceGraph cfg liveness additionalVRegs
     // Add additional VRegs (like float params) as isolated vertices if not already in graph
@@ -1465,34 +1465,34 @@ let applyFloatAllocationToFReg (floatAllocation: FAllocationResult) (freg: LIR.F
         | None -> Crash.crash $"Float register allocation bug: FVirtual {id} not found in allocation"
 
 /// Apply float allocation to an instruction
-let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIRSymbolic.Instr) : LIRSymbolic.Instr =
+let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIR.Instr) : LIR.Instr =
     let applyF = applyFloatAllocationToFReg floatAllocation
     match instr with
-    | LIRSymbolic.FMov (dest, src) -> LIRSymbolic.FMov (applyF dest, applyF src)
-    | LIRSymbolic.FAdd (dest, left, right) -> LIRSymbolic.FAdd (applyF dest, applyF left, applyF right)
-    | LIRSymbolic.FSub (dest, left, right) -> LIRSymbolic.FSub (applyF dest, applyF left, applyF right)
-    | LIRSymbolic.FMul (dest, left, right) -> LIRSymbolic.FMul (applyF dest, applyF left, applyF right)
-    | LIRSymbolic.FDiv (dest, left, right) -> LIRSymbolic.FDiv (applyF dest, applyF left, applyF right)
-    | LIRSymbolic.FNeg (dest, src) -> LIRSymbolic.FNeg (applyF dest, applyF src)
-    | LIRSymbolic.FAbs (dest, src) -> LIRSymbolic.FAbs (applyF dest, applyF src)
-    | LIRSymbolic.FSqrt (dest, src) -> LIRSymbolic.FSqrt (applyF dest, applyF src)
-    | LIRSymbolic.FCmp (left, right) -> LIRSymbolic.FCmp (applyF left, applyF right)
-    | LIRSymbolic.FLoad (dest, value) -> LIRSymbolic.FLoad (applyF dest, value)
-    | LIRSymbolic.Int64ToFloat (dest, src) -> LIRSymbolic.Int64ToFloat (applyF dest, src)
-    | LIRSymbolic.FloatToInt64 (dest, src) -> LIRSymbolic.FloatToInt64 (dest, applyF src)
-    | LIRSymbolic.FloatToBits (dest, src) -> LIRSymbolic.FloatToBits (dest, applyF src)
-    | LIRSymbolic.FpToGp (dest, src) -> LIRSymbolic.FpToGp (dest, applyF src)
-    | LIRSymbolic.GpToFp (dest, src) -> LIRSymbolic.GpToFp (applyF dest, src)
-    | LIRSymbolic.PrintFloat freg -> LIRSymbolic.PrintFloat (applyF freg)
-    | LIRSymbolic.PrintFloatNoNewline freg -> LIRSymbolic.PrintFloatNoNewline (applyF freg)
-    | LIRSymbolic.FPhi (dest, sources) ->
-        LIRSymbolic.FPhi (applyF dest, sources |> List.map (fun (src, label) -> (applyF src, label)))
-    | LIRSymbolic.FArgMoves moves ->
-        LIRSymbolic.FArgMoves (moves |> List.map (fun (physReg, src) -> (physReg, applyF src)))
-    | LIRSymbolic.FloatToString (dest, value) -> LIRSymbolic.FloatToString (dest, applyF value)
+    | LIR.FMov (dest, src) -> LIR.FMov (applyF dest, applyF src)
+    | LIR.FAdd (dest, left, right) -> LIR.FAdd (applyF dest, applyF left, applyF right)
+    | LIR.FSub (dest, left, right) -> LIR.FSub (applyF dest, applyF left, applyF right)
+    | LIR.FMul (dest, left, right) -> LIR.FMul (applyF dest, applyF left, applyF right)
+    | LIR.FDiv (dest, left, right) -> LIR.FDiv (applyF dest, applyF left, applyF right)
+    | LIR.FNeg (dest, src) -> LIR.FNeg (applyF dest, applyF src)
+    | LIR.FAbs (dest, src) -> LIR.FAbs (applyF dest, applyF src)
+    | LIR.FSqrt (dest, src) -> LIR.FSqrt (applyF dest, applyF src)
+    | LIR.FCmp (left, right) -> LIR.FCmp (applyF left, applyF right)
+    | LIR.FLoad (dest, value) -> LIR.FLoad (applyF dest, value)
+    | LIR.Int64ToFloat (dest, src) -> LIR.Int64ToFloat (applyF dest, src)
+    | LIR.FloatToInt64 (dest, src) -> LIR.FloatToInt64 (dest, applyF src)
+    | LIR.FloatToBits (dest, src) -> LIR.FloatToBits (dest, applyF src)
+    | LIR.FpToGp (dest, src) -> LIR.FpToGp (dest, applyF src)
+    | LIR.GpToFp (dest, src) -> LIR.GpToFp (applyF dest, src)
+    | LIR.PrintFloat freg -> LIR.PrintFloat (applyF freg)
+    | LIR.PrintFloatNoNewline freg -> LIR.PrintFloatNoNewline (applyF freg)
+    | LIR.FPhi (dest, sources) ->
+        LIR.FPhi (applyF dest, sources |> List.map (fun (src, label) -> (applyF src, label)))
+    | LIR.FArgMoves moves ->
+        LIR.FArgMoves (moves |> List.map (fun (physReg, src) -> (physReg, applyF src)))
+    | LIR.FloatToString (dest, value) -> LIR.FloatToString (dest, applyF value)
     // HeapStore with float value: the Virtual register ID is shared with FVirtual
     // We need to apply float allocation to convert Virtual(n) to the allocated physical register
-    | LIRSymbolic.HeapStore (addr, offset, LIRSymbolic.Reg (LIR.Virtual vregId), Some AST.TFloat64) ->
+    | LIR.HeapStore (addr, offset, LIR.Reg (LIR.Virtual vregId), Some AST.TFloat64) ->
         // Convert Virtual to the allocated FPhysical if it's in the float mapping
         let allocatedFReg = applyF (LIR.FVirtual vregId)
         // Convert the FReg back to a Virtual/Physical Reg for HeapStore
@@ -1509,15 +1509,15 @@ let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIR
                     | LIR.D12 -> LIR.X12 | LIR.D13 -> LIR.X13 | LIR.D14 -> LIR.X14 | LIR.D15 -> LIR.X15
                 LIR.Physical physReg
             | LIR.FVirtual n -> LIR.Virtual n
-        LIRSymbolic.HeapStore (addr, offset, LIRSymbolic.Reg allocatedReg, Some AST.TFloat64)
+        LIR.HeapStore (addr, offset, LIR.Reg allocatedReg, Some AST.TFloat64)
     | _ -> instr  // Non-float instructions unchanged
 
 /// Apply float allocation to a basic block
-let applyFloatAllocationToBlock (floatAllocation: FAllocationResult) (block: LIRSymbolic.BasicBlock) : LIRSymbolic.BasicBlock =
+let applyFloatAllocationToBlock (floatAllocation: FAllocationResult) (block: LIR.BasicBlock) : LIR.BasicBlock =
     { block with Instrs = block.Instrs |> List.map (applyFloatAllocationToInstr floatAllocation) }
 
 /// Apply float allocation to a CFG
-let applyFloatAllocationToCFG (floatAllocation: FAllocationResult) (cfg: LIRSymbolic.CFG) : LIRSymbolic.CFG =
+let applyFloatAllocationToCFG (floatAllocation: FAllocationResult) (cfg: LIR.CFG) : LIR.CFG =
     { cfg with Blocks = cfg.Blocks |> Map.map (fun _ block -> applyFloatAllocationToBlock floatAllocation block) }
 
 // ============================================================================
@@ -1549,7 +1549,7 @@ let getLiveCallerSavedFloatRegs (liveFVRegs: Set<int>) (floatAllocation: FAlloca
 // ============================================================================
 
 /// Apply allocation to a register, returning the physical register and allocation info
-let applyToReg (mapping: Map<int, Allocation>) (reg: LIRSymbolic.Reg) : LIRSymbolic.Reg * Allocation option =
+let applyToReg (mapping: Map<int, Allocation>) (reg: LIR.Reg) : LIR.Reg * Allocation option =
     match reg with
     | LIR.Physical p -> (LIR.Physical p, None)
     | LIR.Virtual id ->
@@ -1559,328 +1559,328 @@ let applyToReg (mapping: Map<int, Allocation>) (reg: LIRSymbolic.Reg) : LIRSymbo
         | None -> (LIR.Physical LIR.X11, None)
 
 /// Apply allocation to an operand, returning load instructions if needed
-let applyToOperand (mapping: Map<int, Allocation>) (operand: LIRSymbolic.Operand) (tempReg: LIR.PhysReg)
-    : LIRSymbolic.Operand * LIRSymbolic.Instr list =
+let applyToOperand (mapping: Map<int, Allocation>) (operand: LIR.Operand) (tempReg: LIR.PhysReg)
+    : LIR.Operand * LIR.Instr list =
     match operand with
-    | LIRSymbolic.Imm n -> (LIRSymbolic.Imm n, [])
-    | LIRSymbolic.FloatImm f -> (LIRSymbolic.FloatImm f, [])
-    | LIRSymbolic.StringSymbol value -> (LIRSymbolic.StringSymbol value, [])
-    | LIRSymbolic.FloatSymbol value -> (LIRSymbolic.FloatSymbol value, [])
-    | LIRSymbolic.StackSlot s -> (LIRSymbolic.StackSlot s, [])
-    | LIRSymbolic.Reg reg ->
+    | LIR.Imm n -> (LIR.Imm n, [])
+    | LIR.FloatImm f -> (LIR.FloatImm f, [])
+    | LIR.StringSymbol value -> (LIR.StringSymbol value, [])
+    | LIR.FloatSymbol value -> (LIR.FloatSymbol value, [])
+    | LIR.StackSlot s -> (LIR.StackSlot s, [])
+    | LIR.Reg reg ->
         match reg with
-        | LIR.Physical p -> (LIRSymbolic.Reg (LIR.Physical p), [])
+        | LIR.Physical p -> (LIR.Reg (LIR.Physical p), [])
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
-            | Some (PhysReg physReg) -> (LIRSymbolic.Reg (LIR.Physical physReg), [])
+            | Some (PhysReg physReg) -> (LIR.Reg (LIR.Physical physReg), [])
             | Some (StackSlot offset) ->
-                let loadInstr = LIRSymbolic.Mov (LIR.Physical tempReg, LIRSymbolic.StackSlot offset)
-                (LIRSymbolic.Reg (LIR.Physical tempReg), [loadInstr])
+                let loadInstr = LIR.Mov (LIR.Physical tempReg, LIR.StackSlot offset)
+                (LIR.Reg (LIR.Physical tempReg), [loadInstr])
             // Keep Virtual unchanged if not in integer mapping - it may be a float register
             // that will be handled by float allocation later
-            | None -> (LIRSymbolic.Reg (LIR.Virtual id), [])
-    | LIRSymbolic.FuncAddr name -> (LIRSymbolic.FuncAddr name, [])
+            | None -> (LIR.Reg (LIR.Virtual id), [])
+    | LIR.FuncAddr name -> (LIR.FuncAddr name, [])
 
 /// Apply allocation to an operand WITHOUT generating load instructions for spills.
 /// Returns StackSlot for spilled values so CodeGen can load them at the right time.
 /// Used for TailArgMoves where loads must be deferred to avoid using the same temp register.
-let applyToOperandNoLoad (mapping: Map<int, Allocation>) (operand: LIRSymbolic.Operand) : LIRSymbolic.Operand =
+let applyToOperandNoLoad (mapping: Map<int, Allocation>) (operand: LIR.Operand) : LIR.Operand =
     match operand with
-    | LIRSymbolic.Imm n -> LIRSymbolic.Imm n
-    | LIRSymbolic.FloatImm f -> LIRSymbolic.FloatImm f
-    | LIRSymbolic.StringSymbol value -> LIRSymbolic.StringSymbol value
-    | LIRSymbolic.FloatSymbol value -> LIRSymbolic.FloatSymbol value
-    | LIRSymbolic.StackSlot s -> LIRSymbolic.StackSlot s
-    | LIRSymbolic.Reg reg ->
+    | LIR.Imm n -> LIR.Imm n
+    | LIR.FloatImm f -> LIR.FloatImm f
+    | LIR.StringSymbol value -> LIR.StringSymbol value
+    | LIR.FloatSymbol value -> LIR.FloatSymbol value
+    | LIR.StackSlot s -> LIR.StackSlot s
+    | LIR.Reg reg ->
         match reg with
-        | LIR.Physical p -> LIRSymbolic.Reg (LIR.Physical p)
+        | LIR.Physical p -> LIR.Reg (LIR.Physical p)
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
-            | Some (PhysReg physReg) -> LIRSymbolic.Reg (LIR.Physical physReg)
-            | Some (StackSlot offset) -> LIRSymbolic.StackSlot offset
+            | Some (PhysReg physReg) -> LIR.Reg (LIR.Physical physReg)
+            | Some (StackSlot offset) -> LIR.StackSlot offset
             // Keep Virtual unchanged if not in integer mapping - it may be a float register
-            | None -> LIRSymbolic.Reg (LIR.Virtual id)
-    | LIRSymbolic.FuncAddr name -> LIRSymbolic.FuncAddr name
+            | None -> LIR.Reg (LIR.Virtual id)
+    | LIR.FuncAddr name -> LIR.FuncAddr name
 
 /// Helper to load a spilled register
-let loadSpilled (mapping: Map<int, Allocation>) (reg: LIRSymbolic.Reg) (tempReg: LIR.PhysReg)
-    : LIRSymbolic.Reg * LIRSymbolic.Instr list =
+let loadSpilled (mapping: Map<int, Allocation>) (reg: LIR.Reg) (tempReg: LIR.PhysReg)
+    : LIR.Reg * LIR.Instr list =
     match reg with
     | LIR.Physical p -> (LIR.Physical p, [])
     | LIR.Virtual id ->
         match Map.tryFind id mapping with
         | Some (PhysReg physReg) -> (LIR.Physical physReg, [])
         | Some (StackSlot offset) ->
-            let loadInstr = LIRSymbolic.Mov (LIR.Physical tempReg, LIRSymbolic.StackSlot offset)
+            let loadInstr = LIR.Mov (LIR.Physical tempReg, LIR.StackSlot offset)
             (LIR.Physical tempReg, [loadInstr])
         | None -> (LIR.Physical tempReg, [])
 
 /// Apply allocation to an instruction
-let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LIRSymbolic.Instr list =
+let applyToInstr (mapping: Map<int, Allocation>) (instr: LIR.Instr) : LIR.Instr list =
     match instr with
-    | LIRSymbolic.Phi _ ->
+    | LIR.Phi _ ->
         // Phi nodes are handled specially by resolvePhiNodes after allocation.
         // Skip them here - they will be removed and converted to moves at predecessor exits.
         []
 
-    | LIRSymbolic.FPhi _ ->
+    | LIR.FPhi _ ->
         // Float phi nodes are handled specially by resolvePhiNodes after allocation.
         // Skip them here - they will be removed and converted to FMov at predecessor exits.
         []
 
-    | LIRSymbolic.Mov (dest, src) ->
+    | LIR.Mov (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcOp, srcLoads) = applyToOperand mapping src LIR.X12
-        let movInstr = LIRSymbolic.Mov (destReg, srcOp)
+        let movInstr = LIR.Mov (destReg, srcOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [movInstr] @ storeInstrs
 
-    | LIRSymbolic.Store (offset, src) ->
+    | LIR.Store (offset, src) ->
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        srcLoads @ [LIRSymbolic.Store (offset, srcReg)]
+        srcLoads @ [LIR.Store (offset, srcReg)]
 
-    | LIRSymbolic.Add (dest, left, right) ->
+    | LIR.Add (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightOp, rightLoads) = applyToOperand mapping right LIR.X13
-        let addInstr = LIRSymbolic.Add (destReg, leftReg, rightOp)
+        let addInstr = LIR.Add (destReg, leftReg, rightOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [addInstr] @ storeInstrs
 
-    | LIRSymbolic.Sub (dest, left, right) ->
+    | LIR.Sub (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightOp, rightLoads) = applyToOperand mapping right LIR.X13
-        let subInstr = LIRSymbolic.Sub (destReg, leftReg, rightOp)
+        let subInstr = LIR.Sub (destReg, leftReg, rightOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [subInstr] @ storeInstrs
 
-    | LIRSymbolic.Mul (dest, left, right) ->
+    | LIR.Mul (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightReg, rightLoads) = loadSpilled mapping right LIR.X13
-        let mulInstr = LIRSymbolic.Mul (destReg, leftReg, rightReg)
+        let mulInstr = LIR.Mul (destReg, leftReg, rightReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [mulInstr] @ storeInstrs
 
-    | LIRSymbolic.Sdiv (dest, left, right) ->
+    | LIR.Sdiv (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightReg, rightLoads) = loadSpilled mapping right LIR.X13
-        let divInstr = LIRSymbolic.Sdiv (destReg, leftReg, rightReg)
+        let divInstr = LIR.Sdiv (destReg, leftReg, rightReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [divInstr] @ storeInstrs
 
-    | LIRSymbolic.Msub (dest, mulLeft, mulRight, sub) ->
+    | LIR.Msub (dest, mulLeft, mulRight, sub) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (mulLeftReg, mulLeftLoads) = loadSpilled mapping mulLeft LIR.X12
         let (mulRightReg, mulRightLoads) = loadSpilled mapping mulRight LIR.X13
         let (subReg, subLoads) = loadSpilled mapping sub LIR.X14
-        let msubInstr = LIRSymbolic.Msub (destReg, mulLeftReg, mulRightReg, subReg)
+        let msubInstr = LIR.Msub (destReg, mulLeftReg, mulRightReg, subReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         mulLeftLoads @ mulRightLoads @ subLoads @ [msubInstr] @ storeInstrs
 
-    | LIRSymbolic.Madd (dest, mulLeft, mulRight, add) ->
+    | LIR.Madd (dest, mulLeft, mulRight, add) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (mulLeftReg, mulLeftLoads) = loadSpilled mapping mulLeft LIR.X12
         let (mulRightReg, mulRightLoads) = loadSpilled mapping mulRight LIR.X13
         let (addReg, addLoads) = loadSpilled mapping add LIR.X14
-        let maddInstr = LIRSymbolic.Madd (destReg, mulLeftReg, mulRightReg, addReg)
+        let maddInstr = LIR.Madd (destReg, mulLeftReg, mulRightReg, addReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         mulLeftLoads @ mulRightLoads @ addLoads @ [maddInstr] @ storeInstrs
 
-    | LIRSymbolic.Cmp (left, right) ->
+    | LIR.Cmp (left, right) ->
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightOp, rightLoads) = applyToOperand mapping right LIR.X13
-        leftLoads @ rightLoads @ [LIRSymbolic.Cmp (leftReg, rightOp)]
+        leftLoads @ rightLoads @ [LIR.Cmp (leftReg, rightOp)]
 
-    | LIRSymbolic.Cset (dest, cond) ->
+    | LIR.Cset (dest, cond) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let csetInstr = LIRSymbolic.Cset (destReg, cond)
+        let csetInstr = LIR.Cset (destReg, cond)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [csetInstr] @ storeInstrs
 
-    | LIRSymbolic.And (dest, left, right) ->
+    | LIR.And (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightReg, rightLoads) = loadSpilled mapping right LIR.X13
-        let andInstr = LIRSymbolic.And (destReg, leftReg, rightReg)
+        let andInstr = LIR.And (destReg, leftReg, rightReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [andInstr] @ storeInstrs
 
-    | LIRSymbolic.And_imm (dest, src, imm) ->
+    | LIR.And_imm (dest, src, imm) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let andInstr = LIRSymbolic.And_imm (destReg, srcReg, imm)
+        let andInstr = LIR.And_imm (destReg, srcReg, imm)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [andInstr] @ storeInstrs
 
-    | LIRSymbolic.Orr (dest, left, right) ->
+    | LIR.Orr (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightReg, rightLoads) = loadSpilled mapping right LIR.X13
-        let orrInstr = LIRSymbolic.Orr (destReg, leftReg, rightReg)
+        let orrInstr = LIR.Orr (destReg, leftReg, rightReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [orrInstr] @ storeInstrs
 
-    | LIRSymbolic.Eor (dest, left, right) ->
+    | LIR.Eor (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftReg, leftLoads) = loadSpilled mapping left LIR.X12
         let (rightReg, rightLoads) = loadSpilled mapping right LIR.X13
-        let eorInstr = LIRSymbolic.Eor (destReg, leftReg, rightReg)
+        let eorInstr = LIR.Eor (destReg, leftReg, rightReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [eorInstr] @ storeInstrs
 
-    | LIRSymbolic.Lsl (dest, src, shift) ->
+    | LIR.Lsl (dest, src, shift) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
         let (shiftReg, shiftLoads) = loadSpilled mapping shift LIR.X13
-        let lslInstr = LIRSymbolic.Lsl (destReg, srcReg, shiftReg)
+        let lslInstr = LIR.Lsl (destReg, srcReg, shiftReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ shiftLoads @ [lslInstr] @ storeInstrs
 
-    | LIRSymbolic.Lsr (dest, src, shift) ->
+    | LIR.Lsr (dest, src, shift) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
         let (shiftReg, shiftLoads) = loadSpilled mapping shift LIR.X13
-        let lsrInstr = LIRSymbolic.Lsr (destReg, srcReg, shiftReg)
+        let lsrInstr = LIR.Lsr (destReg, srcReg, shiftReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ shiftLoads @ [lsrInstr] @ storeInstrs
 
-    | LIRSymbolic.Lsl_imm (dest, src, shift) ->
+    | LIR.Lsl_imm (dest, src, shift) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let lslInstr = LIRSymbolic.Lsl_imm (destReg, srcReg, shift)
+        let lslInstr = LIR.Lsl_imm (destReg, srcReg, shift)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [lslInstr] @ storeInstrs
 
-    | LIRSymbolic.Lsr_imm (dest, src, shift) ->
+    | LIR.Lsr_imm (dest, src, shift) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let lsrInstr = LIRSymbolic.Lsr_imm (destReg, srcReg, shift)
+        let lsrInstr = LIR.Lsr_imm (destReg, srcReg, shift)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [lsrInstr] @ storeInstrs
 
-    | LIRSymbolic.Mvn (dest, src) ->
+    | LIR.Mvn (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let mvnInstr = LIRSymbolic.Mvn (destReg, srcReg)
+        let mvnInstr = LIR.Mvn (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [mvnInstr] @ storeInstrs
 
     // Sign/zero extension instructions (for integer overflow)
-    | LIRSymbolic.Sxtb (dest, src) ->
+    | LIR.Sxtb (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Sxtb (destReg, srcReg)
+        let extInstr = LIR.Sxtb (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Sxth (dest, src) ->
+    | LIR.Sxth (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Sxth (destReg, srcReg)
+        let extInstr = LIR.Sxth (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Sxtw (dest, src) ->
+    | LIR.Sxtw (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Sxtw (destReg, srcReg)
+        let extInstr = LIR.Sxtw (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Uxtb (dest, src) ->
+    | LIR.Uxtb (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Uxtb (destReg, srcReg)
+        let extInstr = LIR.Uxtb (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Uxth (dest, src) ->
+    | LIR.Uxth (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Uxth (destReg, srcReg)
+        let extInstr = LIR.Uxth (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Uxtw (dest, src) ->
+    | LIR.Uxtw (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        let extInstr = LIRSymbolic.Uxtw (destReg, srcReg)
+        let extInstr = LIR.Uxtw (destReg, srcReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         srcLoads @ [extInstr] @ storeInstrs
 
-    | LIRSymbolic.Call (dest, funcName, args) ->
+    | LIR.Call (dest, funcName, args) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let allocatedArgs =
             args |> List.mapi (fun i arg ->
@@ -1889,14 +1889,14 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.Call (destReg, funcName, argOps)
+        let callInstr = LIR.Call (destReg, funcName, argOps)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         argLoads @ [callInstr] @ storeInstrs
 
-    | LIRSymbolic.TailCall (funcName, args) ->
+    | LIR.TailCall (funcName, args) ->
         // Tail calls have no destination - just apply allocation to args
         let allocatedArgs =
             args |> List.mapi (fun i arg ->
@@ -1905,10 +1905,10 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.TailCall (funcName, argOps)
+        let callInstr = LIR.TailCall (funcName, argOps)
         argLoads @ [callInstr]
 
-    | LIRSymbolic.IndirectCall (dest, func, args) ->
+    | LIR.IndirectCall (dest, func, args) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (funcReg, funcLoads) = loadSpilled mapping func LIR.X14
         let allocatedArgs =
@@ -1918,14 +1918,14 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.IndirectCall (destReg, funcReg, argOps)
+        let callInstr = LIR.IndirectCall (destReg, funcReg, argOps)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         funcLoads @ argLoads @ [callInstr] @ storeInstrs
 
-    | LIRSymbolic.IndirectTailCall (func, args) ->
+    | LIR.IndirectTailCall (func, args) ->
         // Indirect tail calls have no destination
         let (funcReg, funcLoads) = loadSpilled mapping func LIR.X14
         let allocatedArgs =
@@ -1935,10 +1935,10 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.IndirectTailCall (funcReg, argOps)
+        let callInstr = LIR.IndirectTailCall (funcReg, argOps)
         funcLoads @ argLoads @ [callInstr]
 
-    | LIRSymbolic.ClosureAlloc (dest, funcName, captures) ->
+    | LIR.ClosureAlloc (dest, funcName, captures) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let allocatedCaptures =
             captures |> List.mapi (fun i cap ->
@@ -1947,14 +1947,14 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let capLoads = allocatedCaptures |> List.collect snd
         let capOps = allocatedCaptures |> List.map fst
-        let allocInstr = LIRSymbolic.ClosureAlloc (destReg, funcName, capOps)
+        let allocInstr = LIR.ClosureAlloc (destReg, funcName, capOps)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         capLoads @ [allocInstr] @ storeInstrs
 
-    | LIRSymbolic.ClosureCall (dest, closure, args) ->
+    | LIR.ClosureCall (dest, closure, args) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (closureReg, closureLoads) = loadSpilled mapping closure LIR.X14
         let allocatedArgs =
@@ -1964,14 +1964,14 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.ClosureCall (destReg, closureReg, argOps)
+        let callInstr = LIR.ClosureCall (destReg, closureReg, argOps)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         closureLoads @ argLoads @ [callInstr] @ storeInstrs
 
-    | LIRSymbolic.ClosureTailCall (closure, args) ->
+    | LIR.ClosureTailCall (closure, args) ->
         // Closure tail calls have no destination
         let (closureReg, closureLoads) = loadSpilled mapping closure LIR.X14
         let allocatedArgs =
@@ -1981,15 +1981,15 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             )
         let argLoads = allocatedArgs |> List.collect snd
         let argOps = allocatedArgs |> List.map fst
-        let callInstr = LIRSymbolic.ClosureTailCall (closureReg, argOps)
+        let callInstr = LIR.ClosureTailCall (closureReg, argOps)
         closureLoads @ argLoads @ [callInstr]
 
     // SaveRegs/RestoreRegs are handled specially in applyToBlockWithLiveness
     // These patterns handle the case where they've already been populated
-    | LIRSymbolic.SaveRegs (intRegs, floatRegs) -> [LIRSymbolic.SaveRegs (intRegs, floatRegs)]
-    | LIRSymbolic.RestoreRegs (intRegs, floatRegs) -> [LIRSymbolic.RestoreRegs (intRegs, floatRegs)]
+    | LIR.SaveRegs (intRegs, floatRegs) -> [LIR.SaveRegs (intRegs, floatRegs)]
+    | LIR.RestoreRegs (intRegs, floatRegs) -> [LIR.RestoreRegs (intRegs, floatRegs)]
 
-    | LIRSymbolic.ArgMoves moves ->
+    | LIR.ArgMoves moves ->
         // ArgMoves must preserve distinct sources for each argument.
         // Use no-load allocation so spilled values remain StackSlot and are
         // loaded per-move in CodeGen (avoids reusing a single temp).
@@ -1997,9 +1997,9 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
             moves |> List.map (fun (destReg, srcOp) ->
                 let allocatedOp = applyToOperandNoLoad mapping srcOp
                 (destReg, allocatedOp))
-        [LIRSymbolic.ArgMoves allocatedMoves]
+        [LIR.ArgMoves allocatedMoves]
 
-    | LIRSymbolic.TailArgMoves moves ->
+    | LIR.TailArgMoves moves ->
         // Apply allocation WITHOUT loading spilled values into a temp register.
         // This is different from ArgMoves: for tail calls, we can't use a shared temp
         // because there's no SaveRegs to preserve values. CodeGen will handle StackSlots
@@ -2007,385 +2007,385 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIRSymbolic.Instr) : LI
         let allocatedMoves =
             moves |> List.map (fun (destReg, srcOp) ->
                 (destReg, applyToOperandNoLoad mapping srcOp))
-        [LIRSymbolic.TailArgMoves allocatedMoves]
+        [LIR.TailArgMoves allocatedMoves]
 
-    | LIRSymbolic.FArgMoves moves ->
+    | LIR.FArgMoves moves ->
         // Pass through unchanged for now - float argument moves use physical registers only
-        [LIRSymbolic.FArgMoves moves]
+        [LIR.FArgMoves moves]
 
-    | LIRSymbolic.PrintInt64 reg ->
+    | LIR.PrintInt64 reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintInt64 regFinal]
+        regLoads @ [LIR.PrintInt64 regFinal]
 
-    | LIRSymbolic.PrintBool reg ->
+    | LIR.PrintBool reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintBool regFinal]
+        regLoads @ [LIR.PrintBool regFinal]
 
-    | LIRSymbolic.PrintInt64NoNewline reg ->
+    | LIR.PrintInt64NoNewline reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintInt64NoNewline regFinal]
+        regLoads @ [LIR.PrintInt64NoNewline regFinal]
 
-    | LIRSymbolic.PrintBoolNoNewline reg ->
+    | LIR.PrintBoolNoNewline reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintBoolNoNewline regFinal]
+        regLoads @ [LIR.PrintBoolNoNewline regFinal]
 
-    | LIRSymbolic.PrintFloatNoNewline freg -> [LIRSymbolic.PrintFloatNoNewline freg]
+    | LIR.PrintFloatNoNewline freg -> [LIR.PrintFloatNoNewline freg]
 
-    | LIRSymbolic.PrintHeapStringNoNewline reg ->
+    | LIR.PrintHeapStringNoNewline reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintHeapStringNoNewline regFinal]
+        regLoads @ [LIR.PrintHeapStringNoNewline regFinal]
 
-    | LIRSymbolic.PrintList (listPtr, elemType) ->
+    | LIR.PrintList (listPtr, elemType) ->
         let (ptrFinal, ptrLoads) = loadSpilled mapping listPtr LIR.X12
-        ptrLoads @ [LIRSymbolic.PrintList (ptrFinal, elemType)]
+        ptrLoads @ [LIR.PrintList (ptrFinal, elemType)]
 
-    | LIRSymbolic.PrintSum (sumPtr, variants) ->
+    | LIR.PrintSum (sumPtr, variants) ->
         let (ptrFinal, ptrLoads) = loadSpilled mapping sumPtr LIR.X12
-        ptrLoads @ [LIRSymbolic.PrintSum (ptrFinal, variants)]
+        ptrLoads @ [LIR.PrintSum (ptrFinal, variants)]
 
-    | LIRSymbolic.PrintRecord (recordPtr, typeName, fields) ->
+    | LIR.PrintRecord (recordPtr, typeName, fields) ->
         let (ptrFinal, ptrLoads) = loadSpilled mapping recordPtr LIR.X12
-        ptrLoads @ [LIRSymbolic.PrintRecord (ptrFinal, typeName, fields)]
+        ptrLoads @ [LIR.PrintRecord (ptrFinal, typeName, fields)]
 
-    | LIRSymbolic.PrintFloat freg -> [LIRSymbolic.PrintFloat freg]
-    | LIRSymbolic.PrintString value -> [LIRSymbolic.PrintString value]
-    | LIRSymbolic.PrintChars chars -> [LIRSymbolic.PrintChars chars]
-    | LIRSymbolic.PrintBytes reg ->
+    | LIR.PrintFloat freg -> [LIR.PrintFloat freg]
+    | LIR.PrintString value -> [LIR.PrintString value]
+    | LIR.PrintChars chars -> [LIR.PrintChars chars]
+    | LIR.PrintBytes reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintBytes regFinal]
+        regLoads @ [LIR.PrintBytes regFinal]
 
     // FP instructions pass through unchanged
-    | LIRSymbolic.FMov (dest, src) -> [LIRSymbolic.FMov (dest, src)]
-    | LIRSymbolic.FLoad (dest, value) -> [LIRSymbolic.FLoad (dest, value)]
-    | LIRSymbolic.FAdd (dest, left, right) -> [LIRSymbolic.FAdd (dest, left, right)]
-    | LIRSymbolic.FSub (dest, left, right) -> [LIRSymbolic.FSub (dest, left, right)]
-    | LIRSymbolic.FMul (dest, left, right) -> [LIRSymbolic.FMul (dest, left, right)]
-    | LIRSymbolic.FDiv (dest, left, right) -> [LIRSymbolic.FDiv (dest, left, right)]
-    | LIRSymbolic.FNeg (dest, src) -> [LIRSymbolic.FNeg (dest, src)]
-    | LIRSymbolic.FAbs (dest, src) -> [LIRSymbolic.FAbs (dest, src)]
-    | LIRSymbolic.FSqrt (dest, src) -> [LIRSymbolic.FSqrt (dest, src)]
-    | LIRSymbolic.FCmp (left, right) -> [LIRSymbolic.FCmp (left, right)]
+    | LIR.FMov (dest, src) -> [LIR.FMov (dest, src)]
+    | LIR.FLoad (dest, value) -> [LIR.FLoad (dest, value)]
+    | LIR.FAdd (dest, left, right) -> [LIR.FAdd (dest, left, right)]
+    | LIR.FSub (dest, left, right) -> [LIR.FSub (dest, left, right)]
+    | LIR.FMul (dest, left, right) -> [LIR.FMul (dest, left, right)]
+    | LIR.FDiv (dest, left, right) -> [LIR.FDiv (dest, left, right)]
+    | LIR.FNeg (dest, src) -> [LIR.FNeg (dest, src)]
+    | LIR.FAbs (dest, src) -> [LIR.FAbs (dest, src)]
+    | LIR.FSqrt (dest, src) -> [LIR.FSqrt (dest, src)]
+    | LIR.FCmp (left, right) -> [LIR.FCmp (left, right)]
     // Int64ToFloat: src is integer register, dest is FP register
-    | LIRSymbolic.Int64ToFloat (dest, src) ->
+    | LIR.Int64ToFloat (dest, src) ->
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        srcLoads @ [LIRSymbolic.Int64ToFloat (dest, srcReg)]
+        srcLoads @ [LIR.Int64ToFloat (dest, srcReg)]
     // GpToFp: move bits from GP register to FP register (src is integer, dest is FP)
-    | LIRSymbolic.GpToFp (dest, src) ->
+    | LIR.GpToFp (dest, src) ->
         let (srcReg, srcLoads) = loadSpilled mapping src LIR.X12
-        srcLoads @ [LIRSymbolic.GpToFp (dest, srcReg)]
+        srcLoads @ [LIR.GpToFp (dest, srcReg)]
     // FloatToInt64: src is FP register, dest is integer register
-    | LIRSymbolic.FloatToInt64 (dest, src) ->
+    | LIR.FloatToInt64 (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let instr = LIRSymbolic.FloatToInt64 (destReg, src)
+        let instr = LIR.FloatToInt64 (destReg, src)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [instr] @ storeInstrs
 
     // FpToGp: src is FP register, dest is integer register
-    | LIRSymbolic.FpToGp (dest, src) ->
+    | LIR.FpToGp (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let instr = LIRSymbolic.FpToGp (destReg, src)
+        let instr = LIR.FpToGp (destReg, src)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [instr] @ storeInstrs
 
     // FloatToBits: src is FP register, dest is integer register (bit copy)
-    | LIRSymbolic.FloatToBits (dest, src) ->
+    | LIR.FloatToBits (dest, src) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let instr = LIRSymbolic.FloatToBits (destReg, src)
+        let instr = LIR.FloatToBits (destReg, src)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [instr] @ storeInstrs
 
     // Heap operations
-    | LIRSymbolic.HeapAlloc (dest, size) ->
+    | LIR.HeapAlloc (dest, size) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let allocInstr = LIRSymbolic.HeapAlloc (destReg, size)
+        let allocInstr = LIR.HeapAlloc (destReg, size)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [allocInstr] @ storeInstrs
 
-    | LIRSymbolic.HeapStore (addr, offset, src, vt) ->
+    | LIR.HeapStore (addr, offset, src, vt) ->
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
         let (srcOp, srcLoads) = applyToOperand mapping src LIR.X13
-        addrLoads @ srcLoads @ [LIRSymbolic.HeapStore (addrReg, offset, srcOp, vt)]
+        addrLoads @ srcLoads @ [LIR.HeapStore (addrReg, offset, srcOp, vt)]
 
-    | LIRSymbolic.HeapLoad (dest, addr, offset) ->
+    | LIR.HeapLoad (dest, addr, offset) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
-        let loadInstr = LIRSymbolic.HeapLoad (destReg, addrReg, offset)
+        let loadInstr = LIR.HeapLoad (destReg, addrReg, offset)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         addrLoads @ [loadInstr] @ storeInstrs
 
-    | LIRSymbolic.RefCountInc (addr, payloadSize) ->
+    | LIR.RefCountInc (addr, payloadSize) ->
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
-        addrLoads @ [LIRSymbolic.RefCountInc (addrReg, payloadSize)]
+        addrLoads @ [LIR.RefCountInc (addrReg, payloadSize)]
 
-    | LIRSymbolic.RefCountDec (addr, payloadSize) ->
+    | LIR.RefCountDec (addr, payloadSize) ->
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
-        addrLoads @ [LIRSymbolic.RefCountDec (addrReg, payloadSize)]
+        addrLoads @ [LIR.RefCountDec (addrReg, payloadSize)]
 
-    | LIRSymbolic.StringConcat (dest, left, right) ->
+    | LIR.StringConcat (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (leftOp, leftLoads) = applyToOperand mapping left LIR.X12
         let (rightOp, rightLoads) = applyToOperand mapping right LIR.X13
-        let concatInstr = LIRSymbolic.StringConcat (destReg, leftOp, rightOp)
+        let concatInstr = LIR.StringConcat (destReg, leftOp, rightOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         leftLoads @ rightLoads @ [concatInstr] @ storeInstrs
 
-    | LIRSymbolic.PrintHeapString reg ->
+    | LIR.PrintHeapString reg ->
         let (regPhys, regLoads) = loadSpilled mapping reg LIR.X12
-        regLoads @ [LIRSymbolic.PrintHeapString regPhys]
+        regLoads @ [LIR.PrintHeapString regPhys]
 
-    | LIRSymbolic.LoadFuncAddr (dest, funcName) ->
+    | LIR.LoadFuncAddr (dest, funcName) ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let loadInstr = LIRSymbolic.LoadFuncAddr (destReg, funcName)
+        let loadInstr = LIR.LoadFuncAddr (destReg, funcName)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [loadInstr] @ storeInstrs
 
-    | LIRSymbolic.FileReadText (dest, path) ->
+    | LIR.FileReadText (dest, path) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
-        let fileInstr = LIRSymbolic.FileReadText (destReg, pathOp)
+        let fileInstr = LIR.FileReadText (destReg, pathOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileExists (dest, path) ->
+    | LIR.FileExists (dest, path) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
-        let fileInstr = LIRSymbolic.FileExists (destReg, pathOp)
+        let fileInstr = LIR.FileExists (destReg, pathOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileWriteText (dest, path, content) ->
+    | LIR.FileWriteText (dest, path, content) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
         let (contentOp, contentLoads) = applyToOperand mapping content LIR.X13
-        let fileInstr = LIRSymbolic.FileWriteText (destReg, pathOp, contentOp)
+        let fileInstr = LIR.FileWriteText (destReg, pathOp, contentOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ contentLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileAppendText (dest, path, content) ->
+    | LIR.FileAppendText (dest, path, content) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
         let (contentOp, contentLoads) = applyToOperand mapping content LIR.X13
-        let fileInstr = LIRSymbolic.FileAppendText (destReg, pathOp, contentOp)
+        let fileInstr = LIR.FileAppendText (destReg, pathOp, contentOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ contentLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileDelete (dest, path) ->
+    | LIR.FileDelete (dest, path) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
-        let fileInstr = LIRSymbolic.FileDelete (destReg, pathOp)
+        let fileInstr = LIR.FileDelete (destReg, pathOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileSetExecutable (dest, path) ->
+    | LIR.FileSetExecutable (dest, path) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
-        let fileInstr = LIRSymbolic.FileSetExecutable (destReg, pathOp)
+        let fileInstr = LIR.FileSetExecutable (destReg, pathOp)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.FileWriteFromPtr (dest, path, ptr, length) ->
+    | LIR.FileWriteFromPtr (dest, path, ptr, length) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (pathOp, pathLoads) = applyToOperand mapping path LIR.X12
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X13
         let (lengthReg, lengthLoads) = loadSpilled mapping length LIR.X14
-        let fileInstr = LIRSymbolic.FileWriteFromPtr (destReg, pathOp, ptrReg, lengthReg)
+        let fileInstr = LIR.FileWriteFromPtr (destReg, pathOp, ptrReg, lengthReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         pathLoads @ ptrLoads @ lengthLoads @ [fileInstr] @ storeInstrs
 
-    | LIRSymbolic.RawAlloc (dest, numBytes) ->
+    | LIR.RawAlloc (dest, numBytes) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (numBytesReg, numBytesLoads) = loadSpilled mapping numBytes LIR.X12
-        let allocInstr = LIRSymbolic.RawAlloc (destReg, numBytesReg)
+        let allocInstr = LIR.RawAlloc (destReg, numBytesReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         numBytesLoads @ [allocInstr] @ storeInstrs
 
-    | LIRSymbolic.RawFree ptr ->
+    | LIR.RawFree ptr ->
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
-        ptrLoads @ [LIRSymbolic.RawFree ptrReg]
+        ptrLoads @ [LIR.RawFree ptrReg]
 
-    | LIRSymbolic.RawGet (dest, ptr, byteOffset) ->
+    | LIR.RawGet (dest, ptr, byteOffset) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
-        let getInstr = LIRSymbolic.RawGet (destReg, ptrReg, offsetReg)
+        let getInstr = LIR.RawGet (destReg, ptrReg, offsetReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         ptrLoads @ offsetLoads @ [getInstr] @ storeInstrs
 
-    | LIRSymbolic.RawGetByte (dest, ptr, byteOffset) ->
+    | LIR.RawGetByte (dest, ptr, byteOffset) ->
         let (destReg, destAlloc) = applyToReg mapping dest
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
-        let getInstr = LIRSymbolic.RawGetByte (destReg, ptrReg, offsetReg)
+        let getInstr = LIR.RawGetByte (destReg, ptrReg, offsetReg)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         ptrLoads @ offsetLoads @ [getInstr] @ storeInstrs
 
-    | LIRSymbolic.RawSet (ptr, byteOffset, value) ->
+    | LIR.RawSet (ptr, byteOffset, value) ->
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
         let (valueReg, valueLoads) = loadSpilled mapping value LIR.X14
-        ptrLoads @ offsetLoads @ valueLoads @ [LIRSymbolic.RawSet (ptrReg, offsetReg, valueReg)]
+        ptrLoads @ offsetLoads @ valueLoads @ [LIR.RawSet (ptrReg, offsetReg, valueReg)]
 
-    | LIRSymbolic.RawSetByte (ptr, byteOffset, value) ->
+    | LIR.RawSetByte (ptr, byteOffset, value) ->
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
         let (valueReg, valueLoads) = loadSpilled mapping value LIR.X14
-        ptrLoads @ offsetLoads @ valueLoads @ [LIRSymbolic.RawSetByte (ptrReg, offsetReg, valueReg)]
+        ptrLoads @ offsetLoads @ valueLoads @ [LIR.RawSetByte (ptrReg, offsetReg, valueReg)]
 
-    | LIRSymbolic.RefCountIncString str ->
+    | LIR.RefCountIncString str ->
         let (strOp, strLoads) = applyToOperand mapping str LIR.X12
-        strLoads @ [LIRSymbolic.RefCountIncString strOp]
+        strLoads @ [LIR.RefCountIncString strOp]
 
-    | LIRSymbolic.RefCountDecString str ->
+    | LIR.RefCountDecString str ->
         let (strOp, strLoads) = applyToOperand mapping str LIR.X12
-        strLoads @ [LIRSymbolic.RefCountDecString strOp]
+        strLoads @ [LIR.RefCountDecString strOp]
 
-    | LIRSymbolic.RandomInt64 dest ->
+    | LIR.RandomInt64 dest ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let randomInstr = LIRSymbolic.RandomInt64 destReg
+        let randomInstr = LIR.RandomInt64 destReg
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [randomInstr] @ storeInstrs
 
-    | LIRSymbolic.DateNow dest ->
+    | LIR.DateNow dest ->
         let (destReg, destAlloc) = applyToReg mapping dest
-        let dateInstr = LIRSymbolic.DateNow destReg
+        let dateInstr = LIR.DateNow destReg
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [dateInstr] @ storeInstrs
 
-    | LIRSymbolic.FloatToString (dest, value) ->
+    | LIR.FloatToString (dest, value) ->
         // FP register value is already physical after float allocation
         let (destReg, destAlloc) = applyToReg mapping dest
-        let floatToStrInstr = LIRSymbolic.FloatToString (destReg, value)
+        let floatToStrInstr = LIR.FloatToString (destReg, value)
         let storeInstrs =
             match destAlloc with
-            | Some (StackSlot offset) -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X11)]
+            | Some (StackSlot offset) -> [LIR.Store (offset, LIR.Physical LIR.X11)]
             | _ -> []
         [floatToStrInstr] @ storeInstrs
 
-    | LIRSymbolic.CoverageHit exprId ->
-        [LIRSymbolic.CoverageHit exprId]  // No registers to allocate
+    | LIR.CoverageHit exprId ->
+        [LIR.CoverageHit exprId]  // No registers to allocate
 
-    | LIRSymbolic.Exit -> [LIRSymbolic.Exit]
+    | LIR.Exit -> [LIR.Exit]
 
 /// Apply allocation to terminator
-let applyToTerminator (mapping: Map<int, Allocation>) (term: LIRSymbolic.Terminator)
-    : LIRSymbolic.Instr list * LIRSymbolic.Terminator =
+let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
+    : LIR.Instr list * LIR.Terminator =
     match term with
-    | LIRSymbolic.Ret -> ([], LIRSymbolic.Ret)
-    | LIRSymbolic.Branch (cond, trueLabel, falseLabel) ->
+    | LIR.Ret -> ([], LIR.Ret)
+    | LIR.Branch (cond, trueLabel, falseLabel) ->
         match cond with
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
             | Some (PhysReg physReg) ->
-                ([], LIRSymbolic.Branch (LIR.Physical physReg, trueLabel, falseLabel))
+                ([], LIR.Branch (LIR.Physical physReg, trueLabel, falseLabel))
             | Some (StackSlot offset) ->
                 // Load condition from stack before branching
-                let loadInstr = LIRSymbolic.Mov (LIR.Physical LIR.X11, LIRSymbolic.StackSlot offset)
-                ([loadInstr], LIRSymbolic.Branch (LIR.Physical LIR.X11, trueLabel, falseLabel))
+                let loadInstr = LIR.Mov (LIR.Physical LIR.X11, LIR.StackSlot offset)
+                ([loadInstr], LIR.Branch (LIR.Physical LIR.X11, trueLabel, falseLabel))
             | None ->
-                ([], LIRSymbolic.Branch (LIR.Physical LIR.X11, trueLabel, falseLabel))
+                ([], LIR.Branch (LIR.Physical LIR.X11, trueLabel, falseLabel))
         | LIR.Physical p ->
-            ([], LIRSymbolic.Branch (LIR.Physical p, trueLabel, falseLabel))
-    | LIRSymbolic.BranchZero (cond, zeroLabel, nonZeroLabel) ->
+            ([], LIR.Branch (LIR.Physical p, trueLabel, falseLabel))
+    | LIR.BranchZero (cond, zeroLabel, nonZeroLabel) ->
         match cond with
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
             | Some (PhysReg physReg) ->
-                ([], LIRSymbolic.BranchZero (LIR.Physical physReg, zeroLabel, nonZeroLabel))
+                ([], LIR.BranchZero (LIR.Physical physReg, zeroLabel, nonZeroLabel))
             | Some (StackSlot offset) ->
                 // Load condition from stack before branching
-                let loadInstr = LIRSymbolic.Mov (LIR.Physical LIR.X11, LIRSymbolic.StackSlot offset)
-                ([loadInstr], LIRSymbolic.BranchZero (LIR.Physical LIR.X11, zeroLabel, nonZeroLabel))
+                let loadInstr = LIR.Mov (LIR.Physical LIR.X11, LIR.StackSlot offset)
+                ([loadInstr], LIR.BranchZero (LIR.Physical LIR.X11, zeroLabel, nonZeroLabel))
             | None ->
-                ([], LIRSymbolic.BranchZero (LIR.Physical LIR.X11, zeroLabel, nonZeroLabel))
+                ([], LIR.BranchZero (LIR.Physical LIR.X11, zeroLabel, nonZeroLabel))
         | LIR.Physical p ->
-            ([], LIRSymbolic.BranchZero (LIR.Physical p, zeroLabel, nonZeroLabel))
-    | LIRSymbolic.BranchBitZero (reg, bit, zeroLabel, nonZeroLabel) ->
+            ([], LIR.BranchZero (LIR.Physical p, zeroLabel, nonZeroLabel))
+    | LIR.BranchBitZero (reg, bit, zeroLabel, nonZeroLabel) ->
         match reg with
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
             | Some (PhysReg physReg) ->
-                ([], LIRSymbolic.BranchBitZero (LIR.Physical physReg, bit, zeroLabel, nonZeroLabel))
+                ([], LIR.BranchBitZero (LIR.Physical physReg, bit, zeroLabel, nonZeroLabel))
             | Some (StackSlot offset) ->
-                let loadInstr = LIRSymbolic.Mov (LIR.Physical LIR.X11, LIRSymbolic.StackSlot offset)
-                ([loadInstr], LIRSymbolic.BranchBitZero (LIR.Physical LIR.X11, bit, zeroLabel, nonZeroLabel))
+                let loadInstr = LIR.Mov (LIR.Physical LIR.X11, LIR.StackSlot offset)
+                ([loadInstr], LIR.BranchBitZero (LIR.Physical LIR.X11, bit, zeroLabel, nonZeroLabel))
             | None ->
-                ([], LIRSymbolic.BranchBitZero (LIR.Physical LIR.X11, bit, zeroLabel, nonZeroLabel))
+                ([], LIR.BranchBitZero (LIR.Physical LIR.X11, bit, zeroLabel, nonZeroLabel))
         | LIR.Physical p ->
-            ([], LIRSymbolic.BranchBitZero (LIR.Physical p, bit, zeroLabel, nonZeroLabel))
-    | LIRSymbolic.BranchBitNonZero (reg, bit, nonZeroLabel, zeroLabel) ->
+            ([], LIR.BranchBitZero (LIR.Physical p, bit, zeroLabel, nonZeroLabel))
+    | LIR.BranchBitNonZero (reg, bit, nonZeroLabel, zeroLabel) ->
         match reg with
         | LIR.Virtual id ->
             match Map.tryFind id mapping with
             | Some (PhysReg physReg) ->
-                ([], LIRSymbolic.BranchBitNonZero (LIR.Physical physReg, bit, nonZeroLabel, zeroLabel))
+                ([], LIR.BranchBitNonZero (LIR.Physical physReg, bit, nonZeroLabel, zeroLabel))
             | Some (StackSlot offset) ->
-                let loadInstr = LIRSymbolic.Mov (LIR.Physical LIR.X11, LIRSymbolic.StackSlot offset)
-                ([loadInstr], LIRSymbolic.BranchBitNonZero (LIR.Physical LIR.X11, bit, nonZeroLabel, zeroLabel))
+                let loadInstr = LIR.Mov (LIR.Physical LIR.X11, LIR.StackSlot offset)
+                ([loadInstr], LIR.BranchBitNonZero (LIR.Physical LIR.X11, bit, nonZeroLabel, zeroLabel))
             | None ->
-                ([], LIRSymbolic.BranchBitNonZero (LIR.Physical LIR.X11, bit, nonZeroLabel, zeroLabel))
+                ([], LIR.BranchBitNonZero (LIR.Physical LIR.X11, bit, nonZeroLabel, zeroLabel))
         | LIR.Physical p ->
-            ([], LIRSymbolic.BranchBitNonZero (LIR.Physical p, bit, nonZeroLabel, zeroLabel))
-    | LIRSymbolic.Jump label -> ([], LIRSymbolic.Jump label)
-    | LIRSymbolic.CondBranch (cond, trueLabel, falseLabel) ->
+            ([], LIR.BranchBitNonZero (LIR.Physical p, bit, nonZeroLabel, zeroLabel))
+    | LIR.Jump label -> ([], LIR.Jump label)
+    | LIR.CondBranch (cond, trueLabel, falseLabel) ->
         // CondBranch uses condition flags, not a register - pass through unchanged
-        ([], LIRSymbolic.CondBranch (cond, trueLabel, falseLabel))
+        ([], LIR.CondBranch (cond, trueLabel, falseLabel))
 
 /// Apply allocation to a basic block with liveness-aware SaveRegs/RestoreRegs population
 let applyToBlockWithLiveness
@@ -2393,8 +2393,8 @@ let applyToBlockWithLiveness
     (floatAllocation: FAllocationResult)
     (liveOut: Set<int>)
     (floatLiveOut: Set<int>)
-    (block: LIRSymbolic.BasicBlock)
-    : LIRSymbolic.BasicBlock =
+    (block: LIR.BasicBlock)
+    : LIR.BasicBlock =
 
     // Compute liveness at each instruction point
     let instrLiveness = computeInstructionLiveness block liveOut
@@ -2419,7 +2419,7 @@ let applyToBlockWithLiveness
         List.zip3 block.Instrs instrLiveness floatInstrLiveness
         |> List.collect (fun (instr, liveAfter, floatLiveAfter) ->
             match instr with
-            | LIRSymbolic.SaveRegs ([], []) ->
+            | LIR.SaveRegs ([], []) ->
                 // At SaveRegs, we need to save registers that are:
                 // 1. Currently live (have values that might be clobbered by the call)
                 // 2. Needed after the call
@@ -2428,8 +2428,8 @@ let applyToBlockWithLiveness
                 let liveCallerSavedFloat = getLiveCallerSavedFloatRegs floatLiveAfter floatAllocation
                 // Push onto stack for matching RestoreRegs
                 savedRegsStack <- (liveCallerSaved, liveCallerSavedFloat) :: savedRegsStack
-                applyToInstr mapping (LIRSymbolic.SaveRegs (liveCallerSaved, liveCallerSavedFloat))
-            | LIRSymbolic.RestoreRegs ([], []) ->
+                applyToInstr mapping (LIR.SaveRegs (liveCallerSaved, liveCallerSavedFloat))
+            | LIR.RestoreRegs ([], []) ->
                 // Pop the matching SaveRegs registers
                 let (liveCallerSaved, liveCallerSavedFloat) =
                     match savedRegsStack with
@@ -2438,7 +2438,7 @@ let applyToBlockWithLiveness
                         (intRegs, floatRegs)
                     | [] ->
                         Crash.crash "Unmatched RestoreRegs: SaveRegs stack is empty"
-                applyToInstr mapping (LIRSymbolic.RestoreRegs (liveCallerSaved, liveCallerSavedFloat))
+                applyToInstr mapping (LIR.RestoreRegs (liveCallerSaved, liveCallerSavedFloat))
             | _ ->
                 applyToInstr mapping instr)
 
@@ -2451,10 +2451,10 @@ let applyToBlockWithLiveness
 let applyToCFGWithLiveness
     (mapping: Map<int, Allocation>)
     (floatAllocation: FAllocationResult)
-    (cfg: LIRSymbolic.CFG)
+    (cfg: LIR.CFG)
     (liveness: Map<LIR.Label, BlockLiveness>)
     (floatLiveness: Map<LIR.Label, BlockLiveness>)
-    : LIRSymbolic.CFG =
+    : LIR.CFG =
     { Entry = cfg.Entry
       Blocks =
         cfg.Blocks
@@ -2474,7 +2474,7 @@ let applyToCFGWithLiveness
 /// Uses the float allocation result instead of modulo-based mapping.
 let generateFloatMoveInstrsWithAllocation
     (moves: (LIR.FReg * LIR.FReg) list)
-    (floatAllocation: FAllocationResult) : LIRSymbolic.Instr list =
+    (floatAllocation: FAllocationResult) : LIR.Instr list =
 
     if List.isEmpty moves then []
     else
@@ -2518,15 +2518,15 @@ let generateFloatMoveInstrsWithAllocation
             match action with
             | ParallelMoves.SaveToTemp physId ->
                 match Map.tryFind physId srcMap with
-                | Some srcFreg -> [LIRSymbolic.FMov (LIR.FVirtual 2000, srcFreg)]
+                | Some srcFreg -> [LIR.FMov (LIR.FVirtual 2000, srcFreg)]
                 | None -> []
             | ParallelMoves.Move (destPhysId, srcPhysId) ->
                 match Map.tryFind destPhysId destMap, Map.tryFind srcPhysId srcMap with
-                | Some destFreg, Some srcFreg -> [LIRSymbolic.FMov (destFreg, srcFreg)]
+                | Some destFreg, Some srcFreg -> [LIR.FMov (destFreg, srcFreg)]
                 | _ -> []
             | ParallelMoves.MoveFromTemp destPhysId ->
                 match Map.tryFind destPhysId destMap with
-                | Some destFreg -> [LIRSymbolic.FMov (destFreg, LIR.FVirtual 2000)]
+                | Some destFreg -> [LIR.FMov (destFreg, LIR.FVirtual 2000)]
                 | None -> [])
 
 // ============================================================================
@@ -2542,25 +2542,25 @@ let generateFloatMoveInstrsWithAllocation
 /// 5. Inserts the moves at the end of each predecessor (before terminator)
 /// 6. Removes phi nodes from blocks
 let resolvePhiNodes
-    (cfg: LIRSymbolic.CFG)
+    (cfg: LIR.CFG)
     (allocation: Map<int, Allocation>)
     (floatAllocation: FAllocationResult)
-    : LIRSymbolic.CFG =
-    let collectNonPhiUses (cfg: LIRSymbolic.CFG) : Set<int> =
+    : LIR.CFG =
+    let collectNonPhiUses (cfg: LIR.CFG) : Set<int> =
         cfg.Blocks
         |> Map.fold (fun acc _ block ->
             let instrUses =
                 block.Instrs
                 |> List.fold (fun acc instr ->
                     match instr with
-                    | LIRSymbolic.Phi _ -> acc
-                    | LIRSymbolic.FPhi _ -> acc
+                    | LIR.Phi _ -> acc
+                    | LIR.FPhi _ -> acc
                     | _ -> Set.union acc (getUsedVRegs instr)) Set.empty
             let termUses = getTerminatorUsedVRegs block.Terminator
             Set.union acc (Set.union instrUses termUses)
         ) Set.empty
 
-    let collectPhiSources (cfg: LIRSymbolic.CFG) : Map<int, Set<int>> =
+    let collectPhiSources (cfg: LIR.CFG) : Map<int, Set<int>> =
         let addSource (dest: int) (src: int) (acc: Map<int, Set<int>>) =
             let existing = Map.tryFind dest acc |> Option.defaultValue Set.empty
             Map.add dest (Set.add src existing) acc
@@ -2570,31 +2570,31 @@ let resolvePhiNodes
             block.Instrs
             |> List.fold (fun acc instr ->
                 match instr with
-                | LIRSymbolic.Phi (LIR.Virtual destId, sources, _) ->
+                | LIR.Phi (LIR.Virtual destId, sources, _) ->
                     sources
                     |> List.fold (fun acc (src, _) ->
                         match src with
-                        | LIRSymbolic.Reg (LIR.Virtual srcId) -> addSource destId srcId acc
+                        | LIR.Reg (LIR.Virtual srcId) -> addSource destId srcId acc
                         | _ -> acc) acc
                 | _ -> acc) acc
         ) Map.empty
 
-    let collectPhysicalPhiSources (cfg: LIRSymbolic.CFG) : Set<int> =
+    let collectPhysicalPhiSources (cfg: LIR.CFG) : Set<int> =
         cfg.Blocks
         |> Map.fold (fun acc _ block ->
             block.Instrs
             |> List.fold (fun acc instr ->
                 match instr with
-                | LIRSymbolic.Phi (LIR.Physical _, sources, _) ->
+                | LIR.Phi (LIR.Physical _, sources, _) ->
                     sources
                     |> List.fold (fun acc (src, _) ->
                         match src with
-                        | LIRSymbolic.Reg (LIR.Virtual srcId) -> Set.add srcId acc
+                        | LIR.Reg (LIR.Virtual srcId) -> Set.add srcId acc
                         | _ -> acc) acc
                 | _ -> acc) acc
         ) Set.empty
 
-    let computeNeededVRegs (cfg: LIRSymbolic.CFG) : Set<int> =
+    let computeNeededVRegs (cfg: LIR.CFG) : Set<int> =
         let phiSources = collectPhiSources cfg
         let rootUses = Set.union (collectNonPhiUses cfg) (collectPhysicalPhiSources cfg)
         let rec expand (needed: Set<int>) (worklist: int list) : Set<int> =
@@ -2613,13 +2613,13 @@ let resolvePhiNodes
 
     let neededVRegs = computeNeededVRegs cfg
 
-    let phiDestNeeded (dest: LIRSymbolic.Reg) : bool =
+    let phiDestNeeded (dest: LIR.Reg) : bool =
         match dest with
         | LIR.Virtual id -> Set.contains id neededVRegs
         | LIR.Physical _ -> true
 
     // Get the allocation for a virtual register (register or stack slot)
-    let getDestAllocation (reg: LIRSymbolic.Reg) : Allocation =
+    let getDestAllocation (reg: LIR.Reg) : Allocation =
         match reg with
         | LIR.Virtual id ->
             match Map.tryFind id allocation with
@@ -2627,15 +2627,15 @@ let resolvePhiNodes
             | None -> Crash.crash $"RegisterAllocation: Virtual register {id} not found in allocation"
         | LIR.Physical p -> PhysReg p
 
-    // Helper to convert a LIRSymbolic.Operand to allocated version
-    let operandToAllocated (op: LIRSymbolic.Operand) : LIRSymbolic.Operand =
+    // Helper to convert a LIR.Operand to allocated version
+    let operandToAllocated (op: LIR.Operand) : LIR.Operand =
         match op with
-        | LIRSymbolic.Reg (LIR.Virtual id) ->
+        | LIR.Reg (LIR.Virtual id) ->
             match Map.tryFind id allocation with
-            | Some (PhysReg r) -> LIRSymbolic.Reg (LIR.Physical r)
-            | Some (StackSlot offset) -> LIRSymbolic.StackSlot offset
+            | Some (PhysReg r) -> LIR.Reg (LIR.Physical r)
+            | Some (StackSlot offset) -> LIR.StackSlot offset
             | None -> op
-        | LIRSymbolic.Reg (LIR.Physical p) -> LIRSymbolic.Reg (LIR.Physical p)
+        | LIR.Reg (LIR.Physical p) -> LIR.Reg (LIR.Physical p)
         | _ -> op
 
     // Collect all int phi info: for each phi, get (dest_reg, src_operand, pred_label)
@@ -2647,7 +2647,7 @@ let resolvePhiNodes
             block.Instrs
             |> List.choose (fun instr ->
                 match instr with
-                | LIRSymbolic.Phi (dest, sources, valueType) ->
+                | LIR.Phi (dest, sources, valueType) ->
                     if phiDestNeeded dest then
                         Some (dest, sources, valueType)
                     else
@@ -2662,12 +2662,12 @@ let resolvePhiNodes
             block.Instrs
             |> List.choose (fun instr ->
                 match instr with
-                | LIRSymbolic.FPhi (dest, sources) -> Some (dest, sources)
+                | LIR.FPhi (dest, sources) -> Some (dest, sources)
                 | _ -> None))
 
     // Group int phis by predecessor: Map<pred_label, List<(dest_allocation, src_operand)>>
     // Keep the full Allocation type to handle both register and stack destinations
-    let predecessorIntMoves : Map<LIR.Label, (Allocation * LIRSymbolic.Operand) list> =
+    let predecessorIntMoves : Map<LIR.Label, (Allocation * LIR.Operand) list> =
         intPhiInfo
         |> List.collect (fun (dest, sources, _valueType) ->
             let destAlloc = getDestAllocation dest
@@ -2693,35 +2693,35 @@ let resolvePhiNodes
 
     // Generate move instructions for phi resolution using parallel move resolution
     // across both register and stack destinations (handles reg<->stack cycles).
-    let generateIntMoveInstrs (moves: (Allocation * LIRSymbolic.Operand) list) : LIRSymbolic.Instr list =
-        let getSrcAllocation (op: LIRSymbolic.Operand) : Allocation option =
+    let generateIntMoveInstrs (moves: (Allocation * LIR.Operand) list) : LIR.Instr list =
+        let getSrcAllocation (op: LIR.Operand) : Allocation option =
             match op with
-            | LIRSymbolic.Reg (LIR.Physical p) -> Some (PhysReg p)
-            | LIRSymbolic.StackSlot offset -> Some (StackSlot offset)
+            | LIR.Reg (LIR.Physical p) -> Some (PhysReg p)
+            | LIR.StackSlot offset -> Some (StackSlot offset)
             | _ -> None
 
         let actions = ParallelMoves.resolve moves getSrcAllocation
 
-        let saveToTemp (loc: Allocation) : LIRSymbolic.Instr list =
+        let saveToTemp (loc: Allocation) : LIR.Instr list =
             match loc with
-            | PhysReg r -> [LIRSymbolic.Mov (LIR.Physical LIR.X16, LIRSymbolic.Reg (LIR.Physical r))]
-            | StackSlot offset -> [LIRSymbolic.Mov (LIR.Physical LIR.X16, LIRSymbolic.StackSlot offset)]
+            | PhysReg r -> [LIR.Mov (LIR.Physical LIR.X16, LIR.Reg (LIR.Physical r))]
+            | StackSlot offset -> [LIR.Mov (LIR.Physical LIR.X16, LIR.StackSlot offset)]
 
-        let moveFromTemp (loc: Allocation) : LIRSymbolic.Instr list =
+        let moveFromTemp (loc: Allocation) : LIR.Instr list =
             match loc with
-            | PhysReg r -> [LIRSymbolic.Mov (LIR.Physical r, LIRSymbolic.Reg (LIR.Physical LIR.X16))]
-            | StackSlot offset -> [LIRSymbolic.Store (offset, LIR.Physical LIR.X16)]
+            | PhysReg r -> [LIR.Mov (LIR.Physical r, LIR.Reg (LIR.Physical LIR.X16))]
+            | StackSlot offset -> [LIR.Store (offset, LIR.Physical LIR.X16)]
 
-        let moveToDest (dest: Allocation) (src: LIRSymbolic.Operand) : LIRSymbolic.Instr list =
+        let moveToDest (dest: Allocation) (src: LIR.Operand) : LIR.Instr list =
             match dest with
-            | PhysReg r -> [LIRSymbolic.Mov (LIR.Physical r, src)]
+            | PhysReg r -> [LIR.Mov (LIR.Physical r, src)]
             | StackSlot offset ->
                 match src with
-                | LIRSymbolic.Reg (LIR.Physical r) ->
-                    [LIRSymbolic.Store (offset, LIR.Physical r)]
+                | LIR.Reg (LIR.Physical r) ->
+                    [LIR.Store (offset, LIR.Physical r)]
                 | _ ->
-                    [LIRSymbolic.Mov (LIR.Physical LIR.X16, src)
-                     LIRSymbolic.Store (offset, LIR.Physical LIR.X16)]
+                    [LIR.Mov (LIR.Physical LIR.X16, src)
+                     LIR.Store (offset, LIR.Physical LIR.X16)]
 
         actions
         |> List.collect (fun action ->
@@ -2772,8 +2772,8 @@ let resolvePhiNodes
                 block.Instrs
                 |> List.filter (fun instr ->
                     match instr with
-                    | LIRSymbolic.Phi _ -> false
-                    | LIRSymbolic.FPhi _ -> false
+                    | LIR.Phi _ -> false
+                    | LIR.FPhi _ -> false
                     | _ -> true)
             { block with Instrs = filteredInstrs })
 
@@ -2788,7 +2788,7 @@ let parameterRegs = [LIR.X0; LIR.X1; LIR.X2; LIR.X3; LIR.X4; LIR.X5; LIR.X6; LIR
 let floatParamRegs = [LIR.D0; LIR.D1; LIR.D2; LIR.D3; LIR.D4; LIR.D5; LIR.D6; LIR.D7]
 
 /// Allocate registers for a function
-let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
+let allocateRegisters (func: LIR.Function) : LIR.Function =
     // Step 1: Compute liveness
     let liveness = computeLiveness func.CFG
 
@@ -2863,7 +2863,7 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
                 match Map.tryFind id result.Mapping with
                 | Some (PhysReg allocatedReg) when allocatedReg <> paramReg ->
                     // Need to copy from paramReg to allocatedReg
-                    Some (allocatedReg, LIRSymbolic.Reg (LIR.Physical paramReg))
+                    Some (allocatedReg, LIR.Reg (LIR.Physical paramReg))
                 | Some (StackSlot _offset) ->
                     // Store to stack - not a register move, handle separately
                     None // We'll handle stack stores separately
@@ -2879,14 +2879,14 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
                 let paramReg = List.item paramIdx parameterRegs
                 match Map.tryFind id result.Mapping with
                 | Some (StackSlot offset) ->
-                    Some (LIRSymbolic.Store (offset, LIR.Physical paramReg))
+                    Some (LIR.Store (offset, LIR.Physical paramReg))
                 | _ -> None
             | LIR.Physical _ -> None)
 
     // Use parallel move resolution for register-to-register moves
-    let getSrcReg (op: LIRSymbolic.Operand) : LIR.PhysReg option =
+    let getSrcReg (op: LIR.Operand) : LIR.PhysReg option =
         match op with
-        | LIRSymbolic.Reg (LIR.Physical r) -> Some r
+        | LIR.Reg (LIR.Physical r) -> Some r
         | _ -> None
 
     let moveActions = ParallelMoves.resolve intParamMoves getSrcReg
@@ -2897,11 +2897,11 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
         |> List.collect (fun action ->
             match action with
             | ParallelMoves.SaveToTemp reg ->
-                [LIRSymbolic.Mov (LIR.Physical LIR.X16, LIRSymbolic.Reg (LIR.Physical reg))]
+                [LIR.Mov (LIR.Physical LIR.X16, LIR.Reg (LIR.Physical reg))]
             | ParallelMoves.Move (dest, src) ->
-                [LIRSymbolic.Mov (LIR.Physical dest, src)]
+                [LIR.Mov (LIR.Physical dest, src)]
             | ParallelMoves.MoveFromTemp dest ->
-                [LIRSymbolic.Mov (LIR.Physical dest, LIRSymbolic.Reg (LIR.Physical LIR.X16))])
+                [LIR.Mov (LIR.Physical dest, LIR.Reg (LIR.Physical LIR.X16))])
 
     // Combine register moves and stack stores
     let intParamCopyInstrs = regMoveInstrs @ intParamStackStores
@@ -2935,7 +2935,7 @@ let allocateRegisters (func: LIRSymbolic.Function) : LIRSymbolic.Function =
         entryBlockBeforeResolution.Instrs
         |> List.choose (fun instr ->
             match instr with
-            | LIRSymbolic.FPhi (dest, sources) ->
+            | LIR.FPhi (dest, sources) ->
                 // Find sources where the predecessor label doesn't exist in the CFG
                 // (these are entry-edge sources)
                 let entryEdgeSources =

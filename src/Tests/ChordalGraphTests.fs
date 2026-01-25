@@ -13,7 +13,6 @@ module ChordalGraphTests
 
 open RegisterAllocation
 open LIR
-open LIRSymbolic
 open Crash
 
 /// Test result type

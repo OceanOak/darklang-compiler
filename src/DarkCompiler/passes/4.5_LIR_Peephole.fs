@@ -10,7 +10,7 @@
 
 module LIR_Peephole
 
-open LIRSymbolic
+open LIR
 
 (* Plan:
    1) Mirror MIR's loop discovery in LIR: build predecessor/successor maps and dominators.

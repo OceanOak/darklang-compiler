@@ -230,16 +230,16 @@ let lirFRegToARM64FReg (freg: LIR.FReg) : Result<ARM64Symbolic.FReg, string> =
         let regIdx = ((n - 10000) + 7) % tempRegs.Length
         Ok tempRegs.[regIdx]
 
-/// Convert LIRSymbolic.Reg to ARM64Symbolic.Reg (assumes physical registers only)
-let lirRegToARM64Reg (reg: LIRSymbolic.Reg) : Result<ARM64Symbolic.Reg, string> =
+/// Convert LIR.Reg to ARM64Symbolic.Reg (assumes physical registers only)
+let lirRegToARM64Reg (reg: LIR.Reg) : Result<ARM64Symbolic.Reg, string> =
     match reg with
     | LIR.Physical physReg -> Ok (lirPhysRegToARM64Reg physReg)
     | LIR.Virtual vreg -> Error $"Virtual register {vreg} should have been allocated"
 
-/// Convert LIRSymbolic.Reg (Virtual) to LIR.FReg (FVirtual) for float HeapStore
+/// Convert LIR.Reg (Virtual) to LIR.FReg (FVirtual) for float HeapStore
 /// This is used when a float value is stored via HeapStore - the register
 /// ID is shared between Virtual and FVirtual address spaces
-let virtualToFVirtual (reg: LIRSymbolic.Reg) : LIR.FReg =
+let virtualToFVirtual (reg: LIR.Reg) : LIR.FReg =
     match reg with
     | LIR.Virtual n -> LIR.FVirtual n
     | LIR.Physical p -> LIR.FPhysical (
@@ -467,7 +467,7 @@ let generateEpilogue (usedCalleeSaved: LIR.PhysReg list) (stackSize: int) : ARM6
     restoreCalleeSavedInstrs @ deallocStack @ restoreFpLr @ ret
 
 /// Convert LIR instruction to ARM64 instructions
-let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64Symbolic.Instr list, string> =
+let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic.Instr list, string> =
     let getListDisplayStringFunc (elemType: AST.Type) : string option =
         match elemType with
         | AST.TInt64 -> Some "Stdlib.List.toDisplayString_i64"
@@ -659,32 +659,32 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         printOpenBracket @ setup @ loopCode @ printCloseBracket
 
     match instr with
-    | LIRSymbolic.Phi _ ->
+    | LIR.Phi _ ->
         // Phi nodes should be eliminated before code generation (by register allocation)
         Error "Phi nodes should be eliminated before code generation"
 
-    | LIRSymbolic.FPhi _ ->
+    | LIR.FPhi _ ->
         // Float phi nodes should be eliminated before code generation (by register allocation)
         Error "Float phi nodes should be eliminated before code generation"
 
-    | LIRSymbolic.Mov (dest, src) ->
+    | LIR.Mov (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             match src with
-            | LIRSymbolic.Imm value ->
+            | LIR.Imm value ->
                 Ok (loadImmediate destReg value)
-            | LIRSymbolic.FloatImm _ ->
+            | LIR.FloatImm _ ->
                 Error "Float code generation not yet implemented"
-            | LIRSymbolic.Reg srcReg ->
+            | LIR.Reg srcReg ->
                 lirRegToARM64Reg srcReg
                 |> Result.map (fun srcARM64 ->
                     // Skip self-moves (can happen after register allocation coalesces VRegs)
                     if destReg = srcARM64 then []
                     else [ARM64Symbolic.MOV_reg (destReg, srcARM64)])
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 // Load from stack slot into destination register
                 loadStackSlot destReg offset
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Convert literal string to heap string format when storing in variable
                 // This ensures all string variables have consistent heap layout:
                 // [length:8][data:N][refcount:8]
@@ -737,77 +737,77 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)
                         ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X12, 0s)  // [X12] = 1
                     ] @ generateLeakCounterInc ctx)
-            | LIRSymbolic.FloatSymbol _ ->
+            | LIR.FloatSymbol _ ->
                 Error "Cannot MOV float reference - use FLoad instruction"
-            | LIRSymbolic.FuncAddr funcName ->
+            | LIR.FuncAddr funcName ->
                 // Load function address using ADR instruction
                 Ok [ARM64Symbolic.ADR (destReg, codeLabel funcName)])
 
-    | LIRSymbolic.Store (offset, src) ->
+    | LIR.Store (offset, src) ->
         // Store register to stack slot
         lirRegToARM64Reg src
         |> Result.bind (fun srcReg -> storeStackSlot srcReg offset)
 
-    | LIRSymbolic.Add (dest, left, right) ->
+    | LIR.Add (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
             |> Result.bind (fun leftReg ->
                 match right with
-                | LIRSymbolic.Imm value when value >= 0L && value < 4096L ->
+                | LIR.Imm value when value >= 0L && value < 4096L ->
                     // Can use immediate ADD
                     Ok [ARM64Symbolic.ADD_imm (destReg, leftReg, uint16 value)]
-                | LIRSymbolic.Imm value ->
+                | LIR.Imm value ->
                     // Need to load immediate into register first
                     let tempReg = ARM64Symbolic.X9  // Use X9 as temp
                     Ok (loadImmediate tempReg value @ [ARM64Symbolic.ADD_reg (destReg, leftReg, tempReg)])
-                | LIRSymbolic.FloatImm _ ->
+                | LIR.FloatImm _ ->
                     Error "Float code generation not yet implemented"
-                | LIRSymbolic.Reg rightReg ->
+                | LIR.Reg rightReg ->
                     lirRegToARM64Reg rightReg
                     |> Result.map (fun rightARM64 -> [ARM64Symbolic.ADD_reg (destReg, leftReg, rightARM64)])
-                | LIRSymbolic.StackSlot offset ->
+                | LIR.StackSlot offset ->
                     // Load stack slot into temp register, then add
                     let tempReg = ARM64Symbolic.X9
                     loadStackSlot tempReg offset
                     |> Result.map (fun loadInstrs -> loadInstrs @ [ARM64Symbolic.ADD_reg (destReg, leftReg, tempReg)])
-                | LIRSymbolic.StringSymbol _ ->
+                | LIR.StringSymbol _ ->
                     Error "Cannot use string reference in arithmetic operation"
-                | LIRSymbolic.FloatSymbol _ ->
+                | LIR.FloatSymbol _ ->
                     Error "Cannot use float reference in integer arithmetic"
-                | LIRSymbolic.FuncAddr _ ->
+                | LIR.FuncAddr _ ->
                     Error "Cannot use function address in arithmetic operation"))
 
-    | LIRSymbolic.Sub (dest, left, right) ->
+    | LIR.Sub (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
             |> Result.bind (fun leftReg ->
                 match right with
-                | LIRSymbolic.Imm value when value >= 0L && value < 4096L ->
+                | LIR.Imm value when value >= 0L && value < 4096L ->
                     Ok [ARM64Symbolic.SUB_imm (destReg, leftReg, uint16 value)]
-                | LIRSymbolic.Imm value ->
+                | LIR.Imm value ->
                     let tempReg = ARM64Symbolic.X9
                     Ok (loadImmediate tempReg value @ [ARM64Symbolic.SUB_reg (destReg, leftReg, tempReg)])
-                | LIRSymbolic.FloatImm _ ->
+                | LIR.FloatImm _ ->
                     Error "Float code generation not yet implemented"
-                | LIRSymbolic.Reg rightReg ->
+                | LIR.Reg rightReg ->
                     lirRegToARM64Reg rightReg
                     |> Result.map (fun rightARM64 -> [ARM64Symbolic.SUB_reg (destReg, leftReg, rightARM64)])
-                | LIRSymbolic.StackSlot offset ->
+                | LIR.StackSlot offset ->
                     // Load stack slot into temp register, then subtract
                     let tempReg = ARM64Symbolic.X9
                     loadStackSlot tempReg offset
                     |> Result.map (fun loadInstrs -> loadInstrs @ [ARM64Symbolic.SUB_reg (destReg, leftReg, tempReg)])
-                | LIRSymbolic.StringSymbol _ ->
+                | LIR.StringSymbol _ ->
                     Error "Cannot use string reference in arithmetic operation"
-                | LIRSymbolic.FloatSymbol _ ->
+                | LIR.FloatSymbol _ ->
                     Error "Cannot use float reference in integer arithmetic"
-                | LIRSymbolic.FuncAddr _ ->
+                | LIR.FuncAddr _ ->
                     Error "Cannot use function address in arithmetic operation"))
 
 
-    | LIRSymbolic.Mul (dest, left, right) ->
+    | LIR.Mul (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
@@ -815,7 +815,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.MUL (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.Sdiv (dest, left, right) ->
+    | LIR.Sdiv (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
@@ -823,7 +823,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.SDIV (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.Msub (dest, mulLeft, mulRight, sub) ->
+    | LIR.Msub (dest, mulLeft, mulRight, sub) ->
         // MSUB: dest = sub - mulLeft * mulRight
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -835,7 +835,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     |> Result.map (fun subReg ->
                         [ARM64Symbolic.MSUB (destReg, mulLeftReg, mulRightReg, subReg)]))))
 
-    | LIRSymbolic.Madd (dest, mulLeft, mulRight, add) ->
+    | LIR.Madd (dest, mulLeft, mulRight, add) ->
         // MADD: dest = add + mulLeft * mulRight
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -847,33 +847,33 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     |> Result.map (fun addReg ->
                         [ARM64Symbolic.MADD (destReg, mulLeftReg, mulRightReg, addReg)]))))
 
-    | LIRSymbolic.Cmp (left, right) ->
+    | LIR.Cmp (left, right) ->
         lirRegToARM64Reg left
         |> Result.bind (fun leftReg ->
             match right with
-            | LIRSymbolic.Imm value when value >= 0L && value < 4096L ->
+            | LIR.Imm value when value >= 0L && value < 4096L ->
                 Ok [ARM64Symbolic.CMP_imm (leftReg, uint16 value)]
-            | LIRSymbolic.Imm value ->
+            | LIR.Imm value ->
                 let tempReg = ARM64Symbolic.X9
                 Ok (loadImmediate tempReg value @ [ARM64Symbolic.CMP_reg (leftReg, tempReg)])
-            | LIRSymbolic.FloatImm _ ->
+            | LIR.FloatImm _ ->
                 Error "Float code generation not yet implemented"
-            | LIRSymbolic.Reg rightReg ->
+            | LIR.Reg rightReg ->
                 lirRegToARM64Reg rightReg
                 |> Result.map (fun rightARM64 -> [ARM64Symbolic.CMP_reg (leftReg, rightARM64)])
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 // Load stack slot into temp register, then compare
                 let tempReg = ARM64Symbolic.X9
                 loadStackSlot tempReg offset
                 |> Result.map (fun loadInstrs -> loadInstrs @ [ARM64Symbolic.CMP_reg (leftReg, tempReg)])
-            | LIRSymbolic.StringSymbol _ ->
+            | LIR.StringSymbol _ ->
                 Error "Cannot compare string references directly"
-            | LIRSymbolic.FloatSymbol _ ->
+            | LIR.FloatSymbol _ ->
                 Error "Cannot compare float references directly - use FCmp"
-            | LIRSymbolic.FuncAddr _ ->
+            | LIR.FuncAddr _ ->
                 Error "Cannot compare function addresses directly")
 
-    | LIRSymbolic.Cset (dest, cond) ->
+    | LIR.Cset (dest, cond) ->
         lirRegToARM64Reg dest
         |> Result.map (fun destReg ->
             let arm64Cond =
@@ -886,7 +886,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 | LIR.GE -> ARM64Symbolic.GE
             [ARM64Symbolic.CSET (destReg, arm64Cond)])
 
-    | LIRSymbolic.And (dest, left, right) ->
+    | LIR.And (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
@@ -894,13 +894,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.AND_reg (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.And_imm (dest, src, imm) ->
+    | LIR.And_imm (dest, src, imm) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.AND_imm (destReg, srcReg, uint64 imm)]))
 
-    | LIRSymbolic.Orr (dest, left, right) ->
+    | LIR.Orr (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
@@ -908,7 +908,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.ORR_reg (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.Eor (dest, left, right) ->
+    | LIR.Eor (dest, left, right) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg left
@@ -916,7 +916,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.EOR_reg (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.Lsl (dest, src, shift) ->
+    | LIR.Lsl (dest, src, shift) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
@@ -924,7 +924,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg shift
                 |> Result.map (fun shiftReg -> [ARM64Symbolic.LSL_reg (destReg, srcReg, shiftReg)])))
 
-    | LIRSymbolic.Lsr (dest, src, shift) ->
+    | LIR.Lsr (dest, src, shift) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
@@ -932,62 +932,62 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg shift
                 |> Result.map (fun shiftReg -> [ARM64Symbolic.LSR_reg (destReg, srcReg, shiftReg)])))
 
-    | LIRSymbolic.Lsl_imm (dest, src, shift) ->
+    | LIR.Lsl_imm (dest, src, shift) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.LSL_imm (destReg, srcReg, shift)]))
 
-    | LIRSymbolic.Lsr_imm (dest, src, shift) ->
+    | LIR.Lsr_imm (dest, src, shift) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.LSR_imm (destReg, srcReg, shift)]))
 
-    | LIRSymbolic.Mvn (dest, src) ->
+    | LIR.Mvn (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.MVN (destReg, srcReg)]))
 
     // Sign/zero extension for integer overflow truncation
-    | LIRSymbolic.Sxtb (dest, src) ->
+    | LIR.Sxtb (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.SXTB (destReg, srcReg)]))
 
-    | LIRSymbolic.Sxth (dest, src) ->
+    | LIR.Sxth (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.SXTH (destReg, srcReg)]))
 
-    | LIRSymbolic.Sxtw (dest, src) ->
+    | LIR.Sxtw (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.SXTW (destReg, srcReg)]))
 
-    | LIRSymbolic.Uxtb (dest, src) ->
+    | LIR.Uxtb (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.UXTB (destReg, srcReg)]))
 
-    | LIRSymbolic.Uxth (dest, src) ->
+    | LIR.Uxth (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.UXTH (destReg, srcReg)]))
 
-    | LIRSymbolic.Uxtw (dest, src) ->
+    | LIR.Uxtw (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.UXTW (destReg, srcReg)]))
 
-    | LIRSymbolic.PrintBool reg ->
+    | LIR.PrintBool reg ->
         // Print booleans as "true" or "false" (no exit)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -996,11 +996,11 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintBoolNoExit ()))
 
-    | LIRSymbolic.PrintChars chars ->
+    | LIR.PrintChars chars ->
         // Print literal characters (for tuple/list delimiters like "(", ", ", ")")
         Ok (runtimeInstrs (Runtime.generatePrintChars chars))
 
-    | LIRSymbolic.PrintBytes reg ->
+    | LIR.PrintBytes reg ->
         // Print bytes as "<N bytes>\n"
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -1009,7 +1009,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintBytes ()))
 
-    | LIRSymbolic.PrintInt64NoNewline reg ->
+    | LIR.PrintInt64NoNewline reg ->
         // Print integer without newline (for tuple elements)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -1018,7 +1018,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintInt64NoNewline ()))
 
-    | LIRSymbolic.PrintBoolNoNewline reg ->
+    | LIR.PrintBoolNoNewline reg ->
         // Print boolean without newline (for tuple elements)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -1027,7 +1027,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintBoolNoNewline ()))
 
-    | LIRSymbolic.PrintFloatNoNewline freg ->
+    | LIR.PrintFloatNoNewline freg ->
         // Print float without newline (for tuple/list elements)
         lirFRegToARM64FReg freg
         |> Result.map (fun fregARM64 ->
@@ -1036,7 +1036,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintFloatNoNewline ()))
 
-    | LIRSymbolic.PrintHeapStringNoNewline reg ->
+    | LIR.PrintHeapStringNoNewline reg ->
         // Print heap string without newline (for tuple/list elements)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -1051,14 +1051,14 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 let loadFromSaved = [ARM64Symbolic.LDR (ARM64Symbolic.X10, ARM64Symbolic.X11, 0s); ARM64Symbolic.ADD_imm (ARM64Symbolic.X9, ARM64Symbolic.X11, 8us)]
                 saveReg @ loadFromSaved @ runtimeInstrs (Runtime.generatePrintStringNoNewline ()))
 
-    | LIRSymbolic.PrintList (listPtr, elemType) ->
+    | LIR.PrintList (listPtr, elemType) ->
         // Print list as [elem1, elem2, ...]
         // List layout: Nil = 0, Cons = [tag=1, head, tail]
         // Uses X19 for list pointer (callee-saved), X20 for first flag
         lirRegToARM64Reg listPtr
         |> Result.map (fun listReg -> generatePrintListInstrs listReg elemType true)
 
-    | LIRSymbolic.PrintSum (sumPtr, variants) ->
+    | LIR.PrintSum (sumPtr, variants) ->
         // Print sum type: variant name + optional payload + newline
         // Sum layout depends on whether ANY variant has a payload:
         // - If any payload: [tag, payload] on heap
@@ -1190,7 +1190,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
             setup @ variantCode @ printNewline)
 
-    | LIRSymbolic.PrintRecord (recordPtr, typeName, fields) ->
+    | LIR.PrintRecord (recordPtr, typeName, fields) ->
         // Print record: TypeName { field1 = val1, field2 = val2, ... }\n
         // Record layout: [field0, field1, field2, ...] on heap (each 8 bytes)
         lirRegToARM64Reg recordPtr
@@ -1253,12 +1253,12 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
             setup @ printHeader @ printFields @ printFooter)
 
-    | LIRSymbolic.Call (dest, funcName, args) ->
+    | LIR.Call (dest, funcName, args) ->
         // Function call: arguments already moved to X0-X7 by preceding MOVs
         // Caller-save is handled by SaveRegs/RestoreRegs instructions
         Ok [ARM64Symbolic.BL funcName]
 
-    | LIRSymbolic.TailCall (funcName, args) ->
+    | LIR.TailCall (funcName, args) ->
         // Tail call: restore stack frame, then branch (no link)
         // This is the same as the epilogue but with B instead of RET
         let calleeSavedSpace = calleeSavedStackSpace ctx.UsedCalleeSaved
@@ -1274,13 +1274,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         let branch = [ARM64Symbolic.B_label funcName]
         Ok (restoreCalleeSavedInstrs @ deallocStack @ restoreFpLr @ branch)
 
-    | LIRSymbolic.IndirectCall (dest, func, args) ->
+    | LIR.IndirectCall (dest, func, args) ->
         // Indirect call: call through function pointer in register
         // Use BLR instruction instead of BL
         lirRegToARM64Reg func
         |> Result.map (fun funcReg -> [ARM64Symbolic.BLR funcReg])
 
-    | LIRSymbolic.IndirectTailCall (func, args) ->
+    | LIR.IndirectTailCall (func, args) ->
         // Indirect tail call: restore stack frame, then branch to register
         lirRegToARM64Reg func
         |> Result.map (fun funcReg ->
@@ -1296,7 +1296,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             let branch = [ARM64Symbolic.BR funcReg]
             restoreCalleeSavedInstrs @ deallocStack @ restoreFpLr @ branch)
 
-    | LIRSymbolic.ClosureAlloc (dest, funcName, captures) ->
+    | LIR.ClosureAlloc (dest, funcName, captures) ->
         // Allocate closure on heap: (func_ptr, cap1, cap2, ...)
         // Each slot is 8 bytes
         lirRegToARM64Reg dest
@@ -1327,10 +1327,10 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 |> List.collect (fun (i, cap) ->
                     let offset = (i + 1) * 8
                     match cap with
-                    | LIRSymbolic.Imm value ->
+                    | LIR.Imm value ->
                         loadImmediate ARM64Symbolic.X15 value @
                         [ARM64Symbolic.STR (ARM64Symbolic.X15, destReg, int16 offset)]
-                    | LIRSymbolic.Reg reg ->
+                    | LIR.Reg reg ->
                         match lirRegToARM64Reg reg with
                         | Ok srcReg ->
                             // Avoid storing dest into itself at offset
@@ -1339,13 +1339,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                             else
                                 [ARM64Symbolic.STR (srcReg, destReg, int16 offset)]
                         | Error msg -> Crash.crash $"ClosureAlloc: lirRegToARM64Reg failed: {msg}"
-                    | LIRSymbolic.FuncAddr fname ->
+                    | LIR.FuncAddr fname ->
                         [ARM64Symbolic.ADR (ARM64Symbolic.X15, codeLabel fname); ARM64Symbolic.STR (ARM64Symbolic.X15, destReg, int16 offset)]
                     | other -> Crash.crash $"ClosureAlloc: Unexpected capture operand type: {other}")
 
             Ok (allocInstrs @ generateLeakCounterInc ctx @ storeFuncAddr @ storeCaptures))
 
-    | LIRSymbolic.ClosureCall (dest, funcPtr, args) ->
+    | LIR.ClosureCall (dest, funcPtr, args) ->
         // Call through closure - MIR_to_LIR already set up:
         // - X9: function pointer (loaded from closure[0])
         // - X0: closure
@@ -1355,7 +1355,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         |> Result.map (fun funcPtrReg ->
             [ARM64Symbolic.BLR funcPtrReg])
 
-    | LIRSymbolic.ClosureTailCall (funcPtr, args) ->
+    | LIR.ClosureTailCall (funcPtr, args) ->
         // Closure tail call: restore stack frame, then branch to register
         lirRegToARM64Reg funcPtr
         |> Result.map (fun funcPtrReg ->
@@ -1371,7 +1371,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             let branch = [ARM64Symbolic.BR funcPtrReg]
             restoreCalleeSavedInstrs @ deallocStack @ restoreFpLr @ branch)
 
-    | LIRSymbolic.SaveRegs (intRegs, floatRegs) ->
+    | LIR.SaveRegs (intRegs, floatRegs) ->
         // Save only the caller-saved registers that are live across this call
         // We maintain fixed offsets for ArgMoves compatibility:
         // Layout: X1-X10 at SP+0..SP+72 (fixed), D0-D7 at SP+80..SP+136
@@ -1447,7 +1447,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
             Ok (allocStack @ intSaves @ floatSaves)
 
-    | LIRSymbolic.RestoreRegs (intRegs, floatRegs) ->
+    | LIR.RestoreRegs (intRegs, floatRegs) ->
         // Restore only the caller-saved registers that are live across this call
         // Must match the layout from SaveRegs
         if List.isEmpty intRegs && List.isEmpty floatRegs then
@@ -1519,7 +1519,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
             Ok (intRestores @ floatRestores @ deallocStack)
 
-    | LIRSymbolic.ArgMoves moves ->
+    | LIR.ArgMoves moves ->
         // Parallel move resolution for function arguments
         // After SaveRegs, X1-X10 are saved at [SP+0..SP+72]
         // If source is in X1-X7 and could be clobbered, load from stack instead
@@ -1543,12 +1543,12 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         let destRegs = moves |> List.map fst |> Set.ofList
 
         // For each move, determine how to execute it safely
-        let generateMove (destReg: LIR.PhysReg, srcOp: LIRSymbolic.Operand) : Result<ARM64Symbolic.Instr list, string> =
+        let generateMove (destReg: LIR.PhysReg, srcOp: LIR.Operand) : Result<ARM64Symbolic.Instr list, string> =
             let destARM64 = lirPhysRegToARM64Reg destReg
             match srcOp with
-            | LIRSymbolic.Imm value ->
+            | LIR.Imm value ->
                 Ok (loadImmediate destARM64 value)
-            | LIRSymbolic.Reg (LIR.Physical srcPhysReg) ->
+            | LIR.Reg (LIR.Physical srcPhysReg) ->
                 // If source equals destination, it's a no-op
                 if srcPhysReg = destReg then
                     Ok []
@@ -1571,11 +1571,11 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     else
                         let srcARM64 = lirPhysRegToARM64Reg srcPhysReg
                         Ok [ARM64Symbolic.MOV_reg (destARM64, srcARM64)]
-            | LIRSymbolic.Reg (LIR.Virtual _) ->
+            | LIR.Reg (LIR.Virtual _) ->
                 Error "Virtual register in ArgMoves - should have been allocated"
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 loadStackSlot destARM64 offset
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Convert literal string to heap format for function arguments
                 // Functions expect heap strings: [length:8][data:N][refcount:8]
                 // Literal data uses [length:8][data:N] - skip length to copy data
@@ -1616,9 +1616,9 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X12, 0s)  // [X12] = 1
                 ] @ generateLeakCounterInc ctx)
-            | LIRSymbolic.FuncAddr funcName ->
+            | LIR.FuncAddr funcName ->
                 Ok [ARM64Symbolic.ADR (destARM64, codeLabel funcName)]
-            | LIRSymbolic.FloatImm _ | LIRSymbolic.FloatSymbol _ ->
+            | LIR.FloatImm _ | LIR.FloatSymbol _ ->
                 Error "Float in ArgMoves not yet supported"
 
         // Generate all moves in order (X0, X1, X2, ...)
@@ -1638,33 +1638,33 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
         moveInstrs
 
-    | LIRSymbolic.TailArgMoves moves ->
+    | LIR.TailArgMoves moves ->
         // Parallel move resolution for TAIL CALL arguments
         // Unlike ArgMoves, there is NO SaveRegs, so we can't load from stack.
         // We use the shared ParallelMoves module with X16 as the temp register.
 
         // Helper to get source register if operand is a physical register
-        let getSrcPhysReg (srcOp: LIRSymbolic.Operand) : LIR.PhysReg option =
+        let getSrcPhysReg (srcOp: LIR.Operand) : LIR.PhysReg option =
             match srcOp with
-            | LIRSymbolic.Reg (LIR.Physical srcPhysReg) -> Some srcPhysReg
+            | LIR.Reg (LIR.Physical srcPhysReg) -> Some srcPhysReg
             | _ -> None
 
         // Generate a single move instruction (for non-register sources)
-        let generateMoveInstr (destReg: LIR.PhysReg, srcOp: LIRSymbolic.Operand) : Result<ARM64Symbolic.Instr list, string> =
+        let generateMoveInstr (destReg: LIR.PhysReg, srcOp: LIR.Operand) : Result<ARM64Symbolic.Instr list, string> =
             let destARM64 = lirPhysRegToARM64Reg destReg
             match srcOp with
-            | LIRSymbolic.Imm value ->
+            | LIR.Imm value ->
                 Ok (loadImmediate destARM64 value)
-            | LIRSymbolic.Reg (LIR.Physical srcPhysReg) ->
+            | LIR.Reg (LIR.Physical srcPhysReg) ->
                 let srcARM64 = lirPhysRegToARM64Reg srcPhysReg
                 Ok [ARM64Symbolic.MOV_reg (destARM64, srcARM64)]
-            | LIRSymbolic.Reg (LIR.Virtual _) ->
+            | LIR.Reg (LIR.Virtual _) ->
                 Error "Virtual register in TailArgMoves - should have been allocated"
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 loadStackSlot destARM64 offset
-            | LIRSymbolic.FuncAddr funcName ->
+            | LIR.FuncAddr funcName ->
                 Ok [ARM64Symbolic.ADR (destARM64, codeLabel funcName)]
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Convert literal string to heap format for tail call arguments
                 // Same pattern as ArgMoves - functions expect heap strings
                 // Literal data uses: [length:8][data:N] - skip length to copy data
@@ -1700,7 +1700,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X12, 0s)  // [X12] = 1
                 ] @ generateLeakCounterInc ctx)
-            | LIRSymbolic.FloatImm _ | LIRSymbolic.FloatSymbol _ ->
+            | LIR.FloatImm _ | LIR.FloatSymbol _ ->
                 Error "Float in TailArgMoves not yet supported"
 
         // Use the shared parallel move resolution algorithm
@@ -1728,7 +1728,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         | Some e -> Error e
         | None -> Ok allInstrs
 
-    | LIRSymbolic.FArgMoves moves ->
+    | LIR.FArgMoves moves ->
         // Float argument moves - move float values to D0-D7
         // Uses parallel move resolution to handle register conflicts correctly
 
@@ -1773,7 +1773,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
             Ok allInstrs
 
-    | LIRSymbolic.PrintInt64 reg ->
+    | LIR.PrintInt64 reg ->
         // Value to print should be in X0 (no exit)
         lirRegToARM64Reg reg
         |> Result.map (fun regARM64 ->
@@ -1783,11 +1783,11 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintInt64NoExit ()))
 
-    | LIRSymbolic.Exit ->
+    | LIR.Exit ->
         // Exit program with code 0
         Ok (runtimeInstrs (Runtime.generateExit ()))
 
-    | LIRSymbolic.PrintFloat freg ->
+    | LIR.PrintFloat freg ->
         // Print float value from FP register
         // Value should be in D0 for generatePrintFloat
         lirFRegToARM64FReg freg
@@ -1798,7 +1798,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             else
                 runtimeInstrs (Runtime.generatePrintFloat ()))
 
-    | LIRSymbolic.PrintString value ->
+    | LIR.PrintString value ->
         // To print a string, we need:
         // 1. ADRP + ADD to load string address into X0
         // 2. Call Runtime.generatePrintString which handles write syscall
@@ -1810,13 +1810,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         ] @ runtimeInstrs (Runtime.generatePrintString len))
 
     // Floating-point instructions
-    | LIRSymbolic.FMov (dest, src) ->
+    | LIR.FMov (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FMOV_reg (destReg, srcReg)]))
 
-    | LIRSymbolic.FLoad (dest, value) ->
+    | LIR.FLoad (dest, value) ->
         // Load float from literal pool into FP register
         lirFRegToARM64FReg dest
         |> Result.map (fun destReg ->
@@ -1827,7 +1827,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ARM64Symbolic.LDR_fp (destReg, ARM64Symbolic.X9, 0s)        // Load float from [X9]
             ])
 
-    | LIRSymbolic.FAdd (dest, left, right) ->
+    | LIR.FAdd (dest, left, right) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg left
@@ -1835,7 +1835,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirFRegToARM64FReg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.FADD (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.FSub (dest, left, right) ->
+    | LIR.FSub (dest, left, right) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg left
@@ -1843,7 +1843,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirFRegToARM64FReg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.FSUB (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.FMul (dest, left, right) ->
+    | LIR.FMul (dest, left, right) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg left
@@ -1851,7 +1851,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirFRegToARM64FReg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.FMUL (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.FDiv (dest, left, right) ->
+    | LIR.FDiv (dest, left, right) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg left
@@ -1859,57 +1859,57 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirFRegToARM64FReg right
                 |> Result.map (fun rightReg -> [ARM64Symbolic.FDIV (destReg, leftReg, rightReg)])))
 
-    | LIRSymbolic.FNeg (dest, src) ->
+    | LIR.FNeg (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FNEG (destReg, srcReg)]))
 
-    | LIRSymbolic.FAbs (dest, src) ->
+    | LIR.FAbs (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FABS (destReg, srcReg)]))
 
-    | LIRSymbolic.FSqrt (dest, src) ->
+    | LIR.FSqrt (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FSQRT (destReg, srcReg)]))
 
-    | LIRSymbolic.FCmp (left, right) ->
+    | LIR.FCmp (left, right) ->
         lirFRegToARM64FReg left
         |> Result.bind (fun leftReg ->
             lirFRegToARM64FReg right
             |> Result.map (fun rightReg -> [ARM64Symbolic.FCMP (leftReg, rightReg)]))
 
-    | LIRSymbolic.Int64ToFloat (dest, src) ->
+    | LIR.Int64ToFloat (dest, src) ->
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.SCVTF (destReg, srcReg)]))
 
-    | LIRSymbolic.FloatToInt64 (dest, src) ->
+    | LIR.FloatToInt64 (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FCVTZS (destReg, srcReg)]))
 
-    | LIRSymbolic.GpToFp (dest, src) ->
+    | LIR.GpToFp (dest, src) ->
         // Move bits from GP register to FP register (for floats loaded from heap)
         lirFRegToARM64FReg dest
         |> Result.bind (fun destReg ->
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FMOV_from_gp (destReg, srcReg)]))
 
-    | LIRSymbolic.FpToGp (dest, src) ->
+    | LIR.FpToGp (dest, src) ->
         // Move bits from FP register to GP register (for floats stored to list)
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             lirFRegToARM64FReg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.FMOV_to_gp (destReg, srcReg)]))
 
-    | LIRSymbolic.FloatToBits (dest, src) ->
+    | LIR.FloatToBits (dest, src) ->
         // Copy Float64 bits to UInt64 (uses FMOV to GP register)
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -1917,7 +1917,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             |> Result.map (fun srcReg -> [ARM64Symbolic.FMOV_to_gp (destReg, srcReg)]))
 
     // Heap operations
-    | LIRSymbolic.HeapAlloc (dest, sizeBytes) ->
+    | LIR.HeapAlloc (dest, sizeBytes) ->
         // Heap allocator with free list support
         // X27 = free list heads base, X28 = bump allocator pointer
         //
@@ -1976,23 +1976,23 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.ADD_imm (ARM64Symbolic.X28, ARM64Symbolic.X28, uint16 totalSize) // bump pointer
                 ] @ generateLeakCounterInc ctx)
 
-    | LIRSymbolic.HeapStore (addr, offset, src, valueType) ->
+    | LIR.HeapStore (addr, offset, src, valueType) ->
         // Store value at addr + offset (offset is in bytes)
         lirRegToARM64Reg addr
         |> Result.bind (fun addrReg ->
             match src, valueType with
-            | LIRSymbolic.Imm value, _ ->
+            | LIR.Imm value, _ ->
                 // Load immediate into temp register, then store
                 let tempReg = ARM64Symbolic.X9
                 Ok (loadImmediate tempReg value @
                     [ARM64Symbolic.STR (tempReg, addrReg, int16 offset)])
-            | LIRSymbolic.Reg srcReg, Some AST.TFloat64 ->
+            | LIR.Reg srcReg, Some AST.TFloat64 ->
                 // Float value in register: interpret as FReg and use STR_fp
                 // The srcReg ID is actually an FVirtual, convert to ARM64 FP register
                 lirFRegToARM64FReg (virtualToFVirtual srcReg)
                 |> Result.map (fun srcARM64FP ->
                     [ARM64Symbolic.STR_fp (srcARM64FP, addrReg, int16 offset)])
-            | LIRSymbolic.Reg srcReg, _ ->
+            | LIR.Reg srcReg, _ ->
                 lirRegToARM64Reg srcReg
                 |> Result.map (fun srcARM64 ->
                     // If src and addr are the same register, we have a problem
@@ -2003,17 +2003,17 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         [ARM64Symbolic.MOV_reg (tempReg, srcARM64); ARM64Symbolic.STR (tempReg, addrReg, int16 offset)]
                     else
                         [ARM64Symbolic.STR (srcARM64, addrReg, int16 offset)])
-            | LIRSymbolic.StackSlot slotOffset, _ ->
+            | LIR.StackSlot slotOffset, _ ->
                 // Load from stack slot into temp, then store to heap
                 let tempReg = ARM64Symbolic.X9
                 loadStackSlot tempReg slotOffset
                 |> Result.map (fun loadInstrs ->
                     loadInstrs @ [ARM64Symbolic.STR (tempReg, addrReg, int16 offset)])
-            | LIRSymbolic.FuncAddr funcName, _ ->
+            | LIR.FuncAddr funcName, _ ->
                 // Load function address into temp, then store to heap
                 let tempReg = ARM64Symbolic.X9
                 Ok [ARM64Symbolic.ADR (tempReg, codeLabel funcName); ARM64Symbolic.STR (tempReg, addrReg, int16 offset)]
-            | LIRSymbolic.StringSymbol value, _ ->
+            | LIR.StringSymbol value, _ ->
                 // Convert literal string to heap format when storing in tuples/data structures
                 // Heap strings: [length:8][data:N][refcount:8]
                 // Literal data: [length:8][data:N]
@@ -2057,7 +2057,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     // Store heap string address to tuple slot
                     ARM64Symbolic.STR (ARM64Symbolic.X9, addrReg, int16 offset)
                 ] @ generateLeakCounterInc ctx)
-            | LIRSymbolic.FloatSymbol value, _ ->
+            | LIR.FloatSymbol value, _ ->
                 // Load float literal from pool into temp FP register, then store to heap
                 let labelRef = floatDataLabel value
                 Ok [
@@ -2068,7 +2068,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ]
             | _ -> Error "Unsupported operand type in HeapStore")
 
-    | LIRSymbolic.HeapLoad (dest, addr, offset) ->
+    | LIR.HeapLoad (dest, addr, offset) ->
         // Load value from addr + offset (offset is in bytes)
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -2076,7 +2076,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             |> Result.map (fun addrReg ->
                 [ARM64Symbolic.LDR (destReg, addrReg, int16 offset)]))
 
-    | LIRSymbolic.RefCountInc (addr, payloadSize) ->
+    | LIR.RefCountInc (addr, payloadSize) ->
         // Increment ref count at [addr + payloadSize]
         // Skip if addr is null (e.g., empty list = 0)
         // Use X15 as temp register
@@ -2089,7 +2089,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ARM64Symbolic.STR (ARM64Symbolic.X15, addrReg, int16 payloadSize)   // Store back
             ])
 
-    | LIRSymbolic.RefCountDec (addr, payloadSize) ->
+    | LIR.RefCountDec (addr, payloadSize) ->
         // Decrement ref count at [addr + payloadSize]
         // Skip if addr is null (e.g., empty list = 0)
         // When ref count hits 0, add block to free list for memory reuse
@@ -2126,7 +2126,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ARM64Symbolic.STR (addrReg, ARM64Symbolic.X27, int16 payloadSize)   // Update free list head
             ] @ leakDec)
 
-    | LIRSymbolic.StringConcat (dest, left, right) ->
+    | LIR.StringConcat (dest, left, right) ->
         // String concatenation:
         // Heap string layout: [length:8][data:N][refcount:8]
         // Literal string layout: [length:8][data:N]
@@ -2154,9 +2154,9 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             // Helper: load operand address and length into registers
-            let loadOperandInfo (operand: LIRSymbolic.Operand) (addrReg: ARM64Symbolic.Reg) (lenReg: ARM64Symbolic.Reg) : Result<ARM64Symbolic.Instr list, string> =
+            let loadOperandInfo (operand: LIR.Operand) (addrReg: ARM64Symbolic.Reg) (lenReg: ARM64Symbolic.Reg) : Result<ARM64Symbolic.Instr list, string> =
                 match operand with
-                | LIRSymbolic.StringSymbol value ->
+                | LIR.StringSymbol value ->
                     // Literal string: address via ADRP+ADD, length from UTF-8 bytes
                     // Literal format: [length:8][data:N] - skip length prefix to get data address
                     let len = utf8Len value
@@ -2166,7 +2166,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.ADD_label (addrReg, addrReg, labelRef)
                         ARM64Symbolic.ADD_imm (addrReg, addrReg, 8us)    // Skip 8-byte length prefix
                     ] @ loadImmediate lenReg (int64 len))
-                | LIRSymbolic.Reg reg ->
+                | LIR.Reg reg ->
                     // Heap string: address in reg, length at [reg], data at [reg+8]
                     lirRegToARM64Reg reg
                     |> Result.map (fun srcReg ->
@@ -2270,7 +2270,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     leftInstrs @ rightInstrs @ calcTotal @ allocate @ storeLen @ copyLeft @ copyRight @ recomputeTotal @ storeRefcount @ moveResult @ generateLeakCounterInc ctx
                 )))
 
-    | LIRSymbolic.PrintHeapString reg ->
+    | LIR.PrintHeapString reg ->
         // Print heap string: layout is [len:8][data:N]
         // Note: The syscall clobbers X0, X1, X2, X8. If the input register is one
         // of these, we save it to X9 before and restore after so subsequent code
@@ -2292,24 +2292,24 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ARM64Symbolic.MOVZ (ARM64Symbolic.X0, 1us, 0)                // X0 = stdout fd
             ] @ runtimeInstrs (Runtime.generateWriteSyscall ()) @ restoreInstrs)
 
-    | LIRSymbolic.LoadFuncAddr (dest, funcName) ->
+    | LIR.LoadFuncAddr (dest, funcName) ->
         // Load the address of a function into the destination register using ADR
         lirRegToARM64Reg dest
         |> Result.map (fun destReg ->
             [ARM64Symbolic.ADR (destReg, codeLabel funcName)])
 
-    | LIRSymbolic.FileReadText (dest, path) ->
+    | LIR.FileReadText (dest, path) ->
         // File reading: generates syscall sequence to read file contents
         // Returns Result<String, String>
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             match path with
-            | LIRSymbolic.Reg pathReg ->
+            | LIR.Reg pathReg ->
                 // Already a heap string pointer
                 lirRegToARM64Reg pathReg
                 |> Result.map (fun pathARM64 ->
                     runtimeInstrs (Runtime.generateFileReadText destReg pathARM64))
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Literal string - convert to heap format first (same as FileExists)
                 // Literal format: [length:8][data:N] - skip length to copy data
                 let len = utf8Len value
@@ -2338,25 +2338,25 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)
                 ] @ generateLeakCounterInc ctx @ runtimeInstrs (Runtime.generateFileReadText destReg ARM64Symbolic.X15))
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 loadStackSlot ARM64Symbolic.X15 offset
                 |> Result.map (fun loadInstrs ->
                     loadInstrs @ runtimeInstrs (Runtime.generateFileReadText destReg ARM64Symbolic.X15))
             | _ -> Error "FileReadText requires string operand")
 
-    | LIRSymbolic.FileExists (dest, path) ->
+    | LIR.FileExists (dest, path) ->
         // File exists check: generates syscall sequence to check file accessibility
         // Uses access/faccessat syscall to check if path exists
         // Path can be either a Reg (heap string pointer) or StringSymbol (literal string)
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             match path with
-            | LIRSymbolic.Reg pathReg ->
+            | LIR.Reg pathReg ->
                 // Already a heap string pointer
                 lirRegToARM64Reg pathReg
                 |> Result.map (fun pathARM64 ->
                     runtimeInstrs (Runtime.generateFileExists destReg pathARM64))
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Literal string - convert to heap format first, then call FileExists
                 // Literal format: [length:8][data:N] - skip length to copy data
                 // Heap format: [length:8][data:N][refcount:8]
@@ -2398,14 +2398,14 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)  // [X13] = 1
                 ] @ generateLeakCounterInc ctx @ runtimeInstrs (Runtime.generateFileExists destReg ARM64Symbolic.X15))
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 // Load heap string from stack slot
                 loadStackSlot ARM64Symbolic.X15 offset
                 |> Result.map (fun loadInstrs ->
                     loadInstrs @ runtimeInstrs (Runtime.generateFileExists destReg ARM64Symbolic.X15))
             | _ -> Error "FileExists requires string operand")
 
-    | LIRSymbolic.FileWriteText (dest, path, content) ->
+    | LIR.FileWriteText (dest, path, content) ->
         // File write: writes content string to file at path
         // Returns Result<Unit, String>
         lirRegToARM64Reg dest
@@ -2413,9 +2413,9 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             // Helper to get operand into a register
             let getOperandReg operand tempReg =
                 match operand with
-                | LIRSymbolic.Reg reg ->
+                | LIR.Reg reg ->
                     lirRegToARM64Reg reg |> Result.map (fun r -> ([], r))
-                | LIRSymbolic.StringSymbol value ->
+                | LIR.StringSymbol value ->
                     // Literal string - convert to heap format
                     // Literal format: [length:8][data:N] - skip length to copy data
                     let len = utf8Len value
@@ -2450,7 +2450,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                         ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)
                     ] @ generateLeakCounterInc ctx, tempReg)
-                | LIRSymbolic.StackSlot offset ->
+                | LIR.StackSlot offset ->
                     loadStackSlot tempReg offset |> Result.map (fun instrs -> (instrs, tempReg))
                 | _ -> Error "FileWriteText requires string operands"
 
@@ -2460,7 +2460,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 |> Result.map (fun (contentInstrs, contentReg) ->
                     pathInstrs @ contentInstrs @ runtimeInstrs (Runtime.generateFileWriteText destReg pathReg contentReg false))))
 
-    | LIRSymbolic.FileAppendText (dest, path, content) ->
+    | LIR.FileAppendText (dest, path, content) ->
         // File append: appends content string to file at path
         // Returns Result<Unit, String>
         lirRegToARM64Reg dest
@@ -2469,9 +2469,9 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             // Pool format: [length:8][data:N] - skip length to copy data
             let getOperandReg operand tempReg =
                 match operand with
-                | LIRSymbolic.Reg reg ->
+                | LIR.Reg reg ->
                     lirRegToARM64Reg reg |> Result.map (fun r -> ([], r))
-                | LIRSymbolic.StringSymbol value ->
+                | LIR.StringSymbol value ->
                     let len = utf8Len value
                     let labelRef = stringDataLabel value
                     let totalSize = ((len + 16) + 7) &&& (~~~7)
@@ -2504,7 +2504,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                         ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)
                     ] @ generateLeakCounterInc ctx, tempReg)
-                | LIRSymbolic.StackSlot offset ->
+                | LIR.StackSlot offset ->
                     loadStackSlot tempReg offset |> Result.map (fun instrs -> (instrs, tempReg))
                 | _ -> Error "FileAppendText requires string operands"
 
@@ -2514,19 +2514,19 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 |> Result.map (fun (contentInstrs, contentReg) ->
                     pathInstrs @ contentInstrs @ runtimeInstrs (Runtime.generateFileWriteText destReg pathReg contentReg true))))
 
-    | LIRSymbolic.FileDelete (dest, path) ->
+    | LIR.FileDelete (dest, path) ->
         // File delete: deletes file at path
         // Uses unlink syscall to remove file
         // Returns Result<Unit, String>
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             match path with
-            | LIRSymbolic.Reg pathReg ->
+            | LIR.Reg pathReg ->
                 // Already a heap string pointer
                 lirRegToARM64Reg pathReg
                 |> Result.map (fun pathARM64 ->
                     runtimeInstrs (Runtime.generateFileDelete destReg pathARM64))
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Literal string - convert to heap format first, then call FileDelete
                 // Literal format: [length:8][data:N] - skip length to copy data
                 // Heap format: [length:8][data:N][refcount:8]
@@ -2568,26 +2568,26 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)  // [X13] = 1
                 ] @ generateLeakCounterInc ctx @ runtimeInstrs (Runtime.generateFileDelete destReg ARM64Symbolic.X15))
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 // Load heap string from stack slot
                 loadStackSlot ARM64Symbolic.X15 offset
                 |> Result.map (fun loadInstrs ->
                     loadInstrs @ runtimeInstrs (Runtime.generateFileDelete destReg ARM64Symbolic.X15))
             | _ -> Error "FileDelete requires string operand")
 
-    | LIRSymbolic.FileSetExecutable (dest, path) ->
+    | LIR.FileSetExecutable (dest, path) ->
         // File set executable: sets executable bit on file at path
         // Uses chmod syscall with executable permission
         // Returns Result<Unit, String>
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
             match path with
-            | LIRSymbolic.Reg pathReg ->
+            | LIR.Reg pathReg ->
                 // Already a heap string pointer
                 lirRegToARM64Reg pathReg
                 |> Result.map (fun pathARM64 ->
                     runtimeInstrs (Runtime.generateFileSetExecutable destReg pathARM64))
-            | LIRSymbolic.StringSymbol value ->
+            | LIR.StringSymbol value ->
                 // Literal string - convert to heap format first
                 // Literal format: [length:8][data:N] - skip length to copy data
                 let len = utf8Len value
@@ -2616,13 +2616,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                     ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)
                 ] @ generateLeakCounterInc ctx @ runtimeInstrs (Runtime.generateFileSetExecutable destReg ARM64Symbolic.X15))
-            | LIRSymbolic.StackSlot offset ->
+            | LIR.StackSlot offset ->
                 loadStackSlot ARM64Symbolic.X15 offset
                 |> Result.map (fun loadInstrs ->
                     loadInstrs @ runtimeInstrs (Runtime.generateFileSetExecutable destReg ARM64Symbolic.X15))
             | _ -> Error "FileSetExecutable requires string operand")
 
-    | LIRSymbolic.FileWriteFromPtr (dest, path, ptr, length) ->
+    | LIR.FileWriteFromPtr (dest, path, ptr, length) ->
         // Write raw bytes from ptr to file at path
         // Returns 1 on success, 0 on failure
         lirRegToARM64Reg dest
@@ -2632,12 +2632,12 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 lirRegToARM64Reg length
                 |> Result.bind (fun lengthARM64 ->
                     match path with
-                    | LIRSymbolic.Reg pathReg ->
+                    | LIR.Reg pathReg ->
                         // Already a heap string pointer
                         lirRegToARM64Reg pathReg
                         |> Result.map (fun pathARM64 ->
                             runtimeInstrs (Runtime.generateFileWriteFromPtr destReg pathARM64 ptrARM64 lengthARM64))
-                    | LIRSymbolic.StringSymbol value ->
+                    | LIR.StringSymbol value ->
                         // Literal string - convert to heap format first
                         // Literal format: [length:8][data:N] - skip length to copy data
                         let len = utf8Len value
@@ -2666,13 +2666,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                             ARM64Symbolic.MOVZ (ARM64Symbolic.X12, 1us, 0)
                             ARM64Symbolic.STR (ARM64Symbolic.X12, ARM64Symbolic.X13, 0s)
                         ] @ generateLeakCounterInc ctx @ runtimeInstrs (Runtime.generateFileWriteFromPtr destReg ARM64Symbolic.X15 ptrARM64 lengthARM64))
-                    | LIRSymbolic.StackSlot offset ->
+                    | LIR.StackSlot offset ->
                         loadStackSlot ARM64Symbolic.X15 offset
                         |> Result.map (fun loadInstrs ->
                             loadInstrs @ runtimeInstrs (Runtime.generateFileWriteFromPtr destReg ARM64Symbolic.X15 ptrARM64 lengthARM64))
                     | _ -> Error "FileWriteFromPtr requires string path operand")))
 
-    | LIRSymbolic.RawAlloc (dest, numBytes) ->
+    | LIR.RawAlloc (dest, numBytes) ->
         // Raw allocation: simple bump allocator without refcount header
         // Just allocates numBytes and returns pointer
         // numBytes is already in a physical register (from MIR_to_LIR)
@@ -2693,12 +2693,12 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                     ARM64Symbolic.ADD_reg (ARM64Symbolic.X28, ARM64Symbolic.X28, ARM64Symbolic.X15)    // bump pointer by aligned size
                 ]))
 
-    | LIRSymbolic.RawFree ptr ->
+    | LIR.RawFree ptr ->
         // Raw free: no-op for now (bump allocator doesn't support free)
         // In future: could add to a raw memory free list
         Ok []
 
-    | LIRSymbolic.RawGet (dest, ptr, byteOffset) ->
+    | LIR.RawGet (dest, ptr, byteOffset) ->
         // Load 8 bytes from ptr + byteOffset
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -2711,7 +2711,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.LDR (destReg, ARM64Symbolic.X15, 0s)             // dest = [X15]
                     ])))
 
-    | LIRSymbolic.RawGetByte (dest, ptr, byteOffset) ->
+    | LIR.RawGetByte (dest, ptr, byteOffset) ->
         // Load 1 byte from ptr + byteOffset (zero-extended to 64 bits)
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -2724,7 +2724,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.LDRB_imm (destReg, ARM64Symbolic.X15, 0)         // dest = [X15] (byte, zero-extended)
                     ])))
 
-    | LIRSymbolic.RawSet (ptr, byteOffset, value) ->
+    | LIR.RawSet (ptr, byteOffset, value) ->
         // Store 8 bytes at ptr + byteOffset
         // IMPORTANT: If any input reg is X15, use X14 as temp instead
         lirRegToARM64Reg ptr
@@ -2743,7 +2743,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.STR (valueReg, tempReg, 0s)            // [temp] = value
                     ])))
 
-    | LIRSymbolic.RawSetByte (ptr, byteOffset, value) ->
+    | LIR.RawSetByte (ptr, byteOffset, value) ->
         // Store 1 byte at ptr + byteOffset
         // IMPORTANT: If any input reg is X15, use X14 as temp instead
         lirRegToARM64Reg ptr
@@ -2762,15 +2762,15 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                         ARM64Symbolic.STRB_reg (valueReg, tempReg)           // [temp] = value (byte)
                     ])))
 
-    | LIRSymbolic.RefCountIncString str ->
+    | LIR.RefCountIncString str ->
         // Increment refcount for a heap string
         // Heap string layout: [length:8][data:N][padding:P][refcount:8] where P aligns to 8
         // Literal strings have refcount = INT64_MAX as sentinel (don't modify read-only memory)
         match str with
-        | LIRSymbolic.StringSymbol _ ->
+        | LIR.StringSymbol _ ->
             // Literal string - no refcount, no-op
             Ok []
-        | LIRSymbolic.Reg reg ->
+        | LIR.Reg reg ->
             // Heap or literal string - refcount is at [addr + 8 + aligned(length)]
             lirRegToARM64Reg reg
             |> Result.map (fun addrReg ->
@@ -2798,15 +2798,15 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ])
         | _ -> Error "RefCountIncString requires StringSymbol or Reg operand"
 
-    | LIRSymbolic.RefCountDecString str ->
+    | LIR.RefCountDecString str ->
         // Decrement refcount for a heap string
         // Heap string layout: [length:8][data:N][padding:P][refcount:8] where P aligns to 8
         // Literal strings have refcount = INT64_MAX as sentinel (don't modify read-only memory)
         match str with
-        | LIRSymbolic.StringSymbol _ ->
+        | LIR.StringSymbol _ ->
             // Literal string - no refcount, no-op
             Ok []
-        | LIRSymbolic.Reg reg ->
+        | LIR.Reg reg ->
             // Heap or literal string - refcount is at [addr + 8 + aligned(length)]
             lirRegToARM64Reg reg
             |> Result.map (fun addrReg ->
@@ -2847,19 +2847,19 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
                 ] @ refcountUpdate)
         | _ -> Error "RefCountDecString requires StringSymbol or Reg operand"
 
-    | LIRSymbolic.RandomInt64 dest ->
+    | LIR.RandomInt64 dest ->
         // Generate random 8 bytes as Int64
         lirRegToARM64Reg dest
         |> Result.map (fun destReg ->
             runtimeInstrs (Runtime.generateRandomInt64 destReg))
 
-    | LIRSymbolic.DateNow dest ->
+    | LIR.DateNow dest ->
         // Generate current Unix epoch seconds as Int64
         lirRegToARM64Reg dest
         |> Result.map (fun destReg ->
             runtimeInstrs (Runtime.generateDateNow destReg))
 
-    | LIRSymbolic.FloatToString (dest, value) ->
+    | LIR.FloatToString (dest, value) ->
         // Convert float in FP register to heap string
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -2867,7 +2867,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
             |> Result.map (fun valueReg ->
                 runtimeInstrs (Runtime.generateFloatToString destReg valueReg) @ generateLeakCounterInc ctx))
 
-    | LIRSymbolic.CoverageHit exprId ->
+    | LIR.CoverageHit exprId ->
         // Increment coverage counter at _coverage_data[exprId * 8]
         // Uses PC-relative addressing (ADRP+ADD) to get BSS buffer address
         // Uses X9 and X10 as scratch registers
@@ -2892,13 +2892,13 @@ let convertInstr (ctx: CodeGenContext) (instr: LIRSymbolic.Instr) : Result<ARM64
 
 /// Convert LIR terminator to ARM64 instructions
 /// epilogueLabel: the label to jump to for function return (handles stack cleanup)
-let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminator) : Result<ARM64Symbolic.Instr list, string> =
+let convertTerminator (epilogueLabel: string) (terminator: LIR.Terminator) : Result<ARM64Symbolic.Instr list, string> =
     match terminator with
-    | LIRSymbolic.Ret ->
+    | LIR.Ret ->
         // Jump to function epilogue (handles stack cleanup and RET)
         Ok [ARM64Symbolic.B_label epilogueLabel]
 
-    | LIRSymbolic.Branch (condReg, trueLabel, falseLabel) ->
+    | LIR.Branch (condReg, trueLabel, falseLabel) ->
         // Branch if register is non-zero (true), otherwise fall through to else
         // Use CBNZ (compare and branch if not zero) to true label
         // Then unconditional branch to false label
@@ -2911,7 +2911,7 @@ let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminato
                 ARM64Symbolic.B_label falseLbl           // Otherwise jump to else branch
             ])
 
-    | LIRSymbolic.BranchZero (condReg, zeroLabel, nonZeroLabel) ->
+    | LIR.BranchZero (condReg, zeroLabel, nonZeroLabel) ->
         // Branch if register is zero, otherwise fall through to non-zero case
         // Use CBZ (compare and branch if zero) to zero label
         // Then unconditional branch to non-zero label
@@ -2924,7 +2924,7 @@ let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminato
                 ARM64Symbolic.B_label nonZeroLbl          // Otherwise jump to non-zero branch
             ])
 
-    | LIRSymbolic.BranchBitZero (condReg, bit, zeroLabel, nonZeroLabel) ->
+    | LIR.BranchBitZero (condReg, bit, zeroLabel, nonZeroLabel) ->
         // Branch if specified bit is zero, otherwise fall through to non-zero case
         // Use TBZ (test bit and branch if zero) to zero label
         // Then unconditional branch to non-zero label
@@ -2937,7 +2937,7 @@ let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminato
                 ARM64Symbolic.B_label nonZeroLbl                   // Otherwise jump to non-zero branch
             ])
 
-    | LIRSymbolic.BranchBitNonZero (condReg, bit, nonZeroLabel, zeroLabel) ->
+    | LIR.BranchBitNonZero (condReg, bit, nonZeroLabel, zeroLabel) ->
         // Branch if specified bit is non-zero, otherwise fall through to zero case
         // Use TBNZ (test bit and branch if not zero) to non-zero label
         // Then unconditional branch to zero label
@@ -2950,11 +2950,11 @@ let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminato
                 ARM64Symbolic.B_label zeroLbl                          // Otherwise jump to zero branch
             ])
 
-    | LIRSymbolic.Jump label ->
+    | LIR.Jump label ->
         let (LIR.Label lbl) = label
         Ok [ARM64Symbolic.B_label lbl]
 
-    | LIRSymbolic.CondBranch (cond, trueLabel, falseLabel) ->
+    | LIR.CondBranch (cond, trueLabel, falseLabel) ->
         // Branch based on condition flags (set by previous CMP)
         // Use B.cond to true label, then unconditional branch to false label
         let (LIR.Label trueLbl) = trueLabel
@@ -2974,7 +2974,7 @@ let convertTerminator (epilogueLabel: string) (terminator: LIRSymbolic.Terminato
 
 /// Convert LIR basic block to ARM64 instructions (with label)
 /// epilogueLabel: passed through to terminator for Ret handling
-let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (block: LIRSymbolic.BasicBlock) : Result<ARM64Symbolic.Instr list, string> =
+let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (block: LIR.BasicBlock) : Result<ARM64Symbolic.Instr list, string> =
     // Emit label for this block
     let (LIR.Label lbl) = block.Label
     let labelInstr = ARM64Symbolic.Label lbl
@@ -2988,7 +2988,7 @@ let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (block: LIRSymbol
 
 /// Convert LIR CFG to ARM64 instructions
 /// epilogueLabel: passed through to blocks for Ret handling
-let convertCFG (ctx: CodeGenContext) (epilogueLabel: string) (cfg: LIRSymbolic.CFG) : Result<ARM64Symbolic.Instr list, string> =
+let convertCFG (ctx: CodeGenContext) (epilogueLabel: string) (cfg: LIR.CFG) : Result<ARM64Symbolic.Instr list, string> =
     // Get blocks in a deterministic order (entry first, then sorted by label)
     let entryBlock =
         match Map.tryFind cfg.Entry cfg.Blocks with
@@ -3057,7 +3057,7 @@ let generateHeapInit () : ARM64Symbolic.Instr list =
     ]
 
 /// Convert LIR function to ARM64 instructions with prologue and epilogue
-let convertFunction (ctx: CodeGenContext) (func: LIRSymbolic.Function) : Result<ARM64Symbolic.Instr list, string> =
+let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64Symbolic.Instr list, string> =
     // Generate epilogue label for this function (passed to convertCFG for Ret terminators)
     let epilogueLabel = "_epilogue_" + func.Name
 
@@ -3229,8 +3229,8 @@ let peepholeOptimize (instrs: ARM64Symbolic.Instr list) : ARM64Symbolic.Instr li
     optimize [] instrs
 
 /// Convert LIR program to ARM64 instructions with options
-let generateARM64WithOptions (options: CodeGenOptions) (program: LIRSymbolic.Program) : Result<ARM64Symbolic.Instr list, string> =
-    let (LIRSymbolic.Program functions) = program
+let generateARM64WithOptions (options: CodeGenOptions) (program: LIR.Program) : Result<ARM64Symbolic.Instr list, string> =
+    let (LIR.Program functions) = program
 
     // Create code generation context with options
     // StackSize and UsedCalleeSaved are set per-function in convertFunction
@@ -3238,9 +3238,9 @@ let generateARM64WithOptions (options: CodeGenOptions) (program: LIRSymbolic.Pro
 
     // Ensure _start is first (entry point)
     let sortedFunctions =
-        match List.tryFind (fun (f: LIRSymbolic.Function) -> f.Name = "_start") functions with
+        match List.tryFind (fun (f: LIR.Function) -> f.Name = "_start") functions with
         | Some startFunc ->
-            let otherFuncs = List.filter (fun (f: LIRSymbolic.Function) -> f.Name <> "_start") functions
+            let otherFuncs = List.filter (fun (f: LIR.Function) -> f.Name <> "_start") functions
             startFunc :: otherFuncs
         | None -> functions  // No _start, keep original order
 
@@ -3248,5 +3248,5 @@ let generateARM64WithOptions (options: CodeGenOptions) (program: LIRSymbolic.Pro
     |> Result.map (fun instrLists -> instrLists |> List.concat |> peepholeOptimize)
 
 /// Convert LIR program to ARM64 instructions (uses default options)
-let generateARM64 (program: LIRSymbolic.Program) : Result<ARM64Symbolic.Instr list, string> =
+let generateARM64 (program: LIR.Program) : Result<ARM64Symbolic.Instr list, string> =
     generateARM64WithOptions defaultOptions program

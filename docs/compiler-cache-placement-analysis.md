@@ -101,5 +101,5 @@ Earlier hashing is possible but either:
 - requires a new type map analysis to avoid missing type dependencies, or
 - needs a different cached artifact (pre-ANF or pre-opt IR).
 
-Given the current cache artifact (symbolic LIR post-regalloc), the safest and
+Given the current cache artifact (LIR post-regalloc), the safest and
 most precise placement is post-inlining and post-ANF optimization.

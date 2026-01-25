@@ -11,7 +11,6 @@
 module PhiResolutionTests
 
 open LIR
-open LIRSymbolic
 
 /// Test result type
 type TestResult = Result<unit, string>
@@ -409,7 +408,7 @@ let testLoopPhiCoalesced () : TestResult =
     let blockExit = makeRetBlock labelExit []
 
     let cfg = makeCFG labelEntry [blockEntry; blockLoop; blockBack; blockExit]
-    let func : LIRSymbolic.Function = {
+    let func : LIR.Function = {
         Name = "phi_coalesce_loop"
         TypedParams = []
         CFG = cfg

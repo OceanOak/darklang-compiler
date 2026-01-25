@@ -174,7 +174,7 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                             // LIR optimization
                             let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                             // Pretty-print
-                            Ok (formatLIRSymbolic optimizedLir)
+                            Ok (formatLIR optimizedLir)
 
 /// Run a single optimization test
 let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult) (test: OptimizationTest) : OptimizationTestResult =

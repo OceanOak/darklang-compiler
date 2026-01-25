@@ -19,21 +19,21 @@ open ResultList
 let moduloNegativeDivisorErrorMessage =
     "Error when executing Script. Call-stack:\nCall stack (last call at bottom):\n\nScript error: Cannot evaluate modulus against a negative number"
 
-/// Convert MIR.VReg to LIRSymbolic.Reg (virtual)
-let vregToLIRReg (MIR.VReg id) : LIRSymbolic.Reg = LIR.Virtual id
+/// Convert MIR.VReg to LIR.Reg (virtual)
+let vregToLIRReg (MIR.VReg id) : LIR.Reg = LIR.Virtual id
 
 /// Convert MIR.VReg to LIR.FReg (virtual float register)
 let vregToLIRFReg (MIR.VReg id) : LIR.FReg = LIR.FVirtual id
 
-/// Convert MIR.Operand to LIRSymbolic.Operand
-let convertOperand (operand: MIR.Operand) : LIRSymbolic.Operand =
+/// Convert MIR.Operand to LIR.Operand
+let convertOperand (operand: MIR.Operand) : LIR.Operand =
     match operand with
-    | MIR.Int64Const n -> LIRSymbolic.Imm n
-    | MIR.BoolConst b -> LIRSymbolic.Imm (if b then 1L else 0L)  // Booleans as 0/1
-    | MIR.FloatSymbol value -> LIRSymbolic.FloatSymbol value
-    | MIR.StringSymbol value -> LIRSymbolic.StringSymbol value
-    | MIR.Register vreg -> LIRSymbolic.Reg (vregToLIRReg vreg)
-    | MIR.FuncAddr name -> LIRSymbolic.FuncAddr name  // Function address (for higher-order functions)
+    | MIR.Int64Const n -> LIR.Imm n
+    | MIR.BoolConst b -> LIR.Imm (if b then 1L else 0L)  // Booleans as 0/1
+    | MIR.FloatSymbol value -> LIR.FloatSymbol value
+    | MIR.StringSymbol value -> LIR.StringSymbol value
+    | MIR.Register vreg -> LIR.Reg (vregToLIRReg vreg)
+    | MIR.FuncAddr name -> LIR.FuncAddr name  // Function address (for higher-order functions)
 
 /// Apply type substitution - replaces type variables with concrete types
 let rec applyTypeSubst (typeParams: string list) (typeArgs: AST.Type list) (typ: AST.Type) : AST.Type =
@@ -58,7 +58,7 @@ type TempState =
     { NextRegId: int
       NextFRegId: int }
 
-let freshTempReg (state: TempState) : LIRSymbolic.Reg * TempState =
+let freshTempReg (state: TempState) : LIR.Reg * TempState =
     let reg = LIR.Virtual state.NextRegId
     (reg, { state with NextRegId = state.NextRegId + 1 })
 
@@ -67,21 +67,21 @@ let freshTempFReg (state: TempState) : LIR.FReg * TempState =
     (reg, { state with NextFRegId = state.NextFRegId + 1 })
 
 /// Ensure operand is in a register (may need to load immediate)
-let ensureInRegister (operand: MIR.Operand) (state: TempState) : Result<LIRSymbolic.Instr list * LIRSymbolic.Reg * TempState, string> =
+let ensureInRegister (operand: MIR.Operand) (state: TempState) : Result<LIR.Instr list * LIR.Reg * TempState, string> =
     match operand with
     | MIR.Int64Const n ->
         // Need to load constant into a temporary register
         let (tempReg, nextState) = freshTempReg state
-        Ok ([LIRSymbolic.Mov (tempReg, LIRSymbolic.Imm n)], tempReg, nextState)
+        Ok ([LIR.Mov (tempReg, LIR.Imm n)], tempReg, nextState)
     | MIR.BoolConst b ->
         // Load boolean (0 or 1) into register
         let (tempReg, nextState) = freshTempReg state
-        Ok ([LIRSymbolic.Mov (tempReg, LIRSymbolic.Imm (if b then 1L else 0L))], tempReg, nextState)
+        Ok ([LIR.Mov (tempReg, LIR.Imm (if b then 1L else 0L))], tempReg, nextState)
     | MIR.FloatSymbol value ->
         // Load float into FP register, then move bits to GP register
         let (tempReg, stateAfterReg) = freshTempReg state
         let (tempFReg, nextState) = freshTempFReg stateAfterReg
-        Ok ([LIRSymbolic.FLoad (tempFReg, value); LIRSymbolic.FpToGp (tempReg, tempFReg)], tempReg, nextState)
+        Ok ([LIR.FLoad (tempFReg, value); LIR.FpToGp (tempReg, tempFReg)], tempReg, nextState)
     | MIR.StringSymbol _ ->
         // String references are not used as operands in arithmetic operations
         Error "Internal error: Cannot use string literal as arithmetic operand"
@@ -90,15 +90,15 @@ let ensureInRegister (operand: MIR.Operand) (state: TempState) : Result<LIRSymbo
     | MIR.FuncAddr name ->
         // Load function address into register using ADR instruction
         let (tempReg, nextState) = freshTempReg state
-        Ok ([LIRSymbolic.LoadFuncAddr (tempReg, name)], tempReg, nextState)
+        Ok ([LIR.LoadFuncAddr (tempReg, name)], tempReg, nextState)
 
 /// Ensure float operand is in an FP register
-let ensureInFRegister (operand: MIR.Operand) (state: TempState) : Result<LIRSymbolic.Instr list * LIR.FReg * TempState, string> =
+let ensureInFRegister (operand: MIR.Operand) (state: TempState) : Result<LIR.Instr list * LIR.FReg * TempState, string> =
     match operand with
     | MIR.FloatSymbol value ->
         // Load float constant into FP register
         let (tempFReg, nextState) = freshTempFReg state
-        Ok ([LIRSymbolic.FLoad (tempFReg, value)], tempFReg, nextState)
+        Ok ([LIR.FLoad (tempFReg, value)], tempFReg, nextState)
     | MIR.Register vreg ->
         // Float value already in a virtual register - treat it as FVirtual
         Ok ([], vregToLIRFReg vreg, state)
@@ -112,14 +112,14 @@ let ensureInFRegister (operand: MIR.Operand) (state: TempState) : Result<LIRSymb
 /// Generate truncation instruction for sized integer arithmetic
 /// After a 64-bit operation, this sign/zero extends the result to the target width
 /// to ensure proper overflow behavior (e.g., 127y + 1y = -128)
-let truncateForType (destReg: LIRSymbolic.Reg) (operandType: AST.Type) : LIRSymbolic.Instr list =
+let truncateForType (destReg: LIR.Reg) (operandType: AST.Type) : LIR.Instr list =
     match operandType with
-    | AST.TInt8 -> [LIRSymbolic.Sxtb (destReg, destReg)]      // Sign-extend byte
-    | AST.TInt16 -> [LIRSymbolic.Sxth (destReg, destReg)]     // Sign-extend halfword
-    | AST.TInt32 -> [LIRSymbolic.Sxtw (destReg, destReg)]     // Sign-extend word
-    | AST.TUInt8 -> [LIRSymbolic.Uxtb (destReg, destReg)]     // Zero-extend byte
-    | AST.TUInt16 -> [LIRSymbolic.Uxth (destReg, destReg)]    // Zero-extend halfword
-    | AST.TUInt32 -> [LIRSymbolic.Uxtw (destReg, destReg)]    // Zero-extend word
+    | AST.TInt8 -> [LIR.Sxtb (destReg, destReg)]      // Sign-extend byte
+    | AST.TInt16 -> [LIR.Sxth (destReg, destReg)]     // Sign-extend halfword
+    | AST.TInt32 -> [LIR.Sxtw (destReg, destReg)]     // Sign-extend word
+    | AST.TUInt8 -> [LIR.Uxtb (destReg, destReg)]     // Zero-extend byte
+    | AST.TUInt16 -> [LIR.Uxth (destReg, destReg)]    // Zero-extend halfword
+    | AST.TUInt32 -> [LIR.Uxtw (destReg, destReg)]    // Zero-extend word
     | AST.TInt64 | AST.TUInt64 -> []                  // No truncation needed for 64-bit
     | _ -> []                                          // Non-integer types
 
@@ -129,12 +129,12 @@ let shouldCheckNegativeDivisor (operandType: AST.Type) : bool =
     | _ -> false
 
 let buildIntegerModuloParts
-    (destReg: LIRSymbolic.Reg)
+    (destReg: LIR.Reg)
     (left: MIR.Operand)
     (right: MIR.Operand)
     (operandType: AST.Type)
     (state: TempState)
-    : Result<LIRSymbolic.Instr list * LIRSymbolic.Reg * LIRSymbolic.Instr list * TempState, string> =
+    : Result<LIR.Instr list * LIR.Reg * LIR.Instr list * TempState, string> =
     match ensureInRegister left state with
     | Error err -> Error err
     | Ok (leftInstrs, leftReg, stateAfterLeft) ->
@@ -149,16 +149,16 @@ let buildIntegerModuloParts
         let (adjustReg, nextState) = freshTempReg stateAfterAdjustFlag
         let truncInstrs = truncateForType destReg operandType
         let modInstrs =
-            [LIRSymbolic.Sdiv (quotReg, leftReg, rightReg);
-             LIRSymbolic.Msub (destReg, quotReg, rightReg, leftReg);
-             LIRSymbolic.Cmp (destReg, LIRSymbolic.Imm 0L);
-             LIRSymbolic.Cset (remNonZeroReg, LIR.NE);
-             LIRSymbolic.Eor (xorReg, destReg, rightReg);
-             LIRSymbolic.Cmp (xorReg, LIRSymbolic.Imm 0L);
-             LIRSymbolic.Cset (signMismatchReg, LIR.LT);
-             LIRSymbolic.And (adjustFlagReg, remNonZeroReg, signMismatchReg);
-             LIRSymbolic.Mul (adjustReg, adjustFlagReg, rightReg);
-             LIRSymbolic.Add (destReg, destReg, LIRSymbolic.Reg adjustReg)]
+            [LIR.Sdiv (quotReg, leftReg, rightReg);
+             LIR.Msub (destReg, quotReg, rightReg, leftReg);
+             LIR.Cmp (destReg, LIR.Imm 0L);
+             LIR.Cset (remNonZeroReg, LIR.NE);
+             LIR.Eor (xorReg, destReg, rightReg);
+             LIR.Cmp (xorReg, LIR.Imm 0L);
+             LIR.Cset (signMismatchReg, LIR.LT);
+             LIR.And (adjustFlagReg, remNonZeroReg, signMismatchReg);
+             LIR.Mul (adjustReg, adjustFlagReg, rightReg);
+             LIR.Add (destReg, destReg, LIR.Reg adjustReg)]
             @ truncInstrs
         Ok (leftInstrs @ rightInstrs, rightReg, modInstrs, nextState)
 
@@ -166,7 +166,7 @@ let buildFloatArgMoves
     (floatArgs: MIR.Operand list)
     (destRegs: LIR.PhysFPReg list)
     (state: TempState)
-    : Result<LIRSymbolic.Instr list * TempState, string> =
+    : Result<LIR.Instr list * TempState, string> =
     if List.isEmpty floatArgs then
         Ok ([], state)
     else
@@ -178,7 +178,7 @@ let buildFloatArgMoves
                 match arg with
                 | MIR.FloatSymbol value ->
                     let (tempFReg, nextState) = freshTempFReg currentState
-                    loop rest regTail nextState ([LIRSymbolic.FLoad (tempFReg, value)] :: loadInstrs) ((destReg, tempFReg) :: pairs)
+                    loop rest regTail nextState ([LIR.FLoad (tempFReg, value)] :: loadInstrs) ((destReg, tempFReg) :: pairs)
                 | MIR.Register vreg ->
                     loop rest regTail currentState loadInstrs ((destReg, vregToLIRFReg vreg) :: pairs)
                 | _ ->
@@ -186,7 +186,7 @@ let buildFloatArgMoves
         match loop floatArgs destRegs state [] [] with
         | Error err -> Error err
         | Ok (loadInstrs, argPairs, nextState) ->
-            Ok (loadInstrs @ [LIRSymbolic.FArgMoves argPairs], nextState)
+            Ok (loadInstrs @ [LIR.FArgMoves argPairs], nextState)
 
 /// Convert MIR instruction to LIR instructions
 /// floatRegs: Set of VReg IDs that hold float values (from MIR.Function.FloatRegs)
@@ -196,7 +196,7 @@ let selectInstr
     (recordRegistry: MIR.RecordRegistry)
     (floatRegs: Set<int>)
     (state: TempState)
-    : Result<LIRSymbolic.Instr list * TempState, string> =
+    : Result<LIR.Instr list * TempState, string> =
     match instr with
     | MIR.Mov (dest, src, valueType) ->
         // Check if this is a float move - either by valueType or by source operand type
@@ -212,23 +212,23 @@ let selectInstr
             match src with
             | MIR.FloatSymbol value ->
                 // Load float constant
-                Ok ([LIRSymbolic.FLoad (lirFDest, value)], state)
+                Ok ([LIR.FLoad (lirFDest, value)], state)
             | MIR.Register ((MIR.VReg regId) as vreg) ->
                 if Set.contains regId floatRegs then
                     // Move between float registers
                     let srcFReg = vregToLIRFReg vreg
-                    Ok ([LIRSymbolic.FMov (lirFDest, srcFReg)], state)
+                    Ok ([LIR.FMov (lirFDest, srcFReg)], state)
                 else
                     // Reinterpret GP register bits as float (e.g., heap-loaded float payloads)
                     let srcReg = vregToLIRReg vreg
-                    Ok ([LIRSymbolic.GpToFp (lirFDest, srcReg)], state)
+                    Ok ([LIR.GpToFp (lirFDest, srcReg)], state)
             | _ ->
                 Error "Internal error: non-float operand in float Mov"
         else
             // Integer/other move
             let lirDest = vregToLIRReg dest
             let lirSrc = convertOperand src
-            Ok ([LIRSymbolic.Mov (lirDest, lirSrc)], state)
+            Ok ([LIR.Mov (lirDest, lirSrc)], state)
 
     | MIR.BinOp (dest, op, left, right, operandType) ->
         let lirDest = vregToLIRReg dest
@@ -247,7 +247,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FAdd (lirFDest, leftFReg, rightFReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FAdd (lirFDest, leftFReg, rightFReg)], nextState)
             | MIR.Sub ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -255,7 +255,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FSub (lirFDest, leftFReg, rightFReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FSub (lirFDest, leftFReg, rightFReg)], nextState)
             | MIR.Mul ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -263,7 +263,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FMul (lirFDest, leftFReg, rightFReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FMul (lirFDest, leftFReg, rightFReg)], nextState)
             | MIR.Div ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -271,7 +271,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FDiv (lirFDest, leftFReg, rightFReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FDiv (lirFDest, leftFReg, rightFReg)], nextState)
             | MIR.Mod ->
                 Error "Float modulo not yet supported"
             // Float comparisons - result goes in integer register
@@ -282,7 +282,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.EQ)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.EQ)], nextState)
             | MIR.Neq ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -290,7 +290,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.NE)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.NE)], nextState)
             | MIR.Lt ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -298,7 +298,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.LT)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.LT)], nextState)
             | MIR.Gt ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -306,7 +306,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.GT)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.GT)], nextState)
             | MIR.Lte ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -314,7 +314,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.LE)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.LE)], nextState)
             | MIR.Gte ->
                 match ensureInFRegister left state with
                 | Error err -> Error err
@@ -322,7 +322,7 @@ let selectInstr
                 match ensureInFRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightFReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.FCmp (leftFReg, rightFReg); LIRSymbolic.Cset (lirDest, LIR.GE)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.FCmp (leftFReg, rightFReg); LIR.Cset (lirDest, LIR.GE)], nextState)
             | MIR.And | MIR.Or ->
                 Error "Boolean operations not supported on floats"
             | MIR.Shl | MIR.Shr | MIR.BitAnd | MIR.BitOr | MIR.BitXor ->
@@ -340,14 +340,14 @@ let selectInstr
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Add (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ [LIR.Add (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
 
             | MIR.Sub ->
                 // SUB can have immediate or register as right operand
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Sub (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ [LIR.Sub (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
 
             | MIR.Mul ->
                 // MUL requires both operands in registers
@@ -357,7 +357,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Mul (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.Mul (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.Div ->
                 // SDIV requires both operands in registers
@@ -367,7 +367,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Sdiv (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.Sdiv (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.Mod ->
                 buildIntegerModuloParts lirDest left right operandType state
@@ -379,37 +379,37 @@ let selectInstr
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.EQ)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.EQ)], nextState)
 
             | MIR.Neq ->
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.NE)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.NE)], nextState)
 
             | MIR.Lt ->
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.LT)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.LT)], nextState)
 
             | MIR.Gt ->
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.GT)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.GT)], nextState)
 
             | MIR.Lte ->
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.LE)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.LE)], nextState)
 
             | MIR.Gte ->
                 match ensureInRegister left state with
                 | Error err -> Error err
                 | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIRSymbolic.Cmp (leftReg, rightOp); LIRSymbolic.Cset (lirDest, LIR.GE)], nextState)
+                    Ok (leftInstrs @ [LIR.Cmp (leftReg, rightOp); LIR.Cset (lirDest, LIR.GE)], nextState)
 
             // Boolean operations (bitwise for 0/1 values)
             | MIR.And ->
@@ -419,7 +419,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.And (lirDest, leftReg, rightReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.And (lirDest, leftReg, rightReg)], nextState)
 
             | MIR.Or ->
                 match ensureInRegister left state with
@@ -428,7 +428,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Orr (lirDest, leftReg, rightReg)], nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.Orr (lirDest, leftReg, rightReg)], nextState)
 
             // Bitwise operators (also need truncation for proper overflow)
             | MIR.Shl ->
@@ -438,12 +438,12 @@ let selectInstr
                     // Check if shift amount is a constant (0-63)
                     match right with
                     | MIR.Int64Const n when n >= 0L && n < 64L ->
-                        Ok (leftInstrs @ [LIRSymbolic.Lsl_imm (lirDest, leftReg, int n)] @ truncInstrs, stateAfterLeft)
+                        Ok (leftInstrs @ [LIR.Lsl_imm (lirDest, leftReg, int n)] @ truncInstrs, stateAfterLeft)
                     | _ ->
                         match ensureInRegister right stateAfterLeft with
                         | Error err -> Error err
                         | Ok (rightInstrs, rightReg, nextState) ->
-                            Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Lsl (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                            Ok (leftInstrs @ rightInstrs @ [LIR.Lsl (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.Shr ->
                 match ensureInRegister left state with
@@ -452,12 +452,12 @@ let selectInstr
                     // Check if shift amount is a constant (0-63)
                     match right with
                     | MIR.Int64Const n when n >= 0L && n < 64L ->
-                        Ok (leftInstrs @ [LIRSymbolic.Lsr_imm (lirDest, leftReg, int n)] @ truncInstrs, stateAfterLeft)
+                        Ok (leftInstrs @ [LIR.Lsr_imm (lirDest, leftReg, int n)] @ truncInstrs, stateAfterLeft)
                     | _ ->
                         match ensureInRegister right stateAfterLeft with
                         | Error err -> Error err
                         | Ok (rightInstrs, rightReg, nextState) ->
-                            Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Lsr (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                            Ok (leftInstrs @ rightInstrs @ [LIR.Lsr (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.BitAnd ->
                 match ensureInRegister left state with
@@ -468,12 +468,12 @@ let selectInstr
                     let isPowerOf2Minus1 n = n > 0L && (n &&& (n + 1L)) = 0L
                     match right with
                     | MIR.Int64Const n when isPowerOf2Minus1 n ->
-                        Ok (leftInstrs @ [LIRSymbolic.And_imm (lirDest, leftReg, n)] @ truncInstrs, stateAfterLeft)
+                        Ok (leftInstrs @ [LIR.And_imm (lirDest, leftReg, n)] @ truncInstrs, stateAfterLeft)
                     | _ ->
                         match ensureInRegister right stateAfterLeft with
                         | Error err -> Error err
                         | Ok (rightInstrs, rightReg, nextState) ->
-                            Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.And (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                            Ok (leftInstrs @ rightInstrs @ [LIR.And (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.BitOr ->
                 match ensureInRegister left state with
@@ -482,7 +482,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Orr (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.Orr (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
             | MIR.BitXor ->
                 match ensureInRegister left state with
@@ -491,7 +491,7 @@ let selectInstr
                 match ensureInRegister right stateAfterLeft with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, nextState) ->
-                    Ok (leftInstrs @ rightInstrs @ [LIRSymbolic.Eor (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
+                    Ok (leftInstrs @ rightInstrs @ [LIR.Eor (lirDest, leftReg, rightReg)] @ truncInstrs, nextState)
 
     | MIR.UnaryOp (dest, op, src) ->
         let lirDest = vregToLIRReg dest
@@ -503,15 +503,15 @@ let selectInstr
             | MIR.FloatSymbol value ->
                 // Float negation: load float into D1, negate into D0
                 Ok ([
-                    LIRSymbolic.FLoad (LIR.FPhysical LIR.D1, value)
-                    LIRSymbolic.FNeg (LIR.FPhysical LIR.D0, LIR.FPhysical LIR.D1)
+                    LIR.FLoad (LIR.FPhysical LIR.D1, value)
+                    LIR.FNeg (LIR.FPhysical LIR.D0, LIR.FPhysical LIR.D1)
                 ], state)
             | _ ->
                 // Integer negation: 0 - src
                 match ensureInRegister src state with
                 | Error err -> Error err
                 | Ok (srcInstrs, srcReg, nextState) ->
-                    Ok (srcInstrs @ [LIRSymbolic.Mov (lirDest, LIRSymbolic.Imm 0L); LIRSymbolic.Sub (lirDest, lirDest, LIRSymbolic.Reg srcReg)], nextState)
+                    Ok (srcInstrs @ [LIR.Mov (lirDest, LIR.Imm 0L); LIR.Sub (lirDest, lirDest, LIR.Reg srcReg)], nextState)
 
         | MIR.Not ->
             // Boolean NOT: 1 - src (since booleans are 0 or 1)
@@ -519,8 +519,8 @@ let selectInstr
             | Error err -> Error err
             | Ok (srcInstrs, srcReg, nextState) ->
                 Ok (srcInstrs @ [
-                    LIRSymbolic.Mov (lirDest, LIRSymbolic.Imm 1L)
-                    LIRSymbolic.Sub (lirDest, lirDest, LIRSymbolic.Reg srcReg)
+                    LIR.Mov (lirDest, LIR.Imm 1L)
+                    LIR.Sub (lirDest, lirDest, LIR.Reg srcReg)
                 ], nextState)
 
         | MIR.BitNot ->
@@ -528,7 +528,7 @@ let selectInstr
             match ensureInRegister src state with
             | Error err -> Error err
             | Ok (srcInstrs, srcReg, nextState) ->
-                Ok (srcInstrs @ [LIRSymbolic.Mvn (lirDest, srcReg)], nextState)
+                Ok (srcInstrs @ [LIR.Mvn (lirDest, srcReg)], nextState)
 
     | MIR.Call (dest, funcName, args, argTypes, returnType) ->
         // ARM64 calling convention (AAPCS64):
@@ -541,7 +541,7 @@ let selectInstr
 
         // IMPORTANT: Save caller-saved registers BEFORE setting up arguments
         // Empty placeholder - register allocator will fill in the actual registers to save
-        let saveInstrs = [LIRSymbolic.SaveRegs ([], [])]
+        let saveInstrs = [LIR.SaveRegs ([], [])]
 
         // Separate args into int and float based on argTypes
         let argsWithTypes = List.zip args argTypes
@@ -555,7 +555,7 @@ let selectInstr
                 let argPairs =
                     List.zip (List.map fst intArgs) (List.take (List.length intArgs) intRegs)
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.ArgMoves argPairs]
+                [LIR.ArgMoves argPairs]
 
         let floatArgMovesResult =
             if List.isEmpty floatArgs then
@@ -566,11 +566,11 @@ let selectInstr
                 buildFloatArgMoves floatOperands destRegs state
 
         // Call instruction
-        let callInstr = LIRSymbolic.Call (lirDest, funcName, List.map convertOperand args)
+        let callInstr = LIR.Call (lirDest, funcName, List.map convertOperand args)
 
         // Restore caller-saved registers after the call
         // Empty placeholder - register allocator will fill in the actual registers to restore
-        let restoreInstrs = [LIRSymbolic.RestoreRegs ([], [])]
+        let restoreInstrs = [LIR.RestoreRegs ([], [])]
 
         // Move return value from X0 or D0 to destination based on return type
         // For float returns, we use D8 (callee-saved) as intermediate to avoid conflicts:
@@ -582,16 +582,16 @@ let selectInstr
                 // Float return: value is in D0, use D8 as safe intermediate
                 let destFReg = vregToLIRFReg dest
                 // First save D0 to D8 (callee-saved, not touched by RestoreRegs)
-                let saveToD8 = [LIRSymbolic.FMov (LIR.FPhysical LIR.D8, LIR.FPhysical LIR.D0)]
+                let saveToD8 = [LIR.FMov (LIR.FPhysical LIR.D8, LIR.FPhysical LIR.D0)]
                 // After RestoreRegs, copy from D8 to actual destination
-                let copyToFinal = [LIRSymbolic.FMov (destFReg, LIR.FPhysical LIR.D8)]
+                let copyToFinal = [LIR.FMov (destFReg, LIR.FPhysical LIR.D8)]
                 (saveToD8, copyToFinal)
             else
                 // Integer return: value is in X0
                 let intMove =
                     match lirDest with
                     | LIR.Physical LIR.X0 -> []
-                    | _ -> [LIRSymbolic.Mov (lirDest, LIRSymbolic.Reg (LIR.Physical LIR.X0))]
+                    | _ -> [LIR.Mov (lirDest, LIR.Reg (LIR.Physical LIR.X0))]
                 ([], intMove)
 
         let (saveReturnValue, copyReturnValue) = moveResult
@@ -618,7 +618,7 @@ let selectInstr
                 let argPairs =
                     List.zip (List.map fst intArgs) (List.take (List.length intArgs) intRegs)
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.TailArgMoves argPairs]
+                [LIR.TailArgMoves argPairs]
 
         // Generate FArgMoves for float arguments
         let floatArgMovesResult =
@@ -630,7 +630,7 @@ let selectInstr
                 buildFloatArgMoves floatOperands destRegs state
 
         // Tail call instruction (no SaveRegs/RestoreRegs)
-        let callInstr = LIRSymbolic.TailCall (funcName, List.map convertOperand args)
+        let callInstr = LIR.TailCall (funcName, List.map convertOperand args)
 
         match floatArgMovesResult with
         | Error err -> Error err
@@ -645,21 +645,21 @@ let selectInstr
 
         // Save caller-saved registers
         // Empty placeholder - register allocator will fill in the actual registers to save
-        let saveInstrs = [LIRSymbolic.SaveRegs ([], [])]
+        let saveInstrs = [LIR.SaveRegs ([], [])]
 
         // IMPORTANT: Load function address into X9 FIRST, before setting up arguments.
         // The function pointer might be in X0-X7 which will be overwritten by argument moves.
         let funcOp = convertOperand func
         let loadFuncInstrs =
             match funcOp with
-            | LIRSymbolic.Reg r ->
+            | LIR.Reg r ->
                 // Always copy to X9 in case the source register is overwritten by arg moves
-                [LIRSymbolic.Mov (LIR.Physical LIR.X9, LIRSymbolic.Reg r)]
-            | LIRSymbolic.FuncAddr name ->
-                [LIRSymbolic.LoadFuncAddr (LIR.Physical LIR.X9, name)]
+                [LIR.Mov (LIR.Physical LIR.X9, LIR.Reg r)]
+            | LIR.FuncAddr name ->
+                [LIR.LoadFuncAddr (LIR.Physical LIR.X9, name)]
             | other ->
                 // Load operand into X9
-                [LIRSymbolic.Mov (LIR.Physical LIR.X9, other)]
+                [LIR.Mov (LIR.Physical LIR.X9, other)]
 
         // Use ArgMoves for parallel move - handles register clobbering correctly
         let argMoves =
@@ -668,26 +668,26 @@ let selectInstr
                 let argPairs =
                     List.zip args (List.take (List.length args) argRegs)
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.ArgMoves argPairs]
+                [LIR.ArgMoves argPairs]
 
         // Call through X9 (always, since we always copy to X9 now)
-        let callInstr = LIRSymbolic.IndirectCall (lirDest, LIR.Physical LIR.X9, List.map convertOperand args)
+        let callInstr = LIR.IndirectCall (lirDest, LIR.Physical LIR.X9, List.map convertOperand args)
 
         // Restore caller-saved registers
         // Empty placeholder - register allocator will fill in the actual registers to restore
-        let restoreInstrs = [LIRSymbolic.RestoreRegs ([], [])]
+        let restoreInstrs = [LIR.RestoreRegs ([], [])]
 
         // Move return value from X0 or D0 to destination based on return type
         let moveResult =
             if returnType = AST.TFloat64 then
                 // Float return: value is in D0, move to FVirtual
                 let destFReg = vregToLIRFReg dest
-                [LIRSymbolic.FMov (destFReg, LIR.FPhysical LIR.D0)]
+                [LIR.FMov (destFReg, LIR.FPhysical LIR.D0)]
             else
                 // Integer return: value is in X0
                 match lirDest with
                 | LIR.Physical LIR.X0 -> []
-                | _ -> [LIRSymbolic.Mov (lirDest, LIRSymbolic.Reg (LIR.Physical LIR.X0))]
+                | _ -> [LIR.Mov (lirDest, LIR.Reg (LIR.Physical LIR.X0))]
 
         Ok (saveInstrs @ loadFuncInstrs @ argMoves @ [callInstr] @ restoreInstrs @ moveResult, state)
 
@@ -699,9 +699,9 @@ let selectInstr
         let funcOp = convertOperand func
         let loadFuncInstrs =
             match funcOp with
-            | LIRSymbolic.Reg r -> [LIRSymbolic.Mov (LIR.Physical LIR.X9, LIRSymbolic.Reg r)]
-            | LIRSymbolic.FuncAddr name -> [LIRSymbolic.LoadFuncAddr (LIR.Physical LIR.X9, name)]
-            | other -> [LIRSymbolic.Mov (LIR.Physical LIR.X9, other)]
+            | LIR.Reg r -> [LIR.Mov (LIR.Physical LIR.X9, LIR.Reg r)]
+            | LIR.FuncAddr name -> [LIR.LoadFuncAddr (LIR.Physical LIR.X9, name)]
+            | other -> [LIR.Mov (LIR.Physical LIR.X9, other)]
 
         // Use TailArgMoves for parallel move (uses temp registers, no SaveRegs)
         let argMoves =
@@ -710,10 +710,10 @@ let selectInstr
                 let argPairs =
                     List.zip args (List.take (List.length args) argRegs)
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.TailArgMoves argPairs]
+                [LIR.TailArgMoves argPairs]
 
         // Indirect tail call through X9
-        let callInstr = LIRSymbolic.IndirectTailCall (LIR.Physical LIR.X9, List.map convertOperand args)
+        let callInstr = LIR.IndirectTailCall (LIR.Physical LIR.X9, List.map convertOperand args)
 
         Ok (loadFuncInstrs @ argMoves @ [callInstr], state)
 
@@ -723,13 +723,13 @@ let selectInstr
         let lirDest = vregToLIRReg dest
         let numSlots = 1 + List.length captures
         let sizeBytes = numSlots * 8
-        let allocInstr = LIRSymbolic.HeapAlloc (lirDest, sizeBytes)
+        let allocInstr = LIR.HeapAlloc (lirDest, sizeBytes)
         // Store function pointer at offset 0 (always int/pointer type)
-        let storeFuncInstr = LIRSymbolic.HeapStore (lirDest, 0, LIRSymbolic.FuncAddr funcName, None)
+        let storeFuncInstr = LIR.HeapStore (lirDest, 0, LIR.FuncAddr funcName, None)
         // Store captured values at offsets 8, 16, ... (assume int/pointer for captures)
         let storeInstrs =
             captures
-            |> List.mapi (fun i cap -> LIRSymbolic.HeapStore (lirDest, (i + 1) * 8, convertOperand cap, None))
+            |> List.mapi (fun i cap -> LIR.HeapStore (lirDest, (i + 1) * 8, convertOperand cap, None))
         Ok (allocInstr :: storeFuncInstr :: storeInstrs, state)
 
     | MIR.ClosureCall (dest, closure, args, argTypes, returnType) ->
@@ -740,15 +740,15 @@ let selectInstr
 
         // Save caller-saved registers
         // Empty placeholder - register allocator will fill in the actual registers to save
-        let saveInstrs = [LIRSymbolic.SaveRegs ([], [])]
+        let saveInstrs = [LIR.SaveRegs ([], [])]
 
         // Load closure into a temp register first
         let closureOp = convertOperand closure
         let closureReg = LIR.Physical LIR.X10  // Use X10 for closure (not an arg register)
         let loadClosureInstr =
             match closureOp with
-            | LIRSymbolic.Reg r -> LIRSymbolic.Mov (closureReg, LIRSymbolic.Reg r)
-            | other -> LIRSymbolic.Mov (closureReg, other)
+            | LIR.Reg r -> LIR.Mov (closureReg, LIR.Reg r)
+            | other -> LIR.Mov (closureReg, other)
 
         // Separate args into int and float based on argTypes
         let argsWithTypes = List.zip args argTypes
@@ -757,14 +757,14 @@ let selectInstr
 
         // Generate ArgMoves for closure (X0) and integer arguments (X1-X7)
         let intArgMoves =
-            let closureMove = (LIR.X0, LIRSymbolic.Reg closureReg)
+            let closureMove = (LIR.X0, LIR.Reg closureReg)
             if List.isEmpty intArgs then
-                [LIRSymbolic.ArgMoves [closureMove]]
+                [LIR.ArgMoves [closureMove]]
             else
                 let regularArgMoves =
                     List.zip (List.map fst intArgs) (List.skip 1 intRegs |> List.take (List.length intArgs))
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.ArgMoves (closureMove :: regularArgMoves)]
+                [LIR.ArgMoves (closureMove :: regularArgMoves)]
 
         let floatArgMovesResult =
             if List.isEmpty floatArgs then
@@ -778,27 +778,27 @@ let selectInstr
         // IMPORTANT: This must come AFTER argMoves because ArgMoves may use X9 as a temp
         // (e.g., StringSymbol conversion uses X9 for ADRP/ADD_label)
         // After ArgMoves, X0 contains the closure, so we load from [X0, 0]
-        let loadFuncPtrInstr = LIRSymbolic.HeapLoad (LIR.Physical LIR.X9, LIR.Physical LIR.X0, 0)
+        let loadFuncPtrInstr = LIR.HeapLoad (LIR.Physical LIR.X9, LIR.Physical LIR.X0, 0)
 
-        let callInstr = LIRSymbolic.ClosureCall (lirDest, LIR.Physical LIR.X9, List.map convertOperand args)
+        let callInstr = LIR.ClosureCall (lirDest, LIR.Physical LIR.X9, List.map convertOperand args)
 
         // Restore caller-saved registers
         // Empty placeholder - register allocator will fill in the actual registers to restore
-        let restoreInstrs = [LIRSymbolic.RestoreRegs ([], [])]
+        let restoreInstrs = [LIR.RestoreRegs ([], [])]
 
         // Move return value from X0 or D0 to destination based on return type
         // For float returns, save D0 to D8 before RestoreRegs, then copy to dest after.
         let (moveBeforeRestore, moveAfterRestore) =
             if returnType = AST.TFloat64 then
                 let destFReg = vregToLIRFReg dest
-                let saveToD8 = [LIRSymbolic.FMov (LIR.FPhysical LIR.D8, LIR.FPhysical LIR.D0)]
-                let copyToFinal = [LIRSymbolic.FMov (destFReg, LIR.FPhysical LIR.D8)]
+                let saveToD8 = [LIR.FMov (LIR.FPhysical LIR.D8, LIR.FPhysical LIR.D0)]
+                let copyToFinal = [LIR.FMov (destFReg, LIR.FPhysical LIR.D8)]
                 (saveToD8, copyToFinal)
             else
                 let moveResult =
                     match lirDest with
                     | LIR.Physical LIR.X0 -> []
-                    | _ -> [LIRSymbolic.Mov (lirDest, LIRSymbolic.Reg (LIR.Physical LIR.X0))]
+                    | _ -> [LIR.Mov (lirDest, LIR.Reg (LIR.Physical LIR.X0))]
                 ([], moveResult)
 
         match floatArgMovesResult with
@@ -816,8 +816,8 @@ let selectInstr
         let closureReg = LIR.Physical LIR.X10
         let loadClosureInstr =
             match closureOp with
-            | LIRSymbolic.Reg r -> LIRSymbolic.Mov (closureReg, LIRSymbolic.Reg r)
-            | other -> LIRSymbolic.Mov (closureReg, other)
+            | LIR.Reg r -> LIR.Mov (closureReg, LIR.Reg r)
+            | other -> LIR.Mov (closureReg, other)
 
         // Separate args into int and float based on argTypes
         let argsWithTypes = List.zip args argTypes
@@ -826,14 +826,14 @@ let selectInstr
 
         // Generate TailArgMoves for closure (X0) and integer arguments (X1-X7)
         let intArgMoves =
-            let closureMove = (LIR.X0, LIRSymbolic.Reg closureReg)
+            let closureMove = (LIR.X0, LIR.Reg closureReg)
             if List.isEmpty intArgs then
-                [LIRSymbolic.TailArgMoves [closureMove]]
+                [LIR.TailArgMoves [closureMove]]
             else
                 let regularArgMoves =
                     List.zip (List.map fst intArgs) (List.skip 1 intRegs |> List.take (List.length intArgs))
                     |> List.map (fun (arg, reg) -> (reg, convertOperand arg))
-                [LIRSymbolic.TailArgMoves (closureMove :: regularArgMoves)]
+                [LIR.TailArgMoves (closureMove :: regularArgMoves)]
 
         let floatArgMovesResult =
             if List.isEmpty floatArgs then
@@ -847,9 +847,9 @@ let selectInstr
         // IMPORTANT: This must come AFTER argMoves because TailArgMoves may use X9 as a temp
         // (e.g., StringSymbol conversion uses X9 for ADRP/ADD_label)
         // After TailArgMoves, X0 contains the closure, so we load from [X0, 0]
-        let loadFuncPtrInstr = LIRSymbolic.HeapLoad (LIR.Physical LIR.X9, LIR.Physical LIR.X0, 0)
+        let loadFuncPtrInstr = LIR.HeapLoad (LIR.Physical LIR.X9, LIR.Physical LIR.X0, 0)
 
-        let callInstr = LIRSymbolic.ClosureTailCall (LIR.Physical LIR.X9, List.map convertOperand args)
+        let callInstr = LIR.ClosureTailCall (LIR.Physical LIR.X9, List.map convertOperand args)
 
         match floatArgMovesResult with
         | Error err -> Error err
@@ -858,7 +858,7 @@ let selectInstr
 
     | MIR.HeapAlloc (dest, sizeBytes) ->
         let lirDest = vregToLIRReg dest
-        Ok ([LIRSymbolic.HeapAlloc (lirDest, sizeBytes)], state)
+        Ok ([LIR.HeapAlloc (lirDest, sizeBytes)], state)
 
     | MIR.HeapStore (addr, offset, src, valueType) ->
         let lirAddr = vregToLIRReg addr
@@ -871,10 +871,10 @@ let selectInstr
             let tempReg = LIR.Physical LIR.X9  // Use temp register for FpToGp
             // After FpToGp, value is in GP register, so use None for valueType
             // (otherwise CodeGen would try to treat X9 as a float register)
-            Ok ([LIRSymbolic.FpToGp (tempReg, srcFReg); LIRSymbolic.HeapStore (lirAddr, offset, LIRSymbolic.Reg tempReg, None)], state)
+            Ok ([LIR.FpToGp (tempReg, srcFReg); LIR.HeapStore (lirAddr, offset, LIR.Reg tempReg, None)], state)
         | _ ->
             let lirSrc = convertOperand src
-            Ok ([LIRSymbolic.HeapStore (lirAddr, offset, lirSrc, valueType)], state)
+            Ok ([LIR.HeapStore (lirAddr, offset, lirSrc, valueType)], state)
 
     | MIR.HeapLoad (dest, addr, offset, valueType) ->
         let lirAddr = vregToLIRReg addr
@@ -883,20 +883,20 @@ let selectInstr
             // Float load: load into integer register, then move bits to float register
             let lirFDest = vregToLIRFReg dest
             let tempReg = LIR.Physical LIR.X9  // Use temp register for heap load
-            Ok ([LIRSymbolic.HeapLoad (tempReg, lirAddr, offset)
-                 LIRSymbolic.GpToFp (lirFDest, tempReg)], state)
+            Ok ([LIR.HeapLoad (tempReg, lirAddr, offset)
+                 LIR.GpToFp (lirFDest, tempReg)], state)
         | _ ->
             // Integer/other load
             let lirDest = vregToLIRReg dest
-            Ok ([LIRSymbolic.HeapLoad (lirDest, lirAddr, offset)], state)
+            Ok ([LIR.HeapLoad (lirDest, lirAddr, offset)], state)
 
     | MIR.RefCountInc (addr, payloadSize) ->
         let lirAddr = vregToLIRReg addr
-        Ok ([LIRSymbolic.RefCountInc (lirAddr, payloadSize)], state)
+        Ok ([LIR.RefCountInc (lirAddr, payloadSize)], state)
 
     | MIR.RefCountDec (addr, payloadSize) ->
         let lirAddr = vregToLIRReg addr
-        Ok ([LIRSymbolic.RefCountDec (lirAddr, payloadSize)], state)
+        Ok ([LIR.RefCountDec (lirAddr, payloadSize)], state)
 
     | MIR.Print (src, valueType) ->
         // Generate appropriate print instruction based on type
@@ -905,29 +905,29 @@ let selectInstr
             let lirSrc = convertOperand src
             let moveToX0 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintBool (LIR.Physical LIR.X0)], state)
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintBool (LIR.Physical LIR.X0)], state)
         | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
         | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 ->
             let lirSrc = convertOperand src
             let moveToX0 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)], state)
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
         | AST.TFloat64 ->
             // Float needs to be in D0 for printing
             match src with
             | MIR.FloatSymbol value ->
                 // Literal float - load into D0
-                Ok ([LIRSymbolic.FLoad (LIR.FPhysical LIR.D0, value)
-                     LIRSymbolic.PrintFloat (LIR.FPhysical LIR.D0)], state)
+                Ok ([LIR.FLoad (LIR.FPhysical LIR.D0, value)
+                     LIR.PrintFloat (LIR.FPhysical LIR.D0)], state)
             | MIR.Register vreg ->
                 // Computed float - it's in an FVirtual register, move to D0 for printing
                 let srcFReg = vregToLIRFReg vreg
-                Ok ([LIRSymbolic.FMov (LIR.FPhysical LIR.D0, srcFReg)
-                     LIRSymbolic.PrintFloat (LIR.FPhysical LIR.D0)], state)
+                Ok ([LIR.FMov (LIR.FPhysical LIR.D0, srcFReg)
+                     LIR.PrintFloat (LIR.FPhysical LIR.D0)], state)
             | _ ->
                 Error "Internal error: unexpected operand type for float print"
         | AST.TString | AST.TChar ->
@@ -935,11 +935,11 @@ let selectInstr
             // Char is stored as a string at runtime (single EGC)
             match src with
             | MIR.StringSymbol value ->
-                Ok ([LIRSymbolic.PrintString value], state)
+                Ok ([LIR.PrintString value], state)
             | MIR.Register vreg ->
                 // Heap string (from concatenation): use PrintHeapString
                 let lirReg = vregToLIRReg vreg
-                Ok ([LIRSymbolic.PrintHeapString lirReg], state)
+                Ok ([LIR.PrintHeapString lirReg], state)
             | other ->
                 Error $"Print: Unexpected operand type for string: {other}"
         | AST.TTuple elemTypes ->
@@ -949,27 +949,27 @@ let selectInstr
             let tupleAddrReg = LIR.Physical LIR.X19
             let saveTupleAddr =
                 let srcOp = convertOperand src
-                [LIRSymbolic.Mov (tupleAddrReg, srcOp)]
+                [LIR.Mov (tupleAddrReg, srcOp)]
 
             // Helper to generate print instructions for a value based on its type
-            let rec printValue (valueReg: LIRSymbolic.Reg) (valueType: AST.Type) : LIRSymbolic.Instr list =
+            let rec printValue (valueReg: LIR.Reg) (valueType: AST.Type) : LIR.Instr list =
                 match valueType with
                 | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
                 | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 ->
-                    [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)]
+                    [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
+                     LIR.PrintInt64 (LIR.Physical LIR.X0)]
                 | AST.TBool ->
-                    [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.PrintBool (LIR.Physical LIR.X0)]
+                    [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
+                     LIR.PrintBool (LIR.Physical LIR.X0)]
                 | AST.TFloat64 ->
                     // Float value is in integer register as raw bits, move to D0 for printing
-                    [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
-                     LIRSymbolic.PrintFloat (LIR.FPhysical LIR.D0)]
+                    [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
+                     LIR.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
+                     LIR.PrintFloat (LIR.FPhysical LIR.D0)]
                 | _ ->
                     // Other types: print address for now
-                    [LIRSymbolic.Mov (LIR.Physical LIR.X0, LIRSymbolic.Reg valueReg)
-                     LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)]
+                    [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
+                     LIR.PrintInt64 (LIR.Physical LIR.X0)]
 
             // Generate instructions to print each element
             // Use no-newline versions for tuple elements
@@ -977,29 +977,29 @@ let selectInstr
                 elemTypes
                 |> List.mapi (fun i elemType ->
                     let elemReg = LIR.Physical LIR.X0  // Load directly to X0 for printing
-                    let loadInstr = LIRSymbolic.HeapLoad (elemReg, tupleAddrReg, i * 8)
+                    let loadInstr = LIR.HeapLoad (elemReg, tupleAddrReg, i * 8)
                     let sepInstrs =
-                        if i > 0 then [LIRSymbolic.PrintChars [byte ','; byte ' ']]  // ", "
+                        if i > 0 then [LIR.PrintChars [byte ','; byte ' ']]  // ", "
                         else []
                     let printInstrs =
                         match elemType with
                         | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
                         | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 ->
-                            [LIRSymbolic.PrintInt64NoNewline (LIR.Physical LIR.X0)]
+                            [LIR.PrintInt64NoNewline (LIR.Physical LIR.X0)]
                         | AST.TBool ->
-                            [LIRSymbolic.PrintBoolNoNewline (LIR.Physical LIR.X0)]
+                            [LIR.PrintBoolNoNewline (LIR.Physical LIR.X0)]
                         | AST.TFloat64 ->
                             // Float is in X0 as raw bits, move to D0 for printing
-                            [LIRSymbolic.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
-                             LIRSymbolic.PrintFloatNoNewline (LIR.FPhysical LIR.D0)]
+                            [LIR.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
+                             LIR.PrintFloatNoNewline (LIR.FPhysical LIR.D0)]
                         | t ->
                             Crash.crash $"Unsupported tuple element type for printing: {t}"
                     sepInstrs @ [loadInstr] @ printInstrs)
                 |> List.concat
 
             // Combine: save addr + "(" + elements + ")\n"
-            let openParen = [LIRSymbolic.PrintChars [byte '(']]
-            let closeParenNewline = [LIRSymbolic.PrintChars [byte ')'; byte '\n']]
+            let openParen = [LIR.PrintChars [byte '(']]
+            let closeParenNewline = [LIR.PrintChars [byte ')'; byte '\n']]
             Ok (saveTupleAddr @ openParen @ elemInstrs @ closeParenNewline, state)
 
         | AST.TList elemType ->
@@ -1007,10 +1007,10 @@ let selectInstr
             let lirSrc = convertOperand src
             let moveToX19 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X19) -> []
-                | LIRSymbolic.Reg r -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, LIRSymbolic.Reg r)]
-                | other -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, other)]
-            Ok (moveToX19 @ [LIRSymbolic.PrintList (LIR.Physical LIR.X19, elemType)], state)
+                | LIR.Reg (LIR.Physical LIR.X19) -> []
+                | LIR.Reg r -> [LIR.Mov (LIR.Physical LIR.X19, LIR.Reg r)]
+                | other -> [LIR.Mov (LIR.Physical LIR.X19, other)]
+            Ok (moveToX19 @ [LIR.PrintList (LIR.Physical LIR.X19, elemType)], state)
 
         | AST.TSum (typeName, typeArgs) ->
             // Sum type printing: look up variants and generate PrintSum
@@ -1029,18 +1029,18 @@ let selectInstr
                 let lirSrc = convertOperand src
                 let moveToX19 =
                     match lirSrc with
-                    | LIRSymbolic.Reg (LIR.Physical LIR.X19) -> []
-                    | LIRSymbolic.Reg r -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, LIRSymbolic.Reg r)]
-                    | other -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, other)]
-                Ok (moveToX19 @ [LIRSymbolic.PrintSum (LIR.Physical LIR.X19, substitutedVariants)], state)
+                    | LIR.Reg (LIR.Physical LIR.X19) -> []
+                    | LIR.Reg r -> [LIR.Mov (LIR.Physical LIR.X19, LIR.Reg r)]
+                    | other -> [LIR.Mov (LIR.Physical LIR.X19, other)]
+                Ok (moveToX19 @ [LIR.PrintSum (LIR.Physical LIR.X19, substitutedVariants)], state)
             | None ->
                 // Unknown type, just print address
                 let lirSrc = convertOperand src
                 let moveToX0 =
                     match lirSrc with
-                    | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                    | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-                Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)], state)
+                    | LIR.Reg (LIR.Physical LIR.X0) -> []
+                    | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+                Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
 
         | AST.TRecord (typeName, _) ->
             // Print record with field names and values
@@ -1050,11 +1050,11 @@ let selectInstr
                 let lirSrc = convertOperand src
                 let moveToX19 =
                     match lirSrc with
-                    | LIRSymbolic.Reg (LIR.Physical LIR.X19) -> []
-                    | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, lirSrc)]
+                    | LIR.Reg (LIR.Physical LIR.X19) -> []
+                    | _ -> [LIR.Mov (LIR.Physical LIR.X19, lirSrc)]
                 // Convert RecordField list to tuple format for LIR
                 let fieldTuples = fields |> List.map (fun f -> (f.Name, f.Type))
-                Ok (moveToX19 @ [LIRSymbolic.PrintRecord (LIR.Physical LIR.X19, typeName, fieldTuples)], state)
+                Ok (moveToX19 @ [LIR.PrintRecord (LIR.Physical LIR.X19, typeName, fieldTuples)], state)
             | None ->
                 Error $"Print: Record type '{typeName}' not found in recordRegistry"
         | AST.TDict _ ->
@@ -1062,37 +1062,37 @@ let selectInstr
             let lirSrc = convertOperand src
             let moveToX0 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)], state)
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
         | AST.TUnit ->
             // Unit: print "()" with newline
-            Ok ([LIRSymbolic.PrintChars [byte '('; byte ')'; byte '\n']], state)
+            Ok ([LIR.PrintChars [byte '('; byte ')'; byte '\n']], state)
         | AST.TFunction _ ->
             // Functions shouldn't be printed, but just print address
             let lirSrc = convertOperand src
             let moveToX0 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)], state)
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
         | AST.TRawPtr ->
             // Raw pointer: print address
             let lirSrc = convertOperand src
             let moveToX0 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X0) -> []
-                | _ -> [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirSrc)]
-            Ok (moveToX0 @ [LIRSymbolic.PrintInt64 (LIR.Physical LIR.X0)], state)
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
         | AST.TBytes ->
             // Bytes: print as "<N bytes>" where N is the length
             let lirSrc = convertOperand src
             let moveToX19 =
                 match lirSrc with
-                | LIRSymbolic.Reg (LIR.Physical LIR.X19) -> []
-                | LIRSymbolic.Reg r -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, LIRSymbolic.Reg r)]
-                | other -> [LIRSymbolic.Mov (LIR.Physical LIR.X19, other)]
-            Ok (moveToX19 @ [LIRSymbolic.PrintBytes (LIR.Physical LIR.X19)], state)
+                | LIR.Reg (LIR.Physical LIR.X19) -> []
+                | LIR.Reg r -> [LIR.Mov (LIR.Physical LIR.X19, LIR.Reg r)]
+                | other -> [LIR.Mov (LIR.Physical LIR.X19, other)]
+            Ok (moveToX19 @ [LIR.PrintBytes (LIR.Physical LIR.X19)], state)
         | AST.TVar _ ->
             // Type variables should be monomorphized away before reaching LIR
             Error "Internal error: Type variable reached MIR_to_LIR (should be monomorphized)"
@@ -1101,39 +1101,39 @@ let selectInstr
         let lirDest = vregToLIRReg dest
         let lirLeft = convertOperand left
         let lirRight = convertOperand right
-        Ok ([LIRSymbolic.StringConcat (lirDest, lirLeft, lirRight)], state)
+        Ok ([LIR.StringConcat (lirDest, lirLeft, lirRight)], state)
 
     | MIR.FileReadText (dest, path) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
-        Ok ([LIRSymbolic.FileReadText (lirDest, lirPath)], state)
+        Ok ([LIR.FileReadText (lirDest, lirPath)], state)
 
     | MIR.FileExists (dest, path) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
-        Ok ([LIRSymbolic.FileExists (lirDest, lirPath)], state)
+        Ok ([LIR.FileExists (lirDest, lirPath)], state)
 
     | MIR.FileWriteText (dest, path, content) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
         let lirContent = convertOperand content
-        Ok ([LIRSymbolic.FileWriteText (lirDest, lirPath, lirContent)], state)
+        Ok ([LIR.FileWriteText (lirDest, lirPath, lirContent)], state)
 
     | MIR.FileAppendText (dest, path, content) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
         let lirContent = convertOperand content
-        Ok ([LIRSymbolic.FileAppendText (lirDest, lirPath, lirContent)], state)
+        Ok ([LIR.FileAppendText (lirDest, lirPath, lirContent)], state)
 
     | MIR.FileDelete (dest, path) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
-        Ok ([LIRSymbolic.FileDelete (lirDest, lirPath)], state)
+        Ok ([LIR.FileDelete (lirDest, lirPath)], state)
 
     | MIR.FileSetExecutable (dest, path) ->
         let lirDest = vregToLIRReg dest
         let lirPath = convertOperand path
-        Ok ([LIRSymbolic.FileSetExecutable (lirDest, lirPath)], state)
+        Ok ([LIR.FileSetExecutable (lirDest, lirPath)], state)
 
     | MIR.FileWriteFromPtr (dest, path, ptr, length) ->
         let lirDest = vregToLIRReg dest
@@ -1145,7 +1145,7 @@ let selectInstr
         match ensureInRegister length stateAfterPtr with
         | Error err -> Error err
         | Ok (lengthInstrs, lengthReg, nextState) ->
-            Ok (ptrInstrs @ lengthInstrs @ [LIRSymbolic.FileWriteFromPtr (lirDest, lirPath, ptrReg, lengthReg)], nextState)
+            Ok (ptrInstrs @ lengthInstrs @ [LIR.FileWriteFromPtr (lirDest, lirPath, ptrReg, lengthReg)], nextState)
 
     | MIR.RawAlloc (dest, numBytes) ->
         let lirDest = vregToLIRReg dest
@@ -1153,14 +1153,14 @@ let selectInstr
         match ensureInRegister numBytes state with
         | Error err -> Error err
         | Ok (loadInstrs, numBytesReg, nextState) ->
-            Ok (loadInstrs @ [LIRSymbolic.RawAlloc (lirDest, numBytesReg)], nextState)
+            Ok (loadInstrs @ [LIR.RawAlloc (lirDest, numBytesReg)], nextState)
 
     | MIR.RawFree ptr ->
         // ptr must be in a register
         match ensureInRegister ptr state with
         | Error err -> Error err
         | Ok (loadInstrs, ptrReg, nextState) ->
-            Ok (loadInstrs @ [LIRSymbolic.RawFree ptrReg], nextState)
+            Ok (loadInstrs @ [LIR.RawFree ptrReg], nextState)
 
     | MIR.RawGet (dest, ptr, byteOffset, valueType) ->
         // Both ptr and byteOffset must be in registers
@@ -1175,11 +1175,11 @@ let selectInstr
                 // Float load: load raw bits into GP register, then move to FP register
                 let lirFDest = vregToLIRFReg dest
                 let tempReg = LIR.Physical LIR.X9  // Use temp register for raw get
-                Ok (ptrInstrs @ offsetInstrs @ [LIRSymbolic.RawGet (tempReg, ptrReg, offsetReg); LIRSymbolic.GpToFp (lirFDest, tempReg)], nextState)
+                Ok (ptrInstrs @ offsetInstrs @ [LIR.RawGet (tempReg, ptrReg, offsetReg); LIR.GpToFp (lirFDest, tempReg)], nextState)
             | _ ->
                 // Integer/other load
                 let lirDest = vregToLIRReg dest
-                Ok (ptrInstrs @ offsetInstrs @ [LIRSymbolic.RawGet (lirDest, ptrReg, offsetReg)], nextState)
+                Ok (ptrInstrs @ offsetInstrs @ [LIR.RawGet (lirDest, ptrReg, offsetReg)], nextState)
 
     | MIR.RawGetByte (dest, ptr, byteOffset) ->
         let lirDest = vregToLIRReg dest
@@ -1190,7 +1190,7 @@ let selectInstr
         match ensureInRegister byteOffset stateAfterPtr with
         | Error err -> Error err
         | Ok (offsetInstrs, offsetReg, nextState) ->
-            Ok (ptrInstrs @ offsetInstrs @ [LIRSymbolic.RawGetByte (lirDest, ptrReg, offsetReg)], nextState)
+            Ok (ptrInstrs @ offsetInstrs @ [LIR.RawGetByte (lirDest, ptrReg, offsetReg)], nextState)
 
     | MIR.RawSet (ptr, byteOffset, value, valueType) ->
         // All three operands must be in registers
@@ -1204,8 +1204,8 @@ let selectInstr
         match value with
         | MIR.StringSymbol _ ->
             let (tempReg, nextState) = freshTempReg stateAfterOffset
-            let movInstr = LIRSymbolic.Mov (tempReg, convertOperand value)
-            Ok (ptrInstrs @ offsetInstrs @ [movInstr; LIRSymbolic.RawSet (ptrReg, offsetReg, tempReg)], nextState)
+            let movInstr = LIR.Mov (tempReg, convertOperand value)
+            Ok (ptrInstrs @ offsetInstrs @ [movInstr; LIR.RawSet (ptrReg, offsetReg, tempReg)], nextState)
         | _ ->
             match valueType with
             | Some AST.TFloat64 ->
@@ -1214,12 +1214,12 @@ let selectInstr
                 | Error err -> Error err
                 | Ok (valueInstrs, valueFReg, nextState) ->
                     let tempReg = LIR.Physical LIR.X9  // Use temp register for FpToGp
-                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIRSymbolic.FpToGp (tempReg, valueFReg); LIRSymbolic.RawSet (ptrReg, offsetReg, tempReg)], nextState)
+                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.FpToGp (tempReg, valueFReg); LIR.RawSet (ptrReg, offsetReg, tempReg)], nextState)
             | _ ->
                 match ensureInRegister value stateAfterOffset with
                 | Error err -> Error err
                 | Ok (valueInstrs, valueReg, nextState) ->
-                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIRSymbolic.RawSet (ptrReg, offsetReg, valueReg)], nextState)
+                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.RawSet (ptrReg, offsetReg, valueReg)], nextState)
 
     | MIR.RawSetByte (ptr, byteOffset, value) ->
         // All three operands must be in registers
@@ -1232,28 +1232,28 @@ let selectInstr
         match ensureInRegister value stateAfterOffset with
         | Error err -> Error err
         | Ok (valueInstrs, valueReg, nextState) ->
-            Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIRSymbolic.RawSetByte (ptrReg, offsetReg, valueReg)], nextState)
+            Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.RawSetByte (ptrReg, offsetReg, valueReg)], nextState)
 
     | MIR.FloatSqrt (dest, src) ->
         let lirFDest = vregToLIRFReg dest
         match ensureInFRegister src state with
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg, nextState) ->
-            Ok (srcInstrs @ [LIRSymbolic.FSqrt (lirFDest, srcFReg)], nextState)
+            Ok (srcInstrs @ [LIR.FSqrt (lirFDest, srcFReg)], nextState)
 
     | MIR.FloatAbs (dest, src) ->
         let lirFDest = vregToLIRFReg dest
         match ensureInFRegister src state with
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg, nextState) ->
-            Ok (srcInstrs @ [LIRSymbolic.FAbs (lirFDest, srcFReg)], nextState)
+            Ok (srcInstrs @ [LIR.FAbs (lirFDest, srcFReg)], nextState)
 
     | MIR.FloatNeg (dest, src) ->
         let lirFDest = vregToLIRFReg dest
         match ensureInFRegister src state with
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg, nextState) ->
-            Ok (srcInstrs @ [LIRSymbolic.FNeg (lirFDest, srcFReg)], nextState)
+            Ok (srcInstrs @ [LIR.FNeg (lirFDest, srcFReg)], nextState)
 
     | MIR.Int64ToFloat (dest, src) ->
         let lirFDest = vregToLIRFReg dest
@@ -1261,7 +1261,7 @@ let selectInstr
         match ensureInRegister src state with
         | Error err -> Error err
         | Ok (srcInstrs, srcReg, nextState) ->
-            Ok (srcInstrs @ [LIRSymbolic.Int64ToFloat (lirFDest, srcReg)], nextState)
+            Ok (srcInstrs @ [LIR.Int64ToFloat (lirFDest, srcReg)], nextState)
 
     | MIR.FloatToInt64 (dest, src) ->
         let lirDest = vregToLIRReg dest
@@ -1269,7 +1269,7 @@ let selectInstr
         match ensureInFRegister src state with
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg, nextState) ->
-            Ok (srcInstrs @ [LIRSymbolic.FloatToInt64 (lirDest, srcFReg)], nextState)
+            Ok (srcInstrs @ [LIR.FloatToInt64 (lirDest, srcFReg)], nextState)
 
     | MIR.FloatToBits (dest, src) ->
         let lirDest = vregToLIRReg dest
@@ -1278,23 +1278,23 @@ let selectInstr
         | Error err -> Error err
         | Ok (srcInstrs, srcFReg, nextState) ->
             // FloatToBits uses FpToGp (bit copy, not conversion)
-            Ok (srcInstrs @ [LIRSymbolic.FloatToBits (lirDest, srcFReg)], nextState)
+            Ok (srcInstrs @ [LIR.FloatToBits (lirDest, srcFReg)], nextState)
 
     | MIR.RefCountIncString str ->
         let lirStr = convertOperand str
-        Ok ([LIRSymbolic.RefCountIncString lirStr], state)
+        Ok ([LIR.RefCountIncString lirStr], state)
 
     | MIR.RefCountDecString str ->
         let lirStr = convertOperand str
-        Ok ([LIRSymbolic.RefCountDecString lirStr], state)
+        Ok ([LIR.RefCountDecString lirStr], state)
 
     | MIR.RandomInt64 dest ->
         let lirDest = vregToLIRReg dest
-        Ok ([LIRSymbolic.RandomInt64 lirDest], state)
+        Ok ([LIR.RandomInt64 lirDest], state)
 
     | MIR.DateNow dest ->
         let lirDest = vregToLIRReg dest
-        Ok ([LIRSymbolic.DateNow lirDest], state)
+        Ok ([LIR.DateNow lirDest], state)
 
     | MIR.FloatToString (dest, value) ->
         let lirDest = vregToLIRReg dest
@@ -1302,13 +1302,13 @@ let selectInstr
         match ensureInFRegister value state with
         | Error err -> Error err
         | Ok (valueInstrs, valueFReg, nextState) ->
-            Ok (valueInstrs @ [LIRSymbolic.FloatToString (lirDest, valueFReg)], nextState)
+            Ok (valueInstrs @ [LIR.FloatToString (lirDest, valueFReg)], nextState)
 
     | MIR.CoverageHit exprId ->
-        Ok ([LIRSymbolic.CoverageHit exprId], state)
+        Ok ([LIR.CoverageHit exprId], state)
 
     | MIR.Phi (dest, sources, valueType) ->
-        // Convert MIR.Phi to LIRSymbolic.Phi (int) or LIRSymbolic.FPhi (float)
+        // Convert MIR.Phi to LIR.Phi (int) or LIR.FPhi (float)
         // Check if this is a float phi by:
         // 1. valueType is Some TFloat64 (set by SSA for parameters), OR
         // 2. destination VReg is in floatRegs (set during MIR generation and SSA renaming)
@@ -1332,14 +1332,14 @@ let selectInstr
                     | _ -> Error $"FPhi source must be a register, got: {op}"
             match buildSources sources with
             | Error err -> Error err
-            | Ok lirSources -> Ok ([LIRSymbolic.FPhi (lirDest, lirSources)], state)
+            | Ok lirSources -> Ok ([LIR.FPhi (lirDest, lirSources)], state)
         else
             // Integer phi uses Reg (Virtual) registers
             let lirDest = vregToLIRReg dest
             let lirSources =
                 sources |> List.map (fun (op, MIR.Label lbl) ->
                     (convertOperand op, LIR.Label lbl))
-            Ok ([LIRSymbolic.Phi (lirDest, lirSources, valueType)], state)
+            Ok ([LIR.Phi (lirDest, lirSources, valueType)], state)
 
 /// Convert MIR terminator to LIR terminator
 /// For Branch, need to convert operand to register (may add instructions)
@@ -1348,33 +1348,33 @@ let selectTerminator
     (terminator: MIR.Terminator)
     (returnType: AST.Type)
     (state: TempState)
-    : Result<LIRSymbolic.Instr list * LIRSymbolic.Terminator * TempState, string> =
+    : Result<LIR.Instr list * LIR.Terminator * TempState, string> =
     match terminator with
     | MIR.Ret operand ->
         match operand with
         | MIR.FloatSymbol value ->
             // Load float into D0 for return
-            let loadFloat = LIRSymbolic.FLoad (LIR.FPhysical LIR.D0, value)
-            Ok ([loadFloat], LIRSymbolic.Ret, state)
+            let loadFloat = LIR.FLoad (LIR.FPhysical LIR.D0, value)
+            Ok ([loadFloat], LIR.Ret, state)
         | MIR.BoolConst b ->
             // Return bool as 0/1
-            let lirOp = LIRSymbolic.Imm (if b then 1L else 0L)
-            let moveToX0 = [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirOp)]
-            Ok (moveToX0, LIRSymbolic.Ret, state)
+            let lirOp = LIR.Imm (if b then 1L else 0L)
+            let moveToX0 = [LIR.Mov (LIR.Physical LIR.X0, lirOp)]
+            Ok (moveToX0, LIR.Ret, state)
         | MIR.StringSymbol _ ->
             // Strings don't have a meaningful register return value
             // The value has been printed, so just exit with code 0
-            Ok ([LIRSymbolic.Exit], LIRSymbolic.Ret, state)
+            Ok ([LIR.Exit], LIR.Ret, state)
         | MIR.Register vreg when returnType = AST.TFloat64 ->
             // Float return - move to D0 via FMov
             let srcFReg = vregToLIRFReg vreg
-            let moveToD0 = [LIRSymbolic.FMov (LIR.FPhysical LIR.D0, srcFReg)]
-            Ok (moveToD0, LIRSymbolic.Ret, state)
+            let moveToD0 = [LIR.FMov (LIR.FPhysical LIR.D0, srcFReg)]
+            Ok (moveToD0, LIR.Ret, state)
         | _ ->
             // Integer/other return - move operand to X0
             let lirOp = convertOperand operand
-            let moveToX0 = [LIRSymbolic.Mov (LIR.Physical LIR.X0, lirOp)]
-            Ok (moveToX0, LIRSymbolic.Ret, state)
+            let moveToX0 = [LIR.Mov (LIR.Physical LIR.X0, lirOp)]
+            Ok (moveToX0, LIR.Ret, state)
 
     | MIR.Branch (condOp, trueLabel, falseLabel) ->
         // Convert MIR.Label to LIR.Label
@@ -1385,11 +1385,11 @@ let selectTerminator
         match ensureInRegister condOp state with
         | Error err -> Error err
         | Ok (condInstrs, condReg, nextState) ->
-            Ok (condInstrs, LIRSymbolic.Branch (condReg, LIR.Label trueLbl, LIR.Label falseLbl), nextState)
+            Ok (condInstrs, LIR.Branch (condReg, LIR.Label trueLbl, LIR.Label falseLbl), nextState)
 
     | MIR.Jump label ->
         let (MIR.Label lbl) = label
-        Ok ([], LIRSymbolic.Jump (LIR.Label lbl), state)
+        Ok ([], LIR.Jump (LIR.Label lbl), state)
 
 /// Convert MIR label to LIR label
 let convertLabel (MIR.Label lbl) : LIR.Label = LIR.Label lbl
@@ -1486,11 +1486,11 @@ let initTempState (mirFunc: MIR.Function) : TempState =
     { NextRegId = maxRegId + 1
       NextFRegId = maxFRegId + 1 }
 
-let moduloNegativeDivisorErrorBlock (label: LIR.Label) : LIRSymbolic.BasicBlock =
+let moduloNegativeDivisorErrorBlock (label: LIR.Label) : LIR.BasicBlock =
     {
         Label = label
-        Instrs = [LIRSymbolic.PrintString moduloNegativeDivisorErrorMessage]
-        Terminator = LIRSymbolic.Ret
+        Instrs = [LIR.PrintString moduloNegativeDivisorErrorMessage]
+        Terminator = LIR.Ret
     }
 
 let selectBlocksWithModuloChecks
@@ -1501,7 +1501,7 @@ let selectBlocksWithModuloChecks
     (floatRegs: Set<int>)
     (errorLabel: LIR.Label)
     (state: TempState)
-    : Result<LIRSymbolic.BasicBlock list * LIR.Label * TempState, string> =
+    : Result<LIR.BasicBlock list * LIR.Label * TempState, string> =
     let (MIR.Label baseLabel) = block.Label
     let rec loop instrs counter currentLabel currentInstrs blocksRev currentState =
         match instrs with
@@ -1517,12 +1517,12 @@ let selectBlocksWithModuloChecks
                     let checkInstrs =
                         currentInstrs
                         @ loadInstrs
-                        @ [LIRSymbolic.Cmp (rightReg, LIRSymbolic.Imm 0L)]
-                    let checkBlock : LIRSymbolic.BasicBlock =
+                        @ [LIR.Cmp (rightReg, LIR.Imm 0L)]
+                    let checkBlock : LIR.BasicBlock =
                         {
                             Label = currentLabel
                             Instrs = checkInstrs
-                            Terminator = LIRSymbolic.CondBranch (LIR.LT, errorLabel, nextLabel)
+                            Terminator = LIR.CondBranch (LIR.LT, errorLabel, nextLabel)
                         }
                     loop rest (counter + 1) nextLabel modInstrs (checkBlock :: blocksRev) nextState
             | _ ->
@@ -1537,7 +1537,7 @@ let selectBlocksWithModuloChecks
         match selectTerminator block.Terminator returnType stateAfterInstrs with
         | Error err -> Error err
         | Ok (termInstrs, lirTerm, nextState) ->
-            let finalBlock : LIRSymbolic.BasicBlock =
+            let finalBlock : LIR.BasicBlock =
                 {
                     Label = currentLabel
                     Instrs = currentInstrs @ termInstrs
@@ -1554,7 +1554,7 @@ let selectCFG
     (floatRegs: Set<int>)
     (errorLabel: LIR.Label)
     (state: TempState)
-    : Result<LIRSymbolic.CFG, string> =
+    : Result<LIR.CFG, string> =
     let lirEntry = convertLabel cfg.Entry
 
     let blockList = cfg.Blocks |> Map.toList
@@ -1575,19 +1575,19 @@ let selectCFG
             lirBlocks
             |> List.exists (fun block ->
                 match block.Terminator with
-                | LIRSymbolic.Branch (_, trueLabel, falseLabel) ->
+                | LIR.Branch (_, trueLabel, falseLabel) ->
                     trueLabel = errorLabel || falseLabel = errorLabel
-                | LIRSymbolic.BranchZero (_, zeroLabel, nonZeroLabel) ->
+                | LIR.BranchZero (_, zeroLabel, nonZeroLabel) ->
                     zeroLabel = errorLabel || nonZeroLabel = errorLabel
-                | LIRSymbolic.BranchBitZero (_, _, zeroLabel, nonZeroLabel) ->
+                | LIR.BranchBitZero (_, _, zeroLabel, nonZeroLabel) ->
                     zeroLabel = errorLabel || nonZeroLabel = errorLabel
-                | LIRSymbolic.BranchBitNonZero (_, _, nonZeroLabel, zeroLabel) ->
+                | LIR.BranchBitNonZero (_, _, nonZeroLabel, zeroLabel) ->
                     zeroLabel = errorLabel || nonZeroLabel = errorLabel
-                | LIRSymbolic.CondBranch (_, trueLabel, falseLabel) ->
+                | LIR.CondBranch (_, trueLabel, falseLabel) ->
                     trueLabel = errorLabel || falseLabel = errorLabel
-                | LIRSymbolic.Jump label ->
+                | LIR.Jump label ->
                     label = errorLabel
-                | LIRSymbolic.Ret -> false)
+                | LIR.Ret -> false)
         let blocksWithError =
             if needsErrorBlock then
                 lirBlocks @ [moduloNegativeDivisorErrorBlock errorLabel]
@@ -1605,14 +1605,14 @@ let selectCFG
                 | Some mapped -> mapped
                 | None -> label
 
-            let remapPhiInstr (instr: LIRSymbolic.Instr) : LIRSymbolic.Instr =
+            let remapPhiInstr (instr: LIR.Instr) : LIR.Instr =
                 match instr with
-                | LIRSymbolic.Phi (dest, sources, valueType) ->
+                | LIR.Phi (dest, sources, valueType) ->
                     let sources' = sources |> List.map (fun (op, pred) -> (op, remapLabel pred))
-                    LIRSymbolic.Phi (dest, sources', valueType)
-                | LIRSymbolic.FPhi (dest, sources) ->
+                    LIR.Phi (dest, sources', valueType)
+                | LIR.FPhi (dest, sources) ->
                     let sources' = sources |> List.map (fun (src, pred) -> (src, remapLabel pred))
-                    LIRSymbolic.FPhi (dest, sources')
+                    LIR.FPhi (dest, sources')
                 | _ -> instr
 
             let remappedBlocks =
@@ -1656,7 +1656,7 @@ let private checkCallArgLimits (mirFuncs: MIR.Function list) : Result<unit, stri
     | None -> Ok ()
 
 /// Convert MIR program to LIR
-let toLIR (program: MIR.Program) : Result<LIRSymbolic.Program, string> =
+let toLIR (program: MIR.Program) : Result<LIR.Program, string> =
     let (MIR.Program (mirFuncs, variantRegistry, recordRegistry)) = program
 
     // Pre-check: verify all functions have ≤8 parameters and calls have ≤8 arguments
@@ -1668,14 +1668,14 @@ let toLIR (program: MIR.Program) : Result<LIRSymbolic.Program, string> =
     | Ok () ->
 
     // Convert each MIR function to LIR
-    let convertFunc (mirFunc: MIR.Function) : Result<LIRSymbolic.Function, string> =
+    let convertFunc (mirFunc: MIR.Function) : Result<LIR.Function, string> =
         let errorLabel = LIR.Label $"__modulo_negative_divisor_error_{mirFunc.Name}"
         let tempState = initTempState mirFunc
         match selectCFG mirFunc.CFG variantRegistry recordRegistry mirFunc.ReturnType mirFunc.FloatRegs errorLabel tempState with
         | Error err -> Error err
         | Ok lirCFG ->
             // Convert MIR TypedParams to LIR TypedLIRParams
-            let lirTypedParams : LIRSymbolic.TypedLIRParam list =
+            let lirTypedParams : LIR.TypedLIRParam list =
                 mirFunc.TypedParams
                 |> List.map (fun tp ->
                     let (MIR.VReg id) = tp.Reg
@@ -1690,4 +1690,4 @@ let toLIR (program: MIR.Program) : Result<LIRSymbolic.Program, string> =
     match mapResults convertFunc mirFuncs with
     | Error err -> Error err
     | Ok lirFuncs ->
-        Ok (LIRSymbolic.Program lirFuncs)
+        Ok (LIR.Program lirFuncs)

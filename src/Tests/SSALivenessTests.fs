@@ -9,7 +9,6 @@
 module SSALivenessTests
 
 open LIR
-open LIRSymbolic
 
 /// Test result type
 type TestResult = Result<unit, string>

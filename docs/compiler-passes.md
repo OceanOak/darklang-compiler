@@ -348,9 +348,8 @@ Input (MIR):  Add(v1, v2, v3)      // v1 = v2 + v3
 Output (LIR): ADD(V1, V2, V3)      // ARM64 ADD instruction
 ```
 
-Implementation detail: some prebuilt compilation paths store a symbolic LIR
-variant (string/float constants by value) and resolve pool indices once at
-final merge before code generation. This avoids per-function pool remapping
+Implementation detail: LIR keeps string/float constants by value and defers
+pool construction until ARM64 emission. This avoids per-function pool remapping
 when mixing stdlib, preamble, and user functions.
 
 ---
@@ -438,7 +437,6 @@ Uses `7_ARM64_Encoding.fs` for encoding and `8_Binary_Generation_*.fs` for binar
 | `ANF.fs` | A-Normal Form types |
 | `MIR.fs` | Mid-level IR types |
 | `LIR.fs` | Low-level IR types |
-| `LIRSymbolic.fs` | Symbolic low-level IR types |
 | `ARM64.fs` | ARM64 instruction types |
 | `ARM64Symbolic.fs` | Symbolic ARM64 instruction types |
 

@@ -5,7 +5,7 @@
 module IRSymbolTests
 
 open MIR
-open LIRSymbolic
+open LIR
 
 /// Test result type
 type TestResult = Result<unit, string>
@@ -28,7 +28,7 @@ let testMirToLirSymbolicOperands () : TestResult =
     let program = MIR.Program ([func], Map.empty, Map.empty)
     match MIR_to_LIR.toLIR program with
     | Error err -> Error $"MIR→LIR failed: {err}"
-    | Ok (LIRSymbolic.Program funcs) ->
+    | Ok (LIR.Program funcs) ->
         match funcs with
         | [lirFunc] ->
             let hasSymbolic =
@@ -36,8 +36,8 @@ let testMirToLirSymbolicOperands () : TestResult =
                 |> Map.toList
                 |> List.collect (fun (_, block) -> block.Instrs)
                 |> List.exists (function
-                    | LIRSymbolic.Mov (_, LIRSymbolic.StringSymbol value) -> value = "mir_symbolic"
-                    | LIRSymbolic.Mov (_, LIRSymbolic.FloatSymbol value) -> value = 4.5
+                    | LIR.Mov (_, LIR.StringSymbol value) -> value = "mir_symbolic"
+                    | LIR.Mov (_, LIR.FloatSymbol value) -> value = 4.5
                     | _ -> false)
             if hasSymbolic then Ok ()
             else Error "Expected MIR→LIR to preserve symbolic operands"

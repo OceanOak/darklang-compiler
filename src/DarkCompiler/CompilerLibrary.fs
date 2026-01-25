@@ -559,9 +559,9 @@ let private printMIRProgram (title: string) (program: MIR.Program) : unit =
     println ""
 
 /// Print symbolic LIR program (with CFG) in a consistent format
-let private printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : unit =
+let private printLIRProgram (title: string) (program: LIR.Program) : unit =
     println title
-    println (formatLIRSymbolic program)
+    println (formatLIR program)
     println ""
 
 /// Run SSA + MIR/LIR optimizations, returning an optimized LIR program
@@ -572,7 +572,7 @@ let private compileMirToLir
     (passTimingRecorder: PassTimingRecorder option)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
-    : Result<LIRSymbolic.Program, string> =
+    : Result<LIR.Program, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
@@ -619,7 +619,7 @@ let private compileMirToLir
         let lirElapsed = sw.Elapsed.TotalMilliseconds - lirStart
         recordPassTiming passTimingRecorder "MIR -> LIR" lirElapsed
         if shouldDumpIR verbosity options.DumpLIR then
-            printLIRSymbolicProgram "=== LIR (Low-level IR with CFG) ===" lirProgram
+            printLIRProgram "=== LIR (Low-level IR with CFG) ===" lirProgram
         if verbosity >= 2 then
             let t = System.Math.Round(lirElapsed, 1)
             println $"        {t}ms"
@@ -644,8 +644,8 @@ let private compileMirToLir
 
 /// Allocate registers for a list of symbolic LIR functions
 let private allocateRegistersForFunctions
-    (functions: LIRSymbolic.Function list)
-    : LIRSymbolic.Function list =
+    (functions: LIR.Function list)
+    : LIR.Function list =
     functions |> List.map RegisterAllocation.allocateRegisters
 
 /// Run MIR+LIR passes (including register allocation) from ANF functions
@@ -662,7 +662,7 @@ let private lowerToAllocatedLir
     (registries: AST_to_ANF.Registries)
     (externalReturnTypes: Map<string, AST.Type>)
     (dependencyHashes: Map<string, string>)
-    : Result<LIRSymbolic.Function list, string> =
+    : Result<LIR.Function list, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
@@ -677,7 +677,7 @@ let private lowerToAllocatedLir
         true
 
     let recordCacheStats
-        (cachedMap: Map<string, LIRSymbolic.Function>)
+        (cachedMap: Map<string, LIR.Function>)
         (functionsToCompile: ANF.Function list)
         : unit =
         match cacheMissRecorder with
@@ -695,7 +695,7 @@ let private lowerToAllocatedLir
                     let stageLabel = if stageSuffix = "" then "user" else stageSuffix
                     record { Stage = stageLabel; Hits = hitCount; Misses = missCount }
 
-    let cachePlanResult : Result<string option * Map<string, LIRSymbolic.Function> * Map<string, string> * ANF.Function list, string> =
+    let cachePlanResult : Result<string option * Map<string, LIR.Function> * Map<string, string> * ANF.Function list, string> =
         match optionsHashOpt with
         | None -> Ok (None, Map.empty, Map.empty, functions)
         | Some optionsHash ->
@@ -724,7 +724,7 @@ let private lowerToAllocatedLir
                 keyedFunctions
                 |> List.choose (fun (func, _, key) ->
                     if isCacheableFunctionName func.Name then Some key else None)
-            Cache.getFunctions<LIRSymbolic.Function> keys
+            Cache.getFunctions<LIR.Function> keys
             |> Result.mapError (fun err -> $"Cache read error: {err}")
             |> Result.map (fun cachedMap ->
                 let functionsToCompile =
@@ -738,7 +738,7 @@ let private lowerToAllocatedLir
                             | None -> Some func)
                 (Some optionsHash, cachedMap, funcHashMap, functionsToCompile))
 
-    let compileMissing (functionsToCompile: ANF.Function list) : Result<LIRSymbolic.Function list, string> =
+    let compileMissing (functionsToCompile: ANF.Function list) : Result<LIR.Function list, string> =
         if List.isEmpty functionsToCompile then
             Ok []
         else
@@ -769,7 +769,7 @@ let private lowerToAllocatedLir
                 |> Result.bind (fun lirProgram ->
                     if verbosity >= 1 then println "  [5/7] Register Allocation..."
                     let allocStart = sw.Elapsed.TotalMilliseconds
-                    let (LIRSymbolic.Program lirFuncs) = lirProgram
+                    let (LIR.Program lirFuncs) = lirProgram
                     let allocatedFuncs = allocateRegistersForFunctions lirFuncs
                     let allocElapsed = sw.Elapsed.TotalMilliseconds - allocStart
                     recordPassTiming passTimingRecorder "Register Allocation" allocElapsed
@@ -781,7 +781,7 @@ let private lowerToAllocatedLir
     let compileMissingWithTiming
         (label: string)
         (functionsToCompile: ANF.Function list)
-        : Result<LIRSymbolic.Function list, string> =
+        : Result<LIR.Function list, string> =
         if List.isEmpty functionsToCompile then
             Ok []
         else
@@ -967,12 +967,12 @@ let private generateBinary
     (emitLabel: string)
     (dumpAsm: bool)
     (dumpMachineCode: bool)
-    (allocatedProgram: LIRSymbolic.Program)
+    (allocatedProgram: LIR.Program)
     : Result<byte array, string> =
 
     if verbosity >= 1 then println codegenLabel
     let codegenStart = sw.Elapsed.TotalMilliseconds
-    let coverageExprCount = if options.EnableCoverage then LIRSymbolic.countCoverageHits allocatedProgram else 0
+    let coverageExprCount = if options.EnableCoverage then LIR.countCoverageHits allocatedProgram else 0
     let codegenOptions : CodeGen.CodeGenOptions = {
         DisableFreeList = options.DisableFreeList
         EnableCoverage = options.EnableCoverage
@@ -1053,7 +1053,7 @@ type PreambleContext = {
     /// Type map from RC insertion (merged with stdlib's TypeMap)
     TypeMap: ANF.TypeMap
     /// Preamble's symbolic LIR functions after register allocation
-    SymbolicFunctions: LIRSymbolic.Function list
+    SymbolicFunctions: LIR.Function list
     /// Hash of the typed preamble (including any specializations)
     PreambleHash: string
     /// Dependency hashes for preamble functions (post-inlining)
@@ -1082,7 +1082,7 @@ type StdlibResult = {
     /// Hash of stdlib source + specialization registry
     StdlibHash: string
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
-    AllocatedFunctions: LIRSymbolic.Function list
+    AllocatedFunctions: LIR.Function list
     /// Call graph for dead code elimination (which stdlib funcs call which other funcs)
     StdlibCallGraph: Map<string, Set<string>>
     /// Stdlib ANF functions indexed by name (for coverage analysis)
@@ -1621,7 +1621,7 @@ type private UserCompilePlan = {
     Stdlib: StdlibResult
     BaseContext: PipelineContext
     Monomorphization: MonomorphizationMode
-    PrebuiltSymbolicFunctions: LIRSymbolic.Function list
+    PrebuiltSymbolicFunctions: LIR.Function list
     SkipFunctionNames: Set<string>
     ExternalFunctionDependencyHashes: Map<string, string>
     EmitFunctionEvents: bool
@@ -1789,9 +1789,9 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
 
                                     // Combine reachable stdlib functions with user functions
                                     let allFuncs = reachableStdlib @ finalUserFuncs
-                                    let allocatedProgram = LIRSymbolic.Program allFuncs
+                                    let allocatedProgram = LIR.Program allFuncs
                                     if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
-                                        printLIRSymbolicProgram "=== LIR (After Register Allocation) ===" allocatedProgram
+                                        printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
 
                                     let binaryResult =
                                         generateBinary

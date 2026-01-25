@@ -408,10 +408,10 @@ let private prettyPrintLIRFReg = function
 let private prettyPrintLIROperand = function
     | LIR.Imm n -> $"Imm {n}"
     | LIR.FloatImm f -> $"FloatImm {f}"
-    | LIR.Operand.Reg reg -> $"Reg {prettyPrintLIRReg reg}"
+    | LIR.Reg reg -> $"Reg {prettyPrintLIRReg reg}"
     | LIR.StackSlot n -> $"Stack {n}"
-    | LIR.StringRef idx -> $"str[{idx}]"
-    | LIR.FloatRef idx -> $"float[{idx}]"
+    | LIR.StringSymbol value -> $"str[{value}]"
+    | LIR.FloatSymbol value -> $"float[{value}]"
     | LIR.FuncAddr name -> $"&{name}"
 
 /// Pretty-print LIR instruction
@@ -476,23 +476,49 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
     | LIR.Call (dest, funcName, args) ->
         let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
         $"{prettyPrintLIRReg dest} <- Call({funcName}, [{argStr}])"
+    | LIR.TailCall (funcName, args) ->
+        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
+        $"TailCall({funcName}, [{argStr}])"
     | LIR.IndirectCall (dest, func, args) ->
         let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
         $"{prettyPrintLIRReg dest} <- IndirectCall({prettyPrintLIRReg func}, [{argStr}])"
+    | LIR.IndirectTailCall (func, args) ->
+        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
+        $"IndirectTailCall({prettyPrintLIRReg func}, [{argStr}])"
     | LIR.ClosureAlloc (dest, funcName, captures) ->
         let capsStr = captures |> List.map prettyPrintLIROperand |> String.concat ", "
         $"{prettyPrintLIRReg dest} <- ClosureAlloc({funcName}, [{capsStr}])"
     | LIR.ClosureCall (dest, closure, args) ->
         let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
         $"{prettyPrintLIRReg dest} <- ClosureCall({prettyPrintLIRReg closure}, [{argStr}])"
+    | LIR.ClosureTailCall (closure, args) ->
+        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
+        $"ClosureTailCall({prettyPrintLIRReg closure}, [{argStr}])"
+    | LIR.SaveRegs (intRegs, floatRegs) ->
+        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
+        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
+        $"SaveRegs([{intStr}], [{floatStr}])"
+    | LIR.RestoreRegs (intRegs, floatRegs) ->
+        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
+        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
+        $"RestoreRegs([{intStr}], [{floatStr}])"
+    | LIR.ArgMoves moves ->
+        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIROperand src))
+        sprintf "ArgMoves(%s)" (String.concat ", " moveStrs)
+    | LIR.TailArgMoves moves ->
+        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIROperand src))
+        sprintf "TailArgMoves(%s)" (String.concat ", " moveStrs)
+    | LIR.FArgMoves moves ->
+        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIRFReg src))
+        sprintf "FArgMoves(%s)" (String.concat ", " moveStrs)
     | LIR.PrintInt64 reg ->
         $"PrintInt64({prettyPrintLIRReg reg})"
     | LIR.PrintBool reg ->
         $"PrintBool({prettyPrintLIRReg reg})"
     | LIR.PrintFloat freg ->
         $"PrintFloat({prettyPrintLIRFReg freg})"
-    | LIR.PrintString (idx, len) ->
-        $"PrintString(str[{idx}], len={len})"
+    | LIR.PrintString value ->
+        $"PrintString(str[{value}], len={value.Length})"
     | LIR.PrintChars chars ->
         let s = chars |> List.map (fun b -> char b) |> System.String.Concat
         $"PrintChars(\"{s}\")"
@@ -512,28 +538,11 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"PrintSum({prettyPrintLIRReg sumPtr}, {variants})"
     | LIR.PrintRecord (recordPtr, typeName, fields) ->
         $"PrintRecord({prettyPrintLIRReg recordPtr}, {typeName}, {fields})"
-    | LIR.SaveRegs (intRegs, floatRegs) ->
-        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
-        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
-        $"SaveRegs([{intStr}], [{floatStr}])"
-    | LIR.RestoreRegs (intRegs, floatRegs) ->
-        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
-        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
-        $"RestoreRegs([{intStr}], [{floatStr}])"
-    | LIR.ArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIROperand src))
-        sprintf "ArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIR.TailArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIROperand src))
-        sprintf "TailArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIR.FArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIRFReg src))
-        sprintf "FArgMoves(%s)" (String.concat ", " moveStrs)
-    // FP instructions
+    | LIR.Exit -> "Exit"
     | LIR.FMov (dest, src) ->
         $"{prettyPrintLIRFReg dest} <- FMov({prettyPrintLIRFReg src})"
-    | LIR.FLoad (dest, idx) ->
-        $"{prettyPrintLIRFReg dest} <- FLoad(float[{idx}])"
+    | LIR.FLoad (dest, value) ->
+        $"{prettyPrintLIRFReg dest} <- FLoad(float[{value}])"
     | LIR.FAdd (dest, left, right) ->
         $"{prettyPrintLIRFReg dest} <- FAdd({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
     | LIR.FSub (dest, left, right) ->
@@ -560,19 +569,16 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
     | LIR.FpToGp (dest, src) ->
         $"{prettyPrintLIRReg dest} <- FpToGp({prettyPrintLIRFReg src})"
-    // Heap operations
     | LIR.HeapAlloc (dest, sizeBytes) ->
         $"{prettyPrintLIRReg dest} <- HeapAlloc({sizeBytes})"
     | LIR.HeapStore (addr, offset, src, _valueType) ->
         $"HeapStore({prettyPrintLIRReg addr}, {offset}, {prettyPrintLIROperand src})"
     | LIR.HeapLoad (dest, addr, offset) ->
         $"{prettyPrintLIRReg dest} <- HeapLoad({prettyPrintLIRReg addr}, {offset})"
-    // Reference counting operations
     | LIR.RefCountInc (addr, payloadSize) ->
         $"RefCountInc({prettyPrintLIRReg addr}, {payloadSize})"
     | LIR.RefCountDec (addr, payloadSize) ->
         $"RefCountDec({prettyPrintLIRReg addr}, {payloadSize})"
-    // String operations
     | LIR.StringConcat (dest, left, right) ->
         $"{prettyPrintLIRReg dest} <- StringConcat({prettyPrintLIROperand left}, {prettyPrintLIROperand right})"
     | LIR.PrintHeapString reg ->
@@ -593,7 +599,6 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRReg dest} <- FileSetExecutable({prettyPrintLIROperand path})"
     | LIR.FileWriteFromPtr (dest, path, ptr, length) ->
         $"{prettyPrintLIRReg dest} <- FileWriteFromPtr({prettyPrintLIROperand path}, {prettyPrintLIRReg ptr}, {prettyPrintLIRReg length})"
-    // Raw memory operations
     | LIR.RawAlloc (dest, numBytes) ->
         $"{prettyPrintLIRReg dest} <- RawAlloc({prettyPrintLIRReg numBytes})"
     | LIR.RawFree ptr ->
@@ -606,9 +611,6 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"RawSet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
     | LIR.RawSetByte (ptr, byteOffset, value) ->
         $"RawSetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
-    // String intrinsics
-    | LIR.FloatToString (dest, value) ->
-        $"{prettyPrintLIRReg dest} <- FloatToString({prettyPrintLIRFReg value})"
     | LIR.RefCountIncString str ->
         $"RefCountIncString({prettyPrintLIROperand str})"
     | LIR.RefCountDecString str ->
@@ -617,20 +619,12 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRReg dest} <- RandomInt64()"
     | LIR.DateNow dest ->
         $"{prettyPrintLIRReg dest} <- DateNow()"
+    | LIR.FloatToString (dest, value) ->
+        $"{prettyPrintLIRReg dest} <- FloatToString({prettyPrintLIRFReg value})"
     | LIR.CoverageHit exprId ->
         $"CoverageHit({exprId})"
-    | LIR.Exit -> "Exit"
-    | LIR.TailCall (funcName, args) ->
-        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
-        $"TailCall({funcName}, [{argStr}])"
-    | LIR.IndirectTailCall (func, args) ->
-        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
-        $"IndirectTailCall({prettyPrintLIRReg func}, [{argStr}])"
-    | LIR.ClosureTailCall (closure, args) ->
-        let argStr = args |> List.map prettyPrintLIROperand |> String.concat ", "
-        $"ClosureTailCall({prettyPrintLIRReg closure}, [{argStr}])"
 
-/// Pretty-print LIR terminator
+/// Pretty-print symbolic LIR terminator
 let private prettyPrintLIRTerminator (term: LIR.Terminator) : string =
     match term with
     | LIR.Ret -> "Ret"
@@ -646,8 +640,8 @@ let private prettyPrintLIRTerminator (term: LIR.Terminator) : string =
         $"CondBranch({cond}, {trueLabel}, {falseLabel})"
     | LIR.Jump label -> $"Jump({label})"
 
-/// Format LIR program with CFG structure
-let formatLIR (LIR.Program (functions, _, _)) : string =
+/// Format symbolic LIR program with CFG structure
+let formatLIR (LIR.Program functions) : string =
     let funcStrs =
         functions
         |> List.map (fun func ->
@@ -662,264 +656,6 @@ let formatLIR (LIR.Program (functions, _, _)) : string =
                         |> List.map (sprintf "    %s")
                         |> String.concat "\n"
                     let termStr = sprintf "    %s" (prettyPrintLIRTerminator block.Terminator)
-                    $"  {label}:\n{instrStrs}\n{termStr}")
-                |> String.concat "\n"
-            $"{func.Name}:\n{blockStrs}")
-        |> String.concat "\n\n"
-    funcStrs
-
-/// Pretty-print symbolic LIR operand
-let private prettyPrintSymbolicOperand = function
-    | LIRSymbolic.Imm n -> $"Imm {n}"
-    | LIRSymbolic.FloatImm f -> $"FloatImm {f}"
-    | LIRSymbolic.Reg reg -> $"Reg {prettyPrintLIRReg reg}"
-    | LIRSymbolic.StackSlot n -> $"Stack {n}"
-    | LIRSymbolic.StringSymbol value -> $"str[{value}]"
-    | LIRSymbolic.FloatSymbol value -> $"float[{value}]"
-    | LIRSymbolic.FuncAddr name -> $"&{name}"
-
-/// Pretty-print symbolic LIR instruction
-let private prettyPrintLIRSymbolicInstr (instr: LIRSymbolic.Instr) : string =
-    match instr with
-    | LIRSymbolic.Mov (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Mov({prettyPrintSymbolicOperand src})"
-    | LIRSymbolic.Phi (dest, sources, _) ->
-        let srcs = sources |> List.map (fun (op, LIR.Label lbl) -> $"({prettyPrintSymbolicOperand op}, {lbl})") |> String.concat ", "
-        $"{prettyPrintLIRReg dest} <- Phi([{srcs}])"
-    | LIRSymbolic.FPhi (dest, sources) ->
-        let srcs = sources |> List.map (fun (freg, LIR.Label lbl) -> $"({prettyPrintLIRFReg freg}, {lbl})") |> String.concat ", "
-        $"{prettyPrintLIRFReg dest} <- FPhi([{srcs}])"
-    | LIRSymbolic.Store (offset, src) ->
-        $"Store(Stack {offset}, {prettyPrintLIRReg src})"
-    | LIRSymbolic.Add (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Add({prettyPrintLIRReg left}, {prettyPrintSymbolicOperand right})"
-    | LIRSymbolic.Sub (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Sub({prettyPrintLIRReg left}, {prettyPrintSymbolicOperand right})"
-    | LIRSymbolic.Mul (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Mul({prettyPrintLIRReg left}, Reg {prettyPrintLIRReg right})"
-    | LIRSymbolic.Sdiv (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Sdiv({prettyPrintLIRReg left}, Reg {prettyPrintLIRReg right})"
-    | LIRSymbolic.Msub (dest, mulLeft, mulRight, sub) ->
-        $"{prettyPrintLIRReg dest} <- Msub({prettyPrintLIRReg mulLeft}, {prettyPrintLIRReg mulRight}, {prettyPrintLIRReg sub})"
-    | LIRSymbolic.Madd (dest, mulLeft, mulRight, add) ->
-        $"{prettyPrintLIRReg dest} <- Madd({prettyPrintLIRReg mulLeft}, {prettyPrintLIRReg mulRight}, {prettyPrintLIRReg add})"
-    | LIRSymbolic.Cmp (left, right) ->
-        $"Cmp({prettyPrintLIRReg left}, {prettyPrintSymbolicOperand right})"
-    | LIRSymbolic.Cset (dest, cond) ->
-        $"{prettyPrintLIRReg dest} <- Cset({cond})"
-    | LIRSymbolic.And (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- And({prettyPrintLIRReg left}, {prettyPrintLIRReg right})"
-    | LIRSymbolic.And_imm (dest, src, imm) ->
-        $"{prettyPrintLIRReg dest} <- And_imm({prettyPrintLIRReg src}, #{imm})"
-    | LIRSymbolic.Orr (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Orr({prettyPrintLIRReg left}, {prettyPrintLIRReg right})"
-    | LIRSymbolic.Eor (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- Eor({prettyPrintLIRReg left}, {prettyPrintLIRReg right})"
-    | LIRSymbolic.Lsl (dest, src, shift) ->
-        $"{prettyPrintLIRReg dest} <- Lsl({prettyPrintLIRReg src}, {prettyPrintLIRReg shift})"
-    | LIRSymbolic.Lsr (dest, src, shift) ->
-        $"{prettyPrintLIRReg dest} <- Lsr({prettyPrintLIRReg src}, {prettyPrintLIRReg shift})"
-    | LIRSymbolic.Lsl_imm (dest, src, shift) ->
-        $"{prettyPrintLIRReg dest} <- Lsl_imm({prettyPrintLIRReg src}, #{shift})"
-    | LIRSymbolic.Lsr_imm (dest, src, shift) ->
-        $"{prettyPrintLIRReg dest} <- Lsr_imm({prettyPrintLIRReg src}, #{shift})"
-    | LIRSymbolic.Mvn (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Mvn({prettyPrintLIRReg src})"
-    | LIRSymbolic.Sxtb (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Sxtb({prettyPrintLIRReg src})"
-    | LIRSymbolic.Sxth (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Sxth({prettyPrintLIRReg src})"
-    | LIRSymbolic.Sxtw (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Sxtw({prettyPrintLIRReg src})"
-    | LIRSymbolic.Uxtb (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Uxtb({prettyPrintLIRReg src})"
-    | LIRSymbolic.Uxth (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Uxth({prettyPrintLIRReg src})"
-    | LIRSymbolic.Uxtw (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- Uxtw({prettyPrintLIRReg src})"
-    | LIRSymbolic.Call (dest, funcName, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"{prettyPrintLIRReg dest} <- Call({funcName}, [{argStr}])"
-    | LIRSymbolic.TailCall (funcName, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"TailCall({funcName}, [{argStr}])"
-    | LIRSymbolic.IndirectCall (dest, func, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"{prettyPrintLIRReg dest} <- IndirectCall({prettyPrintLIRReg func}, [{argStr}])"
-    | LIRSymbolic.IndirectTailCall (func, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"IndirectTailCall({prettyPrintLIRReg func}, [{argStr}])"
-    | LIRSymbolic.ClosureAlloc (dest, funcName, captures) ->
-        let capsStr = captures |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"{prettyPrintLIRReg dest} <- ClosureAlloc({funcName}, [{capsStr}])"
-    | LIRSymbolic.ClosureCall (dest, closure, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"{prettyPrintLIRReg dest} <- ClosureCall({prettyPrintLIRReg closure}, [{argStr}])"
-    | LIRSymbolic.ClosureTailCall (closure, args) ->
-        let argStr = args |> List.map prettyPrintSymbolicOperand |> String.concat ", "
-        $"ClosureTailCall({prettyPrintLIRReg closure}, [{argStr}])"
-    | LIRSymbolic.SaveRegs (intRegs, floatRegs) ->
-        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
-        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
-        $"SaveRegs([{intStr}], [{floatStr}])"
-    | LIRSymbolic.RestoreRegs (intRegs, floatRegs) ->
-        let intStr = intRegs |> List.map (sprintf "%A") |> String.concat ", "
-        let floatStr = floatRegs |> List.map (sprintf "%A") |> String.concat ", "
-        $"RestoreRegs([{intStr}], [{floatStr}])"
-    | LIRSymbolic.ArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintSymbolicOperand src))
-        sprintf "ArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIRSymbolic.TailArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintSymbolicOperand src))
-        sprintf "TailArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIRSymbolic.FArgMoves moves ->
-        let moveStrs = moves |> List.map (fun (dest, src) -> sprintf "%A <- %s" dest (prettyPrintLIRFReg src))
-        sprintf "FArgMoves(%s)" (String.concat ", " moveStrs)
-    | LIRSymbolic.PrintInt64 reg ->
-        $"PrintInt64({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintBool reg ->
-        $"PrintBool({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintFloat freg ->
-        $"PrintFloat({prettyPrintLIRFReg freg})"
-    | LIRSymbolic.PrintString value ->
-        $"PrintString(str[{value}], len={value.Length})"
-    | LIRSymbolic.PrintChars chars ->
-        let s = chars |> List.map (fun b -> char b) |> System.String.Concat
-        $"PrintChars(\"{s}\")"
-    | LIRSymbolic.PrintBytes reg ->
-        $"PrintBytes({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintInt64NoNewline reg ->
-        $"PrintIntNoNewline({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintBoolNoNewline reg ->
-        $"PrintBoolNoNewline({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintFloatNoNewline freg ->
-        $"PrintFloatNoNewline({prettyPrintLIRFReg freg})"
-    | LIRSymbolic.PrintHeapStringNoNewline reg ->
-        $"PrintHeapStringNoNewline({prettyPrintLIRReg reg})"
-    | LIRSymbolic.PrintList (listPtr, elemType) ->
-        $"PrintList({prettyPrintLIRReg listPtr}, {elemType})"
-    | LIRSymbolic.PrintSum (sumPtr, variants) ->
-        $"PrintSum({prettyPrintLIRReg sumPtr}, {variants})"
-    | LIRSymbolic.PrintRecord (recordPtr, typeName, fields) ->
-        $"PrintRecord({prettyPrintLIRReg recordPtr}, {typeName}, {fields})"
-    | LIRSymbolic.Exit -> "Exit"
-    | LIRSymbolic.FMov (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- FMov({prettyPrintLIRFReg src})"
-    | LIRSymbolic.FLoad (dest, value) ->
-        $"{prettyPrintLIRFReg dest} <- FLoad(float[{value}])"
-    | LIRSymbolic.FAdd (dest, left, right) ->
-        $"{prettyPrintLIRFReg dest} <- FAdd({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.FSub (dest, left, right) ->
-        $"{prettyPrintLIRFReg dest} <- FSub({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.FMul (dest, left, right) ->
-        $"{prettyPrintLIRFReg dest} <- FMul({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.FDiv (dest, left, right) ->
-        $"{prettyPrintLIRFReg dest} <- FDiv({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.FNeg (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- FNeg({prettyPrintLIRFReg src})"
-    | LIRSymbolic.FAbs (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- FAbs({prettyPrintLIRFReg src})"
-    | LIRSymbolic.FSqrt (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- FSqrt({prettyPrintLIRFReg src})"
-    | LIRSymbolic.FCmp (left, right) ->
-        $"FCmp({prettyPrintLIRFReg left}, {prettyPrintLIRFReg right})"
-    | LIRSymbolic.Int64ToFloat (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- Int64ToFloat({prettyPrintLIRReg src})"
-    | LIRSymbolic.FloatToInt64 (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- FloatToInt64({prettyPrintLIRFReg src})"
-    | LIRSymbolic.FloatToBits (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- FloatToBits({prettyPrintLIRFReg src})"
-    | LIRSymbolic.GpToFp (dest, src) ->
-        $"{prettyPrintLIRFReg dest} <- GpToFp({prettyPrintLIRReg src})"
-    | LIRSymbolic.FpToGp (dest, src) ->
-        $"{prettyPrintLIRReg dest} <- FpToGp({prettyPrintLIRFReg src})"
-    | LIRSymbolic.HeapAlloc (dest, sizeBytes) ->
-        $"{prettyPrintLIRReg dest} <- HeapAlloc({sizeBytes})"
-    | LIRSymbolic.HeapStore (addr, offset, src, _valueType) ->
-        $"HeapStore({prettyPrintLIRReg addr}, {offset}, {prettyPrintSymbolicOperand src})"
-    | LIRSymbolic.HeapLoad (dest, addr, offset) ->
-        $"{prettyPrintLIRReg dest} <- HeapLoad({prettyPrintLIRReg addr}, {offset})"
-    | LIRSymbolic.RefCountInc (addr, payloadSize) ->
-        $"RefCountInc({prettyPrintLIRReg addr}, {payloadSize})"
-    | LIRSymbolic.RefCountDec (addr, payloadSize) ->
-        $"RefCountDec({prettyPrintLIRReg addr}, {payloadSize})"
-    | LIRSymbolic.StringConcat (dest, left, right) ->
-        $"{prettyPrintLIRReg dest} <- StringConcat({prettyPrintSymbolicOperand left}, {prettyPrintSymbolicOperand right})"
-    | LIRSymbolic.PrintHeapString reg ->
-        $"PrintHeapString({prettyPrintLIRReg reg})"
-    | LIRSymbolic.LoadFuncAddr (dest, funcName) ->
-        $"{prettyPrintLIRReg dest} <- LoadFuncAddr({funcName})"
-    | LIRSymbolic.FileReadText (dest, path) ->
-        $"{prettyPrintLIRReg dest} <- FileReadText({prettyPrintSymbolicOperand path})"
-    | LIRSymbolic.FileExists (dest, path) ->
-        $"{prettyPrintLIRReg dest} <- FileExists({prettyPrintSymbolicOperand path})"
-    | LIRSymbolic.FileWriteText (dest, path, content) ->
-        $"{prettyPrintLIRReg dest} <- FileWriteText({prettyPrintSymbolicOperand path}, {prettyPrintSymbolicOperand content})"
-    | LIRSymbolic.FileAppendText (dest, path, content) ->
-        $"{prettyPrintLIRReg dest} <- FileAppendText({prettyPrintSymbolicOperand path}, {prettyPrintSymbolicOperand content})"
-    | LIRSymbolic.FileDelete (dest, path) ->
-        $"{prettyPrintLIRReg dest} <- FileDelete({prettyPrintSymbolicOperand path})"
-    | LIRSymbolic.FileSetExecutable (dest, path) ->
-        $"{prettyPrintLIRReg dest} <- FileSetExecutable({prettyPrintSymbolicOperand path})"
-    | LIRSymbolic.FileWriteFromPtr (dest, path, ptr, length) ->
-        $"{prettyPrintLIRReg dest} <- FileWriteFromPtr({prettyPrintSymbolicOperand path}, {prettyPrintLIRReg ptr}, {prettyPrintLIRReg length})"
-    | LIRSymbolic.RawAlloc (dest, numBytes) ->
-        $"{prettyPrintLIRReg dest} <- RawAlloc({prettyPrintLIRReg numBytes})"
-    | LIRSymbolic.RawFree ptr ->
-        $"RawFree({prettyPrintLIRReg ptr})"
-    | LIRSymbolic.RawGet (dest, ptr, byteOffset) ->
-        $"{prettyPrintLIRReg dest} <- RawGet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset})"
-    | LIRSymbolic.RawGetByte (dest, ptr, byteOffset) ->
-        $"{prettyPrintLIRReg dest} <- RawGetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset})"
-    | LIRSymbolic.RawSet (ptr, byteOffset, value) ->
-        $"RawSet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
-    | LIRSymbolic.RawSetByte (ptr, byteOffset, value) ->
-        $"RawSetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
-    | LIRSymbolic.RefCountIncString str ->
-        $"RefCountIncString({prettyPrintSymbolicOperand str})"
-    | LIRSymbolic.RefCountDecString str ->
-        $"RefCountDecString({prettyPrintSymbolicOperand str})"
-    | LIRSymbolic.RandomInt64 dest ->
-        $"{prettyPrintLIRReg dest} <- RandomInt64()"
-    | LIRSymbolic.DateNow dest ->
-        $"{prettyPrintLIRReg dest} <- DateNow()"
-    | LIRSymbolic.FloatToString (dest, value) ->
-        $"{prettyPrintLIRReg dest} <- FloatToString({prettyPrintLIRFReg value})"
-    | LIRSymbolic.CoverageHit exprId ->
-        $"CoverageHit({exprId})"
-
-/// Pretty-print symbolic LIR terminator
-let private prettyPrintLIRSymbolicTerminator (term: LIRSymbolic.Terminator) : string =
-    match term with
-    | LIRSymbolic.Ret -> "Ret"
-    | LIRSymbolic.Branch (cond, trueLabel, falseLabel) ->
-        $"Branch({prettyPrintLIRReg cond}, {trueLabel}, {falseLabel})"
-    | LIRSymbolic.BranchZero (cond, zeroLabel, nonZeroLabel) ->
-        $"BranchZero({prettyPrintLIRReg cond}, {zeroLabel}, {nonZeroLabel})"
-    | LIRSymbolic.BranchBitZero (reg, bit, zeroLabel, nonZeroLabel) ->
-        $"BranchBitZero({prettyPrintLIRReg reg}, #{bit}, {zeroLabel}, {nonZeroLabel})"
-    | LIRSymbolic.BranchBitNonZero (reg, bit, nonZeroLabel, zeroLabel) ->
-        $"BranchBitNonZero({prettyPrintLIRReg reg}, #{bit}, {nonZeroLabel}, {zeroLabel})"
-    | LIRSymbolic.CondBranch (cond, trueLabel, falseLabel) ->
-        $"CondBranch({cond}, {trueLabel}, {falseLabel})"
-    | LIRSymbolic.Jump label -> $"Jump({label})"
-
-/// Format symbolic LIR program with CFG structure
-let formatLIRSymbolic (LIRSymbolic.Program functions) : string =
-    let funcStrs =
-        functions
-        |> List.map (fun func ->
-            let blockStrs =
-                func.CFG.Blocks
-                |> Map.toList
-                |> List.sortBy fst
-                |> List.map (fun (label, block) ->
-                    let instrStrs =
-                        block.Instrs
-                        |> List.map prettyPrintLIRSymbolicInstr
-                        |> List.map (sprintf "    %s")
-                        |> String.concat "\n"
-                    let termStr = sprintf "    %s" (prettyPrintLIRSymbolicTerminator block.Terminator)
                     $"  {label}:\n{instrStrs}\n{termStr}")
                 |> String.concat "\n"
             $"{func.Name}:\n{blockStrs}")

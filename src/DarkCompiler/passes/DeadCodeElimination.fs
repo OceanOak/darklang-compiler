@@ -15,28 +15,28 @@ let private getListDisplayStringFunc (elemType: AST.Type) : string option =
     | _ -> None
 
 /// Extract function names from an operand
-let private extractFromOperand (op: LIRSymbolic.Operand) : string list =
+let private extractFromOperand (op: LIR.Operand) : string list =
     match op with
-    | LIRSymbolic.FuncAddr name -> [name]
+    | LIR.FuncAddr name -> [name]
     | _ -> []
 
 /// Extract function names from a single instruction
-let private extractCallsFromInstr (instr: LIRSymbolic.Instr) : string list =
+let private extractCallsFromInstr (instr: LIR.Instr) : string list =
     match instr with
-    | LIRSymbolic.Call (_, funcName, args) ->
+    | LIR.Call (_, funcName, args) ->
         funcName :: (args |> List.collect extractFromOperand)
-    | LIRSymbolic.TailCall (funcName, args) ->
+    | LIR.TailCall (funcName, args) ->
         funcName :: (args |> List.collect extractFromOperand)
-    | LIRSymbolic.IndirectTailCall (_, args) ->
+    | LIR.IndirectTailCall (_, args) ->
         // Function pointer is in a register - we can't statically determine the target
         args |> List.collect extractFromOperand
-    | LIRSymbolic.ClosureAlloc (_, funcName, captures) ->
+    | LIR.ClosureAlloc (_, funcName, captures) ->
         funcName :: (captures |> List.collect extractFromOperand)
-    | LIRSymbolic.ClosureTailCall (_, args) ->
+    | LIR.ClosureTailCall (_, args) ->
         // Closure pointer is in a register - we can't statically determine the target
         args |> List.collect extractFromOperand
-    | LIRSymbolic.LoadFuncAddr (_, funcName) -> [funcName]
-    | LIRSymbolic.PrintSum (_, variants) ->
+    | LIR.LoadFuncAddr (_, funcName) -> [funcName]
+    | LIR.PrintSum (_, variants) ->
         variants
         |> List.collect (fun (_, _, payloadType) ->
             match payloadType with
@@ -45,14 +45,14 @@ let private extractCallsFromInstr (instr: LIRSymbolic.Instr) : string list =
                 | Some funcName -> [funcName]
                 | None -> []
             | _ -> [])
-    | LIRSymbolic.HeapStore (_, _, src, _) -> extractFromOperand src
-    | LIRSymbolic.Mov (_, src) -> extractFromOperand src
-    | LIRSymbolic.StringConcat (_, left, right) ->
+    | LIR.HeapStore (_, _, src, _) -> extractFromOperand src
+    | LIR.Mov (_, src) -> extractFromOperand src
+    | LIR.StringConcat (_, left, right) ->
         extractFromOperand left @ extractFromOperand right
     | _ -> []
 
 /// Extract function names called from a LIR function
-let getCalledFunctions (func: LIRSymbolic.Function) : Set<string> =
+let getCalledFunctions (func: LIR.Function) : Set<string> =
     func.CFG.Blocks
     |> Map.toSeq
     |> Seq.collect (fun (_, block) -> block.Instrs)
@@ -60,7 +60,7 @@ let getCalledFunctions (func: LIRSymbolic.Function) : Set<string> =
     |> Set.ofSeq
 
 /// Build call graph from list of functions
-let buildCallGraph (funcs: LIRSymbolic.Function list) : Map<string, Set<string>> =
+let buildCallGraph (funcs: LIR.Function list) : Map<string, Set<string>> =
     funcs
     |> List.map (fun f -> f.Name, getCalledFunctions f)
     |> Map.ofList
@@ -82,8 +82,8 @@ let findReachable (callGraph: Map<string, Set<string>>) (roots: Set<string>) : S
 
 /// Filter functions to only include reachable ones
 let filterFunctions (callGraph: Map<string, Set<string>>)
-                    (userFuncs: LIRSymbolic.Function list)
-                    (stdlibFuncs: LIRSymbolic.Function list) : LIRSymbolic.Function list =
+                    (userFuncs: LIR.Function list)
+                    (stdlibFuncs: LIR.Function list) : LIR.Function list =
     // Get all functions called from user code
     let userCalls =
         userFuncs
