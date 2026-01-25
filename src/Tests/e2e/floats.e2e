@@ -310,7 +310,7 @@ floatMultiBranchIntermediates(10.0, 2.0, 4) = 5.0
 // =====================================================
 // Float Interference Graph Building (Mutation #203)
 // =====================================================
-// Tests the buildFloatInterferenceGraph function which adds edges from each
+// Tests the float interference graph builder which adds edges from each
 // float definition to the current live set (including entry float params).
 // If the live-set edge loop is incorrect, floats that are live together
 // may be assigned the same register.
@@ -339,7 +339,7 @@ let f1 = 1.1 in let f2 = 2.2 in let f3 = 3.3 in let f4 = 4.4 in let f5 = 5.5 in 
 // =====================================================
 // Float Interference Graph LiveOut Processing (Mutation #205)
 // =====================================================
-// Tests the buildFloatInterferenceGraph function's LiveOut processing.
+// Tests the float interference graph builder's LiveOut processing.
 // The function initializes live from LiveOut and then adds edges from defs
 // to that set while walking backwards.
 
@@ -365,7 +365,7 @@ floatMultiBlockLiveOut(1.0, 2.0, 3.0, false, false) = 6.0
 // =====================================================
 // Float Interference Graph Instruction Processing (Mutation #207)
 // =====================================================
-// Tests the instruction-by-instruction live set processing in buildFloatInterferenceGraph.
+// Tests the instruction-by-instruction live set processing in the float interference graph builder.
 // When processing instructions in reverse order, the function updates the live set
 // and builds interference edges between all pairs of live floats:
 //   for i in 0 .. liveList.Length - 2 do
@@ -687,7 +687,7 @@ floatHighPressure20(false) = 156.54999999999
 // =====================================================
 // Float Liveness Fixed Point Iteration (Mutation #254)
 // =====================================================
-// Tests the || operator in computeFloatLiveness's convergence check:
+// Tests the || operator in float liveness convergence check:
 //   if newLiveIn <> oldLiveness.LiveIn || newLiveOut <> oldLiveness.LiveOut then
 // If mutation changes || to &&, the loop only continues when BOTH LiveIn AND
 // LiveOut change. This can cause early termination when only one changes,

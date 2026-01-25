@@ -37,9 +37,36 @@ module RegisterAllocation
 // Types
 // ============================================================================
 
+/// Live interval for a virtual register
+type LiveInterval = {
+    VRegId: int
+    Start: int
+    End: int
+}
+
+/// Bitset of VRegDomain indices
+type BitSet = {
+    Words: uint64 array
+}
+
+/// Dense domain for VReg IDs used by bitsets
+type VRegDomain = {
+    Ids: int array
+    IndexOf: int array
+    IndexOffset: int
+    WordCount: int
+}
+
+/// Dense domain for basic block labels
+type BlockIndex = {
+    Labels: LIR.Label array
+    EntryIndex: int
+}
+
 /// Result of register allocation
 type AllocationResult = {
-    Mapping: Map<int, Allocation>
+    Domain: VRegDomain
+    Allocations: Allocation option array
     StackSize: int
     UsedCalleeSaved: LIR.PhysReg list
 }
@@ -49,18 +76,286 @@ and Allocation =
     | PhysReg of LIR.PhysReg
     | StackSlot of int
 
-/// Live interval for a virtual register
-type LiveInterval = {
-    VRegId: int
-    Start: int
-    End: int
-}
-
 /// Liveness information for a basic block
 type BlockLiveness = {
-    LiveIn: Set<int>
-    LiveOut: Set<int>
+    LiveIn: BitSet
+    LiveOut: BitSet
 }
+
+/// Timing information for register allocation phases
+type RegisterAllocationTiming = {
+    Phase: string
+    ElapsedMs: float
+}
+
+type private InterferenceGraphTiming = {
+    LiveIterationMs: float
+    AdjacencyUpdatesMs: float
+}
+
+type private McsTiming = {
+    SelectMs: float
+    UpdateMs: float
+}
+
+type private ChordalColoringTiming = {
+    CoalesceMs: float
+    McsSelectMs: float
+    McsUpdateMs: float
+    GreedyMs: float
+    ExpandMs: float
+}
+
+// ============================================================================
+// Bitset Utilities (used to speed up register allocation)
+// ============================================================================
+
+let private buildVRegDomain (ids: int list) : VRegDomain =
+    let sorted = List.sort ids
+    let rec unique (last: int option) (remaining: int list) (acc: int list) : int list =
+        match remaining with
+        | [] -> List.rev acc
+        | head :: tail ->
+            match last with
+            | Some value when value = head -> unique last tail acc
+            | _ -> unique (Some head) tail (head :: acc)
+    let ordered = unique None sorted []
+    let idsArray = ordered |> List.toArray
+    let wordCount = (idsArray.Length + 63) / 64
+    match ordered with
+    | [] ->
+        { Ids = idsArray; IndexOf = [||]; IndexOffset = 0; WordCount = 0 }
+    | _ ->
+        let minId = List.head ordered
+        let maxId = List.last ordered
+        let size = maxId - minId + 1
+        let indexOf = Array.create size -1
+        ordered |> List.iteri (fun idx id -> indexOf.[id - minId] <- idx)
+        { Ids = idsArray; IndexOf = indexOf; IndexOffset = minId; WordCount = wordCount }
+
+let private tryIndexOf (domain: VRegDomain) (value: int) : int option =
+    if domain.IndexOf.Length = 0 then
+        None
+    else
+        let idx = value - domain.IndexOffset
+        if idx < 0 || idx >= domain.IndexOf.Length then
+            None
+        else
+            let mapped = domain.IndexOf.[idx]
+            if mapped >= 0 then Some mapped else None
+
+let private bitsetEmpty (wordCount: int) : BitSet =
+    { Words = Array.zeroCreate<uint64> wordCount }
+
+let private bitsetClone (bits: BitSet) : BitSet =
+    { Words = Array.copy bits.Words }
+
+let private bitsetIsEmpty (bits: BitSet) : bool =
+    bits.Words |> Array.forall (fun word -> word = 0UL)
+
+let private bitsetEqual (left: BitSet) (right: BitSet) : bool =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet equality requires matching word counts"
+    else
+        Array.forall2 (=) left.Words right.Words
+
+let private bitsetUnion (left: BitSet) (right: BitSet) : BitSet =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet union requires matching word counts"
+    else if bitsetIsEmpty left then
+        right
+    else if bitsetIsEmpty right then
+        left
+    else
+        let words = Array.init left.Words.Length (fun i -> left.Words.[i] ||| right.Words.[i])
+        { Words = words }
+
+let private bitsetDiff (left: BitSet) (right: BitSet) : BitSet =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet difference requires matching word counts"
+    else if bitsetIsEmpty right then
+        left
+    else
+        let words = Array.init left.Words.Length (fun i -> left.Words.[i] &&& (~~~right.Words.[i]))
+        { Words = words }
+
+let bitsetContains (domain: VRegDomain) (bits: BitSet) (value: int) : bool =
+    match tryIndexOf domain value with
+    | Some idx ->
+        let wordIdx = idx >>> 6
+        let bitIdx = idx &&& 63
+        if wordIdx < bits.Words.Length then
+            (bits.Words.[wordIdx] &&& (1UL <<< bitIdx)) <> 0UL
+        else
+            false
+    | None -> false
+
+let private bitsetAddInPlace (domain: VRegDomain) (value: int) (bits: BitSet) : unit =
+    match tryIndexOf domain value with
+    | Some idx ->
+        let wordIdx = idx >>> 6
+        let bitIdx = idx &&& 63
+        if wordIdx < bits.Words.Length then
+            bits.Words.[wordIdx] <- bits.Words.[wordIdx] ||| (1UL <<< bitIdx)
+    | None -> ()
+
+let private bitsetRemoveInPlace (domain: VRegDomain) (value: int) (bits: BitSet) : unit =
+    match tryIndexOf domain value with
+    | Some idx ->
+        let wordIdx = idx >>> 6
+        let bitIdx = idx &&& 63
+        if wordIdx < bits.Words.Length then
+            bits.Words.[wordIdx] <- bits.Words.[wordIdx] &&& (~~~(1UL <<< bitIdx))
+    | None -> ()
+
+let private bitsetAddIndexInPlace (idx: int) (bits: BitSet) : unit =
+    let wordIdx = idx >>> 6
+    let bitIdx = idx &&& 63
+    if wordIdx < bits.Words.Length then
+        bits.Words.[wordIdx] <- bits.Words.[wordIdx] ||| (1UL <<< bitIdx)
+
+let private bitsetRemoveIndexInPlace (idx: int) (bits: BitSet) : unit =
+    let wordIdx = idx >>> 6
+    let bitIdx = idx &&& 63
+    if wordIdx < bits.Words.Length then
+        bits.Words.[wordIdx] <- bits.Words.[wordIdx] &&& (~~~(1UL <<< bitIdx))
+
+let private bitsetContainsIndex (idx: int) (bits: BitSet) : bool =
+    let wordIdx = idx >>> 6
+    let bitIdx = idx &&& 63
+    if wordIdx < bits.Words.Length then
+        (bits.Words.[wordIdx] &&& (1UL <<< bitIdx)) <> 0UL
+    else
+        false
+
+let private bitsetUnionInPlace (left: BitSet) (right: BitSet) : unit =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet union requires matching word counts"
+    else
+        for i in 0 .. left.Words.Length - 1 do
+            left.Words.[i] <- left.Words.[i] ||| right.Words.[i]
+
+let private bitsetIntersects (left: BitSet) (right: BitSet) : bool =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet intersection requires matching word counts"
+    else
+        let mutable found = false
+        let mutable i = 0
+        while not found && i < left.Words.Length do
+            if (left.Words.[i] &&& right.Words.[i]) <> 0UL then
+                found <- true
+            i <- i + 1
+        found
+
+let private countTrailingZeros (word: uint64) : int =
+    let mutable temp = word
+    let mutable count = 0
+    while (temp &&& 1UL) = 0UL do
+        temp <- temp >>> 1
+        count <- count + 1
+    count
+
+let private bitsetIter (domain: VRegDomain) (bits: BitSet) (f: int -> unit) : unit =
+    for wordIdx in 0 .. bits.Words.Length - 1 do
+        let mutable word = bits.Words.[wordIdx]
+        let baseIdx = wordIdx * 64
+        while word <> 0UL do
+            let tz = countTrailingZeros word
+            let idx = baseIdx + tz
+            if idx < domain.Ids.Length then
+                f domain.Ids.[idx]
+            word <- word &&& (word - 1UL)
+
+let private bitsetIterIndices (bits: BitSet) (f: int -> unit) : unit =
+    for wordIdx in 0 .. bits.Words.Length - 1 do
+        let mutable word = bits.Words.[wordIdx]
+        let baseIdx = wordIdx * 64
+        while word <> 0UL do
+            let tz = countTrailingZeros word
+            f (baseIdx + tz)
+            word <- word &&& (word - 1UL)
+
+let private bitsetFromList (domain: VRegDomain) (values: int list) : BitSet =
+    if List.isEmpty values then
+        bitsetEmpty domain.WordCount
+    else
+        let words = Array.zeroCreate<uint64> domain.WordCount
+        for value in values do
+            match tryIndexOf domain value with
+            | Some idx ->
+                let wordIdx = idx >>> 6
+                let bitIdx = idx &&& 63
+                words.[wordIdx] <- words.[wordIdx] ||| (1UL <<< bitIdx)
+            | None ->
+                Crash.crash $"BitSet: Missing vreg {value} in domain"
+        { Words = words }
+
+let private bitsetDiffInPlace (left: BitSet) (right: BitSet) : unit =
+    if left.Words.Length <> right.Words.Length then
+        Crash.crash "BitSet difference requires matching word counts"
+    else
+        for i in 0 .. left.Words.Length - 1 do
+            left.Words.[i] <- left.Words.[i] &&& (~~~right.Words.[i])
+
+let private bitsetCount (bits: BitSet) : int =
+    let mutable count = 0
+    for word in bits.Words do
+        let mutable w = word
+        while w <> 0UL do
+            w <- w &&& (w - 1UL)
+            count <- count + 1
+    count
+
+let private bitsetIndicesToList (bits: BitSet) : int list =
+    let mutable acc = []
+    bitsetIterIndices bits (fun idx -> acc <- idx :: acc)
+    List.rev acc
+
+let private tryLabelIndex (labels: LIR.Label array) (label: LIR.Label) : int option =
+    if labels.Length = 0 then
+        None
+    else
+        let rec search low high =
+            if low > high then
+                None
+            else
+                let mid = (low + high) / 2
+                let cmp = compare labels.[mid] label
+                if cmp = 0 then
+                    Some mid
+                else if cmp < 0 then
+                    search (mid + 1) high
+                else
+                    search low (mid - 1)
+        search 0 (labels.Length - 1)
+
+let private buildBlockIndex (cfg: LIR.CFG) : BlockIndex * LIR.BasicBlock array =
+    let entries = cfg.Blocks |> Seq.toArray
+    let labels = entries |> Array.map (fun kvp -> kvp.Key)
+    let blocks = entries |> Array.map (fun kvp -> kvp.Value)
+    let entryIndex =
+        match tryLabelIndex labels cfg.Entry with
+        | Some idx -> idx
+        | None -> Crash.crash $"BlockIndex: Missing entry label {cfg.Entry}"
+    ({ Labels = labels; EntryIndex = entryIndex }, blocks)
+
+let private tryBlockIndex (index: BlockIndex) (label: LIR.Label) : int option =
+    tryLabelIndex index.Labels label
+
+let blockIndexOfLabel (index: BlockIndex) (label: LIR.Label) : int option =
+    tryBlockIndex index label
+
+let blockLivenessForLabel
+    (index: BlockIndex)
+    (liveness: BlockLiveness array)
+    (label: LIR.Label)
+    : BlockLiveness option =
+    match tryBlockIndex index label with
+    | Some idx -> Some liveness.[idx]
+    | None -> None
+
+let private blocksToMap (index: BlockIndex) (blocks: LIR.BasicBlock array) : Map<LIR.Label, LIR.BasicBlock> =
+    Array.zip index.Labels blocks |> Map.ofArray
 
 // ============================================================================
 // Chordal Graph Coloring Types
@@ -69,14 +364,16 @@ type BlockLiveness = {
 /// Interference graph for register allocation
 /// In SSA form, this graph is guaranteed to be chordal
 type InterferenceGraph = {
-    Vertices: Set<int>              // VReg IDs
-    Edges: Map<int, Set<int>>       // Adjacency list (symmetric)
+    Domain: VRegDomain
+    Vertices: BitSet                // Domain indices present in the graph
+    Neighbors: BitSet array         // Adjacency bitsets per domain index
 }
 
 /// Result of graph coloring
 type ColoringResult = {
-    Colors: Map<int, int>           // VRegId → color (0..k-1)
-    Spills: Set<int>                // VRegs that must be spilled
+    Domain: VRegDomain
+    Colors: int option array        // Domain index → color (0..k-1)
+    Spills: BitSet                  // Domain indices that must be spilled
     ChromaticNumber: int            // Max color used + 1
 }
 
@@ -87,12 +384,77 @@ type McsProfile = {
     WeightUpdates: int
     BucketSkips: int
 }
+
+/// Build an interference graph from an explicit vertex list and edge list.
+let buildInterferenceGraphFromEdges (vertices: int list) (edges: (int * int) list) : InterferenceGraph =
+    let domain = buildVRegDomain vertices
+    let n = domain.Ids.Length
+    let wordCount = domain.WordCount
+    let neighbors = Array.init n (fun _ -> bitsetEmpty wordCount)
+    let present = bitsetEmpty wordCount
+
+    for v in vertices do
+        match tryIndexOf domain v with
+        | Some idx -> bitsetAddIndexInPlace idx present
+        | None -> Crash.crash $"Interference graph missing vertex {v}"
+
+    for (u, v) in edges do
+        if u <> v then
+            match tryIndexOf domain u, tryIndexOf domain v with
+            | Some idxU, Some idxV ->
+                bitsetAddIndexInPlace idxU present
+                bitsetAddIndexInPlace idxV present
+                bitsetAddIndexInPlace idxV neighbors.[idxU]
+                bitsetAddIndexInPlace idxU neighbors.[idxV]
+            | _ ->
+                Crash.crash $"Interference graph missing edge endpoint {u} or {v}"
+
+    { Domain = domain; Vertices = present; Neighbors = neighbors }
+
+/// Check if a graph contains a vertex.
+let graphHasVertex (graph: InterferenceGraph) (vregId: int) : bool =
+    bitsetContains graph.Domain graph.Vertices vregId
+
+/// Get neighbors of a vertex in the interference graph.
+let graphNeighbors (graph: InterferenceGraph) (vregId: int) : int list =
+    match tryIndexOf graph.Domain vregId with
+    | None -> []
+    | Some idx ->
+        if not (bitsetContainsIndex idx graph.Vertices) then
+            []
+        else
+            let mutable acc = []
+            bitsetIterIndices graph.Neighbors.[idx] (fun nidx ->
+                if bitsetContainsIndex nidx graph.Vertices then
+                    acc <- graph.Domain.Ids.[nidx] :: acc)
+            List.rev acc
+
+/// Get the assigned color of a vertex.
+let colorOf (result: ColoringResult) (vregId: int) : int option =
+    match tryIndexOf result.Domain vregId with
+    | Some idx -> result.Colors.[idx]
+    | None -> None
+
+/// Check if a vertex was spilled.
+let isSpill (result: ColoringResult) (vregId: int) : bool =
+    match tryIndexOf result.Domain vregId with
+    | Some idx -> bitsetContainsIndex idx result.Spills
+    | None -> false
+
+/// Count spilled vertices.
+let spillCount (result: ColoringResult) : int =
+    bitsetCount result.Spills
+
+/// Count colored vertices.
+let coloredCount (result: ColoringResult) : int =
+    result.Colors
+    |> Array.fold (fun acc color -> if color.IsSome then acc + 1 else acc) 0
 // ============================================================================
 // Liveness Analysis
 // ============================================================================
 
 /// Get virtual register IDs used (read) by an instruction
-let getUsedVRegs (instr: LIR.Instr) : Set<int> =
+let getUsedVRegs (instr: LIR.Instr) : int list =
     let regToVReg (reg: LIR.Reg) : int option =
         match reg with
         | LIR.Virtual id -> Some id
@@ -105,72 +467,64 @@ let getUsedVRegs (instr: LIR.Instr) : Set<int> =
 
     match instr with
     | LIR.Mov (_, src) ->
-        operandToVReg src |> Option.toList |> Set.ofList
+        operandToVReg src |> Option.toList
     | LIR.Store (_, src) ->
-        regToVReg src |> Option.toList |> Set.ofList
+        regToVReg src |> Option.toList
     | LIR.Add (_, left, right) | LIR.Sub (_, left, right) ->
-        let l = regToVReg left |> Option.toList
-        let r = operandToVReg right |> Option.toList
-        Set.ofList (l @ r)
+        (regToVReg left |> Option.toList) @ (operandToVReg right |> Option.toList)
     | LIR.Mul (_, left, right) | LIR.Sdiv (_, left, right)
     | LIR.And (_, left, right) | LIR.Orr (_, left, right) | LIR.Eor (_, left, right)
     | LIR.Lsl (_, left, right) | LIR.Lsr (_, left, right) ->
-        let l = regToVReg left |> Option.toList
-        let r = regToVReg right |> Option.toList
-        Set.ofList (l @ r)
+        (regToVReg left |> Option.toList) @ (regToVReg right |> Option.toList)
     | LIR.Lsl_imm (_, src, _) | LIR.Lsr_imm (_, src, _) | LIR.And_imm (_, src, _) ->
-        regToVReg src |> Option.toList |> Set.ofList
+        regToVReg src |> Option.toList
     | LIR.Msub (_, mulLeft, mulRight, sub) ->
-        let ml = regToVReg mulLeft |> Option.toList
-        let mr = regToVReg mulRight |> Option.toList
-        let s = regToVReg sub |> Option.toList
-        Set.ofList (ml @ mr @ s)
+        (regToVReg mulLeft |> Option.toList)
+        @ (regToVReg mulRight |> Option.toList)
+        @ (regToVReg sub |> Option.toList)
     | LIR.Madd (_, mulLeft, mulRight, add) ->
-        let ml = regToVReg mulLeft |> Option.toList
-        let mr = regToVReg mulRight |> Option.toList
-        let a = regToVReg add |> Option.toList
-        Set.ofList (ml @ mr @ a)
+        (regToVReg mulLeft |> Option.toList)
+        @ (regToVReg mulRight |> Option.toList)
+        @ (regToVReg add |> Option.toList)
     | LIR.Cmp (left, right) ->
-        let l = regToVReg left |> Option.toList
-        let r = operandToVReg right |> Option.toList
-        Set.ofList (l @ r)
-    | LIR.Cset (_, _) -> Set.empty
+        (regToVReg left |> Option.toList) @ (operandToVReg right |> Option.toList)
+    | LIR.Cset (_, _) -> []
     | LIR.Mvn (_, src) ->
-        regToVReg src |> Option.toList |> Set.ofList
+        regToVReg src |> Option.toList
     | LIR.Sxtb (_, src) | LIR.Sxth (_, src) | LIR.Sxtw (_, src)
     | LIR.Uxtb (_, src) | LIR.Uxth (_, src) | LIR.Uxtw (_, src) ->
-        regToVReg src |> Option.toList |> Set.ofList
+        regToVReg src |> Option.toList
     | LIR.Call (_, _, args) ->
-        args |> List.choose operandToVReg |> Set.ofList
+        args |> List.choose operandToVReg
     | LIR.TailCall (_, args) ->
-        args |> List.choose operandToVReg |> Set.ofList
+        args |> List.choose operandToVReg
     | LIR.IndirectCall (_, func, args) ->
         let funcVReg = regToVReg func |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
-        Set.ofList (funcVReg @ argsVRegs)
+        funcVReg @ argsVRegs
     | LIR.IndirectTailCall (func, args) ->
         let funcVReg = regToVReg func |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
-        Set.ofList (funcVReg @ argsVRegs)
+        funcVReg @ argsVRegs
     | LIR.ClosureAlloc (_, _, captures) ->
-        captures |> List.choose operandToVReg |> Set.ofList
+        captures |> List.choose operandToVReg
     | LIR.ClosureCall (_, closure, args) ->
         let closureVReg = regToVReg closure |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
-        Set.ofList (closureVReg @ argsVRegs)
+        closureVReg @ argsVRegs
     | LIR.ClosureTailCall (closure, args) ->
         let closureVReg = regToVReg closure |> Option.toList
         let argsVRegs = args |> List.choose operandToVReg
-        Set.ofList (closureVReg @ argsVRegs)
+        closureVReg @ argsVRegs
     | LIR.PrintInt64 reg | LIR.PrintBool reg
     | LIR.PrintInt64NoNewline reg | LIR.PrintBoolNoNewline reg
     | LIR.PrintHeapStringNoNewline reg | LIR.PrintList (reg, _)
     | LIR.PrintSum (reg, _) | LIR.PrintRecord (reg, _, _) ->
-        regToVReg reg |> Option.toList |> Set.ofList
-    | LIR.PrintFloatNoNewline _ -> Set.empty  // FP register, not GP
-    | LIR.PrintChars _ -> Set.empty  // No registers used
-    | LIR.PrintBytes reg -> regToVReg reg |> Option.toList |> Set.ofList
-    | LIR.HeapAlloc (_, _) -> Set.empty
+        regToVReg reg |> Option.toList
+    | LIR.PrintFloatNoNewline _ -> []  // FP register, not GP
+    | LIR.PrintChars _ -> []  // No registers used
+    | LIR.PrintBytes reg -> regToVReg reg |> Option.toList
+    | LIR.HeapAlloc (_, _) -> []
     | LIR.HeapStore (addr, _, src, valueType) ->
         let a = regToVReg addr |> Option.toList
         // For float values, the src register is an FVirtual (handled by float allocation)
@@ -179,84 +533,71 @@ let getUsedVRegs (instr: LIR.Instr) : Set<int> =
             match valueType with
             | Some AST.TFloat64 -> []
             | _ -> operandToVReg src |> Option.toList
-        Set.ofList (a @ s)
+        a @ s
     | LIR.HeapLoad (_, addr, _) ->
-        regToVReg addr |> Option.toList |> Set.ofList
+        regToVReg addr |> Option.toList
     | LIR.RefCountInc (addr, _) ->
-        regToVReg addr |> Option.toList |> Set.ofList
+        regToVReg addr |> Option.toList
     | LIR.RefCountDec (addr, _) ->
-        regToVReg addr |> Option.toList |> Set.ofList
+        regToVReg addr |> Option.toList
     | LIR.StringConcat (_, left, right) ->
-        let l = operandToVReg left |> Option.toList
-        let r = operandToVReg right |> Option.toList
-        Set.ofList (l @ r)
+        (operandToVReg left |> Option.toList) @ (operandToVReg right |> Option.toList)
     | LIR.PrintHeapString reg ->
-        regToVReg reg |> Option.toList |> Set.ofList
+        regToVReg reg |> Option.toList
     | LIR.FileReadText (_, path) ->
-        operandToVReg path |> Option.toList |> Set.ofList
+        operandToVReg path |> Option.toList
     | LIR.FileExists (_, path) ->
-        operandToVReg path |> Option.toList |> Set.ofList
+        operandToVReg path |> Option.toList
     | LIR.FileWriteText (_, path, content) ->
-        let p = operandToVReg path |> Option.toList
-        let c = operandToVReg content |> Option.toList
-        Set.ofList (p @ c)
+        (operandToVReg path |> Option.toList) @ (operandToVReg content |> Option.toList)
     | LIR.FileAppendText (_, path, content) ->
-        let p = operandToVReg path |> Option.toList
-        let c = operandToVReg content |> Option.toList
-        Set.ofList (p @ c)
+        (operandToVReg path |> Option.toList) @ (operandToVReg content |> Option.toList)
     | LIR.FileDelete (_, path) ->
-        operandToVReg path |> Option.toList |> Set.ofList
+        operandToVReg path |> Option.toList
     | LIR.FileSetExecutable (_, path) ->
-        operandToVReg path |> Option.toList |> Set.ofList
+        operandToVReg path |> Option.toList
     | LIR.FileWriteFromPtr (_, path, ptr, length) ->
-        let p = operandToVReg path |> Option.toList
-        let ptr' = regToVReg ptr |> Option.toList
-        let len = regToVReg length |> Option.toList
-        Set.ofList (p @ ptr' @ len)
+        (operandToVReg path |> Option.toList)
+        @ (regToVReg ptr |> Option.toList)
+        @ (regToVReg length |> Option.toList)
     | LIR.RawAlloc (_, numBytes) ->
-        regToVReg numBytes |> Option.toList |> Set.ofList
+        regToVReg numBytes |> Option.toList
     | LIR.RawFree ptr ->
-        regToVReg ptr |> Option.toList |> Set.ofList
+        regToVReg ptr |> Option.toList
     | LIR.RawGet (_, ptr, byteOffset) ->
-        let p = regToVReg ptr |> Option.toList
-        let o = regToVReg byteOffset |> Option.toList
-        Set.ofList (p @ o)
+        (regToVReg ptr |> Option.toList) @ (regToVReg byteOffset |> Option.toList)
     | LIR.RawGetByte (_, ptr, byteOffset) ->
-        let p = regToVReg ptr |> Option.toList
-        let o = regToVReg byteOffset |> Option.toList
-        Set.ofList (p @ o)
+        (regToVReg ptr |> Option.toList) @ (regToVReg byteOffset |> Option.toList)
     | LIR.RawSet (ptr, byteOffset, value) ->
-        let p = regToVReg ptr |> Option.toList
-        let o = regToVReg byteOffset |> Option.toList
-        let v = regToVReg value |> Option.toList
-        Set.ofList (p @ o @ v)
+        (regToVReg ptr |> Option.toList)
+        @ (regToVReg byteOffset |> Option.toList)
+        @ (regToVReg value |> Option.toList)
     | LIR.RawSetByte (ptr, byteOffset, value) ->
-        let p = regToVReg ptr |> Option.toList
-        let o = regToVReg byteOffset |> Option.toList
-        let v = regToVReg value |> Option.toList
-        Set.ofList (p @ o @ v)
+        (regToVReg ptr |> Option.toList)
+        @ (regToVReg byteOffset |> Option.toList)
+        @ (regToVReg value |> Option.toList)
     // Int64ToFloat uses an integer source register
     | LIR.Int64ToFloat (_, src) ->
-        regToVReg src |> Option.toList |> Set.ofList
+        regToVReg src |> Option.toList
     | LIR.RefCountIncString str ->
-        operandToVReg str |> Option.toList |> Set.ofList
+        operandToVReg str |> Option.toList
     | LIR.RefCountDecString str ->
-        operandToVReg str |> Option.toList |> Set.ofList
+        operandToVReg str |> Option.toList
     | LIR.RandomInt64 _ ->
-        Set.empty  // No operands to read
+        []  // No operands to read
     | LIR.DateNow _ ->
-        Set.empty  // No operands to read
+        []  // No operands to read
     | LIR.FloatToString _ ->
-        Set.empty  // Float value is in FP register, tracked by getUsedFVRegs
+        []  // Float value is in FP register, tracked by getUsedFVRegs
     // ArgMoves/TailArgMoves contain operands that use virtual registers
     | LIR.ArgMoves moves ->
-        moves |> List.choose (fun (_, op) -> operandToVReg op) |> Set.ofList
+        moves |> List.choose (fun (_, op) -> operandToVReg op)
     | LIR.TailArgMoves moves ->
-        moves |> List.choose (fun (_, op) -> operandToVReg op) |> Set.ofList
+        moves |> List.choose (fun (_, op) -> operandToVReg op)
     // Phi sources are NOT regular uses - they are used at predecessor exits, not at the phi's block
-    // The liveness analysis handles phi sources specially in computeLiveness
-    | LIR.Phi _ -> Set.empty
-    | _ -> Set.empty
+    // The liveness analysis handles phi sources specially in computeLivenessBitsRaw
+    | LIR.Phi _ -> []
+    | _ -> []
 
 /// Get virtual register ID defined (written) by an instruction
 let getDefinedVReg (instr: LIR.Instr) : int option =
@@ -319,33 +660,33 @@ let getDefinedVReg (instr: LIR.Instr) : int option =
 // ============================================================================
 
 /// Get FVirtual register IDs used (read) by an instruction
-let getUsedFVRegs (instr: LIR.Instr) : Set<int> =
+let getUsedFVRegs (instr: LIR.Instr) : int list =
     let fregToId (freg: LIR.FReg) : int option =
         match freg with
         | LIR.FVirtual id -> Some id
         | LIR.FPhysical _ -> None
 
     match instr with
-    | LIR.FMov (_, src) -> fregToId src |> Option.toList |> Set.ofList
+    | LIR.FMov (_, src) -> fregToId src |> Option.toList
     | LIR.FAdd (_, left, right) | LIR.FSub (_, left, right)
     | LIR.FMul (_, left, right) | LIR.FDiv (_, left, right) ->
-        [fregToId left; fregToId right] |> List.choose id |> Set.ofList
+        [fregToId left; fregToId right] |> List.choose id
     | LIR.FNeg (_, src) | LIR.FAbs (_, src) | LIR.FSqrt (_, src) ->
-        fregToId src |> Option.toList |> Set.ofList
+        fregToId src |> Option.toList
     | LIR.FCmp (left, right) ->
-        [fregToId left; fregToId right] |> List.choose id |> Set.ofList
-    | LIR.FloatToInt64 (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIR.FloatToBits (_, src) -> fregToId src |> Option.toList |> Set.ofList
-    | LIR.FpToGp (_, src) -> fregToId src |> Option.toList |> Set.ofList
+        [fregToId left; fregToId right] |> List.choose id
+    | LIR.FloatToInt64 (_, src) -> fregToId src |> Option.toList
+    | LIR.FloatToBits (_, src) -> fregToId src |> Option.toList
+    | LIR.FpToGp (_, src) -> fregToId src |> Option.toList
     | LIR.PrintFloat freg | LIR.PrintFloatNoNewline freg ->
-        fregToId freg |> Option.toList |> Set.ofList
+        fregToId freg |> Option.toList
     | LIR.FArgMoves moves ->
-        moves |> List.choose (fun (_, src) -> fregToId src) |> Set.ofList
-    | LIR.FPhi _ -> Set.empty  // Phi sources handled specially
-    | LIR.FloatToString (_, value) -> fregToId value |> Option.toList |> Set.ofList
+        moves |> List.choose (fun (_, src) -> fregToId src)
+    | LIR.FPhi _ -> []  // Phi sources handled specially
+    | LIR.FloatToString (_, value) -> fregToId value |> Option.toList
     // HeapStore with float value: the Virtual register ID is shared with FVirtual
-    | LIR.HeapStore (_, _, LIR.Reg (LIR.Virtual vregId), Some AST.TFloat64) -> Set.singleton vregId
-    | _ -> Set.empty
+    | LIR.HeapStore (_, _, LIR.Reg (LIR.Virtual vregId), Some AST.TFloat64) -> [vregId]
+    | _ -> []
 
 /// Get FVirtual register ID defined (written) by an instruction
 let getDefinedFVReg (instr: LIR.Instr) : int option =
@@ -366,14 +707,14 @@ let getDefinedFVReg (instr: LIR.Instr) : int option =
     | _ -> None
 
 /// Get virtual register used by terminator
-let getTerminatorUsedVRegs (term: LIR.Terminator) : Set<int> =
+let getTerminatorUsedVRegs (term: LIR.Terminator) : int list =
     match term with
-    | LIR.Branch (LIR.Virtual id, _, _) -> Set.singleton id
-    | LIR.BranchZero (LIR.Virtual id, _, _) -> Set.singleton id
-    | LIR.BranchBitZero (LIR.Virtual id, _, _, _) -> Set.singleton id
-    | LIR.BranchBitNonZero (LIR.Virtual id, _, _, _) -> Set.singleton id
-    | LIR.CondBranch _ -> Set.empty  // CondBranch uses condition flags, not a register
-    | _ -> Set.empty
+    | LIR.Branch (LIR.Virtual id, _, _) -> [id]
+    | LIR.BranchZero (LIR.Virtual id, _, _) -> [id]
+    | LIR.BranchBitZero (LIR.Virtual id, _, _, _) -> [id]
+    | LIR.BranchBitNonZero (LIR.Virtual id, _, _, _) -> [id]
+    | LIR.CondBranch _ -> []  // CondBranch uses condition flags, not a register
+    | _ -> []
 
 /// Get successor labels for a terminator
 let getSuccessors (term: LIR.Terminator) : LIR.Label list =
@@ -386,53 +727,79 @@ let getSuccessors (term: LIR.Terminator) : LIR.Label list =
     | LIR.CondBranch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
     | LIR.Jump label -> [label]
 
-/// Get phi uses grouped by predecessor label
-/// Returns a map from predecessor label to the set of VRegIds used from that predecessor
-let getPhiUsesByPredecessor (block: LIR.BasicBlock) : Map<LIR.Label, Set<int>> =
-    let operandToVReg (op: LIR.Operand) : int option =
-        match op with
-        | LIR.Reg (LIR.Virtual id) -> Some id
-        | _ -> None
+let private addPhiUse
+    (domain: VRegDomain)
+    (predIdx: int)
+    (vregId: int)
+    (uses: (int * BitSet) list)
+    : (int * BitSet) list =
+    let rec insert remaining =
+        match remaining with
+        | [] ->
+            let bits = bitsetEmpty domain.WordCount
+            bitsetAddInPlace domain vregId bits
+            [ (predIdx, bits) ]
+        | (idx, bits) :: rest ->
+            if idx = predIdx then
+                bitsetAddInPlace domain vregId bits
+                remaining
+            else
+                (idx, bits) :: insert rest
+    insert uses
 
-    block.Instrs
-    |> List.choose (fun instr ->
-        match instr with
-        | LIR.Phi (_, sources, _) ->
-            Some (sources |> List.choose (fun (op, predLabel) ->
-                operandToVReg op |> Option.map (fun vregId -> (predLabel, vregId))))
-        | _ -> None)
-    |> List.concat
-    |> List.groupBy fst
-    |> List.map (fun (label, pairs) -> (label, pairs |> List.map snd |> Set.ofList))
-    |> Map.ofList
+let private collectPhiUsesByPred
+    (domain: VRegDomain)
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    : (int * BitSet) list array =
+    let result = Array.init blocks.Length (fun _ -> [])
+    for blockIdx in 0 .. blocks.Length - 1 do
+        let block = blocks.[blockIdx]
+        let mutable uses = []
+        for instr in block.Instrs do
+            match instr with
+            | LIR.Phi (_, sources, _) ->
+                for (op, predLabel) in sources do
+                    match op with
+                    | LIR.Reg (LIR.Virtual id) ->
+                        match tryBlockIndex blockIndex predLabel with
+                        | Some predIdx -> uses <- addPhiUse domain predIdx id uses
+                        | None -> ()
+                    | _ -> ()
+            | _ -> ()
+        result.[blockIdx] <- uses
+    result
 
-/// Get FPhi uses grouped by predecessor label
-/// Returns a map from predecessor label to the set of FVRegIds used from that predecessor
-let getFPhiUsesByPredecessor (block: LIR.BasicBlock) : Map<LIR.Label, Set<int>> =
-    let fregToId (freg: LIR.FReg) : int option =
-        match freg with
-        | LIR.FVirtual id -> Some id
-        | LIR.FPhysical _ -> None
-
-    block.Instrs
-    |> List.choose (fun instr ->
-        match instr with
-        | LIR.FPhi (_, sources) ->
-            Some (sources |> List.choose (fun (freg, predLabel) ->
-                fregToId freg |> Option.map (fun id -> (predLabel, id))))
-        | _ -> None)
-    |> List.concat
-    |> List.groupBy fst
-    |> List.map (fun (label, pairs) -> (label, pairs |> List.map snd |> Set.ofList))
-    |> Map.ofList
+let private collectFPhiUsesByPred
+    (domain: VRegDomain)
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    : (int * BitSet) list array =
+    let result = Array.init blocks.Length (fun _ -> [])
+    for blockIdx in 0 .. blocks.Length - 1 do
+        let block = blocks.[blockIdx]
+        let mutable uses = []
+        for instr in block.Instrs do
+            match instr with
+            | LIR.FPhi (_, sources) ->
+                for (freg, predLabel) in sources do
+                    match freg with
+                    | LIR.FVirtual id ->
+                        match tryBlockIndex blockIndex predLabel with
+                        | Some predIdx -> uses <- addPhiUse domain predIdx id uses
+                        | None -> ()
+                    | LIR.FPhysical _ -> ()
+            | _ -> ()
+        result.[blockIdx] <- uses
+    result
 
 /// Compute GEN and KILL sets for a basic block
 /// GEN = variables used before being defined
 /// KILL = variables defined
-let computeGenKill (block: LIR.BasicBlock) : Set<int> * Set<int> =
+let computeGenKill (domain: VRegDomain) (block: LIR.BasicBlock) : BitSet * BitSet =
     // Process instructions in forward order
-    let mutable gen = Set.empty
-    let mutable kill = Set.empty
+    let gen = bitsetEmpty domain.WordCount
+    let kill = bitsetEmpty domain.WordCount
 
     for instr in block.Instrs do
         let used = getUsedVRegs instr
@@ -440,157 +807,226 @@ let computeGenKill (block: LIR.BasicBlock) : Set<int> * Set<int> =
 
         // Add to GEN if used and not already killed (defined earlier in block)
         for u in used do
-            if not (Set.contains u kill) then
-                gen <- Set.add u gen
+            if not (bitsetContains domain kill u) then
+                bitsetAddInPlace domain u gen
 
         // Add to KILL if defined
         match defined with
-        | Some d -> kill <- Set.add d kill
+        | Some d -> bitsetAddInPlace domain d kill
         | None -> ()
 
     // Also add terminator uses to GEN
     let termUses = getTerminatorUsedVRegs block.Terminator
     for u in termUses do
-        if not (Set.contains u kill) then
-            gen <- Set.add u gen
+        if not (bitsetContains domain kill u) then
+            bitsetAddInPlace domain u gen
 
     (gen, kill)
 
 /// Compute liveness using backward dataflow analysis
 /// Handles SSA phi nodes: phi sources are live at predecessor exits, not at phi's block entry
-let computeLiveness (cfg: LIR.CFG) : Map<LIR.Label, BlockLiveness> =
-    // Initialize with empty sets
-    let mutable liveness : Map<LIR.Label, BlockLiveness> =
-        cfg.Blocks
-        |> Map.map (fun _ _ -> { LiveIn = Set.empty; LiveOut = Set.empty })
+/// Collect all integer VReg IDs referenced in the CFG (uses, defs, phi sources/dests, terminators)
+let private collectVRegIds (blocks: LIR.BasicBlock array) : int list =
+    blocks
+    |> Array.fold (fun acc block ->
+        let acc =
+            getTerminatorUsedVRegs block.Terminator
+            |> List.fold (fun acc id -> id :: acc) acc
+        block.Instrs
+        |> List.fold (fun acc instr ->
+            match instr with
+            | LIR.Phi (dest, sources, _) ->
+                let acc =
+                    match dest with
+                    | LIR.Virtual id -> id :: acc
+                    | LIR.Physical _ -> acc
+                sources
+                |> List.fold (fun acc (src, _) ->
+                    match src with
+                    | LIR.Reg (LIR.Virtual id) -> id :: acc
+                    | _ -> acc) acc
+            | _ ->
+                let acc =
+                    getUsedVRegs instr
+                    |> List.fold (fun acc id -> id :: acc) acc
+                match getDefinedVReg instr with
+                | Some id -> id :: acc
+                | None -> acc) acc
+    ) []
 
-    // Precompute GEN and KILL for each block
-    let genKill =
-        cfg.Blocks
-        |> Map.map (fun _ block -> computeGenKill block)
+/// Compute liveness using bitsets for the dataflow fixed point
+let private computeLivenessBitsRaw
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (extraIds: int list)
+    : VRegDomain * BlockLiveness array =
+    let domain = buildVRegDomain (collectVRegIds blocks @ extraIds)
+    let emptyBits = bitsetEmpty domain.WordCount
 
-    // Precompute phi uses by predecessor for each block
-    // This maps: successor_label -> (predecessor_label -> vregs_used_from_that_predecessor)
-    let phiUsesByBlock =
-        cfg.Blocks
-        |> Map.map (fun _ block -> getPhiUsesByPredecessor block)
+    let genKillBits =
+        Array.init blocks.Length (fun idx ->
+            computeGenKill domain blocks.[idx])
 
-    // Iterate until fixed point
+    let phiUsesBits = collectPhiUsesByPred domain blockIndex blocks
+
+    let liveness = Array.init blocks.Length (fun _ -> { LiveIn = emptyBits; LiveOut = emptyBits })
+
+    let phiUsesForEdge (succIdx: int) (predIdx: int) : BitSet =
+        match phiUsesBits.[succIdx] |> List.tryFind (fun (idx, _) -> idx = predIdx) with
+        | Some (_, bits) -> bits
+        | None -> emptyBits
+
     let mutable changed = true
     while changed do
         changed <- false
-        for kvp in cfg.Blocks do
-            let label = kvp.Key
-            let block = kvp.Value
-            let (gen, kill) = Map.find label genKill
-            let oldLiveness = Map.find label liveness
+        for blockIdx in 0 .. blocks.Length - 1 do
+            let block = blocks.[blockIdx]
+            let (gen, kill) = genKillBits.[blockIdx]
+            let oldLiveness = liveness.[blockIdx]
 
-            // LiveOut = union of LiveIn of all successors
-            //         + phi uses from successors (for the current block as predecessor)
             let successors = getSuccessors block.Terminator
             let newLiveOut =
                 successors
                 |> List.fold (fun acc succLabel ->
-                    // Add LiveIn of successor
-                    let liveInContrib =
-                        match Map.tryFind succLabel liveness with
-                        | Some succ -> succ.LiveIn
-                        | None -> Set.empty
-                    // Add phi uses from successor that reference this block as predecessor
-                    let phiContrib =
-                        match Map.tryFind succLabel phiUsesByBlock with
-                        | Some phiUses ->
-                            match Map.tryFind label phiUses with
-                            | Some vregs -> vregs
-                            | None -> Set.empty
-                        | None -> Set.empty
-                    Set.union acc (Set.union liveInContrib phiContrib)
-                ) Set.empty
+                    match tryBlockIndex blockIndex succLabel with
+                    | Some succIdx ->
+                        let liveInContrib = liveness.[succIdx].LiveIn
+                        let phiContrib = phiUsesForEdge succIdx blockIdx
+                        let succLive = bitsetUnion liveInContrib phiContrib
+                        bitsetUnion acc succLive
+                    | None -> acc
+                ) emptyBits
 
-            // LiveIn = GEN ∪ (LiveOut - KILL)
-            let newLiveIn = Set.union gen (Set.difference newLiveOut kill)
+            let newLiveIn = bitsetUnion gen (bitsetDiff newLiveOut kill)
 
-            if newLiveIn <> oldLiveness.LiveIn || newLiveOut <> oldLiveness.LiveOut then
+            if not (bitsetEqual newLiveIn oldLiveness.LiveIn) || not (bitsetEqual newLiveOut oldLiveness.LiveOut) then
                 changed <- true
-                liveness <- Map.add label { LiveIn = newLiveIn; LiveOut = newLiveOut } liveness
+                liveness.[blockIdx] <- { LiveIn = newLiveIn; LiveOut = newLiveOut }
 
-    liveness
+    (domain, liveness)
+
+/// Compute liveness using bitsets for the dataflow fixed point
+let computeLivenessBits (cfg: LIR.CFG) : VRegDomain * BlockIndex * BlockLiveness array =
+    let (blockIndex, blocks) = buildBlockIndex cfg
+    let (domain, liveness) = computeLivenessBitsRaw blockIndex blocks []
+    (domain, blockIndex, liveness)
 
 /// Compute float GEN and KILL sets for a basic block
 /// GEN = float variables used before being defined
 /// KILL = float variables defined
-let computeFloatGenKill (block: LIR.BasicBlock) : Set<int> * Set<int> =
-    let mutable gen = Set.empty
-    let mutable kill = Set.empty
+let computeFloatGenKill (domain: VRegDomain) (block: LIR.BasicBlock) : BitSet * BitSet =
+    let gen = bitsetEmpty domain.WordCount
+    let kill = bitsetEmpty domain.WordCount
 
     for instr in block.Instrs do
         let used = getUsedFVRegs instr
         let defined = getDefinedFVReg instr
 
         for u in used do
-            if not (Set.contains u kill) then
-                gen <- Set.add u gen
+            if not (bitsetContains domain kill u) then
+                bitsetAddInPlace domain u gen
 
         match defined with
-        | Some d -> kill <- Set.add d kill
+        | Some d -> bitsetAddInPlace domain d kill
         | None -> ()
 
     (gen, kill)
 
 /// Compute float liveness using backward dataflow analysis
 /// Handles SSA FPhi nodes: phi sources are live at predecessor exits, not at phi's block entry
-let computeFloatLiveness (cfg: LIR.CFG) : Map<LIR.Label, BlockLiveness> =
-    let mutable liveness : Map<LIR.Label, BlockLiveness> =
-        cfg.Blocks |> Map.map (fun _ _ -> { LiveIn = Set.empty; LiveOut = Set.empty })
+/// Collect all float VReg IDs referenced in the CFG (uses, defs, FPhi sources/dests)
+let private collectFVRegIds (blocks: LIR.BasicBlock array) : int list =
+    blocks
+    |> Array.fold (fun acc block ->
+        block.Instrs
+        |> List.fold (fun acc instr ->
+            match instr with
+            | LIR.FPhi (dest, sources) ->
+                let acc =
+                    match dest with
+                    | LIR.FVirtual id -> id :: acc
+                    | LIR.FPhysical _ -> acc
+                sources
+                |> List.fold (fun acc (src, _) ->
+                    match src with
+                    | LIR.FVirtual id -> id :: acc
+                    | LIR.FPhysical _ -> acc) acc
+            | _ ->
+                let acc =
+                    getUsedFVRegs instr
+                    |> List.fold (fun acc id -> id :: acc) acc
+                match getDefinedFVReg instr with
+                | Some id -> id :: acc
+                | None -> acc) acc
+    ) []
 
-    let genKill = cfg.Blocks |> Map.map (fun _ block -> computeFloatGenKill block)
-    let fphiUsesByBlock = cfg.Blocks |> Map.map (fun _ block -> getFPhiUsesByPredecessor block)
+/// Compute float liveness using bitsets for the dataflow fixed point
+let private computeFloatLivenessBitsRaw
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (extraIds: int list)
+    : VRegDomain * BlockLiveness array =
+    let domain = buildVRegDomain (collectFVRegIds blocks @ extraIds)
+    let emptyBits = bitsetEmpty domain.WordCount
+
+    let genKillBits =
+        Array.init blocks.Length (fun idx ->
+            computeFloatGenKill domain blocks.[idx])
+
+    let fphiUsesBits = collectFPhiUsesByPred domain blockIndex blocks
+
+    let liveness = Array.init blocks.Length (fun _ -> { LiveIn = emptyBits; LiveOut = emptyBits })
+
+    let fphiUsesForEdge (succIdx: int) (predIdx: int) : BitSet =
+        match fphiUsesBits.[succIdx] |> List.tryFind (fun (idx, _) -> idx = predIdx) with
+        | Some (_, bits) -> bits
+        | None -> emptyBits
 
     let mutable changed = true
     while changed do
         changed <- false
-        for kvp in cfg.Blocks do
-            let label = kvp.Key
-            let block = kvp.Value
-            let (gen, kill) = Map.find label genKill
-            let oldLiveness = Map.find label liveness
+        for blockIdx in 0 .. blocks.Length - 1 do
+            let block = blocks.[blockIdx]
+            let (gen, kill) = genKillBits.[blockIdx]
+            let oldLiveness = liveness.[blockIdx]
 
             let successors = getSuccessors block.Terminator
             let newLiveOut =
                 successors
                 |> List.fold (fun acc succLabel ->
-                    let liveInContrib =
-                        match Map.tryFind succLabel liveness with
-                        | Some succ -> succ.LiveIn
-                        | None -> Set.empty
-                    let fphiContrib =
-                        match Map.tryFind succLabel fphiUsesByBlock with
-                        | Some fphiUses ->
-                            match Map.tryFind label fphiUses with
-                            | Some vregs -> vregs
-                            | None -> Set.empty
-                        | None -> Set.empty
-                    Set.union acc (Set.union liveInContrib fphiContrib)
-                ) Set.empty
+                    match tryBlockIndex blockIndex succLabel with
+                    | Some succIdx ->
+                        let liveInContrib = liveness.[succIdx].LiveIn
+                        let fphiContrib = fphiUsesForEdge succIdx blockIdx
+                        let succLive = bitsetUnion liveInContrib fphiContrib
+                        bitsetUnion acc succLive
+                    | None -> acc
+                ) emptyBits
 
-            let newLiveIn = Set.union gen (Set.difference newLiveOut kill)
+            let newLiveIn = bitsetUnion gen (bitsetDiff newLiveOut kill)
 
-            if newLiveIn <> oldLiveness.LiveIn || newLiveOut <> oldLiveness.LiveOut then
+            if not (bitsetEqual newLiveIn oldLiveness.LiveIn) || not (bitsetEqual newLiveOut oldLiveness.LiveOut) then
                 changed <- true
-                liveness <- Map.add label { LiveIn = newLiveIn; LiveOut = newLiveOut } liveness
+                liveness.[blockIdx] <- { LiveIn = newLiveIn; LiveOut = newLiveOut }
 
-    liveness
+    (domain, liveness)
+
+/// Compute float liveness using bitsets for the dataflow fixed point
+let computeFloatLivenessBits (cfg: LIR.CFG) : VRegDomain * BlockIndex * BlockLiveness array =
+    let (blockIndex, blocks) = buildBlockIndex cfg
+    let (domain, liveness) = computeFloatLivenessBitsRaw blockIndex blocks []
+    (domain, blockIndex, liveness)
 
 /// Compute liveness at each instruction index within a block
 /// Returns a list of live VReg sets, one per instruction (same order as Instrs)
-let computeInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set<int> list =
+let computeInstructionLiveness (domain: VRegDomain) (block: LIR.BasicBlock) (liveOut: BitSet) : BitSet list =
     // Walk backwards from the terminator, tracking liveness
-    let mutable live = liveOut
+    let live = bitsetClone liveOut
 
     // Handle terminator uses first
     let termUses = getTerminatorUsedVRegs block.Terminator
     for u in termUses do
-        live <- Set.add u live
+        bitsetAddInPlace domain u live
 
     // Walk instructions in reverse, collecting liveness at each point
     // We want liveness AFTER each instruction (what's live when that instruction completes)
@@ -599,15 +1035,15 @@ let computeInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set
 
     for instr in instrsReversed do
         // Record liveness at this point (after the instruction executes)
-        livenessListReversed <- live :: livenessListReversed
+        livenessListReversed <- bitsetClone live :: livenessListReversed
 
         // Update liveness: remove definition, add uses
         match getDefinedVReg instr with
-        | Some def -> live <- Set.remove def live
+        | Some def -> bitsetRemoveInPlace domain def live
         | None -> ()
 
         for used in getUsedVRegs instr do
-            live <- Set.add used live
+            bitsetAddInPlace domain used live
 
     // Since we walked backwards and prepended each result, the list is already
     // in forward order (matching the original instruction order)
@@ -615,21 +1051,21 @@ let computeInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set
 
 /// Compute float liveness at each instruction index within a block
 /// Returns a list of live FVirtual ID sets, one per instruction (same order as Instrs)
-let computeFloatInstructionLiveness (block: LIR.BasicBlock) (liveOut: Set<int>) : Set<int> list =
-    let mutable live = liveOut
+let computeFloatInstructionLiveness (domain: VRegDomain) (block: LIR.BasicBlock) (liveOut: BitSet) : BitSet list =
+    let live = bitsetClone liveOut
 
     let instrsReversed = List.rev block.Instrs
     let mutable livenessListReversed = []
 
     for instr in instrsReversed do
-        livenessListReversed <- live :: livenessListReversed
+        livenessListReversed <- bitsetClone live :: livenessListReversed
 
         match getDefinedFVReg instr with
-        | Some def -> live <- Set.remove def live
+        | Some def -> bitsetRemoveInPlace domain def live
         | None -> ()
 
         for used in getUsedFVRegs instr do
-            live <- Set.add used live
+            bitsetAddInPlace domain used live
 
     livenessListReversed
 
@@ -661,16 +1097,16 @@ let isNonTailCall (instr: LIR.Instr) : bool =
 
 /// Check if a function has any non-tail calls
 /// If it does, we prefer callee-saved registers to avoid per-call save/restore overhead
-let hasNonTailCalls (cfg: LIR.CFG) : bool =
-    cfg.Blocks
-    |> Map.exists (fun _ block ->
+let hasNonTailCalls (blocks: LIR.BasicBlock array) : bool =
+    blocks
+    |> Array.exists (fun block ->
         block.Instrs |> List.exists isNonTailCall)
 
 /// Get the optimal register allocation order based on calling pattern
 /// - Functions with non-tail calls: prefer callee-saved (save once in prologue/epilogue)
 /// - Leaf functions / tail-call-only: prefer caller-saved (no prologue/epilogue overhead)
-let getAllocatableRegs (cfg: LIR.CFG) : LIR.PhysReg list =
-    if hasNonTailCalls cfg then
+let getAllocatableRegs (blocks: LIR.BasicBlock array) : LIR.PhysReg list =
+    if hasNonTailCalls blocks then
         // Callee-saved first for call-heavy functions
         calleeSavedRegs @ callerSavedRegs
     else
@@ -681,200 +1117,242 @@ let getAllocatableRegs (cfg: LIR.CFG) : LIR.PhysReg list =
 // Chordal Graph Coloring Register Allocation
 // ============================================================================
 
-/// Build interference graph from CFG and liveness information
-/// Two variables interfere if their live ranges overlap.
-/// In SSA form, it is sufficient to add edges from each definition to live-out variables.
-let buildInterferenceGraph
-    (cfg: LIR.CFG)
-    (liveness: Map<LIR.Label, BlockLiveness>)
-    (entryDefs: Set<int>)
-    : InterferenceGraph =
-    let mutable vertices = Set.empty<int>
-    let mutable edges = Map.empty<int, Set<int>>
+let private buildInterferenceGraphBitsetFastWithLivenessInternal
+    (trackTiming: bool)
+    (swOpt: System.Diagnostics.Stopwatch option)
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (domain: VRegDomain)
+    (liveness: BlockLiveness array)
+    (entryDefs: BitSet)
+    : InterferenceGraph * InterferenceGraphTiming =
+    let n = domain.Ids.Length
+    let wordCount = domain.WordCount
+    let adjacency = Array.init n (fun _ -> bitsetEmpty wordCount)
+    let present = bitsetEmpty wordCount
+    let mutable liveIterMs = 0.0
+    let mutable adjacencyMs = 0.0
 
-    /// Add a vertex to the graph
-    let addVertex (v: int) =
-        vertices <- Set.add v vertices
-        if not (Map.containsKey v edges) then
-            edges <- Map.add v Set.empty edges
+    let timeBlock (accumulate: float -> unit) (f: unit -> 'a) : 'a =
+        if not trackTiming then
+            f ()
+        else
+            match swOpt with
+            | None -> f ()
+            | Some sw ->
+                let start = sw.Elapsed.TotalMilliseconds
+                let result = f ()
+                let delta = sw.Elapsed.TotalMilliseconds - start
+                accumulate delta
+                result
 
-    /// Add an edge between two vertices (symmetric)
-    let addEdge (u: int) (v: int) =
-        if u <> v then
-            addVertex u
-            addVertex v
-            edges <- Map.add u (Set.add v (Map.find u edges)) edges
-            edges <- Map.add v (Set.add u (Map.find v edges)) edges
+    let markPresentIdx (idx: int) =
+        if idx >= 0 && idx < n then
+            bitsetAddIndexInPlace idx present
 
-    let addEdgesToLive (d: int) (live: Set<int>) =
-        for v in live do
-            if v <> d then
-                addEdge d v
-
-    // For each block, walk backward through instructions
-    // Add edges from each definition to the current live set
-    for kvp in cfg.Blocks do
-        let block = kvp.Value
-        let label = kvp.Key
-
-        match Map.tryFind label liveness with
+    let markPresentValue (value: int) =
+        match tryIndexOf domain value with
+        | Some idx -> markPresentIdx idx
         | None -> ()
-        | Some blockLiveness ->
-            let mutable live = blockLiveness.LiveOut
 
-            // Process terminator
-            let termUses = getTerminatorUsedVRegs block.Terminator
-            for v in termUses do
-                live <- Set.add v live
+    let addEdgesToLive (defIdx: int) (live: BitSet) =
+        if trackTiming then
+            let liveIndices =
+                timeBlock (fun delta -> liveIterMs <- liveIterMs + delta) (fun () ->
+                    let mutable acc = []
+                    bitsetIterIndices live (fun idx ->
+                        if idx <> defIdx then
+                            acc <- idx :: acc)
+                    List.rev acc)
 
-            // Track all variables that are live at the block end
-            for v in live do
-                addVertex v
+            timeBlock (fun delta -> adjacencyMs <- adjacencyMs + delta) (fun () ->
+                bitsetUnionInPlace adjacency.[defIdx] live
+                bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
+                for idx in liveIndices do
+                    bitsetAddIndexInPlace defIdx adjacency.[idx])
+        else
+            bitsetUnionInPlace adjacency.[defIdx] live
+            bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
+            bitsetIterIndices live (fun idx ->
+                if idx <> defIdx then
+                    bitsetAddIndexInPlace defIdx adjacency.[idx])
 
-            // Walk instructions backward
-            for instr in List.rev block.Instrs do
-                // Get definition and uses
-                let def = getDefinedVReg instr
-                let uses = getUsedVRegs instr
+    for blockIdx in 0 .. blocks.Length - 1 do
+        let block = blocks.[blockIdx]
+        let blockLiveness = liveness.[blockIdx]
+        let mutable live = bitsetClone blockLiveness.LiveOut
 
-                for u in uses do
-                    addVertex u
+        let termUses = getTerminatorUsedVRegs block.Terminator
+        for v in termUses do
+            bitsetAddInPlace domain v live
 
-                // Definition kills liveness
-                match def with
-                | Some d ->
-                    addVertex d
-                    addEdgesToLive d live
-                    live <- Set.remove d live
+        timeBlock (fun delta -> liveIterMs <- liveIterMs + delta) (fun () ->
+            bitsetIterIndices live markPresentIdx)
+
+        for instr in List.rev block.Instrs do
+            let def = getDefinedVReg instr
+            let uses = getUsedVRegs instr
+
+            for u in uses do
+                markPresentValue u
+
+            match def with
+            | Some d ->
+                markPresentValue d
+                match tryIndexOf domain d with
+                | Some defIdx -> addEdgesToLive defIdx live
                 | None -> ()
+                bitsetRemoveInPlace domain d live
+            | None -> ()
 
-                // Uses make variables live
-                for u in uses do
-                    live <- Set.add u live
+            for u in uses do
+                bitsetAddInPlace domain u live
 
-            // Parameters are defined at function entry (not by an instruction).
-            // Add interference edges from live entry parameters to other live-in values.
-            if label = cfg.Entry then
-                let entryLiveDefs = Set.intersect entryDefs live
-                for d in entryLiveDefs do
-                    addVertex d
-                    addEdgesToLive d live
+        if blockIdx = blockIndex.EntryIndex then
+            bitsetIterIndices entryDefs (fun defIdx ->
+                if bitsetContainsIndex defIdx live then
+                    markPresentIdx defIdx
+                    addEdgesToLive defIdx live)
 
-    { Vertices = vertices; Edges = edges }
+    let timing = {
+        LiveIterationMs = liveIterMs
+        AdjacencyUpdatesMs = adjacencyMs
+    }
+    ({ Domain = domain; Vertices = present; Neighbors = adjacency }, timing)
 
-/// Build float interference graph from CFG and float liveness information
-/// Two float variables interfere if they are both live at any program point
-let buildFloatInterferenceGraph
-    (cfg: LIR.CFG)
-    (liveness: Map<LIR.Label, BlockLiveness>)
-    (entryDefs: Set<int>)
+/// Build interference graph from CFG using bitset liveness
+let private buildInterferenceGraphBitsetWithLiveness
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (domain: VRegDomain)
+    (liveness: BlockLiveness array)
+    (entryDefs: BitSet)
     : InterferenceGraph =
-    let mutable vertices = Set.empty<int>
-    let mutable edges = Map.empty<int, Set<int>>
+    buildInterferenceGraphBitsetFastWithLivenessInternal false None blockIndex blocks domain liveness entryDefs
+    |> fst
 
-    let addVertex (v: int) =
-        vertices <- Set.add v vertices
-        if not (Map.containsKey v edges) then
-            edges <- Map.add v Set.empty edges
+let private buildInterferenceGraphBitsetWithLivenessProfile
+    (sw: System.Diagnostics.Stopwatch)
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (domain: VRegDomain)
+    (liveness: BlockLiveness array)
+    (entryDefs: BitSet)
+    : InterferenceGraph * InterferenceGraphTiming =
+    buildInterferenceGraphBitsetFastWithLivenessInternal true (Some sw) blockIndex blocks domain liveness entryDefs
 
-    let addEdge (u: int) (v: int) =
-        if u <> v then
-            addVertex u
-            addVertex v
-            edges <- Map.add u (Set.add v (Map.find u edges)) edges
-            edges <- Map.add v (Set.add u (Map.find v edges)) edges
+/// Build interference graph from CFG using bitset liveness
+let buildInterferenceGraphBitsetFast
+    (cfg: LIR.CFG)
+    (entryDefs: int list)
+    : InterferenceGraph =
+    let (blockIndex, blocks) = buildBlockIndex cfg
+    let (domain, liveness) = computeLivenessBitsRaw blockIndex blocks entryDefs
+    let entryBits = bitsetFromList domain entryDefs
+    buildInterferenceGraphBitsetWithLiveness blockIndex blocks domain liveness entryBits
 
-    let addEdgesToLive (d: int) (live: Set<int>) =
-        for v in live do
-            if v <> d then addEdge d v
+/// Build interference graph from CFG using bitset liveness
+let buildInterferenceGraphBitset
+    (cfg: LIR.CFG)
+    (entryDefs: int list)
+    : InterferenceGraph =
+    buildInterferenceGraphBitsetFast cfg entryDefs
 
-    for kvp in cfg.Blocks do
-        let block = kvp.Value
-        let label = kvp.Key
+/// Build float interference graph from CFG using bitset liveness
+let private buildFloatInterferenceGraphBitsetWithLiveness
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (domain: VRegDomain)
+    (liveness: BlockLiveness array)
+    (entryDefs: BitSet)
+    : InterferenceGraph =
+    let ids = domain.Ids
+    let n = ids.Length
+    let wordCount = domain.WordCount
+    let adjacency = Array.init n (fun _ -> bitsetEmpty wordCount)
+    let present = bitsetEmpty wordCount
 
-        match Map.tryFind label liveness with
+    let markPresentIdx (idx: int) =
+        if idx >= 0 && idx < n then
+            bitsetAddIndexInPlace idx present
+
+    let markPresentValue (value: int) =
+        match tryIndexOf domain value with
+        | Some idx -> markPresentIdx idx
         | None -> ()
-        | Some blockLiveness ->
-            let mutable live = blockLiveness.LiveOut
 
-            for v in live do addVertex v
+    let addEdgesToLive (defIdx: int) (live: BitSet) =
+        bitsetUnionInPlace adjacency.[defIdx] live
+        bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
+        bitsetIterIndices live (fun idx ->
+            if idx <> defIdx then
+                bitsetAddIndexInPlace defIdx adjacency.[idx])
 
-            for instr in List.rev block.Instrs do
-                let def = getDefinedFVReg instr
-                let uses = getUsedFVRegs instr
+    for blockIdx in 0 .. blocks.Length - 1 do
+        let block = blocks.[blockIdx]
+        let blockLiveness = liveness.[blockIdx]
+        let mutable live = bitsetClone blockLiveness.LiveOut
+        bitsetIterIndices live markPresentIdx
 
-                for u in uses do
-                    addVertex u
+        for instr in List.rev block.Instrs do
+            let def = getDefinedFVReg instr
+            let uses = getUsedFVRegs instr
 
-                match def with
-                | Some d ->
-                    addVertex d
-                    addEdgesToLive d live
-                    live <- Set.remove d live
+            for u in uses do
+                markPresentValue u
+
+            match def with
+            | Some d ->
+                markPresentValue d
+                match tryIndexOf domain d with
+                | Some defIdx -> addEdgesToLive defIdx live
                 | None -> ()
+                bitsetRemoveInPlace domain d live
+            | None -> ()
 
-                for u in uses do
-                    live <- Set.add u live
+            for u in uses do
+                bitsetAddInPlace domain u live
 
-            if label = cfg.Entry then
-                let entryLiveDefs = Set.intersect entryDefs live
-                for d in entryLiveDefs do
-                    addVertex d
-                    addEdgesToLive d live
+        if blockIdx = blockIndex.EntryIndex then
+            bitsetIterIndices entryDefs (fun defIdx ->
+                if bitsetContainsIndex defIdx live then
+                    markPresentIdx defIdx
+                    addEdgesToLive defIdx live)
 
-    { Vertices = vertices; Edges = edges }
+    { Domain = domain; Vertices = present; Neighbors = adjacency }
 
-/// Collect phi coalescing preferences from CFG.
-/// Returns Map<vregId, Set<vregId>> where each vreg maps to vregs it should prefer
-/// to share a color with.
-/// For each Phi(dest, sources), the dest should prefer the same color as sources.
-let collectPhiPreferences (cfg: LIR.CFG) : Map<int, Set<int>> =
-    let mutable preferences = Map.empty<int, Set<int>>
+let private normalizePair (a: int) (b: int) : int * int =
+    if a < b then (a, b) else (b, a)
 
-    let addPreference (v1: int) (v2: int) =
-        if v1 <> v2 then
-            let existing1 = Map.tryFind v1 preferences |> Option.defaultValue Set.empty
-            preferences <- Map.add v1 (Set.add v2 existing1) preferences
-            let existing2 = Map.tryFind v2 preferences |> Option.defaultValue Set.empty
-            preferences <- Map.add v2 (Set.add v1 existing2) preferences
-
-    for kvp in cfg.Blocks do
-        let block = kvp.Value
-        for instr in block.Instrs do
-            match instr with
-            | LIR.Phi (LIR.Virtual destId, sources, _) ->
-                // Add preferences between dest and each virtual register source
-                for (src, _) in sources do
-                    match src with
-                    | LIR.Reg (LIR.Virtual srcId) ->
-                        addPreference destId srcId
-                    | _ -> ()
-            | _ -> ()
-
-    preferences
+let private dedupePairs (pairs: (int * int) list) : (int * int) list =
+    let sorted = pairs |> List.map (fun (a, b) -> normalizePair a b) |> List.sort
+    let rec loop (last: (int * int) option) (acc: (int * int) list) (remaining: (int * int) list) =
+        match remaining with
+        | [] -> List.rev acc
+        | head :: tail ->
+            match last with
+            | Some prev when prev = head -> loop last acc tail
+            | _ -> loop (Some head) (head :: acc) tail
+    loop None [] sorted
 
 /// Collect move-related coalescing pairs from CFG.
 /// Returns undirected pairs of virtual registers that are directly moved between.
-let collectMovePairs (cfg: LIR.CFG) : (int * int) list =
-    let normalize (a: int) (b: int) =
-        if a < b then (a, b) else (b, a)
-    cfg.Blocks
-    |> Map.fold (fun acc _ block ->
+let collectMovePairs (blocks: LIR.BasicBlock array) : (int * int) list =
+    blocks
+    |> Array.fold (fun acc block ->
         block.Instrs
         |> List.fold (fun acc instr ->
             match instr with
             | LIR.Mov (LIR.Virtual destId, LIR.Reg (LIR.Virtual srcId)) ->
-                Set.add (normalize destId srcId) acc
-            | _ -> acc) acc) Set.empty
-    |> Set.toList
+                (destId, srcId) :: acc
+            | _ -> acc) acc) []
+    |> dedupePairs
 
 /// Collect phi-related coalescing pairs from CFG.
 /// Returns undirected pairs of virtual registers that flow into the same phi destination.
-let collectPhiPairs (cfg: LIR.CFG) : (int * int) list =
-    let normalize (a: int) (b: int) =
-        if a < b then (a, b) else (b, a)
-    cfg.Blocks
-    |> Map.fold (fun acc _ block ->
+let collectPhiPairs (blocks: LIR.BasicBlock array) : (int * int) list =
+    blocks
+    |> Array.fold (fun acc block ->
         block.Instrs
         |> List.fold (fun acc instr ->
             match instr with
@@ -883,51 +1361,54 @@ let collectPhiPairs (cfg: LIR.CFG) : (int * int) list =
                 |> List.fold (fun acc (src, _) ->
                     match src with
                     | LIR.Reg (LIR.Virtual srcId) when srcId <> destId ->
-                        Set.add (normalize destId srcId) acc
+                        (destId, srcId) :: acc
                     | _ -> acc) acc
-            | _ -> acc) acc) Set.empty
-    |> Set.toList
+            | _ -> acc) acc) []
+    |> dedupePairs
+
+/// Collect phi coalescing preferences from CFG.
+/// Returns undirected pairs (vregId, vregId) representing preferred coalescing.
+let collectPhiPreferences (blocks: LIR.BasicBlock array) : (int * int) list =
+    collectPhiPairs blocks
 
 /// Maximum Cardinality Search - computes Perfect Elimination Ordering for chordal graphs
 /// Returns vertices in PEO order (first vertex is most "central")
 /// Uses a bucket queue for linear-time selection in terms of vertices + edges.
-let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * McsProfile =
-    if Set.isEmpty graph.Vertices then
-        ([], { VertexCount = 0; SelectionChecks = 0; WeightUpdates = 0; BucketSkips = 0 })
+let private maximumCardinalitySearchCore
+    (graph: InterferenceGraph)
+    (swOpt: System.Diagnostics.Stopwatch option)
+    : int list * McsProfile * McsTiming option =
+    let domain = graph.Domain
+    let n = domain.Ids.Length
+    let vertexCount = bitsetCount graph.Vertices
+    if vertexCount = 0 then
+        let profile = { VertexCount = 0; SelectionChecks = 0; WeightUpdates = 0; BucketSkips = 0 }
+        let timing =
+            match swOpt with
+            | None -> None
+            | Some _ -> Some { SelectMs = 0.0; UpdateMs = 0.0 }
+        ([], profile, timing)
     else
-        let vertexList = Set.toArray graph.Vertices
-        let n = vertexList.Length
-        let vertexToIdx = vertexList |> Array.mapi (fun i v -> (v, i)) |> Map.ofArray
-
-        let neighbors =
-            vertexList
-            |> Array.map (fun v ->
-                match Map.tryFind v graph.Edges with
-                | None -> [||]
-                | Some adj ->
-                    adj
-                    |> Seq.map (fun u ->
-                        match Map.tryFind u vertexToIdx with
-                        | Some idx -> idx
-                        | None -> Crash.crash $"Interference graph missing vertex {u}")
-                    |> Seq.toArray)
+        let inGraph = Array.create n false
+        bitsetIterIndices graph.Vertices (fun idx -> inGraph.[idx] <- true)
 
         // Track weights and ordered status
         let weights = Array.zeroCreate<int> n
         let ordered = Array.create n false
 
         // Bucket queue state (weight -> list of vertices)
-        let bucketHeads = Array.create n -1
+        let bucketHeads = Array.create vertexCount -1
         let next = Array.create n -1
         let prev = Array.create n -1
 
         // Initialize all vertices in bucket 0
-        for i in 0 .. n - 1 do
-            let head = bucketHeads.[0]
-            next.[i] <- head
-            prev.[i] <- -1
-            if head <> -1 then prev.[head] <- i
-            bucketHeads.[0] <- i
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] then
+                let head = bucketHeads.[0]
+                next.[idx] <- head
+                prev.[idx] <- -1
+                if head <> -1 then prev.[head] <- idx
+                bucketHeads.[0] <- idx
 
         let removeFromBucket (idx: int) (weight: int) : unit =
             let p = prev.[idx]
@@ -948,44 +1429,79 @@ let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * 
             if head <> -1 then prev.[head] <- idx
             bucketHeads.[weight] <- idx
 
+        let timeBlock (accumulate: float -> unit) (f: unit -> 'a) : 'a =
+            match swOpt with
+            | None -> f ()
+            | Some sw ->
+                let start = sw.Elapsed.TotalMilliseconds
+                let result = f ()
+                let delta = sw.Elapsed.TotalMilliseconds - start
+                accumulate delta
+                result
+
         let mutable currentMax = 0
         let mutable ordering = []
         let mutable selectionChecks = 0
         let mutable weightUpdates = 0
         let mutable bucketSkips = 0
+        let mutable selectMs = 0.0
+        let mutable updateMs = 0.0
 
-        for _ in 0 .. n - 1 do
-            while currentMax >= 0 && bucketHeads.[currentMax] = -1 do
-                currentMax <- currentMax - 1
-                bucketSkips <- bucketSkips + 1
-            if currentMax < 0 then
-                Crash.crash "MCS bucket queue empty before selecting all vertices"
+        for _ in 0 .. vertexCount - 1 do
+            let idx =
+                timeBlock (fun delta -> selectMs <- selectMs + delta) (fun () ->
+                    while currentMax >= 0 && bucketHeads.[currentMax] = -1 do
+                        currentMax <- currentMax - 1
+                        bucketSkips <- bucketSkips + 1
+                    if currentMax < 0 then
+                        Crash.crash "MCS bucket queue empty before selecting all vertices"
 
-            let idx = bucketHeads.[currentMax]
-            selectionChecks <- selectionChecks + 1
-            removeFromBucket idx currentMax
-            ordered.[idx] <- true
-            ordering <- vertexList.[idx] :: ordering
+                    let idx = bucketHeads.[currentMax]
+                    selectionChecks <- selectionChecks + 1
+                    removeFromBucket idx currentMax
+                    ordered.[idx] <- true
+                    ordering <- domain.Ids.[idx] :: ordering
+                    idx)
 
-            for nidx in neighbors.[idx] do
-                if not ordered.[nidx] then
-                    let oldWeight = weights.[nidx]
-                    removeFromBucket nidx oldWeight
-                    let newWeight = oldWeight + 1
-                    if newWeight >= n then
-                        Crash.crash $"MCS weight overflow: {newWeight} >= {n}"
-                    weights.[nidx] <- newWeight
-                    addToBucket nidx newWeight
-                    if newWeight > currentMax then currentMax <- newWeight
-                    weightUpdates <- weightUpdates + 1
+            timeBlock (fun delta -> updateMs <- updateMs + delta) (fun () ->
+                bitsetIterIndices graph.Neighbors.[idx] (fun nidx ->
+                    if inGraph.[nidx] && not ordered.[nidx] then
+                        let oldWeight = weights.[nidx]
+                        removeFromBucket nidx oldWeight
+                        let newWeight = oldWeight + 1
+                        if newWeight >= vertexCount then
+                            Crash.crash $"MCS weight overflow: {newWeight} >= {vertexCount}"
+                        weights.[nidx] <- newWeight
+                        addToBucket nidx newWeight
+                        if newWeight > currentMax then currentMax <- newWeight
+                        weightUpdates <- weightUpdates + 1))
 
         let profile = {
-            VertexCount = n
+            VertexCount = vertexCount
             SelectionChecks = selectionChecks
             WeightUpdates = weightUpdates
             BucketSkips = bucketSkips
         }
-        (List.rev ordering, profile)
+        let timing =
+            match swOpt with
+            | None -> None
+            | Some _ -> Some { SelectMs = selectMs; UpdateMs = updateMs }
+        (List.rev ordering, profile, timing)
+
+let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * McsProfile =
+    let (ordering, profile, _timing) = maximumCardinalitySearchCore graph None
+    (ordering, profile)
+
+let private maximumCardinalitySearchWithTiming
+    (graph: InterferenceGraph)
+    (sw: System.Diagnostics.Stopwatch)
+    : int list * McsTiming =
+    let (ordering, _profile, timingOpt) = maximumCardinalitySearchCore graph (Some sw)
+    let timing =
+        match timingOpt with
+        | Some value -> value
+        | None -> { SelectMs = 0.0; UpdateMs = 0.0 }
+    (ordering, timing)
 
 let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
     let (ordering, _profile) = maximumCardinalitySearchWithProfile graph
@@ -993,38 +1509,53 @@ let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
 
 type private CoalescedGraph = {
     Graph: InterferenceGraph
-    RepMap: Map<int, int>
-    RepMembers: Map<int, Set<int>>
-    Preferences: Map<int, Set<int>>
-    Precolored: Map<int, int>
+    RepOfIndex: int array
+    RepMembers: BitSet array
+    Preferences: BitSet array
+    Precolored: int option array
 }
 
-let private coalesceGraph
+let private coalesceGraphFast
     (graph: InterferenceGraph)
-    (precolored: Map<int, int>)
+    (precoloredPairs: (int * int) list)
     (movePairs: (int * int) list)
-    (preferences: Map<int, Set<int>>)
+    (preferencePairs: (int * int) list)
     : CoalescedGraph =
-    if Set.isEmpty graph.Vertices then
+    let domain = graph.Domain
+    let n = domain.Ids.Length
+    let wordCount = domain.WordCount
+    if bitsetIsEmpty graph.Vertices then
         { Graph = graph
-          RepMap = Map.empty
-          RepMembers = Map.empty
-          Preferences = Map.empty
-          Precolored = precolored }
+          RepOfIndex = Array.init n id
+          RepMembers = Array.init n (fun _ -> bitsetEmpty wordCount)
+          Preferences = Array.init n (fun _ -> bitsetEmpty wordCount)
+          Precolored = Array.create n None }
     else
-        let vertexList = Set.toArray graph.Vertices
-        let n = vertexList.Length
-        let vertexToIdx = vertexList |> Array.mapi (fun i v -> (v, i)) |> Map.ofArray
+        let inGraph = Array.create n false
+        bitsetIterIndices graph.Vertices (fun idx -> inGraph.[idx] <- true)
 
         let parent = Array.init n id
-        let sizes = Array.create n 1
-        let members = vertexList |> Array.map (fun v -> Set.singleton v)
-        let neighbors =
-            vertexList
-            |> Array.map (fun v -> Map.tryFind v graph.Edges |> Option.defaultValue Set.empty)
-        let precolor =
-            vertexList
-            |> Array.map (fun v -> Map.tryFind v precolored)
+        let sizes = Array.create n 0
+        let members = Array.init n (fun _ -> bitsetEmpty wordCount)
+        let neighbors = Array.init n (fun _ -> bitsetEmpty wordCount)
+        let precolor = Array.create n None
+        let repId = Array.create n 0
+
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] then
+                sizes.[idx] <- 1
+                let bits = bitsetEmpty wordCount
+                bitsetAddIndexInPlace idx bits
+                members.[idx] <- bits
+                neighbors.[idx] <- bitsetClone graph.Neighbors.[idx]
+                repId.[idx] <- domain.Ids.[idx]
+            else
+                repId.[idx] <- domain.Ids.[idx]
+
+        for (vregId, color) in precoloredPairs do
+            match tryIndexOf domain vregId with
+            | Some idx when inGraph.[idx] -> precolor.[idx] <- Some color
+            | _ -> ()
 
         let rec find idx =
             let p = parent.[idx]
@@ -1042,14 +1573,10 @@ let private coalesceGraph
                 match precolor.[rootA], precolor.[rootB] with
                 | Some c1, Some c2 when c1 <> c2 -> false
                 | _ ->
-                    let neighborsA = neighbors.[rootA]
-                    let membersB = members.[rootB]
-                    if not (Set.isEmpty (Set.intersect neighborsA membersB)) then
+                    if bitsetIntersects neighbors.[rootA] members.[rootB] then
                         false
                     else
-                        let neighborsB = neighbors.[rootB]
-                        let membersA = members.[rootA]
-                        Set.isEmpty (Set.intersect neighborsB membersA)
+                        not (bitsetIntersects neighbors.[rootB] members.[rootA])
 
         let union rootA rootB =
             let ra, rb =
@@ -1059,223 +1586,212 @@ let private coalesceGraph
                     (rootA, rootB)
             parent.[rb] <- ra
             sizes.[ra] <- sizes.[ra] + sizes.[rb]
-            members.[ra] <- Set.union members.[ra] members.[rb]
-            neighbors.[ra] <- Set.union neighbors.[ra] neighbors.[rb]
+            bitsetUnionInPlace members.[ra] members.[rb]
+            bitsetUnionInPlace neighbors.[ra] neighbors.[rb]
+            bitsetDiffInPlace neighbors.[ra] members.[ra]
             match precolor.[ra], precolor.[rb] with
             | None, Some color -> precolor.[ra] <- Some color
             | _ -> ()
-            members.[rb] <- Set.empty
-            neighbors.[rb] <- Set.empty
-            precolor.[rb] <- None
+            if repId.[rb] < repId.[ra] then
+                repId.[ra] <- repId.[rb]
 
         for (u, v) in movePairs do
-            match Map.tryFind u vertexToIdx, Map.tryFind v vertexToIdx with
-            | Some idxU, Some idxV ->
+            match tryIndexOf domain u, tryIndexOf domain v with
+            | Some idxU, Some idxV when inGraph.[idxU] && inGraph.[idxV] ->
                 let rootU = find idxU
                 let rootV = find idxV
                 if canMerge rootU rootV then
                     union rootU rootV
             | _ -> ()
 
-        let repMembers =
-            [0 .. n - 1]
-            |> List.fold (fun acc idx ->
-                if parent.[idx] = idx then
-                    let memberSet = members.[idx]
-                    if Set.isEmpty memberSet then acc
-                    else
-                        let rep = Set.minElement memberSet
-                        Map.add rep memberSet acc
-                else
-                    acc) Map.empty
+        let rootOfIdx = Array.init n (fun idx -> if inGraph.[idx] then find idx else idx)
 
-        let repMap =
-            repMembers
-            |> Map.fold (fun acc rep memberSet ->
-                memberSet |> Set.fold (fun acc v -> Map.add v rep acc) acc) Map.empty
+        let repIndexOfRoot = Array.create n -1
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] && parent.[idx] = idx then
+                let repValue = repId.[idx]
+                match tryIndexOf domain repValue with
+                | Some repIdx -> repIndexOfRoot.[idx] <- repIdx
+                | None -> Crash.crash $"coalesceGraphFast: Missing rep index for {repValue}"
 
-        let repPrecolored =
-            precolored
-            |> Map.fold (fun acc v color ->
-                match Map.tryFind v repMap with
-                | Some rep -> Map.add rep color acc
-                | None -> acc) Map.empty
+        let repOfIndex = Array.create n -1
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] then
+                let root = rootOfIdx.[idx]
+                let repIdx = repIndexOfRoot.[root]
+                if repIdx < 0 then
+                    Crash.crash $"coalesceGraphFast: Missing rep for {domain.Ids.[idx]}"
+                repOfIndex.[idx] <- repIdx
 
-        let addPreference (v1: int) (v2: int) (prefs: Map<int, Set<int>>) : Map<int, Set<int>> =
-            if v1 = v2 then prefs
-            else
-                let existing1 = Map.tryFind v1 prefs |> Option.defaultValue Set.empty
-                let prefs = Map.add v1 (Set.add v2 existing1) prefs
-                let existing2 = Map.tryFind v2 prefs |> Option.defaultValue Set.empty
-                Map.add v2 (Set.add v1 existing2) prefs
+        let repMembers = Array.init n (fun _ -> bitsetEmpty wordCount)
+        let repVertices = bitsetEmpty wordCount
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] then
+                let repIdx = repOfIndex.[idx]
+                bitsetAddIndexInPlace idx repMembers.[repIdx]
+                bitsetAddIndexInPlace repIdx repVertices
 
-        let repPreferences =
-            preferences
-            |> Map.fold (fun acc v partners ->
-                match Map.tryFind v repMap with
-                | None -> acc
-                | Some repV ->
-                    partners
-                    |> Set.fold (fun acc partner ->
-                        match Map.tryFind partner repMap with
-                        | Some repP when repP <> repV -> addPreference repV repP acc
-                        | _ -> acc) acc) Map.empty
+        let repPrecolored = Array.create n None
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] && parent.[idx] = idx then
+                let repIdx = repIndexOfRoot.[idx]
+                match precolor.[idx] with
+                | Some color -> repPrecolored.[repIdx] <- Some color
+                | None -> ()
 
-        let repVertices =
-            repMembers |> Map.toSeq |> Seq.map fst |> Set.ofSeq
+        let repPreferences = Array.init n (fun _ -> bitsetEmpty wordCount)
+        for (u, v) in preferencePairs do
+            match tryIndexOf domain u, tryIndexOf domain v with
+            | Some idxU, Some idxV when inGraph.[idxU] && inGraph.[idxV] ->
+                let repU = repOfIndex.[idxU]
+                let repV = repOfIndex.[idxV]
+                if repU <> repV && repU >= 0 && repV >= 0 then
+                    bitsetAddIndexInPlace repV repPreferences.[repU]
+                    bitsetAddIndexInPlace repU repPreferences.[repV]
+            | _ -> ()
 
-        let addVertex (v: int) (edges: Map<int, Set<int>>) =
-            if Map.containsKey v edges then edges else Map.add v Set.empty edges
+        let repNeighbors = Array.init n (fun _ -> bitsetEmpty wordCount)
+        for idx in 0 .. n - 1 do
+            if inGraph.[idx] && parent.[idx] = idx then
+                let repIdx = repIndexOfRoot.[idx]
+                bitsetIterIndices neighbors.[idx] (fun nidx ->
+                    if inGraph.[nidx] then
+                        let rootN = rootOfIdx.[nidx]
+                        if rootN <> idx then
+                            let repN = repIndexOfRoot.[rootN]
+                            if repIdx <> repN && repIdx >= 0 && repN >= 0 then
+                                bitsetAddIndexInPlace repN repNeighbors.[repIdx]
+                                bitsetAddIndexInPlace repIdx repNeighbors.[repN])
 
-        let addEdge (u: int) (v: int) (edges: Map<int, Set<int>>) =
-            if u = v then edges
-            else
-                let edges = addVertex u edges
-                let edges = addVertex v edges
-                let neighborsU =
-                    match Map.tryFind u edges with
-                    | Some neighbors -> neighbors
-                    | None -> Crash.crash $"coalesceMoves: Missing vertex {u}"
-                let neighborsV =
-                    match Map.tryFind v edges with
-                    | Some neighbors -> neighbors
-                    | None -> Crash.crash $"coalesceMoves: Missing vertex {v}"
-                let edges = Map.add u (Set.add v neighborsU) edges
-                Map.add v (Set.add u neighborsV) edges
-
-        let repEdges =
-            graph.Edges
-            |> Map.fold (fun edges v neighbors ->
-                match Map.tryFind v repMap with
-                | None -> edges
-                | Some repV ->
-                    neighbors
-                    |> Set.fold (fun edges n ->
-                        match Map.tryFind n repMap with
-                        | Some repN when repN <> repV -> addEdge repV repN edges
-                        | _ -> edges) edges) Map.empty
-            |> fun edges ->
-                repVertices |> Set.fold (fun edges v -> addVertex v edges) edges
-
-        let repGraph = { Vertices = repVertices; Edges = repEdges }
+        let repGraph = { Domain = domain; Vertices = repVertices; Neighbors = repNeighbors }
 
         { Graph = repGraph
-          RepMap = repMap
+          RepOfIndex = repOfIndex
           RepMembers = repMembers
           Preferences = repPreferences
           Precolored = repPrecolored }
 
-let private expandColoring (result: ColoringResult) (repMembers: Map<int, Set<int>>) : ColoringResult =
-    let expandedColors =
-        result.Colors
-        |> Map.fold (fun acc rep color ->
-            match Map.tryFind rep repMembers with
-            | Some members ->
-                members |> Set.fold (fun acc v -> Map.add v color acc) acc
-            | None -> acc) Map.empty
+let private expandColoring (result: ColoringResult) (repMembers: BitSet array) : ColoringResult =
+    let domain = result.Domain
+    let n = domain.Ids.Length
+    let expandedColors = Array.create n None
+    let expandedSpills = bitsetEmpty domain.WordCount
 
-    let expandedSpills =
-        result.Spills
-        |> Set.fold (fun acc rep ->
-            match Map.tryFind rep repMembers with
-            | Some members -> Set.union acc members
-            | None -> acc) Set.empty
+    for repIdx in 0 .. n - 1 do
+        match result.Colors.[repIdx] with
+        | Some color ->
+            bitsetIterIndices repMembers.[repIdx] (fun memberIdx ->
+                expandedColors.[memberIdx] <- Some color)
+        | None -> ()
 
-    { Colors = expandedColors
+    bitsetIterIndices result.Spills (fun repIdx ->
+        bitsetUnionInPlace expandedSpills repMembers.[repIdx])
+
+    { Domain = domain
+      Colors = expandedColors
       Spills = expandedSpills
       ChromaticNumber = result.ChromaticNumber }
+
+let private emptyColoringResult (domain: VRegDomain) : ColoringResult =
+    { Domain = domain
+      Colors = Array.create domain.Ids.Length None
+      Spills = bitsetEmpty domain.WordCount
+      ChromaticNumber = 0 }
 
 /// Greedy color in reverse PEO order with phi coalescing preferences
 /// For chordal graphs, this produces an optimal coloring.
 /// When preferences are provided, try to use colors that match coalesced partners.
 /// Uses two-pass approach: first color vregs with no uncolored phi partners,
 /// then color deferred vregs (whose partners are now colored).
-let greedyColorReverse (graph: InterferenceGraph) (peo: int list) (precolored: Map<int, int>) (numColors: int) (preferences: Map<int, Set<int>>) : ColoringResult =
-    let mutable colors = precolored
-    let mutable spills = Set.empty<int>
+let greedyColorReverse
+    (graph: InterferenceGraph)
+    (peo: int list)
+    (precolored: int option array)
+    (numColors: int)
+    (preferences: BitSet array)
+    : ColoringResult =
+    let domain = graph.Domain
+    let n = domain.Ids.Length
+    let wordCount = domain.WordCount
+    let colors = Array.create n None
+    let spills = bitsetEmpty wordCount
     let mutable maxColor = -1
 
-    // Update maxColor from pre-colored vertices
-    for kvp in precolored do
-        if kvp.Value > maxColor then
-            maxColor <- kvp.Value
+    // Apply pre-colored vertices
+    for idx in 0 .. n - 1 do
+        match precolored.[idx] with
+        | Some c ->
+            colors.[idx] <- Some c
+            if c > maxColor then maxColor <- c
+        | None -> ()
 
-    let colorVertex (v: int) : unit =
-        if not (Map.containsKey v colors) then
-            // Find colors used by already-colored neighbors
-            let neighbors = Map.tryFind v graph.Edges |> Option.defaultValue Set.empty
-            let usedColors =
-                neighbors
-                |> Set.toList
-                |> List.choose (fun u -> Map.tryFind u colors)
-                |> Set.ofList
+    let inGraph = Array.create n false
+    bitsetIterIndices graph.Vertices (fun idx -> inGraph.[idx] <- true)
 
-            // Get preferred colors from coalesced partners that are already colored
-            let preferredColors =
-                match Map.tryFind v preferences with
-                | Some partners ->
-                    partners
-                    |> Set.toList
-                    |> List.choose (fun partner -> Map.tryFind partner colors)
-                    |> List.filter (fun c -> not (Set.contains c usedColors))
-                | None -> []
+    let peoIndices =
+        peo
+        |> List.map (fun v ->
+            match tryIndexOf domain v with
+            | Some idx -> idx
+            | None -> Crash.crash $"Greedy coloring missing vertex {v}")
 
-            let mutable assigned = false
+    let markUsedColors (idx: int) (used: bool array) : unit =
+        bitsetIterIndices graph.Neighbors.[idx] (fun nidx ->
+            if inGraph.[nidx] then
+                match colors.[nidx] with
+                | Some c when c >= 0 && c < numColors -> used.[c] <- true
+                | _ -> ())
 
-            // First try preferred colors (in order of first appearance)
-            for prefColor in preferredColors do
-                if not assigned then
-                    colors <- Map.add v prefColor colors
-                    if prefColor > maxColor then maxColor <- prefColor
-                    assigned <- true
+    let colorVertex (idx: int) : unit =
+        if colors.[idx].IsNone then
+            let used = Array.create numColors false
+            markUsedColors idx used
 
-            // If no preferred color worked, find smallest available color
-            if not assigned then
+            let mutable prefColor = None
+            bitsetIterIndices preferences.[idx] (fun pidx ->
+                match colors.[pidx] with
+                | Some c when prefColor.IsNone && c >= 0 && c < numColors && not used.[c] ->
+                    prefColor <- Some c
+                | _ -> ())
+
+            let assignColor (c: int) =
+                colors.[idx] <- Some c
+                if c > maxColor then maxColor <- c
+
+            match prefColor with
+            | Some c -> assignColor c
+            | None ->
+                let mutable assigned = false
                 for c in 0 .. numColors - 1 do
-                    if not assigned && not (Set.contains c usedColors) then
-                        colors <- Map.add v c colors
-                        if c > maxColor then maxColor <- c
+                    if not assigned && not used.[c] then
+                        assignColor c
                         assigned <- true
+                if not assigned then
+                    bitsetAddIndexInPlace idx spills
 
-            // If no color available, mark for spill
-            if not assigned then
-                spills <- Set.add v spills
+    let hasUncoloredPartners (idx: int) : bool =
+        let mutable found = false
+        bitsetIterIndices preferences.[idx] (fun pidx ->
+            if not found && inGraph.[pidx] && colors.[pidx].IsNone then
+                found <- true)
+        found
 
-    // Check if a vreg has any uncolored phi partners
-    let hasUncoloredPartners (v: int) : bool =
-        match Map.tryFind v preferences with
-        | Some partners ->
-            partners |> Set.exists (fun p -> not (Map.containsKey p colors))
-        | None -> false
+    let interferes (idx1: int) (idx2: int) : bool =
+        bitsetContainsIndex idx2 graph.Neighbors.[idx1]
 
-    // Check if two vertices interfere
-    let interferes (v1: int) (v2: int) : bool =
-        match Map.tryFind v1 graph.Edges with
-        | Some neighbors -> Set.contains v2 neighbors
-        | None -> false
-
-    // Color a vertex and all its non-interfering, uncolored phi partners together
-    // This ensures mutual phi partners get the same color when possible
-    let colorVertexWithPartners (v: int) : unit =
-        if not (Map.containsKey v colors) then
-            // Find non-interfering, uncolored phi partners
-            // Must ensure they don't interfere with v AND don't interfere with each other
+    let colorVertexWithPartners (idx: int) : unit =
+        if colors.[idx].IsNone then
             let candidates =
-                match Map.tryFind v preferences with
-                | Some partners ->
-                    partners
-                    |> Set.filter (fun p ->
-                        not (Map.containsKey p colors) &&
-                        not (interferes v p))
-                    |> Set.toList
-                | None -> []
+                let mutable acc = []
+                bitsetIterIndices preferences.[idx] (fun pidx ->
+                    if inGraph.[pidx] && colors.[pidx].IsNone && not (interferes idx pidx) then
+                        acc <- pidx :: acc)
+                List.rev acc
 
-            // Filter to only include partners that don't interfere with each other
             let rec filterMutuallyCompatible (acc: int list) (remaining: int list) =
                 match remaining with
                 | [] -> List.rev acc
                 | p :: rest ->
-                    // Check if p interferes with any already-accepted partner
                     let compatible = acc |> List.forall (fun a -> not (interferes p a))
                     if compatible then
                         filterMutuallyCompatible (p :: acc) rest
@@ -1283,104 +1799,137 @@ let greedyColorReverse (graph: InterferenceGraph) (peo: int list) (precolored: M
                         filterMutuallyCompatible acc rest
 
             let coalesceable = filterMutuallyCompatible [] candidates
+            let allVertices = idx :: coalesceable
+            let used = Array.create numColors false
+            for vertex in allVertices do
+                markUsedColors vertex used
 
-            // Find colors used by neighbors of v and all coalesceable partners
-            let allVertices = v :: coalesceable
-            let usedColors =
-                allVertices
-                |> List.collect (fun vertex ->
-                    let neighbors = Map.tryFind vertex graph.Edges |> Option.defaultValue Set.empty
-                    neighbors
-                    |> Set.toList
-                    |> List.choose (fun u -> Map.tryFind u colors))
-                |> Set.ofList
-
-            // Find smallest available color
             let mutable assigned = false
             for c in 0 .. numColors - 1 do
-                if not assigned && not (Set.contains c usedColors) then
-                    // Assign this color to v and all coalesceable partners
+                if not assigned && not used.[c] then
                     for vertex in allVertices do
-                        if not (Map.containsKey vertex colors) then
-                            colors <- Map.add vertex c colors
+                        if colors.[vertex].IsNone then
+                            colors.[vertex] <- Some c
                     if c > maxColor then maxColor <- c
                     assigned <- true
 
-            // If no color available, mark for spill (only the main vertex)
             if not assigned then
-                spills <- Set.add v spills
+                bitsetAddIndexInPlace idx spills
 
-    // First pass: color vregs with no preferences or all partners already colored
-    // Defer vregs that have uncolored partners (so partners get colored first)
-    let mutable deferred = Set.empty<int>
-    for v in List.rev peo do
-        if not (Map.containsKey v colors) then
-            if hasUncoloredPartners v then
-                deferred <- Set.add v deferred
+    let deferred = bitsetEmpty wordCount
+    for idx in List.rev peoIndices do
+        if colors.[idx].IsNone then
+            if hasUncoloredPartners idx then
+                bitsetAddIndexInPlace idx deferred
             else
-                colorVertex v
+                colorVertex idx
 
-    // Second pass: color deferred vregs with aggressive coalescing
-    // For mutual phi partners that don't interfere, color them together
-    for v in List.rev peo do
-        if Set.contains v deferred && not (Map.containsKey v colors) then
-            colorVertexWithPartners v
+    for idx in List.rev peoIndices do
+        if bitsetContainsIndex idx deferred && colors.[idx].IsNone then
+            colorVertexWithPartners idx
 
-    { Colors = colors
+    { Domain = domain
+      Colors = colors
       Spills = spills
       ChromaticNumber = if maxColor < 0 then 0 else maxColor + 1 }
 
 /// Main chordal graph coloring function with phi coalescing preferences
 let chordalGraphColor
     (graph: InterferenceGraph)
-    (precolored: Map<int, int>)
+    (precoloredPairs: (int * int) list)
     (numColors: int)
-    (preferences: Map<int, Set<int>>)
+    (preferencePairs: (int * int) list)
     (movePairs: (int * int) list)
     : ColoringResult =
-    if Set.isEmpty graph.Vertices then
-        { Colors = Map.empty; Spills = Set.empty; ChromaticNumber = 0 }
+    if bitsetIsEmpty graph.Vertices then
+        emptyColoringResult graph.Domain
     else
-        let coalesced = coalesceGraph graph precolored movePairs preferences
+        let coalesced = coalesceGraphFast graph precoloredPairs movePairs preferencePairs
         let peo = maximumCardinalitySearch coalesced.Graph
         let result = greedyColorReverse coalesced.Graph peo coalesced.Precolored numColors coalesced.Preferences
         expandColoring result coalesced.RepMembers
 
+let private chordalGraphColorWithTiming
+    (sw: System.Diagnostics.Stopwatch)
+    (graph: InterferenceGraph)
+    (precoloredPairs: (int * int) list)
+    (numColors: int)
+    (preferencePairs: (int * int) list)
+    (movePairs: (int * int) list)
+    : ColoringResult * ChordalColoringTiming =
+    if bitsetIsEmpty graph.Vertices then
+        (emptyColoringResult graph.Domain,
+         { CoalesceMs = 0.0
+           McsSelectMs = 0.0
+           McsUpdateMs = 0.0
+           GreedyMs = 0.0
+           ExpandMs = 0.0 })
+    else
+        let timePhase (f: unit -> 'a) : 'a * float =
+            let start = sw.Elapsed.TotalMilliseconds
+            let result = f ()
+            let elapsedMs = sw.Elapsed.TotalMilliseconds - start
+            (result, elapsedMs)
+
+        let (coalesced, coalesceMs) =
+            timePhase (fun () -> coalesceGraphFast graph precoloredPairs movePairs preferencePairs)
+        let (peo, mcsTiming) = maximumCardinalitySearchWithTiming coalesced.Graph sw
+        let (result, greedyMs) =
+            timePhase (fun () ->
+                greedyColorReverse coalesced.Graph peo coalesced.Precolored numColors coalesced.Preferences)
+        let (expanded, expandMs) =
+            timePhase (fun () -> expandColoring result coalesced.RepMembers)
+
+        let timing = {
+            CoalesceMs = coalesceMs
+            McsSelectMs = mcsTiming.SelectMs
+            McsUpdateMs = mcsTiming.UpdateMs
+            GreedyMs = greedyMs
+            ExpandMs = expandMs
+        }
+        (expanded, timing)
+
 /// Convert chordal graph coloring result to allocation result
 /// Colors map to physical registers, spills map to stack slots
 let coloringToAllocation (colorResult: ColoringResult) (registers: LIR.PhysReg list) : AllocationResult =
-    let mutable mapping = Map.empty<int, Allocation>
+    let domain = colorResult.Domain
+    let n = domain.Ids.Length
+    let allocations = Array.create n None
     let mutable nextStackSlot = -8
-    let mutable usedCalleeSaved = Set.empty<LIR.PhysReg>
+    let mutable usedCalleeSaved : LIR.PhysReg list = []
 
     // Map colored vertices to physical registers
-    for kvp in colorResult.Colors do
-        let vregId = kvp.Key
-        let color = kvp.Value
-        if color < List.length registers then
-            let reg = List.item color registers
-            mapping <- Map.add vregId (PhysReg reg) mapping
-            // Track callee-saved register usage
-            if List.contains reg [LIR.X19; LIR.X20; LIR.X21; LIR.X22; LIR.X23; LIR.X24; LIR.X25; LIR.X26] then
-                usedCalleeSaved <- Set.add reg usedCalleeSaved
-        else
-            // Color out of range - treat as spill
-            mapping <- Map.add vregId (StackSlot nextStackSlot) mapping
-            nextStackSlot <- nextStackSlot - 8
+    for idx in 0 .. n - 1 do
+        match colorResult.Colors.[idx] with
+        | Some color ->
+            if color < List.length registers then
+                let reg = List.item color registers
+                allocations.[idx] <- Some (PhysReg reg)
+                // Track callee-saved register usage
+                if List.contains reg [LIR.X19; LIR.X20; LIR.X21; LIR.X22; LIR.X23; LIR.X24; LIR.X25; LIR.X26] then
+                    if not (List.contains reg usedCalleeSaved) then
+                        usedCalleeSaved <- reg :: usedCalleeSaved
+            else
+                // Color out of range - treat as spill
+                allocations.[idx] <- Some (StackSlot nextStackSlot)
+                nextStackSlot <- nextStackSlot - 8
+        | None -> ()
 
     // Map spilled vertices to stack slots
-    for vregId in colorResult.Spills do
-        mapping <- Map.add vregId (StackSlot nextStackSlot) mapping
-        nextStackSlot <- nextStackSlot - 8
+    bitsetIterIndices colorResult.Spills (fun idx ->
+        if allocations.[idx].IsNone then
+            allocations.[idx] <- Some (StackSlot nextStackSlot)
+            nextStackSlot <- nextStackSlot - 8)
 
     // Compute 16-byte aligned stack size
     let stackSize =
         if nextStackSlot = -8 then 0
         else ((abs nextStackSlot + 15) / 16) * 16
 
-    { Mapping = mapping
+    { Domain = domain
+      Allocations = allocations
       StackSize = stackSize
-      UsedCalleeSaved = usedCalleeSaved |> Set.toList |> List.sort }
+      UsedCalleeSaved = usedCalleeSaved |> List.sort }
 
 // ============================================================================
 // Float Register Allocation
@@ -1401,7 +1950,8 @@ let allocatableFloatRegs : LIR.PhysFPReg list = floatCallerSavedRegs @ floatCall
 
 /// Float allocation result
 type FAllocationResult = {
-    FMapping: Map<int, LIR.PhysFPReg>
+    Domain: VRegDomain
+    Allocations: LIR.PhysFPReg option array
     UsedCalleeSavedF: LIR.PhysFPReg list
 }
 
@@ -1415,41 +1965,57 @@ let physFPRegToInt (reg: LIR.PhysFPReg) : int =
 
 /// Convert float coloring result to allocation
 let floatColoringToAllocation (colorResult: ColoringResult) (registers: LIR.PhysFPReg list) : FAllocationResult =
-    let mutable mapping = Map.empty<int, LIR.PhysFPReg>
-    let mutable usedCalleeSaved = Set.empty<LIR.PhysFPReg>
+    let domain = colorResult.Domain
+    let n = domain.Ids.Length
+    let allocations = Array.create n None
+    let mutable usedCalleeSaved : LIR.PhysFPReg list = []
 
-    for kvp in colorResult.Colors do
-        let fvregId = kvp.Key
-        let color = kvp.Value
-        if color < List.length registers then
-            let reg = List.item color registers
-            mapping <- Map.add fvregId reg mapping
-            if List.contains reg floatCalleeSavedRegs then
-                usedCalleeSaved <- Set.add reg usedCalleeSaved
+    for idx in 0 .. n - 1 do
+        match colorResult.Colors.[idx] with
+        | Some color ->
+            if color < List.length registers then
+                let reg = List.item color registers
+                allocations.[idx] <- Some reg
+                if List.contains reg floatCalleeSavedRegs && not (List.contains reg usedCalleeSaved) then
+                    usedCalleeSaved <- reg :: usedCalleeSaved
+        | None -> ()
 
-    { FMapping = mapping; UsedCalleeSavedF = usedCalleeSaved |> Set.toList |> List.sort }
+    { Domain = domain
+      Allocations = allocations
+      UsedCalleeSavedF = usedCalleeSaved |> List.sort }
 
 /// Run chordal graph coloring for float register allocation
 /// additionalVRegs: FVirtual IDs that must be allocated (e.g., float parameters)
 /// even if they don't appear in the CFG instructions
-let chordalFloatAllocation (cfg: LIR.CFG) (additionalVRegs: Set<int>) : FAllocationResult =
-    let liveness = computeFloatLiveness cfg
-    let graph = buildFloatInterferenceGraph cfg liveness additionalVRegs
+let private chordalFloatAllocationWithLiveness
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (additionalVRegs: BitSet)
+    (domain: VRegDomain)
+    (livenessBits: BlockLiveness array)
+    : FAllocationResult =
+    let graph = buildFloatInterferenceGraphBitsetWithLiveness blockIndex blocks domain livenessBits additionalVRegs
     // Add additional VRegs (like float params) as isolated vertices if not already in graph
     let graphWithParams : InterferenceGraph =
-        additionalVRegs
-        |> Set.fold (fun (g: InterferenceGraph) vregId ->
-            if Set.contains vregId g.Vertices then g
-            else { g with Vertices = Set.add vregId g.Vertices
-                          Edges = Map.add vregId Set.empty g.Edges }
-        ) graph
-    if Set.isEmpty graphWithParams.Vertices then
+        { graph with Vertices = bitsetUnion graph.Vertices additionalVRegs }
+    if bitsetIsEmpty graphWithParams.Vertices then
         // No float registers used - return empty allocation
-        { FMapping = Map.empty; UsedCalleeSavedF = [] }
+        { Domain = domain
+          Allocations = Array.create domain.Ids.Length None
+          UsedCalleeSavedF = [] }
     else
         // No preferences for floats for now (could add FPhi coalescing later)
-        let colorResult = chordalGraphColor graphWithParams Map.empty (List.length allocatableFloatRegs) Map.empty []
+        let colorResult = chordalGraphColor graphWithParams [] (List.length allocatableFloatRegs) [] []
         floatColoringToAllocation colorResult allocatableFloatRegs
+
+/// Run chordal graph coloring for float register allocation
+/// additionalVRegs: FVirtual IDs that must be allocated (e.g., float parameters)
+/// even if they don't appear in the CFG instructions
+let chordalFloatAllocation (cfg: LIR.CFG) (additionalVRegs: int list) : FAllocationResult =
+    let (blockIndex, blocks) = buildBlockIndex cfg
+    let (domain, livenessBits) = computeFloatLivenessBitsRaw blockIndex blocks additionalVRegs
+    let additionalBits = bitsetFromList domain additionalVRegs
+    chordalFloatAllocationWithLiveness blockIndex blocks additionalBits domain livenessBits
 
 /// Apply float allocation to an FReg, converting FVirtual to FPhysical
 let applyFloatAllocationToFReg (floatAllocation: FAllocationResult) (freg: LIR.FReg) : LIR.FReg =
@@ -1460,8 +2026,11 @@ let applyFloatAllocationToFReg (floatAllocation: FAllocationResult) (freg: LIR.F
     | LIR.FVirtual 2000 -> freg  // Fixed temp
     | LIR.FVirtual n when n >= 3000 && n < 4000 -> freg  // Call arg temps - fixed
     | LIR.FVirtual id ->
-        match Map.tryFind id floatAllocation.FMapping with
-        | Some physReg -> LIR.FPhysical physReg
+        match tryIndexOf floatAllocation.Domain id with
+        | Some idx ->
+            match floatAllocation.Allocations.[idx] with
+            | Some physReg -> LIR.FPhysical physReg
+            | None -> Crash.crash $"Float register allocation bug: FVirtual {id} not found in allocation"
         | None -> Crash.crash $"Float register allocation bug: FVirtual {id} not found in allocation"
 
 /// Apply float allocation to an instruction
@@ -1516,50 +2085,74 @@ let applyFloatAllocationToInstr (floatAllocation: FAllocationResult) (instr: LIR
 let applyFloatAllocationToBlock (floatAllocation: FAllocationResult) (block: LIR.BasicBlock) : LIR.BasicBlock =
     { block with Instrs = block.Instrs |> List.map (applyFloatAllocationToInstr floatAllocation) }
 
+/// Apply float allocation to basic blocks
+let applyFloatAllocationToBlocks
+    (floatAllocation: FAllocationResult)
+    (blocks: LIR.BasicBlock array)
+    : LIR.BasicBlock array =
+    blocks |> Array.map (applyFloatAllocationToBlock floatAllocation)
+
 /// Apply float allocation to a CFG
 let applyFloatAllocationToCFG (floatAllocation: FAllocationResult) (cfg: LIR.CFG) : LIR.CFG =
-    { cfg with Blocks = cfg.Blocks |> Map.map (fun _ block -> applyFloatAllocationToBlock floatAllocation block) }
+    let (blockIndex, blocks) = buildBlockIndex cfg
+    let updatedBlocks = applyFloatAllocationToBlocks floatAllocation blocks
+    { cfg with Blocks = blocksToMap blockIndex updatedBlocks }
 
 // ============================================================================
 // Linear Scan Register Allocation (kept for reference, not used)
 // ============================================================================
 
+let private tryAllocation (allocation: AllocationResult) (vregId: int) : Allocation option =
+    match tryIndexOf allocation.Domain vregId with
+    | Some idx -> allocation.Allocations.[idx]
+    | None -> None
+
+let private tryFloatAllocation (floatAllocation: FAllocationResult) (fvregId: int) : LIR.PhysFPReg option =
+    match tryIndexOf floatAllocation.Domain fvregId with
+    | Some idx -> floatAllocation.Allocations.[idx]
+    | None -> None
+
 /// Get the caller-saved physical registers that contain live values
-let getLiveCallerSavedRegs (liveVRegs: Set<int>) (mapping: Map<int, Allocation>) : LIR.PhysReg list =
-    liveVRegs
-    |> Set.toList
-    |> List.choose (fun vregId ->
-        match Map.tryFind vregId mapping with
-        | Some (PhysReg reg) when List.contains reg callerSavedRegs -> Some reg
-        | _ -> None)
-    |> List.distinct
-    |> List.sort  // Keep consistent order for deterministic output
+let getLiveCallerSavedRegs (allocation: AllocationResult) (liveVRegs: BitSet) : LIR.PhysReg list =
+    let mutable regs = []
+    bitsetIter allocation.Domain liveVRegs (fun vregId ->
+        match tryAllocation allocation vregId with
+        | Some (PhysReg reg) when List.contains reg callerSavedRegs ->
+            if not (List.contains reg regs) then
+                regs <- reg :: regs
+        | _ -> ())
+    regs |> List.sort  // Keep consistent order for deterministic output
 
 /// Get the caller-saved physical float registers that contain live values
-let getLiveCallerSavedFloatRegs (liveFVRegs: Set<int>) (floatAllocation: FAllocationResult) : LIR.PhysFPReg list =
-    liveFVRegs
-    |> Set.toList
-    |> List.choose (fun vregId -> Map.tryFind vregId floatAllocation.FMapping)
-    |> List.filter (fun reg -> List.contains reg floatCallerSavedRegs)
-    |> List.distinct
-    |> List.sort
+let getLiveCallerSavedFloatRegs
+    (liveFVRegs: BitSet)
+    (floatAllocation: FAllocationResult)
+    : LIR.PhysFPReg list =
+    let mutable regs = []
+    bitsetIter floatAllocation.Domain liveFVRegs (fun vregId ->
+        match tryFloatAllocation floatAllocation vregId with
+        | Some reg when List.contains reg floatCallerSavedRegs ->
+            if not (List.contains reg regs) then
+                regs <- reg :: regs
+        | _ -> ())
+    regs |> List.sort
 
 // ============================================================================
 // Apply Allocation to LIR
 // ============================================================================
 
 /// Apply allocation to a register, returning the physical register and allocation info
-let applyToReg (mapping: Map<int, Allocation>) (reg: LIR.Reg) : LIR.Reg * Allocation option =
+let applyToReg (allocation: AllocationResult) (reg: LIR.Reg) : LIR.Reg * Allocation option =
     match reg with
     | LIR.Physical p -> (LIR.Physical p, None)
     | LIR.Virtual id ->
-        match Map.tryFind id mapping with
+        match tryAllocation allocation id with
         | Some (PhysReg physReg) -> (LIR.Physical physReg, None)
         | Some (StackSlot offset) -> (LIR.Physical LIR.X11, Some (StackSlot offset))
         | None -> (LIR.Physical LIR.X11, None)
 
 /// Apply allocation to an operand, returning load instructions if needed
-let applyToOperand (mapping: Map<int, Allocation>) (operand: LIR.Operand) (tempReg: LIR.PhysReg)
+let applyToOperand (allocation: AllocationResult) (operand: LIR.Operand) (tempReg: LIR.PhysReg)
     : LIR.Operand * LIR.Instr list =
     match operand with
     | LIR.Imm n -> (LIR.Imm n, [])
@@ -1571,7 +2164,7 @@ let applyToOperand (mapping: Map<int, Allocation>) (operand: LIR.Operand) (tempR
         match reg with
         | LIR.Physical p -> (LIR.Reg (LIR.Physical p), [])
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation allocation id with
             | Some (PhysReg physReg) -> (LIR.Reg (LIR.Physical physReg), [])
             | Some (StackSlot offset) ->
                 let loadInstr = LIR.Mov (LIR.Physical tempReg, LIR.StackSlot offset)
@@ -1584,7 +2177,7 @@ let applyToOperand (mapping: Map<int, Allocation>) (operand: LIR.Operand) (tempR
 /// Apply allocation to an operand WITHOUT generating load instructions for spills.
 /// Returns StackSlot for spilled values so CodeGen can load them at the right time.
 /// Used for TailArgMoves where loads must be deferred to avoid using the same temp register.
-let applyToOperandNoLoad (mapping: Map<int, Allocation>) (operand: LIR.Operand) : LIR.Operand =
+let applyToOperandNoLoad (allocation: AllocationResult) (operand: LIR.Operand) : LIR.Operand =
     match operand with
     | LIR.Imm n -> LIR.Imm n
     | LIR.FloatImm f -> LIR.FloatImm f
@@ -1595,7 +2188,7 @@ let applyToOperandNoLoad (mapping: Map<int, Allocation>) (operand: LIR.Operand) 
         match reg with
         | LIR.Physical p -> LIR.Reg (LIR.Physical p)
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation allocation id with
             | Some (PhysReg physReg) -> LIR.Reg (LIR.Physical physReg)
             | Some (StackSlot offset) -> LIR.StackSlot offset
             // Keep Virtual unchanged if not in integer mapping - it may be a float register
@@ -1603,12 +2196,12 @@ let applyToOperandNoLoad (mapping: Map<int, Allocation>) (operand: LIR.Operand) 
     | LIR.FuncAddr name -> LIR.FuncAddr name
 
 /// Helper to load a spilled register
-let loadSpilled (mapping: Map<int, Allocation>) (reg: LIR.Reg) (tempReg: LIR.PhysReg)
+let loadSpilled (allocation: AllocationResult) (reg: LIR.Reg) (tempReg: LIR.PhysReg)
     : LIR.Reg * LIR.Instr list =
     match reg with
     | LIR.Physical p -> (LIR.Physical p, [])
     | LIR.Virtual id ->
-        match Map.tryFind id mapping with
+        match tryAllocation allocation id with
         | Some (PhysReg physReg) -> (LIR.Physical physReg, [])
         | Some (StackSlot offset) ->
             let loadInstr = LIR.Mov (LIR.Physical tempReg, LIR.StackSlot offset)
@@ -1616,7 +2209,7 @@ let loadSpilled (mapping: Map<int, Allocation>) (reg: LIR.Reg) (tempReg: LIR.Phy
         | None -> (LIR.Physical tempReg, [])
 
 /// Apply allocation to an instruction
-let applyToInstr (mapping: Map<int, Allocation>) (instr: LIR.Instr) : LIR.Instr list =
+let applyToInstr (mapping: AllocationResult) (instr: LIR.Instr) : LIR.Instr list =
     match instr with
     | LIR.Phi _ ->
         // Phi nodes are handled specially by resolvePhiNodes after allocation.
@@ -2324,14 +2917,14 @@ let applyToInstr (mapping: Map<int, Allocation>) (instr: LIR.Instr) : LIR.Instr 
     | LIR.Exit -> [LIR.Exit]
 
 /// Apply allocation to terminator
-let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
+let applyToTerminator (mapping: AllocationResult) (term: LIR.Terminator)
     : LIR.Instr list * LIR.Terminator =
     match term with
     | LIR.Ret -> ([], LIR.Ret)
     | LIR.Branch (cond, trueLabel, falseLabel) ->
         match cond with
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation mapping id with
             | Some (PhysReg physReg) ->
                 ([], LIR.Branch (LIR.Physical physReg, trueLabel, falseLabel))
             | Some (StackSlot offset) ->
@@ -2345,7 +2938,7 @@ let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
     | LIR.BranchZero (cond, zeroLabel, nonZeroLabel) ->
         match cond with
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation mapping id with
             | Some (PhysReg physReg) ->
                 ([], LIR.BranchZero (LIR.Physical physReg, zeroLabel, nonZeroLabel))
             | Some (StackSlot offset) ->
@@ -2359,7 +2952,7 @@ let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
     | LIR.BranchBitZero (reg, bit, zeroLabel, nonZeroLabel) ->
         match reg with
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation mapping id with
             | Some (PhysReg physReg) ->
                 ([], LIR.BranchBitZero (LIR.Physical physReg, bit, zeroLabel, nonZeroLabel))
             | Some (StackSlot offset) ->
@@ -2372,7 +2965,7 @@ let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
     | LIR.BranchBitNonZero (reg, bit, nonZeroLabel, zeroLabel) ->
         match reg with
         | LIR.Virtual id ->
-            match Map.tryFind id mapping with
+            match tryAllocation mapping id with
             | Some (PhysReg physReg) ->
                 ([], LIR.BranchBitNonZero (LIR.Physical physReg, bit, nonZeroLabel, zeroLabel))
             | Some (StackSlot offset) ->
@@ -2389,16 +2982,16 @@ let applyToTerminator (mapping: Map<int, Allocation>) (term: LIR.Terminator)
 
 /// Apply allocation to a basic block with liveness-aware SaveRegs/RestoreRegs population
 let applyToBlockWithLiveness
-    (mapping: Map<int, Allocation>)
+    (mapping: AllocationResult)
     (floatAllocation: FAllocationResult)
-    (liveOut: Set<int>)
-    (floatLiveOut: Set<int>)
+    (liveOut: BitSet)
+    (floatLiveOut: BitSet)
     (block: LIR.BasicBlock)
     : LIR.BasicBlock =
 
     // Compute liveness at each instruction point
-    let instrLiveness = computeInstructionLiveness block liveOut
-    let floatInstrLiveness = computeFloatInstructionLiveness block floatLiveOut
+    let instrLiveness = computeInstructionLiveness mapping.Domain block liveOut
+    let floatInstrLiveness = computeFloatInstructionLiveness floatAllocation.Domain block floatLiveOut
 
     // Process each instruction with its corresponding liveness
     // Debug: check lengths match
@@ -2424,7 +3017,7 @@ let applyToBlockWithLiveness
                 // 1. Currently live (have values that might be clobbered by the call)
                 // 2. Needed after the call
                 // The liveAfter here includes both categories, so we use it
-                let liveCallerSaved = getLiveCallerSavedRegs liveAfter mapping
+                let liveCallerSaved = getLiveCallerSavedRegs mapping liveAfter
                 let liveCallerSavedFloat = getLiveCallerSavedFloatRegs floatLiveAfter floatAllocation
                 // Push onto stack for matching RestoreRegs
                 savedRegsStack <- (liveCallerSaved, liveCallerSavedFloat) :: savedRegsStack
@@ -2449,22 +3042,20 @@ let applyToBlockWithLiveness
 
 /// Apply allocation to CFG with liveness info
 let applyToCFGWithLiveness
-    (mapping: Map<int, Allocation>)
+    (blocks: LIR.BasicBlock array)
+    (mapping: AllocationResult)
     (floatAllocation: FAllocationResult)
-    (cfg: LIR.CFG)
-    (liveness: Map<LIR.Label, BlockLiveness>)
-    (floatLiveness: Map<LIR.Label, BlockLiveness>)
-    : LIR.CFG =
-    { Entry = cfg.Entry
-      Blocks =
-        cfg.Blocks
-        |> Map.map (fun label block ->
-            let blockLiveness = Map.find label liveness
-            let floatBlockLiveness =
-                match Map.tryFind label floatLiveness with
-                | Some fl -> fl
-                | None -> { LiveIn = Set.empty; LiveOut = Set.empty }
-            applyToBlockWithLiveness mapping floatAllocation blockLiveness.LiveOut floatBlockLiveness.LiveOut block) }
+    (liveness: BlockLiveness array)
+    (floatLiveness: BlockLiveness array)
+    : LIR.BasicBlock array =
+    let emptyFloat = bitsetEmpty floatAllocation.Domain.WordCount
+    Array.init blocks.Length (fun idx ->
+        let block = blocks.[idx]
+        let blockLiveness = liveness.[idx]
+        let floatBlockLiveness =
+            if idx < floatLiveness.Length then floatLiveness.[idx]
+            else { LiveIn = emptyFloat; LiveOut = emptyFloat }
+        applyToBlockWithLiveness mapping floatAllocation blockLiveness.LiveOut floatBlockLiveness.LiveOut block)
 
 // ============================================================================
 // Float Move Generation (used by both phi resolution and param copies)
@@ -2489,7 +3080,7 @@ let generateFloatMoveInstrsWithAllocation
                 19 + ((n - 3000) % 8)  // D19-D26 (call arg temps) - fixed
             | LIR.FVirtual id ->
                 // Look up in allocation
-                match Map.tryFind id floatAllocation.FMapping with
+                match tryFloatAllocation floatAllocation id with
                 | Some physReg -> physFPRegToInt physReg
                 | None ->
                     // Fallback to old modulo mapping for unallocated VRegs
@@ -2510,24 +3101,41 @@ let generateFloatMoveInstrsWithAllocation
         let actions = ParallelMoves.resolve physMoves getSrcPhysId
 
         // Convert actions back to FMov instructions using original FRegs
-        let destMap = moves |> List.map (fun (dest, _) -> (fregToPhysId dest, dest)) |> Map.ofList
-        let srcMap = moves |> List.map (fun (_, src) -> (fregToPhysId src, src)) |> Map.ofList
+        let maxPhysId =
+            physMoves
+            |> List.fold (fun acc (destId, srcId) -> max acc (max destId srcId)) 0
+        let destMap = Array.create (maxPhysId + 1) None
+        let srcMap = Array.create (maxPhysId + 1) None
+        for (dest, src) in moves do
+            let destId = fregToPhysId dest
+            let srcId = fregToPhysId src
+            if destId <= maxPhysId then destMap.[destId] <- Some dest
+            if srcId <= maxPhysId then srcMap.[srcId] <- Some src
 
         actions
         |> List.collect (fun action ->
             match action with
             | ParallelMoves.SaveToTemp physId ->
-                match Map.tryFind physId srcMap with
-                | Some srcFreg -> [LIR.FMov (LIR.FVirtual 2000, srcFreg)]
-                | None -> []
+                if physId >= 0 && physId < srcMap.Length then
+                    match srcMap.[physId] with
+                    | Some srcFreg -> [LIR.FMov (LIR.FVirtual 2000, srcFreg)]
+                    | None -> []
+                else
+                    []
             | ParallelMoves.Move (destPhysId, srcPhysId) ->
-                match Map.tryFind destPhysId destMap, Map.tryFind srcPhysId srcMap with
-                | Some destFreg, Some srcFreg -> [LIR.FMov (destFreg, srcFreg)]
-                | _ -> []
+                if destPhysId >= 0 && destPhysId < destMap.Length && srcPhysId >= 0 && srcPhysId < srcMap.Length then
+                    match destMap.[destPhysId], srcMap.[srcPhysId] with
+                    | Some destFreg, Some srcFreg -> [LIR.FMov (destFreg, srcFreg)]
+                    | _ -> []
+                else
+                    []
             | ParallelMoves.MoveFromTemp destPhysId ->
-                match Map.tryFind destPhysId destMap with
-                | Some destFreg -> [LIR.FMov (destFreg, LIR.FVirtual 2000)]
-                | None -> [])
+                if destPhysId >= 0 && destPhysId < destMap.Length then
+                    match destMap.[destPhysId] with
+                    | Some destFreg -> [LIR.FMov (destFreg, LIR.FVirtual 2000)]
+                    | None -> []
+                else
+                    [])
 
 // ============================================================================
 // Phi Resolution
@@ -2542,87 +3150,97 @@ let generateFloatMoveInstrsWithAllocation
 /// 5. Inserts the moves at the end of each predecessor (before terminator)
 /// 6. Removes phi nodes from blocks
 let resolvePhiNodes
-    (cfg: LIR.CFG)
-    (allocation: Map<int, Allocation>)
+    (blockIndex: BlockIndex)
+    (blocks: LIR.BasicBlock array)
+    (allocation: AllocationResult)
     (floatAllocation: FAllocationResult)
-    : LIR.CFG =
-    let collectNonPhiUses (cfg: LIR.CFG) : Set<int> =
-        cfg.Blocks
-        |> Map.fold (fun acc _ block ->
-            let instrUses =
-                block.Instrs
-                |> List.fold (fun acc instr ->
-                    match instr with
-                    | LIR.Phi _ -> acc
-                    | LIR.FPhi _ -> acc
-                    | _ -> Set.union acc (getUsedVRegs instr)) Set.empty
-            let termUses = getTerminatorUsedVRegs block.Terminator
-            Set.union acc (Set.union instrUses termUses)
-        ) Set.empty
+    : LIR.BasicBlock array =
+    let neededDomain = buildVRegDomain (collectVRegIds blocks)
+    let n = neededDomain.Ids.Length
+    let wordCount = neededDomain.WordCount
 
-    let collectPhiSources (cfg: LIR.CFG) : Map<int, Set<int>> =
-        let addSource (dest: int) (src: int) (acc: Map<int, Set<int>>) =
-            let existing = Map.tryFind dest acc |> Option.defaultValue Set.empty
-            Map.add dest (Set.add src existing) acc
-
-        cfg.Blocks
-        |> Map.fold (fun acc _ block ->
-            block.Instrs
-            |> List.fold (fun acc instr ->
-                match instr with
-                | LIR.Phi (LIR.Virtual destId, sources, _) ->
+    let phiSources = Array.init n (fun _ -> bitsetEmpty wordCount)
+    blocks
+    |> Array.iter (fun block ->
+        block.Instrs
+        |> List.iter (fun instr ->
+            match instr with
+            | LIR.Phi (LIR.Virtual destId, sources, _) ->
+                match tryIndexOf neededDomain destId with
+                | Some destIdx ->
                     sources
-                    |> List.fold (fun acc (src, _) ->
+                    |> List.iter (fun (src, _) ->
                         match src with
-                        | LIR.Reg (LIR.Virtual srcId) -> addSource destId srcId acc
-                        | _ -> acc) acc
-                | _ -> acc) acc
-        ) Map.empty
+                        | LIR.Reg (LIR.Virtual srcId) ->
+                            match tryIndexOf neededDomain srcId with
+                            | Some srcIdx -> bitsetAddIndexInPlace srcIdx phiSources.[destIdx]
+                            | None -> ()
+                        | _ -> ())
+                | None -> ()
+            | _ -> ()))
 
-    let collectPhysicalPhiSources (cfg: LIR.CFG) : Set<int> =
-        cfg.Blocks
-        |> Map.fold (fun acc _ block ->
+    let collectNonPhiUses (blocks: LIR.BasicBlock array) : BitSet =
+        let uses = bitsetEmpty wordCount
+        blocks
+        |> Array.iter (fun block ->
             block.Instrs
-            |> List.fold (fun acc instr ->
+            |> List.iter (fun instr ->
+                match instr with
+                | LIR.Phi _ -> ()
+                | LIR.FPhi _ -> ()
+                | _ ->
+                    getUsedVRegs instr
+                    |> List.iter (fun id -> bitsetAddInPlace neededDomain id uses))
+            getTerminatorUsedVRegs block.Terminator
+            |> List.iter (fun id -> bitsetAddInPlace neededDomain id uses))
+        uses
+
+    let collectPhysicalPhiSources (blocks: LIR.BasicBlock array) : BitSet =
+        let uses = bitsetEmpty wordCount
+        blocks
+        |> Array.iter (fun block ->
+            block.Instrs
+            |> List.iter (fun instr ->
                 match instr with
                 | LIR.Phi (LIR.Physical _, sources, _) ->
                     sources
-                    |> List.fold (fun acc (src, _) ->
+                    |> List.iter (fun (src, _) ->
                         match src with
-                        | LIR.Reg (LIR.Virtual srcId) -> Set.add srcId acc
-                        | _ -> acc) acc
-                | _ -> acc) acc
-        ) Set.empty
+                        | LIR.Reg (LIR.Virtual srcId) ->
+                            bitsetAddInPlace neededDomain srcId uses
+                        | _ -> ())
+                | _ -> ()))
+        uses
 
-    let computeNeededVRegs (cfg: LIR.CFG) : Set<int> =
-        let phiSources = collectPhiSources cfg
-        let rootUses = Set.union (collectNonPhiUses cfg) (collectPhysicalPhiSources cfg)
-        let rec expand (needed: Set<int>) (worklist: int list) : Set<int> =
+    let computeNeededVRegs (blocks: LIR.BasicBlock array) : BitSet =
+        let rootUses = collectNonPhiUses blocks
+        bitsetUnionInPlace rootUses (collectPhysicalPhiSources blocks)
+        let rec expand (needed: BitSet) (worklist: int list) : BitSet =
             match worklist with
             | [] -> needed
-            | v :: rest ->
-                match Map.tryFind v phiSources with
-                | None -> expand needed rest
-                | Some sources ->
-                    let newSources = Set.difference sources needed
-                    let needed' = Set.union needed newSources
-                    let worklist' = (Set.toList newSources) @ rest
-                    expand needed' worklist'
+            | vIdx :: rest ->
+                let sources = phiSources.[vIdx]
+                let newSources = bitsetDiff sources needed
+                if bitsetIsEmpty newSources then
+                    expand needed rest
+                else
+                    bitsetUnionInPlace needed newSources
+                    let worklist' = (bitsetIndicesToList newSources) @ rest
+                    expand needed worklist'
+        expand rootUses (bitsetIndicesToList rootUses)
 
-        expand rootUses (Set.toList rootUses)
-
-    let neededVRegs = computeNeededVRegs cfg
+    let neededVRegs = computeNeededVRegs blocks
 
     let phiDestNeeded (dest: LIR.Reg) : bool =
         match dest with
-        | LIR.Virtual id -> Set.contains id neededVRegs
+        | LIR.Virtual id -> bitsetContains neededDomain neededVRegs id
         | LIR.Physical _ -> true
 
     // Get the allocation for a virtual register (register or stack slot)
     let getDestAllocation (reg: LIR.Reg) : Allocation =
         match reg with
         | LIR.Virtual id ->
-            match Map.tryFind id allocation with
+            match tryAllocation allocation id with
             | Some alloc -> alloc
             | None -> Crash.crash $"RegisterAllocation: Virtual register {id} not found in allocation"
         | LIR.Physical p -> PhysReg p
@@ -2631,7 +3249,7 @@ let resolvePhiNodes
     let operandToAllocated (op: LIR.Operand) : LIR.Operand =
         match op with
         | LIR.Reg (LIR.Virtual id) ->
-            match Map.tryFind id allocation with
+            match tryAllocation allocation id with
             | Some (PhysReg r) -> LIR.Reg (LIR.Physical r)
             | Some (StackSlot offset) -> LIR.StackSlot offset
             | None -> op
@@ -2641,9 +3259,9 @@ let resolvePhiNodes
     // Collect all int phi info: for each phi, get (dest_reg, src_operand, pred_label)
     // This gives us: List of (dest, sources, valueType)
     let intPhiInfo =
-        cfg.Blocks
-        |> Map.toList
-        |> List.collect (fun (_, block) ->
+        blocks
+        |> Array.toList
+        |> List.collect (fun block ->
             block.Instrs
             |> List.choose (fun instr ->
                 match instr with
@@ -2656,40 +3274,36 @@ let resolvePhiNodes
 
     // Collect all float phi info: (dest FReg, source FRegs with labels)
     let floatPhiInfo =
-        cfg.Blocks
-        |> Map.toList
-        |> List.collect (fun (_, block) ->
+        blocks
+        |> Array.toList
+        |> List.collect (fun block ->
             block.Instrs
             |> List.choose (fun instr ->
                 match instr with
                 | LIR.FPhi (dest, sources) -> Some (dest, sources)
                 | _ -> None))
 
-    // Group int phis by predecessor: Map<pred_label, List<(dest_allocation, src_operand)>>
+    // Group int phis by predecessor index: List<(dest_allocation, src_operand)> per block index
     // Keep the full Allocation type to handle both register and stack destinations
-    let predecessorIntMoves : Map<LIR.Label, (Allocation * LIR.Operand) list> =
-        intPhiInfo
-        |> List.collect (fun (dest, sources, _valueType) ->
-            let destAlloc = getDestAllocation dest
-            sources |> List.map (fun (src, predLabel) ->
+    let predecessorIntMoves = Array.init blocks.Length (fun _ -> [])
+    for (dest, sources, _valueType) in intPhiInfo do
+        let destAlloc = getDestAllocation dest
+        for (src, predLabel) in sources do
+            match tryBlockIndex blockIndex predLabel with
+            | Some predIdx ->
                 let srcAllocated = operandToAllocated src
-                (predLabel, (destAlloc, srcAllocated))))
-        |> List.groupBy fst
-        |> List.map (fun (predLabel, pairs) ->
-            (predLabel, pairs |> List.map snd))
-        |> Map.ofList
+                predecessorIntMoves.[predIdx] <- (destAlloc, srcAllocated) :: predecessorIntMoves.[predIdx]
+            | None -> ()
 
-    // Group float phis by predecessor: Map<pred_label, List<(dest_freg, src_freg)>>
+    // Group float phis by predecessor index: List<(dest_freg, src_freg)> per block index
     // Float registers don't go through allocation - FVirtual maps directly to D regs in CodeGen
-    let predecessorFloatMoves : Map<LIR.Label, (LIR.FReg * LIR.FReg) list> =
-        floatPhiInfo
-        |> List.collect (fun (dest, sources) ->
-            sources |> List.map (fun (src, predLabel) ->
-                (predLabel, (dest, src))))
-        |> List.groupBy fst
-        |> List.map (fun (predLabel, pairs) ->
-            (predLabel, pairs |> List.map snd))
-        |> Map.ofList
+    let predecessorFloatMoves = Array.init blocks.Length (fun _ -> [])
+    for (dest, sources) in floatPhiInfo do
+        for (src, predLabel) in sources do
+            match tryBlockIndex blockIndex predLabel with
+            | Some predIdx ->
+                predecessorFloatMoves.[predIdx] <- (dest, src) :: predecessorFloatMoves.[predIdx]
+            | None -> ()
 
     // Generate move instructions for phi resolution using parallel move resolution
     // across both register and stack destinations (handles reg<->stack cycles).
@@ -2731,18 +3345,15 @@ let resolvePhiNodes
             | ParallelMoves.MoveFromTemp dest -> moveFromTemp dest)
 
     // Add moves to predecessor blocks
-    let mutable updatedBlocks = cfg.Blocks
+    let updatedBlocks = Array.copy blocks
 
     // Add int phi moves
-    for kvp in predecessorIntMoves do
-        let predLabel = kvp.Key
-        let moves = kvp.Value
-        match Map.tryFind predLabel updatedBlocks with
-        | Some predBlock ->
+    for predIdx in 0 .. updatedBlocks.Length - 1 do
+        let moves = predecessorIntMoves.[predIdx]
+        if not (List.isEmpty moves) then
+            let predBlock = updatedBlocks.[predIdx]
             let moveInstrs = generateIntMoveInstrs moves
-            let updatedBlock = { predBlock with Instrs = predBlock.Instrs @ moveInstrs }
-            updatedBlocks <- Map.add predLabel updatedBlock updatedBlocks
-        | None -> ()
+            updatedBlocks.[predIdx] <- { predBlock with Instrs = predBlock.Instrs @ moveInstrs }
 
     // Add float phi moves
     // IMPORTANT: For tail call blocks, the phi resolution is ALREADY handled by:
@@ -2752,32 +3363,25 @@ let resolvePhiNodes
     // So we should SKIP phi resolution for tail call backedges - it's redundant and incorrect.
     //
     // For non-tail-call predecessors, append moves at the end as usual.
-    for kvp in predecessorFloatMoves do
-        let predLabel = kvp.Key
-        let moves = kvp.Value
-        match Map.tryFind predLabel updatedBlocks with
-        | Some predBlock ->
+    for predIdx in 0 .. updatedBlocks.Length - 1 do
+        let moves = predecessorFloatMoves.[predIdx]
+        if not (List.isEmpty moves) then
+            let predBlock = updatedBlocks.[predIdx]
             // Add phi moves at end of predecessor block
             let moveInstrs = generateFloatMoveInstrsWithAllocation moves floatAllocation
-            let updatedBlock = { predBlock with Instrs = predBlock.Instrs @ moveInstrs }
-            updatedBlocks <- Map.add predLabel updatedBlock updatedBlocks
-        | None ->
-            ()
+            updatedBlocks.[predIdx] <- { predBlock with Instrs = predBlock.Instrs @ moveInstrs }
 
     // Remove phi and fphi nodes from all blocks
-    updatedBlocks <-
-        updatedBlocks
-        |> Map.map (fun _ block ->
-            let filteredInstrs =
-                block.Instrs
-                |> List.filter (fun instr ->
-                    match instr with
-                    | LIR.Phi _ -> false
-                    | LIR.FPhi _ -> false
-                    | _ -> true)
-            { block with Instrs = filteredInstrs })
-
-    { cfg with Blocks = updatedBlocks }
+    updatedBlocks
+    |> Array.map (fun block ->
+        let filteredInstrs =
+            block.Instrs
+            |> List.filter (fun instr ->
+                match instr with
+                | LIR.Phi _ -> false
+                | LIR.FPhi _ -> false
+                | _ -> true)
+        { block with Instrs = filteredInstrs })
 
 // ============================================================================
 // Main Entry Point
@@ -2787,11 +3391,32 @@ let resolvePhiNodes
 let parameterRegs = [LIR.X0; LIR.X1; LIR.X2; LIR.X3; LIR.X4; LIR.X5; LIR.X6; LIR.X7]
 let floatParamRegs = [LIR.D0; LIR.D1; LIR.D2; LIR.D3; LIR.D4; LIR.D5; LIR.D6; LIR.D7]
 
-/// Allocate registers for a function
-let allocateRegisters (func: LIR.Function) : LIR.Function =
-    // Step 1: Compute liveness
-    let liveness = computeLiveness func.CFG
+let private appendTiming
+    (phase: string)
+    (elapsedMs: float)
+    (timings: RegisterAllocationTiming list)
+    : RegisterAllocationTiming list =
+    timings @ [{ Phase = phase; ElapsedMs = elapsedMs }]
 
+/// Allocate registers for a function
+let private timePhase
+    (swOpt: System.Diagnostics.Stopwatch option)
+    (phase: string)
+    (timings: RegisterAllocationTiming list)
+    (f: unit -> 'a)
+    : 'a * RegisterAllocationTiming list =
+    match swOpt with
+    | None -> (f (), timings)
+    | Some sw ->
+        let start = sw.Elapsed.TotalMilliseconds
+        let result = f ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds - start
+        (result, appendTiming phase elapsedMs timings)
+
+let private allocateRegistersInternal
+    (swOpt: System.Diagnostics.Stopwatch option)
+    (func: LIR.Function)
+    : LIR.Function * RegisterAllocationTiming list =
     // Precompute parameter info with separate int/float counters (AAPCS64)
     // Needed for entry defs and float allocation.
     let paramsWithTypes = func.TypedParams |> List.map (fun tp -> (tp.Reg, tp.Type))
@@ -2808,13 +3433,12 @@ let allocateRegisters (func: LIR.Function) : LIR.Function =
     let intParams = List.rev intParams
     let floatParams = List.rev floatParams
 
-    let intParamVRegs =
+    let intParamVRegIds =
         intParams
         |> List.choose (fun (reg, _) ->
             match reg with
             | LIR.Virtual id -> Some id
             | LIR.Physical _ -> None)
-        |> Set.ofList
 
     // Extract FVirtual IDs from float params for allocation
     // Float params use Virtual register IDs that are also FVirtual IDs
@@ -2824,174 +3448,253 @@ let allocateRegisters (func: LIR.Function) : LIR.Function =
             match reg with
             | LIR.Virtual id -> Some id
             | LIR.Physical _ -> None)
-        |> Set.ofList
+
+    let (blockIndex, blocks) = buildBlockIndex func.CFG
+
+    // Step 1: Compute liveness (include int params in domain)
+    let ((domain, livenessBits), timings) =
+        timePhase swOpt "RegAlloc: Liveness" [] (fun () ->
+            computeLivenessBitsRaw blockIndex blocks intParamVRegIds)
+    let intParamBits = bitsetFromList domain intParamVRegIds
 
     // Step 2: Build interference graph
-    let graph = buildInterferenceGraph func.CFG liveness intParamVRegs
+    let (graph, timings) =
+        match swOpt with
+        | None ->
+            timePhase swOpt "RegAlloc: Interference Graph" timings (fun () ->
+                buildInterferenceGraphBitsetWithLiveness blockIndex blocks domain livenessBits intParamBits)
+        | Some sw ->
+            let start = sw.Elapsed.TotalMilliseconds
+            let (graph, igTiming) =
+                buildInterferenceGraphBitsetWithLivenessProfile sw blockIndex blocks domain livenessBits intParamBits
+            let totalMs = sw.Elapsed.TotalMilliseconds - start
+            let timings =
+                timings
+                |> appendTiming "RegAlloc: Interference Graph" totalMs
+                |> appendTiming "RegAlloc: Interference Graph - Live Iteration" igTiming.LiveIterationMs
+                |> appendTiming "RegAlloc: Interference Graph - Adjacency Updates" igTiming.AdjacencyUpdatesMs
+            (graph, timings)
 
     // Step 2b: Collect coalescing preferences and move pairs
-    let preferences = collectPhiPreferences func.CFG
-    let movePairs =
-        let moves = collectMovePairs func.CFG
-        let phiPairs = collectPhiPairs func.CFG
-        Set.ofList (moves @ phiPairs) |> Set.toList
+    let ((preferences, movePairs), timings) =
+        timePhase swOpt "RegAlloc: Coalescing Prep" timings (fun () ->
+            let phiPairs = collectPhiPairs blocks
+            let preferences = phiPairs
+            let moves = collectMovePairs blocks
+            let movePairs = dedupePairs (moves @ phiPairs)
+            (preferences, movePairs))
 
     // Step 3: Run chordal graph coloring with phi coalescing
     // Use optimal register order based on calling pattern:
     // - Functions with non-tail calls: callee-saved first (save once in prologue/epilogue)
     // - Leaf functions / tail-call-only: caller-saved first (no prologue overhead)
-    let regs = getAllocatableRegs func.CFG
-    let colorResult = chordalGraphColor graph Map.empty (List.length regs) preferences movePairs
-    let result = coloringToAllocation colorResult regs
+    let (result, timings) =
+        match swOpt with
+        | None ->
+            timePhase swOpt "RegAlloc: Coloring" timings (fun () ->
+                let regs = getAllocatableRegs blocks
+                let colorResult = chordalGraphColor graph [] (List.length regs) preferences movePairs
+                coloringToAllocation colorResult regs)
+        | Some sw ->
+            let start = sw.Elapsed.TotalMilliseconds
+            let regs = getAllocatableRegs blocks
+            let (colorResult, colorTiming) =
+                chordalGraphColorWithTiming sw graph [] (List.length regs) preferences movePairs
+            let result = coloringToAllocation colorResult regs
+            let totalMs = sw.Elapsed.TotalMilliseconds - start
+            let timings =
+                timings
+                |> appendTiming "RegAlloc: Coloring" totalMs
+                |> appendTiming "RegAlloc: Coloring - Coalesce" colorTiming.CoalesceMs
+                |> appendTiming "RegAlloc: Coloring - MCS Select" colorTiming.McsSelectMs
+                |> appendTiming "RegAlloc: Coloring - MCS Bucket Update" colorTiming.McsUpdateMs
+                |> appendTiming "RegAlloc: Coloring - Greedy" colorTiming.GreedyMs
+                |> appendTiming "RegAlloc: Coloring - Expand" colorTiming.ExpandMs
+            (result, timings)
 
     // Step 3b: Parameter info already computed (needed for float allocation and param moves)
 
     // Step 3c: Run float register allocation
     // Include float param FVirtuals so they get allocated even if not used in CFG
-    let floatAllocation = chordalFloatAllocation func.CFG floatParamFVirtualIds
+    let ((floatDomain, floatLiveness), timings) =
+        timePhase swOpt "RegAlloc: Float Liveness" timings (fun () ->
+            computeFloatLivenessBitsRaw blockIndex blocks floatParamFVirtualIds)
+    let floatParamBits = bitsetFromList floatDomain floatParamFVirtualIds
+    let (floatAllocation, timings) =
+        timePhase swOpt "RegAlloc: Float Allocation" timings (fun () ->
+            chordalFloatAllocationWithLiveness blockIndex blocks floatParamBits floatDomain floatLiveness)
 
-    // Step 5: Build mapping that copies INT parameters from X0-X7
-    // to wherever chordal graph coloring allocated them.
-    // IMPORTANT: Use proper parallel move resolution to handle cycles!
-    // (e.g., X1→X2 and X2→X1 require a temp register)
-    let intParamMoves =
-        intParams
-        |> List.choose (fun (reg, paramIdx) ->
-            match reg with
-            | LIR.Virtual id ->
-                let paramReg = List.item paramIdx parameterRegs
-                match Map.tryFind id result.Mapping with
-                | Some (PhysReg allocatedReg) when allocatedReg <> paramReg ->
-                    // Need to copy from paramReg to allocatedReg
-                    Some (allocatedReg, LIR.Reg (LIR.Physical paramReg))
-                | Some (StackSlot _offset) ->
-                    // Store to stack - not a register move, handle separately
-                    None // We'll handle stack stores separately
-                | _ -> None // Same register or not in mapping
-            | LIR.Physical _ -> None)
+    let ((intParamCopyInstrs, floatParamCopyInstrs, entryEdgePhiInstrs), timings) =
+        timePhase swOpt "RegAlloc: Param Moves" timings (fun () ->
+            // Step 5: Build mapping that copies INT parameters from X0-X7
+            // to wherever chordal graph coloring allocated them.
+            // IMPORTANT: Use proper parallel move resolution to handle cycles!
+            // (e.g., X1→X2 and X2→X1 require a temp register)
+            let intParamMoves =
+                intParams
+                |> List.choose (fun (reg, paramIdx) ->
+                    match reg with
+                    | LIR.Virtual id ->
+                        let paramReg = List.item paramIdx parameterRegs
+                        match tryAllocation result id with
+                        | Some (PhysReg allocatedReg) when allocatedReg <> paramReg ->
+                            // Need to copy from paramReg to allocatedReg
+                            Some (allocatedReg, LIR.Reg (LIR.Physical paramReg))
+                        | Some (StackSlot _offset) ->
+                            // Store to stack - not a register move, handle separately
+                            None // We'll handle stack stores separately
+                        | _ -> None // Same register or not in mapping
+                    | LIR.Physical _ -> None)
 
-    // Collect stack stores separately (they don't conflict with register moves)
-    let intParamStackStores =
-        intParams
-        |> List.choose (fun (reg, paramIdx) ->
-            match reg with
-            | LIR.Virtual id ->
-                let paramReg = List.item paramIdx parameterRegs
-                match Map.tryFind id result.Mapping with
-                | Some (StackSlot offset) ->
-                    Some (LIR.Store (offset, LIR.Physical paramReg))
+            // Collect stack stores separately (they don't conflict with register moves)
+            let intParamStackStores =
+                intParams
+                |> List.choose (fun (reg, paramIdx) ->
+                    match reg with
+                    | LIR.Virtual id ->
+                        let paramReg = List.item paramIdx parameterRegs
+                        match tryAllocation result id with
+                        | Some (StackSlot offset) ->
+                            Some (LIR.Store (offset, LIR.Physical paramReg))
+                        | _ -> None
+                    | LIR.Physical _ -> None)
+
+            // Use parallel move resolution for register-to-register moves
+            let getSrcReg (op: LIR.Operand) : LIR.PhysReg option =
+                match op with
+                | LIR.Reg (LIR.Physical r) -> Some r
                 | _ -> None
-            | LIR.Physical _ -> None)
 
-    // Use parallel move resolution for register-to-register moves
-    let getSrcReg (op: LIR.Operand) : LIR.PhysReg option =
-        match op with
-        | LIR.Reg (LIR.Physical r) -> Some r
-        | _ -> None
+            let moveActions = ParallelMoves.resolve intParamMoves getSrcReg
 
-    let moveActions = ParallelMoves.resolve intParamMoves getSrcReg
+            // Convert move actions to LIR instructions using X16 as temp register
+            let regMoveInstrs =
+                moveActions
+                |> List.collect (fun action ->
+                    match action with
+                    | ParallelMoves.SaveToTemp reg ->
+                        [LIR.Mov (LIR.Physical LIR.X16, LIR.Reg (LIR.Physical reg))]
+                    | ParallelMoves.Move (dest, src) ->
+                        [LIR.Mov (LIR.Physical dest, src)]
+                    | ParallelMoves.MoveFromTemp dest ->
+                        [LIR.Mov (LIR.Physical dest, LIR.Reg (LIR.Physical LIR.X16))])
 
-    // Convert move actions to LIR instructions using X16 as temp register
-    let regMoveInstrs =
-        moveActions
-        |> List.collect (fun action ->
-            match action with
-            | ParallelMoves.SaveToTemp reg ->
-                [LIR.Mov (LIR.Physical LIR.X16, LIR.Reg (LIR.Physical reg))]
-            | ParallelMoves.Move (dest, src) ->
-                [LIR.Mov (LIR.Physical dest, src)]
-            | ParallelMoves.MoveFromTemp dest ->
-                [LIR.Mov (LIR.Physical dest, LIR.Reg (LIR.Physical LIR.X16))])
+            // Combine register moves and stack stores
+            let intParamCopyInstrs = regMoveInstrs @ intParamStackStores
 
-    // Combine register moves and stack stores
-    let intParamCopyInstrs = regMoveInstrs @ intParamStackStores
+            // Step 6: Build mapping that copies FLOAT parameters from D0-D7
+            // Float parameters use FVirtual registers (same ID as Virtual)
+            // and don't go through linear scan - they map directly in CodeGen
+            // IMPORTANT: Use parallel move resolution to handle cases where destination
+            // registers collide with source registers (e.g., when FVirtual id maps to D0
+            // which is also a source register for other params)
+            let floatParamMoves =
+                floatParams
+                |> List.choose (fun (reg, paramIdx) ->
+                    match reg with
+                    | LIR.Virtual id ->
+                        // Float param comes in D0/D1/etc, needs to be in FVirtual id
+                        let srcDReg = List.item paramIdx floatParamRegs
+                        let destFVirtual = LIR.FVirtual id
+                        Some (destFVirtual, LIR.FPhysical srcDReg)
+                    | LIR.Physical _ -> None)
 
-    // Step 6: Build mapping that copies FLOAT parameters from D0-D7
-    // Float parameters use FVirtual registers (same ID as Virtual)
-    // and don't go through linear scan - they map directly in CodeGen
-    // IMPORTANT: Use parallel move resolution to handle cases where destination
-    // registers collide with source registers (e.g., when FVirtual id maps to D0
-    // which is also a source register for other params)
-    let floatParamMoves =
-        floatParams
-        |> List.choose (fun (reg, paramIdx) ->
-            match reg with
-            | LIR.Virtual id ->
-                // Float param comes in D0/D1/etc, needs to be in FVirtual id
-                let srcDReg = List.item paramIdx floatParamRegs
-                let destFVirtual = LIR.FVirtual id
-                Some (destFVirtual, LIR.FPhysical srcDReg)
-            | LIR.Physical _ -> None)
+            let floatParamCopyInstrs = generateFloatMoveInstrsWithAllocation floatParamMoves floatAllocation
 
-    let floatParamCopyInstrs = generateFloatMoveInstrsWithAllocation floatParamMoves floatAllocation
+            // Step 6b: Extract entry-edge phi moves for float phis
+            // For phis at the entry block, we need to add moves from entry-edge sources
+            // to phi destinations. These moves don't get added by resolvePhiNodes because
+            // there's no predecessor block for "before function entry".
+            let entryBlockBeforeResolution = blocks.[blockIndex.EntryIndex]
 
-    // Step 6b: Extract entry-edge phi moves for float phis
-    // For phis at the entry block, we need to add moves from entry-edge sources
-    // to phi destinations. These moves don't get added by resolvePhiNodes because
-    // there's no predecessor block for "before function entry".
-    let entryBlockBeforeResolution = Map.find func.CFG.Entry func.CFG.Blocks
+            let entryEdgeFloatPhiMoves =
+                entryBlockBeforeResolution.Instrs
+                |> List.choose (fun instr ->
+                    match instr with
+                    | LIR.FPhi (dest, sources) ->
+                        // Find sources where the predecessor label doesn't exist in the CFG
+                        // (these are entry-edge sources)
+                        let entryEdgeSources =
+                            sources
+                            |> List.filter (fun (_, predLabel) ->
+                                match tryBlockIndex blockIndex predLabel with
+                                | Some _ -> false
+                                | None -> true)
+                        // Generate moves for entry-edge sources
+                        entryEdgeSources
+                        |> List.map (fun (src, _) -> (dest, src))
+                        |> Some
+                    | _ -> None)
+                |> List.concat
 
-    let entryEdgeFloatPhiMoves =
-        entryBlockBeforeResolution.Instrs
-        |> List.choose (fun instr ->
-            match instr with
-            | LIR.FPhi (dest, sources) ->
-                // Find sources where the predecessor label doesn't exist in the CFG
-                // (these are entry-edge sources)
-                let entryEdgeSources =
-                    sources
-                    |> List.filter (fun (_, predLabel) ->
-                        not (Map.containsKey predLabel func.CFG.Blocks))
-                // Generate moves for entry-edge sources
-                entryEdgeSources
-                |> List.map (fun (src, _) -> (dest, src))
-                |> Some
-            | _ -> None)
-        |> List.concat
+            // Generate FMov instructions for entry-edge phi resolution
+            // Use parallel move resolution to handle potential register conflicts
+            let entryEdgePhiInstrs = generateFloatMoveInstrsWithAllocation entryEdgeFloatPhiMoves floatAllocation
 
-    // Generate FMov instructions for entry-edge phi resolution
-    // Use parallel move resolution to handle potential register conflicts
-    let entryEdgePhiInstrs = generateFloatMoveInstrsWithAllocation entryEdgeFloatPhiMoves floatAllocation
+            (intParamCopyInstrs, floatParamCopyInstrs, entryEdgePhiInstrs))
 
     // Step 7: Resolve phi nodes (convert to moves at predecessor exits)
     // This must happen BEFORE applying allocation since we need to know where each
     // value is allocated to generate the correct moves
-    let cfgWithPhiResolved = resolvePhiNodes func.CFG result.Mapping floatAllocation
+    let (blocksWithPhiResolved, timings) =
+        timePhase swOpt "RegAlloc: Phi Resolution" timings (fun () ->
+            resolvePhiNodes blockIndex blocks result floatAllocation)
 
     // Step 8: Apply allocation to CFG with liveness info for SaveRegs/RestoreRegs population
-    let floatLiveness = computeFloatLiveness func.CFG
-    let allocatedCFG = applyToCFGWithLiveness result.Mapping floatAllocation cfgWithPhiResolved liveness floatLiveness
+    let (allocatedBlocks, timings) =
+        timePhase swOpt "RegAlloc: Apply Allocation" timings (fun () ->
+            let allocatedBlocks =
+                applyToCFGWithLiveness blocksWithPhiResolved result floatAllocation livenessBits floatLiveness
+            applyFloatAllocationToBlocks floatAllocation allocatedBlocks)
 
-    // Step 8b: Apply float allocation to CFG - convert FVirtual to FPhysical
-    let allocatedCFG = applyFloatAllocationToCFG floatAllocation allocatedCFG
+    let ((cfgWithParamCopies, allocatedTypedParams), timings) =
+        timePhase swOpt "RegAlloc: Finalize" timings (fun () ->
+            // Step 9: Insert parameter copy instructions at the start of the entry block
+            // Float param copies go first (they use separate register bank)
+            // Entry-edge phi moves come after param copies (they copy from param FVirtual to phi dest FVirtual)
+            // IMPORTANT: Apply float allocation to param copy instructions since they were generated
+            // before applyFloatAllocationToCFG ran and still contain FVirtual registers
+            let allocatedFloatParamCopyInstrs =
+                floatParamCopyInstrs |> List.map (applyFloatAllocationToInstr floatAllocation)
+            let allocatedEntryEdgePhiInstrs =
+                entryEdgePhiInstrs |> List.map (applyFloatAllocationToInstr floatAllocation)
 
-    // Step 9: Insert parameter copy instructions at the start of the entry block
-    // Float param copies go first (they use separate register bank)
-    // Entry-edge phi moves come after param copies (they copy from param FVirtual to phi dest FVirtual)
-    // IMPORTANT: Apply float allocation to param copy instructions since they were generated
-    // before applyFloatAllocationToCFG ran and still contain FVirtual registers
-    let allocatedFloatParamCopyInstrs =
-        floatParamCopyInstrs |> List.map (applyFloatAllocationToInstr floatAllocation)
-    let allocatedEntryEdgePhiInstrs =
-        entryEdgePhiInstrs |> List.map (applyFloatAllocationToInstr floatAllocation)
+            let updatedBlocks = Array.copy allocatedBlocks
+            let entryBlock = updatedBlocks.[blockIndex.EntryIndex]
+            let entryBlockWithCopies = {
+                entryBlock with
+                    Instrs = allocatedFloatParamCopyInstrs @ allocatedEntryEdgePhiInstrs @ intParamCopyInstrs @ entryBlock.Instrs
+            }
 
-    let entryBlock = Map.find allocatedCFG.Entry allocatedCFG.Blocks
-    let entryBlockWithCopies = {
-        entryBlock with
-            Instrs = allocatedFloatParamCopyInstrs @ allocatedEntryEdgePhiInstrs @ intParamCopyInstrs @ entryBlock.Instrs
+            updatedBlocks.[blockIndex.EntryIndex] <- entryBlockWithCopies
+            let cfgWithParamCopies : LIR.CFG =
+                { Entry = func.CFG.Entry; Blocks = blocksToMap blockIndex updatedBlocks }
+
+            // Step 10: Set parameters to calling convention registers
+            // Create TypedLIRParams with physical registers
+            let allocatedTypedParams : LIR.TypedLIRParam list =
+                func.TypedParams
+                |> List.mapi (fun i tp -> { Reg = LIR.Physical (List.item i parameterRegs); Type = tp.Type })
+
+            (cfgWithParamCopies, allocatedTypedParams))
+
+    let allocatedFunc : LIR.Function = {
+        Name = func.Name
+        TypedParams = allocatedTypedParams
+        CFG = cfgWithParamCopies
+        StackSize = result.StackSize
+        UsedCalleeSaved = result.UsedCalleeSaved
     }
 
-    let updatedBlocks = Map.add allocatedCFG.Entry entryBlockWithCopies allocatedCFG.Blocks
-    let cfgWithParamCopies = { allocatedCFG with Blocks = updatedBlocks }
+    (allocatedFunc, timings)
 
-    // Step 10: Set parameters to calling convention registers
-    // Create TypedLIRParams with physical registers
-    let allocatedTypedParams : LIR.TypedLIRParam list =
-        func.TypedParams
-        |> List.mapi (fun i tp -> { Reg = LIR.Physical (List.item i parameterRegs); Type = tp.Type })
+/// Allocate registers for a function
+let allocateRegisters (func: LIR.Function) : LIR.Function =
+    allocateRegistersInternal None func |> fst
 
-    { Name = func.Name
-      TypedParams = allocatedTypedParams
-      CFG = cfgWithParamCopies
-      StackSize = result.StackSize
-      UsedCalleeSaved = result.UsedCalleeSaved }
+/// Allocate registers for a function and collect phase timings
+let allocateRegistersWithTiming
+    (func: LIR.Function)
+    : LIR.Function * RegisterAllocationTiming list =
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    allocateRegistersInternal (Some sw) func

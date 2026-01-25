@@ -171,7 +171,7 @@ modLoop(48, 18) = 6
 // ===================================================================
 
 // Tests for interference edge generation at terminators.
-// The buildInterferenceGraph function adds edges from each definition
+// The interference graph builder adds edges from each definition
 // to the current live set (plus entry parameter defs). Mutation #201
 // affects the loop bounds when adding edges to the live set.
 

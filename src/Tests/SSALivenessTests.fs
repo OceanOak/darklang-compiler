@@ -40,15 +40,15 @@ let makeCFG (entry: Label) (blocks: BasicBlock list) : CFG =
     { Entry = entry; Blocks = blockMap }
 
 /// Check if a VReg is in the LiveIn set
-let isLiveIn (liveness: Map<Label, RegisterAllocation.BlockLiveness>) (label: Label) (vregId: int) : bool =
+let isLiveIn (domain: RegisterAllocation.VRegDomain) (liveness: Map<Label, RegisterAllocation.BlockLiveness>) (label: Label) (vregId: int) : bool =
     match Map.tryFind label liveness with
-    | Some bl -> Set.contains vregId bl.LiveIn
+    | Some bl -> RegisterAllocation.bitsetContains domain bl.LiveIn vregId
     | None -> false
 
 /// Check if a VReg is in the LiveOut set
-let isLiveOut (liveness: Map<Label, RegisterAllocation.BlockLiveness>) (label: Label) (vregId: int) : bool =
+let isLiveOut (domain: RegisterAllocation.VRegDomain) (liveness: Map<Label, RegisterAllocation.BlockLiveness>) (label: Label) (vregId: int) : bool =
     match Map.tryFind label liveness with
-    | Some bl -> Set.contains vregId bl.LiveOut
+    | Some bl -> RegisterAllocation.bitsetContains domain bl.LiveOut vregId
     | None -> false
 
 // =============================================================================
@@ -85,19 +85,19 @@ let testPhiDefAtBlockEntry () : TestResult =
     let blockE = makeRetBlock labelE [Mov (vr 3, vreg 2)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD; blockE]
-    let liveness = RegisterAllocation.computeLiveness cfg
+    let (domain, liveness) = RegisterAllocation.computeLivenessBits cfg
 
     // v0 should be live-out of B (used by phi in D)
-    if not (isLiveOut liveness labelB 0) then
+    if not (isLiveOut domain liveness labelB 0) then
         Error "v0 should be live-out of B (used by phi in D)"
     // v0 should be live-out of C (used by phi in D)
-    else if not (isLiveOut liveness labelC 0) then
+    else if not (isLiveOut domain liveness labelC 0) then
         Error "v0 should be live-out of C (used by phi in D)"
     // v1 should NOT be live-in to D (it's defined there by phi)
-    else if isLiveIn liveness labelD 1 then
+    else if isLiveIn domain liveness labelD 1 then
         Error "v1 should NOT be live-in to D (it's defined there by phi)"
     // v1 should be live-out of D (used in E via v2)
-    else if not (isLiveOut liveness labelD 2) then
+    else if not (isLiveOut domain liveness labelD 2) then
         Error "v2 should be live-out of D (used in E)"
     else
         Ok ()
@@ -131,19 +131,19 @@ let testPhiSourceLivenessScoped () : TestResult =
     let blockD = makeRetBlock labelD [phiInstr; Mov (vr 3, vreg 2)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
-    let liveness = RegisterAllocation.computeLiveness cfg
+    let (domain, liveness) = RegisterAllocation.computeLivenessBits cfg
 
     // v0 should be live-out of B (used by phi from B)
-    if not (isLiveOut liveness labelB 0) then
+    if not (isLiveOut domain liveness labelB 0) then
         Error "v0 should be live-out of B (used by phi)"
     // v0 should NOT be live-out of C (not used from C path)
-    else if isLiveOut liveness labelC 0 then
+    else if isLiveOut domain liveness labelC 0 then
         Error "v0 should NOT be live-out of C (not in phi from C)"
     // v1 should be live-out of C (used by phi from C)
-    else if not (isLiveOut liveness labelC 1) then
+    else if not (isLiveOut domain liveness labelC 1) then
         Error "v1 should be live-out of C (used by phi)"
     // v1 should NOT be live-out of B (not used from B path)
-    else if isLiveOut liveness labelB 1 then
+    else if isLiveOut domain liveness labelB 1 then
         Error "v1 should NOT be live-out of B (not in phi from B)"
     else
         Ok ()
@@ -178,22 +178,22 @@ let testMultiplePhisSameBlock () : TestResult =
     let blockD = makeRetBlock labelD [phi1; phi2; useInstr; Mov (vr 7, vreg 6)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
-    let liveness = RegisterAllocation.computeLiveness cfg
+    let (domain, liveness) = RegisterAllocation.computeLivenessBits cfg
 
     // v0 and v4 should be live-out of B
-    if not (isLiveOut liveness labelB 0) then
+    if not (isLiveOut domain liveness labelB 0) then
         Error "v0 should be live-out of B"
-    else if not (isLiveOut liveness labelB 4) then
+    else if not (isLiveOut domain liveness labelB 4) then
         Error "v4 should be live-out of B"
     // v1 and v5 should be live-out of C
-    else if not (isLiveOut liveness labelC 1) then
+    else if not (isLiveOut domain liveness labelC 1) then
         Error "v1 should be live-out of C"
-    else if not (isLiveOut liveness labelC 5) then
+    else if not (isLiveOut domain liveness labelC 5) then
         Error "v5 should be live-out of C"
     // Neither phi dest should be live-in to D
-    else if isLiveIn liveness labelD 2 then
+    else if isLiveIn domain liveness labelD 2 then
         Error "v2 should NOT be live-in to D (defined by phi)"
-    else if isLiveIn liveness labelD 3 then
+    else if isLiveIn domain liveness labelD 3 then
         Error "v3 should NOT be live-in to D (defined by phi)"
     else
         Ok ()
@@ -229,25 +229,52 @@ let testLoopPhi () : TestResult =
     let blockD = makeRetBlock labelD [Mov (vr 3, vreg 1)]
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
-    let liveness = RegisterAllocation.computeLiveness cfg
+    let (domain, liveness) = RegisterAllocation.computeLivenessBits cfg
 
     // v0 should be live-out of A (used by phi in B)
-    if not (isLiveOut liveness labelA 0) then
+    if not (isLiveOut domain liveness labelA 0) then
         Error "v0 should be live-out of A (used by phi in B)"
     // v2 should be live-out of C (used by phi in B on loop back)
-    else if not (isLiveOut liveness labelC 2) then
+    else if not (isLiveOut domain liveness labelC 2) then
         Error "v2 should be live-out of C (used by phi in B)"
     // v1 should be live-out of B (used in C)
-    else if not (isLiveOut liveness labelB 1) then
+    else if not (isLiveOut domain liveness labelB 1) then
         Error "v1 should be live-out of B (used in C)"
     else
         Ok ()
+
+/// Test: Bitset-backed liveness preserves expected behavior
+let testBitsetLivenessBehavior () : TestResult =
+    let labelA = makeLabel "A"
+    let labelB = makeLabel "B"
+    let labelC = makeLabel "C"
+    let labelD = makeLabel "D"
+    let labelE = makeLabel "E"
+
+    let condReg = vr 99
+
+    let blockA = makeBranchBlock labelA [Mov (condReg, Imm 1L)] condReg labelB labelC
+    let blockB = makeJumpBlock labelB [Mov (vr 0, Imm 10L)] labelD
+    let blockC = makeJumpBlock labelC [Mov (vr 1, Imm 20L)] labelD
+    let phiInstr = Phi (vr 2, [(vreg 0, labelB); (vreg 1, labelC)], None)
+    let blockD = makeJumpBlock labelD [phiInstr; Add (vr 3, vr 2, Imm 1L)] labelE
+    let blockE = makeRetBlock labelE [Mov (vr 4, vreg 3)]
+
+    let cfg = makeCFG labelA [blockA; blockB; blockC; blockD; blockE]
+    let (domain, bitset) = RegisterAllocation.computeLivenessBits cfg
+    let liveOutB = isLiveOut domain bitset labelB 0
+    let liveOutC = isLiveOut domain bitset labelC 1
+    if liveOutB && liveOutC then
+        Ok ()
+    else
+        Error $"Bitset liveness missing phi uses. LiveOut B contains v0: {liveOutB}, LiveOut C contains v1: {liveOutC}"
 
 let tests = [
     ("phi def at block entry", testPhiDefAtBlockEntry)
     ("phi source liveness scoped", testPhiSourceLivenessScoped)
     ("multiple phis same block", testMultiplePhisSameBlock)
     ("loop phi", testLoopPhi)
+    ("bitset liveness behavior", testBitsetLivenessBehavior)
 ]
 
 /// Run all SSA liveness tests

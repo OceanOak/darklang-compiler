@@ -53,6 +53,12 @@ Where:
 
 The analysis iterates until reaching a fixed point.
 
+Implementation detail: liveness uses a dense VReg domain and bitsets for
+LiveIn/LiveOut during the fixed point. This keeps the dataflow iteration close
+to linear in word count, then converts back to `Set<int>` for downstream passes.
+Interference graph construction iterates those bitsets directly when adding
+edges from defs to live-out sets.
+
 ### Phase 2: Interference Graph Construction
 
 Build an interference graph where:
