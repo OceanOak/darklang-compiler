@@ -40,6 +40,7 @@
     <Compile Include="Platform.fs" />
     <Compile Include="Runtime.fs" />
     <Compile Include="passes/6_CodeGen.fs" />
+    <Compile Include="passes/7_ARM64_Resolve.fs" />
     <Compile Include="passes/7_ARM64_Encoding.fs" />
     <Compile Include="Binary.fs" />
     <Compile Include="Binary_ELF.fs" />

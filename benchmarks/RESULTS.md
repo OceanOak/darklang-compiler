@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-25 09:29:08
-**Commit:** `721e710c` - Avoid quadratic list concatenation in codegen
+**Last Updated:** 2026-01-25 11:28:46
+**Commit:** `6bfda46e` - Move literal pools out of MIR
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

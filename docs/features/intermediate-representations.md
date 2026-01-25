@@ -177,7 +177,8 @@ Key differences from older indexed LIR:
 
 ## Constant Pools
 
-Literal pools are defined in `LiteralPool.fs` and built during ARM64 emission.
+Literal pools are defined in `LiteralPool.fs` and built during ARM64 resolution
+(`7_ARM64_Resolve.fs`).
 
 ### String Pool
 ```fsharp

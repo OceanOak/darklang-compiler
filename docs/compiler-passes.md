@@ -401,10 +401,10 @@ when mixing stdlib, preamble, and user functions.
 ## Pass 6: Code Generation (`6_CodeGen.fs`)
 
 **Input**: LIR with physical registers
-**Output**: ARM64 instruction list
+**Output**: ARM64Symbolic instruction list
 
 ### Responsibilities
-- **Final instruction generation**: Convert LIR to ARM64 types
+- **Final instruction generation**: Convert LIR to ARM64Symbolic types
 - **Prologue/epilogue**: Function entry/exit code
 - **Stack frame setup**: Allocate space for spills and locals
 
@@ -416,16 +416,17 @@ when mixing stdlib, preamble, and user functions.
 
 ## Pass 7: ARM64 Emit (`7_ARM64_Emit.fs`)
 
-**Input**: ARM64 instruction list (symbolic data labels)
+**Input**: ARM64Symbolic instruction list
 **Output**: Executable file (Mach-O or ELF)
 
 ### Responsibilities
-- **Literal pool resolution**: Intern string/float literals into pools
+- **Literal pool resolution**: Resolve symbolic data labels into literal pools
 - **Instruction encoding**: Convert to binary per ARM64 spec
 - **Binary generation**: Emit Mach-O (macOS) or ELF (Linux)
 
 ### Internals
-Uses `7_ARM64_Encoding.fs` for encoding and `8_Binary_Generation_*.fs` for binary layout.
+Uses `7_ARM64_Resolve.fs` to convert ARM64Symbolic instructions into concrete ARM64 instructions
+and literal pools, `7_ARM64_Encoding.fs` for encoding, and `8_Binary_Generation_*.fs` for binary layout.
 
 ---
 
