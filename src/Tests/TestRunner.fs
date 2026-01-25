@@ -83,7 +83,7 @@ let main args =
     let arm64encTestFiles  = getTestFiles "passes/arm64enc" "arm64enc"
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
-    let buildUnitTests (stdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>) : UnitTestSuite array = [|
+    let buildUnitTests (stdlib: CompilerLibrary.StdlibResult<SnapshotCacheState>) : UnitTestSuite array = [|
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
@@ -93,6 +93,7 @@ let main args =
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
         { Name = "Pass Timing Output Tests"; Tests = PassTimingOutputTests.tests }
         { Name = "Test Summary Output Tests"; Tests = TestSummaryOutputTests.tests }
+        { Name = "Snapshot Cache Tests"; Tests = SnapshotCacheTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -138,7 +139,7 @@ let main args =
     let stdlibPassTimingStart = passTimingTotal ()
     let timer = Stopwatch.StartNew()
     let stdlib =
-        let cacheSettingsResult : Result<CompilerLibrary.CacheSettings<Cache.CacheSnapshot>, string> =
+        let cacheSettingsResult : Result<CompilerLibrary.CacheSettings<SnapshotCacheState>, string> =
             if noCache then
                 Ok { CompilerKey = ""; Context = CompilerLibrary.NoCache }
             else
@@ -147,8 +148,9 @@ let main args =
                     Cache.loadAllForCompilerKeyWithTimingForDbPath key cacheDbPath
                     |> Result.map (fun (snapshot, timing) ->
                         recordCacheIo (TestFramework.CacheRead (1, timing.QueryCount, timing.RowCount))
+                        let snapshotState = TestFramework.createSnapshotCacheState snapshot
                         { CompilerKey = key
-                          Context = TestFramework.buildSnapshotCacheContext recordCacheIo cacheDbPath snapshot }))
+                          Context = TestFramework.buildSnapshotCacheContext recordCacheIo cacheDbPath snapshotState }))
         let stdlibResult =
             cacheSettingsResult
             |> Result.bind (fun settings -> CompilerLibrary.buildStdlibWithCache settings (Some recordPassTiming))
@@ -177,12 +179,12 @@ let main args =
             recordResults 0 1 [{ File = filePath; Name = $"{suiteName}: {fileName}"; Message = msg; Details = [] }]
 
     let runE2ESuite
-        (baseStdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>)
-        (cacheSettings: CompilerLibrary.CacheSettings<Cache.CacheSnapshot>)
+        (baseStdlib: CompilerLibrary.StdlibResult<SnapshotCacheState>)
+        (cacheSettings: CompilerLibrary.CacheSettings<SnapshotCacheState>)
         (suiteName: string)
         (progressLabel: string)
         (testsArray: E2ETest array)
-        : CompilerLibrary.CacheSettings<Cache.CacheSnapshot> =
+        : CompilerLibrary.CacheSettings<SnapshotCacheState> =
         let stdlib = { baseStdlib with CacheSettings = cacheSettings }
         let numTests = testsArray.Length
         if numTests > 0 then
@@ -645,9 +647,9 @@ let main args =
     let unitTestsOrdered = Array.append unitTestsNoStdlib unitTestsWithStdlib
 
     let runE2EAndVerification
-        (baseStdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>)
-        (cacheSettings: CompilerLibrary.CacheSettings<Cache.CacheSnapshot>)
-        : CompilerLibrary.CacheSettings<Cache.CacheSnapshot> =
+        (baseStdlib: CompilerLibrary.StdlibResult<SnapshotCacheState>)
+        (cacheSettings: CompilerLibrary.CacheSettings<SnapshotCacheState>)
+        : CompilerLibrary.CacheSettings<SnapshotCacheState> =
         let mutable currentCacheSettings = cacheSettings
         if e2eTestFiles.Length > 0 then
                 let sectionTimer = Stopwatch.StartNew()

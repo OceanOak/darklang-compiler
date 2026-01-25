@@ -146,70 +146,92 @@ let recordCacheIo (state: TestRunState) (info: CacheIoInfo) : unit =
                 WriteCommits = current.WriteCommits + writeCommits
         }
 
-let private updateSnapshot
-    (snapshot: CacheSnapshot)
-    (entries: (FunctionCacheKey * LIR.Function) list)
-    : Result<CacheSnapshot, string> =
-    let folder
-        (accResult: Result<Map<FunctionCacheKey, byte array>, string>)
-        (key, value)
-        : Result<Map<FunctionCacheKey, byte array>, string> =
-        accResult
-        |> Result.bind (fun acc ->
-            serialize value
-            |> Result.map (fun bytes -> Map.add key bytes acc))
-    entries
-    |> List.fold folder (Ok snapshot.Entries)
-    |> Result.map (fun entriesMap -> { snapshot with Entries = entriesMap })
+type SnapshotCacheState = {
+    RawSnapshot: CacheSnapshot
+    CachedEntries: Map<FunctionCacheKey, LIR.Function>
+    PendingWrites: Map<FunctionCacheKey, LIR.Function>
+}
+
+let createSnapshotCacheState (snapshot: CacheSnapshot) : SnapshotCacheState =
+    { RawSnapshot = snapshot; CachedEntries = Map.empty; PendingWrites = Map.empty }
 
 let buildSnapshotCacheContext
     (recordCacheIo: CacheIoInfo -> unit)
     (cacheDbPath: string)
-    (snapshot: CacheSnapshot)
-    : CompilerLibrary.CacheContext<CacheSnapshot, LIR.Function> =
-    let mergePendingWrites
-        (pending: (FunctionCacheKey * LIR.Function) list)
+    (snapshot: SnapshotCacheState)
+    : CompilerLibrary.CacheContext<SnapshotCacheState, LIR.Function> =
+    let addEntriesToMap
         (entries: (FunctionCacheKey * LIR.Function) list)
-        : (FunctionCacheKey * LIR.Function) list =
-        let pendingMap =
-            pending |> List.fold (fun acc (key, value) -> Map.add key value acc) Map.empty
-        let updatedMap =
-            entries |> List.fold (fun acc (key, value) -> Map.add key value acc) pendingMap
-        updatedMap |> Map.toList
+        (initial: Map<FunctionCacheKey, LIR.Function>)
+        : Map<FunctionCacheKey, LIR.Function> =
+        entries |> List.fold (fun acc (key, value) -> Map.add key value acc) initial
 
     let read
         (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
+        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
         (keys: FunctionCacheKey list)
-        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
-        getFunctionsFromSnapshot<LIR.Function> state.Snapshot keys
-        |> Result.map (fun cached -> (cached, state))
+        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
+        if List.isEmpty keys then
+            Ok (Map.empty, state)
+        else
+            match keys |> List.tryFind (fun key -> key.CompilerKey <> state.Snapshot.RawSnapshot.CompilerKey) with
+            | Some key ->
+                Crash.crash $"Cache snapshot compiler key mismatch: expected {state.Snapshot.RawSnapshot.CompilerKey}, got {key.CompilerKey}"
+            | None ->
+                let folder
+                    (accResult: Result<Map<string, LIR.Function> * Map<FunctionCacheKey, LIR.Function>, string>)
+                    (key: FunctionCacheKey)
+                    : Result<Map<string, LIR.Function> * Map<FunctionCacheKey, LIR.Function>, string> =
+                    accResult
+                    |> Result.bind (fun (acc, cached) ->
+                        match Map.tryFind key cached with
+                        | Some value -> Ok (Map.add key.FunctionName value acc, cached)
+                        | None ->
+                            match Map.tryFind key state.Snapshot.RawSnapshot.Entries with
+                            | None -> Ok (acc, cached)
+                            | Some bytes ->
+                                deserialize<LIR.Function> bytes
+                                |> Result.map (fun value ->
+                                    let updatedCached = Map.add key value cached
+                                    (Map.add key.FunctionName value acc, updatedCached)))
+
+                let initial = Ok (Map.empty, state.Snapshot.CachedEntries)
+                keys
+                |> List.fold folder initial
+                |> Result.map (fun (cachedMap, updatedCached) ->
+                    let updatedSnapshot = { state.Snapshot with CachedEntries = updatedCached }
+                    (cachedMap, { state with Snapshot = updatedSnapshot }))
 
     let write
         (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
+        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
         (entries: (FunctionCacheKey * LIR.Function) list)
-        : Result<CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
+        : Result<CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
         if List.isEmpty entries then
             Ok state
         else
-            updateSnapshot state.Snapshot entries
-            |> Result.map (fun updatedSnapshot ->
-                let updatedPending = mergePendingWrites state.PendingWrites entries
-                { state with Snapshot = updatedSnapshot; PendingWrites = updatedPending })
+            let updatedCached =
+                addEntriesToMap entries state.Snapshot.CachedEntries
+            let updatedPending =
+                addEntriesToMap entries state.Snapshot.PendingWrites
+            let updatedSnapshot =
+                { state.Snapshot with CachedEntries = updatedCached; PendingWrites = updatedPending }
+            Ok { state with Snapshot = updatedSnapshot }
 
     let flush
         (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
-        : Result<CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
-        if List.isEmpty state.PendingWrites then
+        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
+        : Result<CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
+        if Map.isEmpty state.Snapshot.PendingWrites then
             Ok state
         else
-            let pendingWrites = state.PendingWrites
+            let pendingWrites = state.Snapshot.PendingWrites |> Map.toList
+            let pendingCount = Map.count state.Snapshot.PendingWrites
             setFunctionsWithDbPath pendingWrites cacheDbPath
             |> Result.map (fun () ->
-                recordCacheIo (CacheWrite (1, pendingWrites.Length, 1))
-                { state with PendingWrites = [] })
+                recordCacheIo (CacheWrite (1, pendingCount, 1))
+                let updatedSnapshot = { state.Snapshot with PendingWrites = Map.empty }
+                { state with Snapshot = updatedSnapshot })
 
     CompilerLibrary.CacheContext {
         State = { Snapshot = snapshot; PendingWrites = [] }

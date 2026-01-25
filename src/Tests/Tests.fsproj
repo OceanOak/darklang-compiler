@@ -41,6 +41,7 @@
     <Compile Include="ProgressBarTests.fs" />
     <Compile Include="PassTimingOutputTests.fs" />
     <Compile Include="TestSummaryOutputTests.fs" />
+    <Compile Include="SnapshotCacheTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />
