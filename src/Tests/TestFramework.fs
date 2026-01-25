@@ -318,6 +318,18 @@ let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
     |> consolidateCacheWriteTimings
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
 
+let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
+    let overlapTimingNames =
+        Set.ofList [
+            "Start Function Compilation"
+            "Cache Hash/Serialize total"
+        ]
+    passTimings
+    |> consolidateCacheHashSerializeTimings
+    |> consolidateCacheWriteTimings
+    |> Map.filter (fun name _ -> not (Set.contains name overlapTimingNames))
+    |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
+
 let calculateUnaccountedTimeBreakdown
     (totalTime: TimeSpan)
     (passTimings: Map<string, TimeSpan>)

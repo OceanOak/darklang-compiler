@@ -117,7 +117,7 @@ let main args =
     let recordResults = TestFramework.recordResults runState
     let recordPassTiming = TestFramework.recordPassTiming runState
     let recordCacheIo = TestFramework.recordCacheIo runState
-    let passTimingTotal () = TestFramework.calculatePassTimingsTotal runState.PassTimings
+    let passTimingTotal () = TestFramework.calculatePassTimingsTotalForOverhead runState.PassTimings
     let recordNonPassTiming (name: string) (elapsed: TimeSpan) : unit =
         if elapsed > TimeSpan.Zero then
             recordPassTiming { Pass = name; Elapsed = elapsed }

@@ -280,10 +280,27 @@ let testOrderedStepsIncludeNonPass () : TestResult =
     | _ ->
         Error "Expected two ordered sections"
 
+let testOverheadTotalsExcludeNestedTimings () : TestResult =
+    let timings =
+        [
+            ("Parse", TimeSpan.FromMilliseconds(10.0))
+            ("Start Function Compilation", TimeSpan.FromMilliseconds(15.0))
+            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(5.0))
+        ]
+        |> Map.ofList
+
+    let total = TestFramework.calculatePassTimingsTotalForOverhead timings
+    let expected = TimeSpan.FromMilliseconds(10.0)
+    if total <> expected then
+        Error $"Expected overhead total {expected}, got {total}"
+    else
+        Ok ()
+
 let tests : (string * (unit -> Result<unit, string>)) list =
     [
         ("pass timing columns order", testPassTimingColumnsOrdering)
         ("unaccounted time breakdown", testUnaccountedTimeBreakdown)
         ("unaccounted time with runtime accounted", testUnaccountedTimeWithAccountedRuntime)
         ("ordered steps include non-pass timings", testOrderedStepsIncludeNonPass)
+        ("overhead totals exclude nested timings", testOverheadTotalsExcludeNestedTimings)
     ]
