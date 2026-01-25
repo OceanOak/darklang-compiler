@@ -178,7 +178,7 @@ Special intrinsics handle the dynamic refcount offset:
 | File | Purpose |
 |------|---------|
 | `AST.fs:35` | TString type |
-| `MIR.fs:22-47` | StringPool type |
+| `LiteralPool.fs:7-12` | StringPool type |
 | `LIR.fs:124-125` | StringConcat, PrintHeapString |
 | `LIR.fs:144-148` | StringHash, StringEq, RefCount intrinsics |
 | `stdlib.dark:370-499` | String stdlib functions |

@@ -1188,7 +1188,7 @@ let getCodeSize (instructions: ARM64.Instr list) : int =
 /// Compute float label positions given code file offset, code size, and float pool
 /// Returns map from "_floatN" to byte offset (relative to segment/file start)
 /// Floats are stored as 8-byte IEEE 754 doubles, aligned to 8 bytes
-let computeFloatLabels (codeFileOffset: int) (codeSize: int) (floatPool: MIR.FloatPool) : Map<string, int> =
+let computeFloatLabels (codeFileOffset: int) (codeSize: int) (floatPool: LiteralPool.FloatPool) : Map<string, int> =
     if floatPool.Floats.IsEmpty then
         Map.empty
     else
@@ -1215,10 +1215,10 @@ let computeFloatLabels (codeFileOffset: int) (codeSize: int) (floatPool: MIR.Flo
 /// Returns map from "_strN" to byte offset (relative to segment/file start)
 /// codeFileOffset: where code starts in the file/segment
 /// Compute the size of the float pool in bytes
-let getFloatPoolSize (floatPool: MIR.FloatPool) : int =
+let getFloatPoolSize (floatPool: LiteralPool.FloatPool) : int =
     floatPool.Floats.Count * 8  // Each double is 8 bytes
 
-let computeStringLabels (codeFileOffset: int) (codeSize: int) (floatPoolSize: int) (stringPool: MIR.StringPool) : Map<string, int> =
+let computeStringLabels (codeFileOffset: int) (codeSize: int) (floatPoolSize: int) (stringPool: LiteralPool.StringPool) : Map<string, int> =
     if stringPool.Strings.IsEmpty then
         Map.empty
     else
@@ -1246,7 +1246,7 @@ let computeStringLabels (codeFileOffset: int) (codeSize: int) (floatPoolSize: in
 
 /// Compute the size of the string pool in bytes
 /// Each string has format: [length:8][data:N][null:1]
-let getStringPoolSize (stringPool: MIR.StringPool) : int =
+let getStringPoolSize (stringPool: LiteralPool.StringPool) : int =
     if stringPool.Strings.IsEmpty then 0
     else
         stringPool.Strings
@@ -1257,8 +1257,8 @@ let getStringPoolSize (stringPool: MIR.StringPool) : int =
 /// Compute the platform-specific code file offset for encoding
 let private computeCodeFileOffset
     (os: Platform.OS)
-    (stringPool: MIR.StringPool)
-    (floatPool: MIR.FloatPool)
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
     (enableLeakCheck: bool)
     : int =
     match os with
@@ -1300,8 +1300,8 @@ let computeLeakCounterLabel (codeFileOffset: int) (codeSize: int) (floatPoolSize
 /// Computes label positions and encodes ADRP/ADD_label correctly
 let encodeAllWithPools
     (instructions: ARM64.Instr list)
-    (stringPool: MIR.StringPool)
-    (floatPool: MIR.FloatPool)
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
     : ARM64.MachineCode list =

@@ -99,7 +99,7 @@ let serializeElf (binary: Binary_ELF.ElfBinary) : byte array =
     |]
 
 /// Create float data bytes from float pool
-let createFloatData (floatPool: MIR.FloatPool) : byte array =
+let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
     if floatPool.Floats.IsEmpty then
         [||]
     else
@@ -114,7 +114,7 @@ let createFloatData (floatPool: MIR.FloatPool) : byte array =
 /// Create string data bytes from string pool
 /// Format: [length:8 bytes][data:N bytes][null:1 byte] for each string
 /// This matches the pooled string layout used by the runtime
-let createStringData (stringPool: MIR.StringPool) : byte array =
+let createStringData (stringPool: LiteralPool.StringPool) : byte array =
     if stringPool.Strings.IsEmpty then
         [||]
     else
@@ -129,7 +129,7 @@ let createStringData (stringPool: MIR.StringPool) : byte array =
         |> Array.ofList
 
 /// Create an ELF executable with float and string data
-let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (enableLeakCheck: bool) : byte array =
+let createExecutableWithPools (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) (floatPool: LiteralPool.FloatPool) (enableLeakCheck: bool) : byte array =
     let codeBytes =
         machineCode
         |> List.collect (fun word ->
@@ -231,18 +231,18 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: MIR.String
     serializeElf binary
 
 /// Create an ELF executable with string data (legacy wrapper for backwards compatibility)
-let createExecutableWithStrings (machineCode: uint32 list) (stringPool: MIR.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool MIR.emptyFloatPool false
+let createExecutableWithStrings (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) : byte array =
+    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false
 
 /// Create a minimal ELF executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode MIR.emptyStringPool MIR.emptyFloatPool false
+    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false
 
 /// Create an ELF executable with coverage data section
 /// coverageExprCount: number of coverage expressions (each needs 8 bytes)
 /// The coverage data is placed after strings and initialized to zero
 /// Uses a single RWX segment for simplicity (code + data + coverage)
-let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: MIR.StringPool) (floatPool: MIR.FloatPool) (coverageExprCount: int) (enableLeakCheck: bool) : byte array =
+let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) (floatPool: LiteralPool.FloatPool) (coverageExprCount: int) (enableLeakCheck: bool) : byte array =
     let codeBytes =
         machineCode
         |> List.collect (fun word ->

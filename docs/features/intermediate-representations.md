@@ -177,11 +177,14 @@ Key differences from older indexed LIR:
 
 ## Constant Pools
 
+Literal pools are defined in `LiteralPool.fs` and built during ARM64 emission.
+
 ### String Pool
 ```fsharp
 type StringPool = {
     Strings: Map<int, string * int>  // index → (value, length)
     StringToId: Map<string, int>      // value → index
+    NextId: int
 }
 ```
 
@@ -189,7 +192,8 @@ type StringPool = {
 ```fsharp
 type FloatPool = {
     Floats: Map<int, float>
-    FloatToId: Map<float, int>
+    FloatBitsToId: Map<int64, int>
+    NextId: int
 }
 ```
 

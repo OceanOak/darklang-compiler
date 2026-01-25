@@ -11,8 +11,8 @@ type EmitResult = {
 }
 
 type private PoolState = {
-    StringPool: MIR.StringPool
-    FloatPool: MIR.FloatPool
+    StringPool: LiteralPool.StringPool
+    FloatPool: LiteralPool.FloatPool
 }
 
 let private resolveLabelRef
@@ -25,10 +25,10 @@ let private resolveLabelRef
         match dataRef with
         | ARM64Symbolic.Named name -> (name, state)
         | ARM64Symbolic.StringLiteral value ->
-            let (idx, pool') = MIR.addString state.StringPool value
+            let (idx, pool') = LiteralPool.addString state.StringPool value
             ("str_" + string idx, { state with StringPool = pool' })
         | ARM64Symbolic.FloatLiteral value ->
-            let (idx, pool') = MIR.addFloat state.FloatPool value
+            let (idx, pool') = LiteralPool.addFloat state.FloatPool value
             ("_float" + string idx, { state with FloatPool = pool' })
 
 let private resolveInstr
@@ -132,7 +132,7 @@ let private resolveInstr
 let private resolveInstrs
     (instrs: ARM64Symbolic.Instr list)
     : ARM64.Instr list * PoolState =
-    let initialState = { StringPool = MIR.emptyStringPool; FloatPool = MIR.emptyFloatPool }
+    let initialState = { StringPool = LiteralPool.emptyStringPool; FloatPool = LiteralPool.emptyFloatPool }
     let rec loop acc state remaining =
         match remaining with
         | [] -> (List.rev acc, state)
