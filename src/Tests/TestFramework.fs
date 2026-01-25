@@ -322,7 +322,6 @@ let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : 
     let overlapTimingNames =
         Set.ofList [
             "Start Function Compilation"
-            "Cache Hash/Serialize total"
         ]
     passTimings
     |> consolidateCacheHashSerializeTimings
@@ -335,7 +334,7 @@ let calculateUnaccountedTimeBreakdown
     (passTimings: Map<string, TimeSpan>)
     (timings: seq<TestTiming>)
     : UnaccountedTimeBreakdown =
-    let passTimingTotal = calculatePassTimingsTotal passTimings
+    let passTimingTotal = calculatePassTimingsTotalForOverhead passTimings
     let unaccounted = totalTime - passTimingTotal
     if unaccounted < TimeSpan.Zero then
         Crash.crash $"calculateUnaccountedTimeBreakdown: pass timings ({passTimingTotal}) exceed total time ({totalTime})"

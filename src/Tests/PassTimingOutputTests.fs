@@ -209,6 +209,50 @@ let testUnaccountedTimeWithAccountedRuntime () : TestResult =
     else
         Ok ()
 
+let testUnaccountedTimeWithOverlappingTimings () : TestResult =
+    let makeTiming (name: string) (totalTime: TimeSpan) (runtimeTime: TimeSpan option) : TestFramework.TestTiming =
+        { Name = name
+          TotalTime = totalTime
+          CompileTime = None
+          RuntimeTime = runtimeTime
+          CacheHitCount = None
+          CacheMissCount = None }
+
+    let passTimings =
+        [
+            ("Parse", TimeSpan.FromMilliseconds(10.0))
+            ("Start Function Compilation", TimeSpan.FromMilliseconds(15.0))
+            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(5.0))
+        ]
+        |> Map.ofList
+
+    let timings =
+        [
+            makeTiming "test-a" (TimeSpan.FromMilliseconds(12.0)) (Some (TimeSpan.FromMilliseconds(4.0)))
+        ]
+
+    let totalTime = TimeSpan.FromMilliseconds(20.0)
+    let breakdownResult =
+        try
+            Ok (TestFramework.calculateUnaccountedTimeBreakdown totalTime passTimings timings)
+        with ex ->
+            Error $"calculateUnaccountedTimeBreakdown threw: {ex.Message}"
+
+    match breakdownResult with
+    | Error msg -> Error msg
+    | Ok breakdown ->
+        let expectedUnaccounted = TimeSpan.FromMilliseconds(5.0)
+        let expectedRuntime = TimeSpan.FromMilliseconds(4.0)
+        let expectedOverhead = TimeSpan.FromMilliseconds(1.0)
+        if breakdown.Unaccounted <> expectedUnaccounted then
+            Error $"Unexpected unaccounted total: {breakdown.Unaccounted}"
+        elif breakdown.Runtime <> expectedRuntime then
+            Error $"Unexpected runtime total: {breakdown.Runtime}"
+        elif breakdown.Overhead <> expectedOverhead then
+            Error $"Unexpected overhead total: {breakdown.Overhead}"
+        else
+            Ok ()
+
 let testOrderedStepsIncludeNonPass () : TestResult =
     let timings =
         [
@@ -290,7 +334,7 @@ let testOverheadTotalsExcludeNestedTimings () : TestResult =
         |> Map.ofList
 
     let total = TestFramework.calculatePassTimingsTotalForOverhead timings
-    let expected = TimeSpan.FromMilliseconds(10.0)
+    let expected = TimeSpan.FromMilliseconds(15.0)
     if total <> expected then
         Error $"Expected overhead total {expected}, got {total}"
     else
@@ -301,6 +345,7 @@ let tests : (string * (unit -> Result<unit, string>)) list =
         ("pass timing columns order", testPassTimingColumnsOrdering)
         ("unaccounted time breakdown", testUnaccountedTimeBreakdown)
         ("unaccounted time with runtime accounted", testUnaccountedTimeWithAccountedRuntime)
+        ("unaccounted time with overlapping timings", testUnaccountedTimeWithOverlappingTimings)
         ("ordered steps include non-pass timings", testOrderedStepsIncludeNonPass)
         ("overhead totals exclude nested timings", testOverheadTotalsExcludeNestedTimings)
     ]
