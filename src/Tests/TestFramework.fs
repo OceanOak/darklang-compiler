@@ -248,6 +248,7 @@ let calculateCacheTotals (timings: seq<TestTiming>) : CacheTotals option =
         timings |> Seq.fold folder (0, 0, false)
     if sawData then Some { Hits = hits; Misses = misses } else None
 
+
 let consolidateCacheHashSerializeTimings
     (passTimings: Map<string, TimeSpan>)
     : Map<string, TimeSpan> =
@@ -303,6 +304,12 @@ let consolidateCacheWriteTimings
         else
             pruned
 
+let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
+    passTimings
+    |> consolidateCacheHashSerializeTimings
+    |> consolidateCacheWriteTimings
+    |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
+
 let private normalizePassTimingName (name: string) : string =
     if name.StartsWith("Cache Hash ", StringComparison.Ordinal)
        || name.StartsWith("Cache Serialize:", StringComparison.Ordinal) then
@@ -354,9 +361,9 @@ let buildPassTimingColumns
 
     let passEntriesInOrder =
         passDefinitions
-        |> List.choose (fun (timingKey, number, name) ->
-            Map.tryFind timingKey consolidated
-            |> Option.map (fun elapsed -> { Number = Some number; Name = name; Elapsed = elapsed }))
+        |> List.map (fun (timingKey, number, name) ->
+            let elapsed = Map.tryFind timingKey consolidated |> Option.defaultValue TimeSpan.Zero
+            { Number = Some number; Name = name; Elapsed = elapsed })
 
     let passEntriesByTime =
         passEntriesInOrder

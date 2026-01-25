@@ -717,7 +717,7 @@ let main args =
             let entries = sections |> List.collect (fun section -> section.Entries)
             let numberText (entry: TestFramework.PassTimingEntry) : string =
                 match entry.Number with
-                | Some number -> $"{number})"
+                | Some number -> number
                 | None -> ""
             let numberWidth =
                 entries
@@ -771,6 +771,9 @@ let main args =
     match coveragePercent with
     | Some pct -> println $"  {Colors.gray}📊 Stdlib coverage: {pct:F1}%%{Colors.reset}"
     | None -> ()
+    let passTimingTotal = TestFramework.calculatePassTimingsTotal runState.PassTimings
+    let unaccounted = totalTimer.Elapsed - passTimingTotal
+    println $"  {Colors.gray}⏱  Unaccounted time: {formatTime unaccounted}{Colors.reset}"
     println $"  {Colors.gray}⏱  Total time: {formatTime totalTimer.Elapsed}{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
 
