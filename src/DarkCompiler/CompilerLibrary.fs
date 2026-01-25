@@ -1929,6 +1929,7 @@ let private compileUserWithPlan (plan: UserCompilePlan<'Snapshot>) : CompileRepo
                                             typeMap
                                             userRegistries
                                             plan.ExternalFunctionDependencyHashes
+                                            plan.PassTimingRecorder
                                     else
                                         Map.empty
                                 let externalReturnTypes = extractReturnTypes userRegistries.FuncReg
