@@ -5,7 +5,6 @@
 module RegisterAllocationTimingTests
 
 open LIR
-open LIRSymbolic
 
 /// Test result type
 type TestResult = Result<unit, string>
@@ -29,7 +28,7 @@ let makeCFG (entry: Label) (blocks: BasicBlock list) : CFG =
     { Entry = entry; Blocks = blockMap }
 
 /// Build a simple function that exercises register allocation
-let buildSimpleFunction () : LIRSymbolic.Function =
+let buildSimpleFunction () : Function =
     let entry = makeLabel "entry"
     let instrs = [
         Mov (vr 0, Imm 1L)
