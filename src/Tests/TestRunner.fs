@@ -92,6 +92,7 @@ let main args =
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
         { Name = "Pass Timing Output Tests"; Tests = PassTimingOutputTests.tests }
+        { Name = "Test Summary Output Tests"; Tests = TestSummaryOutputTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -754,68 +755,67 @@ let main args =
             println $"  {Colors.gray}{i + 1}. {displayName,-45} {timingStr}{Colors.reset}"
         println ""
 
-    if not (Map.isEmpty runState.PassTimings) then
-        println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        println $"{Colors.bold}{Colors.gray}⏱ Suite Timings{Colors.reset}"
-        println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        let columns =
-            TestFramework.buildPassTimingColumns
-                runState.PassTimings
-                (runState.PassTimingOrder |> Seq.toList)
-        let formatColumn (sections: TestFramework.PassTimingSection list) : string list =
-            let entries = sections |> List.collect (fun section -> section.Entries)
-            let formatMilliseconds (elapsed: TimeSpan) : string =
-                let ms = elapsed.TotalMilliseconds.ToString("0")
-                $"{ms}ms"
-            let numberText (entry: TestFramework.PassTimingEntry) : string =
-                match entry.Number with
-                | Some number -> number
-                | None -> ""
-            let numberWidth =
-                entries
-                |> List.map (fun entry -> (numberText entry).Length)
-                |> List.fold max 0
-            let numberPadWidth = if numberWidth > 0 then numberWidth + 2 else 0
-            let labelFor (entry: TestFramework.PassTimingEntry) : string =
-                let numberPadded = (numberText entry).PadRight numberPadWidth
-                if numberPadWidth > 0 then $"{numberPadded}{entry.Name}" else entry.Name
-            let labelWidth =
-                entries
-                |> List.map (fun entry -> (labelFor entry).Length)
-                |> List.fold max 0
-            let timeWidth =
-                entries
-                |> List.map (fun entry -> (formatMilliseconds entry.Elapsed).Length)
-                |> List.fold max 0
-            let formatEntry (entry: TestFramework.PassTimingEntry) : string =
-                let label = labelFor entry
-                let timeText = formatMilliseconds entry.Elapsed
-                $"  {label.PadRight labelWidth}  {timeText.PadLeft timeWidth}"
-            let sectionCount = List.length sections
-            sections
-            |> List.mapi (fun idx section ->
-                let entryLines =
-                    if List.isEmpty section.Entries then
-                        [ "  (none)" ]
-                    else
-                        section.Entries |> List.map formatEntry
-                let lines = section.Title :: entryLines
-                if idx < sectionCount - 1 then lines @ [ "" ] else lines)
-            |> List.collect id
-        let leftLines = formatColumn columns.Ordered
-        let rightLines = formatColumn columns.ByTime
-        let leftWidth =
-            leftLines
-            |> List.map (fun line -> line.Length)
+    println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
+    println $"{Colors.bold}{Colors.gray}⏱ Suite Timings{Colors.reset}"
+    println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
+    let columns =
+        TestFramework.buildPassTimingColumns
+            runState.PassTimings
+            (runState.PassTimingOrder |> Seq.toList)
+    let formatColumn (sections: TestFramework.PassTimingSection list) : string list =
+        let entries = sections |> List.collect (fun section -> section.Entries)
+        let formatMilliseconds (elapsed: TimeSpan) : string =
+            let ms = elapsed.TotalMilliseconds.ToString("0")
+            $"{ms}ms"
+        let numberText (entry: TestFramework.PassTimingEntry) : string =
+            match entry.Number with
+            | Some number -> number
+            | None -> ""
+        let numberWidth =
+            entries
+            |> List.map (fun entry -> (numberText entry).Length)
             |> List.fold max 0
-        let gap = "  "
-        let lineCount = max leftLines.Length rightLines.Length
-        for idx in 0 .. lineCount - 1 do
-            let left = if idx < leftLines.Length then leftLines.[idx] else ""
-            let right = if idx < rightLines.Length then rightLines.[idx] else ""
-            let paddedLeft = left.PadRight leftWidth
-            println $"  {Colors.gray}{paddedLeft}{gap}{right}{Colors.reset}"
-        println ""
+        let numberPadWidth = if numberWidth > 0 then numberWidth + 2 else 0
+        let labelFor (entry: TestFramework.PassTimingEntry) : string =
+            let numberPadded = (numberText entry).PadRight numberPadWidth
+            if numberPadWidth > 0 then $"{numberPadded}{entry.Name}" else entry.Name
+        let labelWidth =
+            entries
+            |> List.map (fun entry -> (labelFor entry).Length)
+            |> List.fold max 0
+        let timeWidth =
+            entries
+            |> List.map (fun entry -> (formatMilliseconds entry.Elapsed).Length)
+            |> List.fold max 0
+        let formatEntry (entry: TestFramework.PassTimingEntry) : string =
+            let label = labelFor entry
+            let timeText = formatMilliseconds entry.Elapsed
+            $"  {label.PadRight labelWidth}  {timeText.PadLeft timeWidth}"
+        let sectionCount = List.length sections
+        sections
+        |> List.mapi (fun idx section ->
+            let entryLines =
+                if List.isEmpty section.Entries then
+                    [ "  (none)" ]
+                else
+                    section.Entries |> List.map formatEntry
+            let lines = section.Title :: entryLines
+            if idx < sectionCount - 1 then lines @ [ "" ] else lines)
+        |> List.collect id
+    let leftLines = formatColumn columns.Ordered
+    let rightLines = formatColumn columns.ByTime
+    let leftWidth =
+        leftLines
+        |> List.map (fun line -> line.Length)
+        |> List.fold max 0
+    let gap = "  "
+    let lineCount = max leftLines.Length rightLines.Length
+    for idx in 0 .. lineCount - 1 do
+        let left = if idx < leftLines.Length then leftLines.[idx] else ""
+        let right = if idx < rightLines.Length then rightLines.[idx] else ""
+        let paddedLeft = left.PadRight leftWidth
+        println $"  {Colors.gray}{paddedLeft}{gap}{right}{Colors.reset}"
+    println ""
 
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}📊 Test Results{Colors.reset}"
@@ -828,6 +828,15 @@ let main args =
     match coveragePercent with
     | Some pct -> println $"  {Colors.gray}📊 Stdlib coverage: {pct:F1}%%{Colors.reset}"
     | None -> ()
+    let cacheTotalsLine =
+        runState.Timings
+        |> TestFramework.calculateCacheTotals
+        |> TestFramework.formatCacheTotalsLine
+    let cacheIoLine =
+        runState.CacheIoTotals
+        |> TestFramework.formatCacheIoTotalsLine
+    println $"  {Colors.gray}{cacheTotalsLine}{Colors.reset}"
+    println $"  {Colors.gray}{cacheIoLine}{Colors.reset}"
     let unaccountedBreakdown =
         TestFramework.calculateUnaccountedTimeBreakdown
             totalTimer.Elapsed

@@ -270,7 +270,19 @@ let private withConnectionForPath
                     use cmd = conn.CreateCommand()
                     cmd.CommandText <- "PRAGMA journal_mode=WAL;"
                     cmd.ExecuteNonQuery() |> ignore
-                    cmd.CommandText <- "PRAGMA synchronous=NORMAL;"
+                    cmd.CommandText <- "PRAGMA synchronous=OFF;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA temp_store=MEMORY;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA cache_size=-262144;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA mmap_size=268435456;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA wal_autocheckpoint=10000;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA journal_size_limit=268435456;"
+                    cmd.ExecuteNonQuery() |> ignore
+                    cmd.CommandText <- "PRAGMA busy_timeout=5000;"
                     cmd.ExecuteNonQuery() |> ignore
                     Ok ()
                 with ex ->
@@ -285,65 +297,92 @@ let private withConnectionForPath
 let private withConnection (f: SqliteConnection -> Result<'T, string>) : Result<'T, string> =
     withConnectionForPath (getCacheDbPath ()) f
 
+type CacheConnectionPragmas = {
+    JournalMode: string
+    Synchronous: int
+    TempStore: int
+    CacheSize: int
+    MmapSize: int64
+    WalAutocheckpoint: int
+    JournalSizeLimit: int64
+    BusyTimeoutMs: int
+}
+
+let private readStringPragma
+    (cmd: SqliteCommand)
+    (pragma: string)
+    : Result<string, string> =
+    cmd.CommandText <- $"PRAGMA {pragma};"
+    let result = cmd.ExecuteScalar()
+    match result with
+    | :? string as value -> Ok value
+    | _ -> Error $"Cache pragma query error: unexpected {pragma} type"
+
+let private readInt64Pragma
+    (cmd: SqliteCommand)
+    (pragma: string)
+    : Result<int64, string> =
+    cmd.CommandText <- $"PRAGMA {pragma};"
+    let result = cmd.ExecuteScalar()
+    match result with
+    | :? int64 as value -> Ok value
+    | :? int as value -> Ok (int64 value)
+    | :? string as value ->
+        match Int64.TryParse(value) with
+        | true, parsed -> Ok parsed
+        | false, _ -> Error $"Cache pragma query error: {pragma} was not numeric"
+    | _ -> Error $"Cache pragma query error: unexpected {pragma} type"
+
+let private readIntPragma
+    (cmd: SqliteCommand)
+    (pragma: string)
+    : Result<int, string> =
+    readInt64Pragma cmd pragma
+    |> Result.bind (fun value ->
+        if value < int64 Int32.MinValue || value > int64 Int32.MaxValue then
+            Error $"Cache pragma query error: {pragma} out of range"
+        else
+            Ok (int value))
+
+let private readConnectionPragmas (conn: SqliteConnection) : Result<CacheConnectionPragmas, string> =
+    try
+        use cmd = conn.CreateCommand()
+        readStringPragma cmd "journal_mode"
+        |> Result.bind (fun journal ->
+            readIntPragma cmd "synchronous"
+            |> Result.bind (fun synchronous ->
+                readIntPragma cmd "temp_store"
+                |> Result.bind (fun tempStore ->
+                    readIntPragma cmd "cache_size"
+                    |> Result.bind (fun cacheSize ->
+                        readInt64Pragma cmd "mmap_size"
+                        |> Result.bind (fun mmapSize ->
+                            readIntPragma cmd "wal_autocheckpoint"
+                            |> Result.bind (fun walAutocheckpoint ->
+                                readInt64Pragma cmd "journal_size_limit"
+                                |> Result.bind (fun journalSizeLimit ->
+                                    readIntPragma cmd "busy_timeout"
+                                    |> Result.map (fun busyTimeout ->
+                                        {
+                                            JournalMode = journal
+                                            Synchronous = synchronous
+                                            TempStore = tempStore
+                                            CacheSize = cacheSize
+                                            MmapSize = mmapSize
+                                            WalAutocheckpoint = walAutocheckpoint
+                                            JournalSizeLimit = journalSizeLimit
+                                            BusyTimeoutMs = busyTimeout
+                                        }))))))))
+    with ex ->
+        Error $"Cache pragma query error: {ex.Message}"
+
 /// Inspect cache connection pragmas for diagnostics/testing
-let getConnectionPragmas () : Result<string * int, string> =
-    let read (conn: SqliteConnection) : Result<string * int, string> =
-        try
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- "PRAGMA journal_mode;"
-            let journalResult = cmd.ExecuteScalar()
-            let journalMode =
-                match journalResult with
-                | :? string as mode -> Ok mode
-                | _ -> Error "Cache pragma query error: unexpected journal_mode type"
-            journalMode
-            |> Result.bind (fun journal ->
-                cmd.CommandText <- "PRAGMA synchronous;"
-                let syncResult = cmd.ExecuteScalar()
-                let syncValue =
-                    match syncResult with
-                    | :? int as value -> Ok value
-                    | :? int64 as value -> Ok (int value)
-                    | :? string as value ->
-                        match System.Int32.TryParse(value) with
-                        | true, parsed -> Ok parsed
-                        | false, _ -> Error "Cache pragma query error: synchronous was not numeric"
-                    | _ -> Error "Cache pragma query error: unexpected synchronous type"
-                syncValue
-                |> Result.map (fun sync -> (journal, sync)))
-        with ex ->
-            Error $"Cache pragma query error: {ex.Message}"
-    withConnection read
+let getConnectionPragmas () : Result<CacheConnectionPragmas, string> =
+    withConnection readConnectionPragmas
 
 /// Inspect cache connection pragmas for diagnostics/testing with an explicit path
-let getConnectionPragmasWithDbPath (dbPath: string) : Result<string * int, string> =
-    let read (conn: SqliteConnection) : Result<string * int, string> =
-        try
-            use cmd = conn.CreateCommand()
-            cmd.CommandText <- "PRAGMA journal_mode;"
-            let journalResult = cmd.ExecuteScalar()
-            let journalMode =
-                match journalResult with
-                | :? string as mode -> Ok mode
-                | _ -> Error "Cache pragma query error: unexpected journal_mode type"
-            journalMode
-            |> Result.bind (fun journal ->
-                cmd.CommandText <- "PRAGMA synchronous;"
-                let syncResult = cmd.ExecuteScalar()
-                let syncValue =
-                    match syncResult with
-                    | :? int as value -> Ok value
-                    | :? int64 as value -> Ok (int value)
-                    | :? string as value ->
-                        match System.Int32.TryParse(value) with
-                        | true, parsed -> Ok parsed
-                        | false, _ -> Error "Cache pragma query error: synchronous was not numeric"
-                    | _ -> Error "Cache pragma query error: unexpected synchronous type"
-                syncValue
-                |> Result.map (fun sync -> (journal, sync)))
-        with ex ->
-            Error $"Cache pragma query error: {ex.Message}"
-    withConnectionForPath dbPath read
+let getConnectionPragmasWithDbPath (dbPath: string) : Result<CacheConnectionPragmas, string> =
+    withConnectionForPath dbPath readConnectionPragmas
 
 let private computeCompilerKey (compilerPath: string) : Result<string, string> =
     try

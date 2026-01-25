@@ -256,6 +256,16 @@ let calculateCacheTotals (timings: seq<TestTiming>) : CacheTotals option =
         timings |> Seq.fold folder (0, 0, false)
     if sawData then Some { Hits = hits; Misses = misses } else None
 
+let formatCacheTotalsLine (totalsOpt: CacheTotals option) : string =
+    let totals =
+        match totalsOpt with
+        | Some value -> value
+        | None -> { Hits = 0; Misses = 0 }
+    $"Cache hits/misses: {totals.Hits}/{totals.Misses}"
+
+let formatCacheIoTotalsLine (totals: CacheIoTotals) : string =
+    $"SQLite IO: reads {totals.ReadCalls} (queries {totals.ReadQueries}, rows {totals.ReadRows}), writes {totals.WriteCalls} (inserts {totals.WriteInserts}, commits {totals.WriteCommits})"
+
 
 let consolidateCacheHashSerializeTimings
     (passTimings: Map<string, TimeSpan>)
@@ -402,21 +412,21 @@ let buildPassTimingColumns
 
     let orderedDefinitions : (string * string option * string * bool) list =
         [
-            ("Cache Deserialize", None, "Cache Deserialize", false)
-            ("Stdlib Build Overhead", None, "Stdlib Build Overhead", false)
-            ("E2E Test Parse", None, "E2E Test Parse", false)
-            ("E2E Suite Context Overhead", None, "E2E Suite Context Overhead", false)
-            ("Verification Test Parse", None, "Verification Test Parse", false)
-            ("Verification Suite Context Overhead", None, "Verification Suite Context Overhead", false)
+            ("Cache Deserialize", None, "Cache Deserialize", true)
+            ("Stdlib Build Overhead", None, "Stdlib Build Overhead", true)
+            ("E2E Test Parse", None, "E2E Test Parse", true)
+            ("E2E Suite Context Overhead", None, "E2E Suite Context Overhead", true)
+            ("Verification Test Parse", None, "Verification Test Parse", true)
+            ("Verification Suite Context Overhead", None, "Verification Suite Context Overhead", true)
         ]
         @ (passDefinitions
            |> List.map (fun (timingKey, number, name) ->
                (timingKey, Some number, name, true)))
         @ [
-            ("Compile Overhead", None, "Compile Overhead", false)
-            ("Cache Hash/Serialize total", None, "Cache Hash/Serialize total", false)
-            (testRuntimeTimingName, None, testRuntimeTimingName, false)
-            ("Cache Flush", None, "Cache Flush", false)
+            ("Compile Overhead", None, "Compile Overhead", true)
+            ("Cache Hash/Serialize total", None, "Cache Hash/Serialize total", true)
+            (testRuntimeTimingName, None, testRuntimeTimingName, true)
+            ("Cache Flush", None, "Cache Flush", true)
         ]
 
     let orderedKeys =
@@ -444,30 +454,49 @@ let buildPassTimingColumns
 
     let orderSet = Set.ofList normalizedOrder
 
+    let nonPassDefinitions = [ "Start Function Compilation"; "Cache Write" ]
+    let nonPassDefinitionSet = Set.ofList nonPassDefinitions
+
+    let entryForNonPass (name: string) : PassTimingEntry =
+        let elapsed = Map.tryFind name nonOrderedMap |> Option.defaultValue TimeSpan.Zero
+        { Number = None; Name = name; Elapsed = elapsed }
+
     let nonPassEntriesInOrder =
         normalizedOrder
-        |> List.choose (fun name ->
-            Map.tryFind name nonOrderedMap
-            |> Option.map (fun elapsed -> { Number = None; Name = name; Elapsed = elapsed }))
+        |> List.filter (fun name -> Set.contains name nonPassDefinitionSet)
+        |> List.map entryForNonPass
 
-    let nonPassRemainder =
+    let nonPassRemainderDefinitions =
+        nonPassDefinitions
+        |> List.filter (fun name -> not (Set.contains name orderSet))
+        |> List.map entryForNonPass
+
+    let nonPassRemainderOther =
         nonOrderedMap
         |> Map.toList
         |> List.choose (fun (name, elapsed) ->
-            if Set.contains name orderSet then None else Some { Number = None; Name = name; Elapsed = elapsed })
+            if Set.contains name orderSet || Set.contains name nonPassDefinitionSet then
+                None
+            else
+                Some { Number = None; Name = name; Elapsed = elapsed })
         |> List.sortBy (fun entry -> entry.Name)
 
     let nonPassEntriesByTime =
-        nonOrderedMap
-        |> Map.toList
-        |> List.map (fun (name, elapsed) -> { Number = None; Name = name; Elapsed = elapsed })
+        let baseEntries = nonPassDefinitions |> List.map entryForNonPass
+        let extraEntries =
+            nonOrderedMap
+            |> Map.toList
+            |> List.choose (fun (name, elapsed) ->
+                if Set.contains name nonPassDefinitionSet then None
+                else Some { Number = None; Name = name; Elapsed = elapsed })
+        (baseEntries @ extraEntries)
         |> List.sortByDescending (fun entry -> entry.Elapsed)
 
     {
         Ordered =
             [
                 { Title = "Ordered Steps (Suite Order)"; Entries = orderedEntries }
-                { Title = "Other Timings (Grouped)"; Entries = nonPassEntriesInOrder @ nonPassRemainder }
+                { Title = "Other Timings (Grouped)"; Entries = nonPassEntriesInOrder @ nonPassRemainderDefinitions @ nonPassRemainderOther }
             ]
         ByTime =
             [

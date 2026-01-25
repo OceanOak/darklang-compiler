@@ -304,19 +304,36 @@ let testOrderedStepsIncludeNonPass () : TestResult =
 
     match columns.Ordered with
     | ordered :: other :: [] ->
-        let orderedNames = names ordered.Entries
-        let orderedNumbers = numbers ordered.Entries
+        let orderedPassEntries =
+            ordered.Entries
+            |> List.choose (fun entry -> entry.Number |> Option.map (fun number -> (number, entry.Name)))
+        let orderedPassNames = orderedPassEntries |> List.map snd
+        let orderedNonPassEntries =
+            ordered.Entries |> List.filter (fun entry -> Option.isNone entry.Number)
+        let orderedNonPassNames = names orderedNonPassEntries
+        let orderedNonPassNumbers = numbers orderedNonPassEntries
         let nonPassNames = names other.Entries
         let nonPassNameText = String.concat ", " nonPassNames
-        let tailNames = orderedNames |> List.skip expectedPassNames.Length
-        let tailNameText = String.concat ", " tailNames
-        let tailNumbers = orderedNumbers |> List.skip expectedPassNames.Length
-        if orderedNames |> List.take expectedPassNames.Length <> expectedPassNames then
+        let orderedNonPassNameText = String.concat ", " orderedNonPassNames
+        let expectedOrderedNonPassNames =
+            [
+                "Cache Deserialize"
+                "Stdlib Build Overhead"
+                "E2E Test Parse"
+                "E2E Suite Context Overhead"
+                "Verification Test Parse"
+                "Verification Suite Context Overhead"
+                "Compile Overhead"
+                "Cache Hash/Serialize total"
+                TestFramework.testRuntimeTimingName
+                "Cache Flush"
+            ]
+        if orderedPassNames <> expectedPassNames then
             Error "Unexpected ordered pass names in ordered steps"
-        elif tailNames <> [ "Compile Overhead"; "Cache Hash/Serialize total"; TestFramework.testRuntimeTimingName ] then
-            Error $"Unexpected ordered non-pass steps: {tailNameText}"
-        elif tailNumbers <> [ None; None; None ] then
-            Error "Expected non-pass steps to have no numbering"
+        elif orderedNonPassNames <> expectedOrderedNonPassNames then
+            Error $"Unexpected ordered non-pass steps: {orderedNonPassNameText}"
+        elif orderedNonPassNumbers <> (List.replicate expectedOrderedNonPassNames.Length None) then
+            Error "Expected ordered non-pass steps to have no numbering"
         elif nonPassNames <> [ "Start Function Compilation"; "Cache Write" ] then
             Error $"Unexpected grouped timings: {nonPassNameText}"
         else
@@ -340,6 +357,28 @@ let testOverheadTotalsExcludeNestedTimings () : TestResult =
     else
         Ok ()
 
+let testOtherTimingsIncludeDefaultsWhenMissing () : TestResult =
+    let columns = TestFramework.buildPassTimingColumns Map.empty []
+    let names (entries: TestFramework.PassTimingEntry list) : string list =
+        entries |> List.map (fun entry -> entry.Name)
+    let elapsed (entries: TestFramework.PassTimingEntry list) : TimeSpan list =
+        entries |> List.map (fun entry -> entry.Elapsed)
+    match columns.Ordered with
+    | _ :: other :: [] ->
+        let otherNames = names other.Entries
+        let otherElapsed = elapsed other.Entries
+        let expectedNames = [ "Start Function Compilation"; "Cache Write" ]
+        let expectedElapsed = [ TimeSpan.Zero; TimeSpan.Zero ]
+        if otherNames <> expectedNames then
+            let otherNameText = String.concat ", " otherNames
+            Error $"Unexpected default other timings: {otherNameText}"
+        elif otherElapsed <> expectedElapsed then
+            Error "Expected default other timings to be zero"
+        else
+            Ok ()
+    | _ ->
+        Error "Expected two ordered sections"
+
 let tests : (string * (unit -> Result<unit, string>)) list =
     [
         ("pass timing columns order", testPassTimingColumnsOrdering)
@@ -348,4 +387,5 @@ let tests : (string * (unit -> Result<unit, string>)) list =
         ("unaccounted time with overlapping timings", testUnaccountedTimeWithOverlappingTimings)
         ("ordered steps include non-pass timings", testOrderedStepsIncludeNonPass)
         ("overhead totals exclude nested timings", testOverheadTotalsExcludeNestedTimings)
+        ("default other timings always present", testOtherTimingsIncludeDefaultsWhenMissing)
     ]
