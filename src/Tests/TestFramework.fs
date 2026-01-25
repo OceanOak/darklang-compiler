@@ -35,7 +35,8 @@ type TestTiming = {
 }
 
 type PassTimingEntry = {
-    Label: string
+    Number: string option
+    Name: string
     Elapsed: TimeSpan
 }
 
@@ -328,34 +329,34 @@ let buildPassTimingColumns
         |> consolidateCacheHashSerializeTimings
         |> consolidateCacheWriteTimings
 
-    let passDefinitions : (string * string) list =
+    let passDefinitions : (string * string * string) list =
         [
-            ("Parse", "1 Parser")
-            ("Type Checking", "1.5 Type Checking")
-            ("AST -> ANF", "2 AST to ANF")
-            ("ANF Optimizations", "2.3 ANF Optimizations")
-            ("ANF Inlining", "2.4 ANF Inlining")
-            ("Reference Count Insertion", "2.5 Ref Count Insertion")
-            ("Print Insertion", "2.6 Print Insertion")
-            ("Tail Call Detection", "2.7 Tail Call Optimization")
-            ("ANF -> MIR", "3 ANF to MIR")
-            ("SSA Construction", "3.1 SSA Construction")
-            ("MIR Optimizations", "3.5 MIR Optimizations")
-            ("MIR -> LIR", "4 MIR to LIR")
-            ("LIR Peephole", "4.5 LIR Peephole")
-            ("Register Allocation", "5 Register Allocation")
-            ("Function Tree Shaking", "5.5 Function Tree Shaking")
-            ("Code Generation", "6 Code Generation")
-            ("ARM64 Emit", "7 ARM64 Emit")
+            ("Parse", "1", "Parser")
+            ("Type Checking", "1.5", "Type Checking")
+            ("AST -> ANF", "2", "AST to ANF")
+            ("ANF Optimizations", "2.3", "ANF Optimizations")
+            ("ANF Inlining", "2.4", "ANF Inlining")
+            ("Reference Count Insertion", "2.5", "Ref Count Insertion")
+            ("Print Insertion", "2.6", "Print Insertion")
+            ("Tail Call Detection", "2.7", "Tail Call Optimization")
+            ("ANF -> MIR", "3", "ANF to MIR")
+            ("SSA Construction", "3.1", "SSA Construction")
+            ("MIR Optimizations", "3.5", "MIR Optimizations")
+            ("MIR -> LIR", "4", "MIR to LIR")
+            ("LIR Peephole", "4.5", "LIR Peephole")
+            ("Register Allocation", "5", "Register Allocation")
+            ("Function Tree Shaking", "5.5", "Function Tree Shaking")
+            ("Code Generation", "6", "Code Generation")
+            ("ARM64 Emit", "7", "ARM64 Emit")
         ]
 
-    let passKeys = passDefinitions |> List.map fst |> Set.ofList
+    let passKeys = passDefinitions |> List.map (fun (key, _, _) -> key) |> Set.ofList
 
     let passEntriesInOrder =
         passDefinitions
-        |> List.choose (fun (timingKey, label) ->
+        |> List.choose (fun (timingKey, number, name) ->
             Map.tryFind timingKey consolidated
-            |> Option.map (fun elapsed -> { Label = label; Elapsed = elapsed }))
+            |> Option.map (fun elapsed -> { Number = Some number; Name = name; Elapsed = elapsed }))
 
     let passEntriesByTime =
         passEntriesInOrder
@@ -375,19 +376,19 @@ let buildPassTimingColumns
         normalizedOrder
         |> List.choose (fun name ->
             Map.tryFind name nonPassMap
-            |> Option.map (fun elapsed -> { Label = name; Elapsed = elapsed }))
+            |> Option.map (fun elapsed -> { Number = None; Name = name; Elapsed = elapsed }))
 
     let nonPassRemainder =
         nonPassMap
         |> Map.toList
         |> List.choose (fun (name, elapsed) ->
-            if Set.contains name orderSet then None else Some { Label = name; Elapsed = elapsed })
-        |> List.sortBy (fun entry -> entry.Label)
+            if Set.contains name orderSet then None else Some { Number = None; Name = name; Elapsed = elapsed })
+        |> List.sortBy (fun entry -> entry.Name)
 
     let nonPassEntriesByTime =
         nonPassMap
         |> Map.toList
-        |> List.map (fun (name, elapsed) -> { Label = name; Elapsed = elapsed })
+        |> List.map (fun (name, elapsed) -> { Number = None; Name = name; Elapsed = elapsed })
         |> List.sortByDescending (fun entry -> entry.Elapsed)
 
     {

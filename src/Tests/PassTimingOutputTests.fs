@@ -32,30 +32,41 @@ let testPassTimingColumnsOrdering () : TestResult =
 
     let columns = TestFramework.buildPassTimingColumns timings order
 
-    let labels (entries: TestFramework.PassTimingEntry list) : string list =
-        entries |> List.map (fun entry -> entry.Label)
+    let names (entries: TestFramework.PassTimingEntry list) : string list =
+        entries |> List.map (fun entry -> entry.Name)
+
+    let numbers (entries: TestFramework.PassTimingEntry list) : string option list =
+        entries |> List.map (fun entry -> entry.Number)
 
     match columns.Ordered with
     | passes :: others :: [] ->
-        let passLabels = labels passes.Entries
-        let otherLabels = labels others.Entries
-        let passLabelText = String.concat ", " passLabels
-        let otherLabelText = String.concat ", " otherLabels
-        if passLabels <> [ "1 Parser"; "1.5 Type Checking"; "2 AST to ANF" ] then
-            Error $"Unexpected compiler-order pass labels: {passLabelText}"
-        elif otherLabels <> [ "Cache Hash/Serialize total"; "Start Function Compilation"; "Cache Write" ] then
-            Error $"Unexpected run-order non-pass labels: {otherLabelText}"
+        let passNumbers = numbers passes.Entries
+        let passNames = names passes.Entries
+        let otherNames = names others.Entries
+        let passNumberText = String.concat ", " (passNumbers |> List.map (Option.defaultValue ""))
+        let passNameText = String.concat ", " passNames
+        let otherNameText = String.concat ", " otherNames
+        if passNumbers <> [ Some "1"; Some "1.5"; Some "2" ] then
+            Error $"Unexpected compiler-order pass numbers: {passNumberText}"
+        elif passNames <> [ "Parser"; "Type Checking"; "AST to ANF" ] then
+            Error $"Unexpected compiler-order pass names: {passNameText}"
+        elif otherNames <> [ "Cache Hash/Serialize total"; "Start Function Compilation"; "Cache Write" ] then
+            Error $"Unexpected run-order non-pass names: {otherNameText}"
         else
             match columns.ByTime with
             | timePasses :: timeOthers :: [] ->
-                let timePassLabels = labels timePasses.Entries
-                let timeOtherLabels = labels timeOthers.Entries
-                let timePassText = String.concat ", " timePassLabels
-                let timeOtherText = String.concat ", " timeOtherLabels
-                if timePassLabels <> [ "2 AST to ANF"; "1.5 Type Checking"; "1 Parser" ] then
-                    Error $"Unexpected time-ordered pass labels: {timePassText}"
-                elif timeOtherLabels <> [ "Cache Write"; "Cache Hash/Serialize total"; "Start Function Compilation" ] then
-                    Error $"Unexpected time-ordered non-pass labels: {timeOtherText}"
+                let timePassNumbers = numbers timePasses.Entries
+                let timePassNames = names timePasses.Entries
+                let timeOtherNames = names timeOthers.Entries
+                let timePassNumberText = String.concat ", " (timePassNumbers |> List.map (Option.defaultValue ""))
+                let timePassNameText = String.concat ", " timePassNames
+                let timeOtherNameText = String.concat ", " timeOtherNames
+                if timePassNumbers <> [ Some "2"; Some "1.5"; Some "1" ] then
+                    Error $"Unexpected time-ordered pass numbers: {timePassNumberText}"
+                elif timePassNames <> [ "AST to ANF"; "Type Checking"; "Parser" ] then
+                    Error $"Unexpected time-ordered pass names: {timePassNameText}"
+                elif timeOtherNames <> [ "Cache Write"; "Cache Hash/Serialize total"; "Start Function Compilation" ] then
+                    Error $"Unexpected time-ordered non-pass names: {timeOtherNameText}"
                 else
                     Ok ()
             | _ ->

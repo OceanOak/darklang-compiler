@@ -713,21 +713,40 @@ let main args =
             TestFramework.buildPassTimingColumns
                 runState.PassTimings
                 (runState.PassTimingOrder |> Seq.toList)
-        let formatEntry (entry: TestFramework.PassTimingEntry) : string =
-            $"  {entry.Label}  {formatTime entry.Elapsed}"
-        let buildLines (sections: TestFramework.PassTimingSection list) : string list =
+        let formatColumn (sections: TestFramework.PassTimingSection list) : string list =
+            let entries = sections |> List.collect (fun section -> section.Entries)
+            let numberText (entry: TestFramework.PassTimingEntry) : string =
+                match entry.Number with
+                | Some number -> $"{number})"
+                | None -> ""
+            let numberWidth =
+                entries
+                |> List.map (fun entry -> (numberText entry).Length)
+                |> List.fold max 0
+            let numberPadWidth = if numberWidth > 0 then numberWidth + 1 else 0
+            let labelFor (entry: TestFramework.PassTimingEntry) : string =
+                let numberPadded = (numberText entry).PadRight numberPadWidth
+                if numberPadWidth > 0 then $"{numberPadded}{entry.Name}" else entry.Name
+            let labelWidth =
+                entries
+                |> List.map (fun entry -> (labelFor entry).Length)
+                |> List.fold max 0
+            let formatEntry (entry: TestFramework.PassTimingEntry) : string =
+                let label = labelFor entry
+                $"  {label.PadRight labelWidth}  {formatTime entry.Elapsed}"
+            let sectionCount = List.length sections
             sections
             |> List.mapi (fun idx section ->
-                let entries =
+                let entryLines =
                     if List.isEmpty section.Entries then
                         [ "  (none)" ]
                     else
                         section.Entries |> List.map formatEntry
-                let lines = section.Title :: entries
-                if idx < sections.Length - 1 then lines @ [ "" ] else lines)
+                let lines = section.Title :: entryLines
+                if idx < sectionCount - 1 then lines @ [ "" ] else lines)
             |> List.collect id
-        let leftLines = buildLines columns.Ordered
-        let rightLines = buildLines columns.ByTime
+        let leftLines = formatColumn columns.Ordered
+        let rightLines = formatColumn columns.ByTime
         let leftWidth =
             leftLines
             |> List.map (fun line -> line.Length)
@@ -752,14 +771,6 @@ let main args =
     match coveragePercent with
     | Some pct -> println $"  {Colors.gray}📊 Stdlib coverage: {pct:F1}%%{Colors.reset}"
     | None -> ()
-    match calculateCacheTotals runState.Timings with
-    | Some totals ->
-        println $"  {Colors.gray}cache hits: {totals.Hits}, cache misses: {totals.Misses}{Colors.reset}"
-    | None -> ()
-    let cacheIo = runState.CacheIoTotals
-    if cacheIo.ReadCalls > 0 || cacheIo.WriteCalls > 0 then
-        println $"  {Colors.gray}cache sqlite reads: {cacheIo.ReadCalls} (queries: {cacheIo.ReadQueries}, rows: {cacheIo.ReadRows}){Colors.reset}"
-        println $"  {Colors.gray}cache sqlite writes: {cacheIo.WriteCalls} (inserts: {cacheIo.WriteInserts}, commits: {cacheIo.WriteCommits}){Colors.reset}"
     println $"  {Colors.gray}⏱  Total time: {formatTime totalTimer.Elapsed}{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
 
