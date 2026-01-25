@@ -2984,25 +2984,12 @@ let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (block: LIR.Basic
     let (LIR.Label lbl) = block.Label
     let labelInstr = ARM64.Label lbl
 
-    // Convert all instructions
-    let instrResults = block.Instrs |> List.map (convertInstr ctx)
-
-    // Convert terminator
-    let termResult = convertTerminator epilogueLabel block.Terminator
-
-    // Collect all results
-    let rec collectResults acc results =
-        match results with
-        | [] -> Ok (List.rev acc)
-        | (Ok instrs) :: rest -> collectResults (List.rev instrs @ acc) rest
-        | (Error err) :: _ -> Error err
-
-    match collectResults [] instrResults with
-    | Error err -> Error err
-    | Ok instrs ->
-        match termResult with
-        | Error err -> Error err
-        | Ok termInstrs -> Ok (labelInstr :: instrs @ termInstrs)
+    ResultList.mapResults (convertInstr ctx) block.Instrs
+    |> Result.bind (fun instrLists ->
+        convertTerminator epilogueLabel block.Terminator
+        |> Result.map (fun termInstrs ->
+            let instrs = List.concat instrLists
+            labelInstr :: (instrs @ termInstrs)))
 
 /// Convert LIR CFG to ARM64 instructions
 /// epilogueLabel: passed through to blocks for Ret handling
@@ -3022,15 +3009,8 @@ let convertCFG (ctx: CodeGenContext) (epilogueLabel: string) (cfg: LIR.CFG) : Re
 
     let allBlocks = entryBlock @ otherBlocks
 
-    // Convert each block (accumulate in reverse to avoid O(n²) list concat)
-    let rec convertBlocks acc remaining =
-        match remaining with
-        | [] -> Ok (List.rev acc)
-        | block :: rest ->
-            match convertBlock ctx epilogueLabel block with
-            | Error err -> Error err
-            | Ok instrs -> convertBlocks (List.rev instrs @ acc) rest
-    convertBlocks [] allBlocks
+    ResultList.mapResults (convertBlock ctx epilogueLabel) allBlocks
+    |> Result.map List.concat
 
 /// Generate heap initialization code for _start function
 /// Uses mmap to allocate 128MB of heap space and initializes X27/X28
@@ -3269,14 +3249,8 @@ let generateARM64WithOptions (options: CodeGenOptions) (program: LIR.Program) : 
             startFunc :: otherFuncs
         | None -> functions  // No _start, keep original order
 
-    sortedFunctions
-    |> List.map (convertFunction ctx)
-    |> List.fold (fun acc result ->
-        match acc, result with
-        | Ok instrs, Ok newInstrs -> Ok (instrs @ newInstrs)
-        | Error err, _ -> Error err
-        | _, Error err -> Error err) (Ok [])
-    |> Result.map peepholeOptimize
+    ResultList.mapResults (convertFunction ctx) sortedFunctions
+    |> Result.map (fun instrLists -> instrLists |> List.concat |> peepholeOptimize)
 
 /// Convert LIR program to ARM64 instructions (uses default options)
 let generateARM64 (program: LIR.Program) : Result<ARM64.Instr list, string> =
