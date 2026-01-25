@@ -117,7 +117,25 @@ let main args =
     let recordResults = TestFramework.recordResults runState
     let recordPassTiming = TestFramework.recordPassTiming runState
     let recordCacheIo = TestFramework.recordCacheIo runState
+    let passTimingTotal () = TestFramework.calculatePassTimingsTotal runState.PassTimings
+    let recordNonPassTiming (name: string) (elapsed: TimeSpan) : unit =
+        if elapsed > TimeSpan.Zero then
+            recordPassTiming { Pass = name; Elapsed = elapsed }
+    let recordPhaseOverhead
+        (name: string)
+        (elapsed: TimeSpan)
+        (passTimingStart: TimeSpan)
+        (passTimingEnd: TimeSpan)
+        : unit =
+        let passDelta = passTimingEnd - passTimingStart
+        if passDelta < TimeSpan.Zero then
+            Crash.crash $"recordPhaseOverhead: pass timing delta ({passDelta}) is negative for {name}"
+        let overhead = elapsed - passDelta
+        if overhead < TimeSpan.Zero then
+            Crash.crash $"recordPhaseOverhead: overhead ({overhead}) is negative for {name}"
+        recordNonPassTiming name overhead
 
+    let stdlibPassTimingStart = passTimingTotal ()
     let timer = Stopwatch.StartNew()
     let stdlib =
         let cacheSettingsResult : Result<CompilerLibrary.CacheSettings<Cache.CacheSnapshot>, string> =
@@ -138,6 +156,8 @@ let main args =
         | Ok stdlib -> stdlib
         | Error err -> failwith $"Stdlib didnt build with error: {err}"
     let elapsed = timer.Elapsed
+    let stdlibPassTimingEnd = passTimingTotal ()
+    recordPhaseOverhead "Stdlib Build Overhead" elapsed stdlibPassTimingStart stdlibPassTimingEnd
     let allUnitTests = buildUnitTests stdlib
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
@@ -166,11 +186,20 @@ let main args =
         let stdlib = { baseStdlib with CacheSettings = cacheSettings }
         let numTests = testsArray.Length
         if numTests > 0 then
+            let suitePassTimingStart = passTimingTotal ()
+            let suiteContextTimer = Stopwatch.StartNew()
             let suiteContextsResult =
                 TestDSL.E2ETestRunner.buildSuiteContexts
                     stdlib
                     testsArray
                     (Some recordPassTiming)
+            suiteContextTimer.Stop()
+            let suitePassTimingEnd = passTimingTotal ()
+            recordPhaseOverhead
+                $"{suiteName} Suite Context Overhead"
+                suiteContextTimer.Elapsed
+                suitePassTimingStart
+                suitePassTimingEnd
             let mutable suiteContextsOpt =
                 match suiteContextsResult with
                 | Ok suiteContexts -> Some suiteContexts
@@ -232,51 +261,62 @@ let main args =
 
             for i in 0 .. numTests - 1 do
                 let test = testsArray.[i]
-                let result, cacheStatsOpt =
+                let result, cacheStatsOpt, passTimingDelta =
                     match suiteContextsResult with
                     | Error err ->
-                        preambleFailureResult $"Preamble build failed: {err}", None
+                        preambleFailureResult $"Preamble build failed: {err}", None, TimeSpan.Zero
                     | Ok suiteContexts ->
                         match suiteContextsOpt with
                         | None ->
-                            preambleFailureResult "Missing built suite contexts", None
+                            preambleFailureResult "Missing built suite contexts", None, TimeSpan.Zero
                         | Some currentSuiteContexts ->
                             match Map.tryFind test.SourceFile currentSuiteContexts.PreambleContexts with
                             | None ->
-                                preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None
+                                preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None, TimeSpan.Zero
                             | Some ctx ->
+                                let passTimingStart = passTimingTotal ()
                                 let cacheEnabled =
                                     match currentSuiteContexts.Stdlib.CacheSettings.Context with
                                     | CompilerLibrary.NoCache -> false
                                     | CompilerLibrary.CacheContext _ -> true
-                                if cacheEnabled then
-                                    let mutable hitCount = 0
-                                    let mutable missCount = 0
-                                    let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
-                                        hitCount <- hitCount + info.Hits
-                                        missCount <- missCount + info.Misses
-                                    let testResult, updatedStdlib =
-                                        TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
-                                            currentSuiteContexts.Stdlib
-                                            ctx
-                                            test
-                                            (Some recordPassTiming)
-                                            (Some recordMiss)
-                                    suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
-                                    testResult, Some (hitCount, missCount)
-                                else
-                                    let testResult, updatedStdlib =
-                                        TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
-                                            currentSuiteContexts.Stdlib
-                                            ctx
-                                            test
-                                            (Some recordPassTiming)
-                                            None
-                                    suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
-                                    testResult, None
+                                let testResult, cacheStats =
+                                    if cacheEnabled then
+                                        let mutable hitCount = 0
+                                        let mutable missCount = 0
+                                        let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
+                                            hitCount <- hitCount + info.Hits
+                                            missCount <- missCount + info.Misses
+                                        let testResult, updatedStdlib =
+                                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                                currentSuiteContexts.Stdlib
+                                                ctx
+                                                test
+                                                (Some recordPassTiming)
+                                                (Some recordMiss)
+                                        suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
+                                        testResult, Some (hitCount, missCount)
+                                    else
+                                        let testResult, updatedStdlib =
+                                            TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                                currentSuiteContexts.Stdlib
+                                                ctx
+                                                test
+                                                (Some recordPassTiming)
+                                                None
+                                        suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
+                                        testResult, None
+                                let passTimingEnd = passTimingTotal ()
+                                let passTimingDelta = passTimingEnd - passTimingStart
+                                testResult, cacheStats, passTimingDelta
 
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
+                let compileOverhead = compileTime - passTimingDelta
+                if compileOverhead < TimeSpan.Zero then
+                    Crash.crash
+                        $"compile overhead negative: compile={compileTime}, passes={passTimingDelta}"
+                recordNonPassTiming "Compile Overhead" compileOverhead
+                recordNonPassTiming TestFramework.testRuntimeTimingName runtimeTime
                 let totalTime = compileTime + runtimeTime
                 results.[i] <- Some (test, result)
                 let cacheHitCountOpt =
@@ -613,7 +653,10 @@ let main args =
                 let sectionTimer = Stopwatch.StartNew()
                 println $"{Colors.cyan}🚀 E2E Tests{Colors.reset}"
 
+                let parseTimer = Stopwatch.StartNew()
                 let (allE2ETests, parseErrors) = loadE2ETests e2eTestFiles
+                parseTimer.Stop()
+                recordNonPassTiming "E2E Test Parse" parseTimer.Elapsed
                 reportParseErrors "E2E" parseErrors
 
                 if allE2ETests.Length > 0 then
@@ -634,7 +677,10 @@ let main args =
                 let sectionTimer = Stopwatch.StartNew()
                 println $"{Colors.cyan}🔬 Verification Tests{Colors.reset}"
 
+                let parseTimer = Stopwatch.StartNew()
                 let (allVerifTests, parseErrors) = loadE2ETests verificationTestFiles
+                parseTimer.Stop()
+                recordNonPassTiming "Verification Test Parse" parseTimer.Elapsed
                 reportParseErrors "Verification" parseErrors
 
                 if allVerifTests.Length > 0 then
@@ -655,7 +701,11 @@ let main args =
     let cacheSettingsAfterTests =
         runE2EAndVerification stdlib stdlib.CacheSettings
     let flushScope = CompilerLibrary.CacheScope.TestExpression "flush:tests"
-    match CompilerLibrary.flushCacheSettings flushScope cacheSettingsAfterTests with
+    let flushTimer = Stopwatch.StartNew()
+    let flushResult = CompilerLibrary.flushCacheSettings flushScope cacheSettingsAfterTests
+    flushTimer.Stop()
+    recordNonPassTiming "Cache Flush" flushTimer.Elapsed
+    match flushResult with
     | Ok _ -> ()
     | Error err -> eprintln $"Cache flush failed: {err}"
 
@@ -707,7 +757,7 @@ let main args =
 
     if not (Map.isEmpty runState.PassTimings) then
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        println $"{Colors.bold}{Colors.gray}⏱ Pass Timings{Colors.reset}"
+        println $"{Colors.bold}{Colors.gray}⏱ Suite Timings{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
         let columns =
             TestFramework.buildPassTimingColumns
@@ -715,6 +765,9 @@ let main args =
                 (runState.PassTimingOrder |> Seq.toList)
         let formatColumn (sections: TestFramework.PassTimingSection list) : string list =
             let entries = sections |> List.collect (fun section -> section.Entries)
+            let formatMilliseconds (elapsed: TimeSpan) : string =
+                let ms = elapsed.TotalMilliseconds.ToString("0")
+                $"{ms}ms"
             let numberText (entry: TestFramework.PassTimingEntry) : string =
                 match entry.Number with
                 | Some number -> number
@@ -723,7 +776,7 @@ let main args =
                 entries
                 |> List.map (fun entry -> (numberText entry).Length)
                 |> List.fold max 0
-            let numberPadWidth = if numberWidth > 0 then numberWidth + 1 else 0
+            let numberPadWidth = if numberWidth > 0 then numberWidth + 2 else 0
             let labelFor (entry: TestFramework.PassTimingEntry) : string =
                 let numberPadded = (numberText entry).PadRight numberPadWidth
                 if numberPadWidth > 0 then $"{numberPadded}{entry.Name}" else entry.Name
@@ -731,9 +784,14 @@ let main args =
                 entries
                 |> List.map (fun entry -> (labelFor entry).Length)
                 |> List.fold max 0
+            let timeWidth =
+                entries
+                |> List.map (fun entry -> (formatMilliseconds entry.Elapsed).Length)
+                |> List.fold max 0
             let formatEntry (entry: TestFramework.PassTimingEntry) : string =
                 let label = labelFor entry
-                $"  {label.PadRight labelWidth}  {formatTime entry.Elapsed}"
+                let timeText = formatMilliseconds entry.Elapsed
+                $"  {label.PadRight labelWidth}  {timeText.PadLeft timeWidth}"
             let sectionCount = List.length sections
             sections
             |> List.mapi (fun idx section ->
