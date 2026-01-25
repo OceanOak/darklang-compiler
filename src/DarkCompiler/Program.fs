@@ -14,8 +14,7 @@
 //   4. MIR_to_LIR: MIR → LIR
 //   5. RegisterAllocation: LIR (virtual) → LIR (physical)
 //   6. CodeGen: LIR → ARM64 instructions
-//   7. ARM64_Encoding: ARM64 instructions → Machine code
-//   8. Binary_Generation: Machine code → Mach-O executable
+//   7. ARM64_Emit: ARM64 instructions → platform binary (encoding + layout)
 
 module Program
 

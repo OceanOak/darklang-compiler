@@ -12,11 +12,11 @@ open TestDSL.Common
 open TestDSL.ANFParser
 open TestDSL.MIRParser
 open TestDSL.LIRParser
-open TestDSL.ARM64Parser
+open TestDSL.ARM64SymbolicParser
 open ANF
 open MIR
-open LIR
-open ARM64
+open LIRSymbolic
+open ARM64Symbolic
 open ANF_to_MIR
 open MIR_to_LIR
 open CodeGen
@@ -35,21 +35,21 @@ let prettyPrintMIR (program: MIR.Program) : string =
     formatMIR program
 
 /// Pretty-print LIR program with shared formatter
-let prettyPrintLIR (program: LIR.Program) : string =
-    formatLIR program
+let prettyPrintLIR (program: LIRSymbolic.Program) : string =
+    formatLIRSymbolic program
 
 /// Rename all functions in an LIR program
-let renameLIRFunctions (name: string) (program: LIR.Program) : LIR.Program =
-    let (LIR.Program (functions, strings, floats)) = program
+let renameLIRFunctions (name: string) (program: LIRSymbolic.Program) : LIRSymbolic.Program =
+    let (LIRSymbolic.Program functions) = program
     let renamed = functions |> List.map (fun func -> { func with Name = name })
-    LIR.Program (renamed, strings, floats)
+    LIRSymbolic.Program renamed
 
 /// Pretty-print ANF program with shared formatter
 let prettyPrintANF (program: ANF.Program) : string =
     formatANF program
 
 /// Load MIR→LIR test from file
-let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIR.Program, string> =
+let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIRSymbolic.Program, string> =
     if not (File.Exists path) then
         Error $"Test file not found: {path}"
     else
@@ -70,31 +70,24 @@ let loadMIR2LIRTest (path: string) : Result<MIR.Program * LIR.Program, string> =
                     | Ok lirProgram -> Ok (mirProgram, lirProgram)
 
 /// Run MIR→LIR test
-let runMIR2LIRTest (input: MIR.Program) (expected: LIR.Program) : PassTestResult =
+let runMIR2LIRTest (input: MIR.Program) (expected: LIRSymbolic.Program) : PassTestResult =
     match MIR_to_LIR.toLIR input with
     | Error err ->
         { Success = false
           Message = $"LIR conversion error: {err}"
           Expected = Some (prettyPrintLIR expected)
           Actual = None }
-    | Ok symbolic ->
-        match LIRSymbolic.toLIR symbolic with
-        | Error err ->
-            { Success = false
-              Message = $"LIR pool resolution error: {err}"
-              Expected = Some (prettyPrintLIR expected)
+    | Ok actual ->
+        if actual = expected then
+            { Success = true
+              Message = "Test passed"
+              Expected = None
               Actual = None }
-        | Ok actual ->
-            if actual = expected then
-                { Success = true
-                  Message = "Test passed"
-                  Expected = None
-                  Actual = None }
-            else
-                { Success = false
-                  Message = "Output mismatch"
-                  Expected = Some (prettyPrintLIR expected)
-                  Actual = Some (prettyPrintLIR actual) }
+        else
+            { Success = false
+              Message = "Output mismatch"
+              Expected = Some (prettyPrintLIR expected)
+              Actual = Some (prettyPrintLIR actual) }
 
 /// Load ANF→MIR test from file
 let loadANF2MIRTest (path: string) : Result<ANF.Program * MIR.Program, string> =
@@ -159,188 +152,200 @@ let prettyPrintARM64Reg = function
     | ARM64.X27 -> "X27" | ARM64.X28 -> "X28"
     | ARM64.X29 -> "X29" | ARM64.X30 -> "X30" | ARM64.SP -> "SP"
 
+/// Pretty-print label references (code/data)
+let private prettyPrintLabelRef (labelRef: ARM64Symbolic.LabelRef) : string =
+    let escapeLabel (value: string) =
+        value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+    match labelRef with
+    | ARM64Symbolic.CodeLabel name -> name
+    | ARM64Symbolic.DataLabel (ARM64Symbolic.Named name) -> $"data:{name}"
+    | ARM64Symbolic.DataLabel (ARM64Symbolic.StringLiteral value) ->
+        $"str:\"{escapeLabel value}\""
+    | ARM64Symbolic.DataLabel (ARM64Symbolic.FloatLiteral value) ->
+        $"float:{value}"
+
 /// Pretty-print ARM64 instruction
 let prettyPrintARM64Instr = function
-    | ARM64.MOVZ (dest, imm, shift) ->
+    | ARM64Symbolic.MOVZ (dest, imm, shift) ->
         $"MOVZ({prettyPrintARM64Reg dest}, {imm}, {shift})"
-    | ARM64.MOVN (dest, imm, shift) ->
+    | ARM64Symbolic.MOVN (dest, imm, shift) ->
         $"MOVN({prettyPrintARM64Reg dest}, {imm}, {shift})"
-    | ARM64.MOVK (dest, imm, shift) ->
+    | ARM64Symbolic.MOVK (dest, imm, shift) ->
         $"MOVK({prettyPrintARM64Reg dest}, {imm}, {shift})"
-    | ARM64.ADD_imm (dest, src, imm) ->
+    | ARM64Symbolic.ADD_imm (dest, src, imm) ->
         $"ADD_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
-    | ARM64.ADD_reg (dest, src1, src2) ->
+    | ARM64Symbolic.ADD_reg (dest, src1, src2) ->
         $"ADD_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.ADD_shifted (dest, src1, src2, shift) ->
+    | ARM64Symbolic.ADD_shifted (dest, src1, src2, shift) ->
         $"ADD_shifted({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, LSL #{shift})"
-    | ARM64.SUB_imm (dest, src, imm) ->
+    | ARM64Symbolic.SUB_imm (dest, src, imm) ->
         $"SUB_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
-    | ARM64.SUB_imm12 (dest, src, imm) ->
+    | ARM64Symbolic.SUB_imm12 (dest, src, imm) ->
         $"SUB_imm12({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
-    | ARM64.SUB_reg (dest, src1, src2) ->
+    | ARM64Symbolic.SUB_reg (dest, src1, src2) ->
         $"SUB_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.SUB_shifted (dest, src1, src2, shift) ->
+    | ARM64Symbolic.SUB_shifted (dest, src1, src2, shift) ->
         $"SUB_shifted({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, LSL #{shift})"
-    | ARM64.SUBS_imm (dest, src, imm) ->
+    | ARM64Symbolic.SUBS_imm (dest, src, imm) ->
         $"SUBS_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {imm})"
-    | ARM64.MUL (dest, src1, src2) ->
+    | ARM64Symbolic.MUL (dest, src1, src2) ->
         $"MUL({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.SDIV (dest, src1, src2) ->
+    | ARM64Symbolic.SDIV (dest, src1, src2) ->
         $"SDIV({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.UDIV (dest, src1, src2) ->
+    | ARM64Symbolic.UDIV (dest, src1, src2) ->
         $"UDIV({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.MSUB (dest, src1, src2, src3) ->
+    | ARM64Symbolic.MSUB (dest, src1, src2, src3) ->
         $"MSUB({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, {prettyPrintARM64Reg src3})"
-    | ARM64.MADD (dest, src1, src2, src3) ->
+    | ARM64Symbolic.MADD (dest, src1, src2, src3) ->
         $"MADD({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2}, {prettyPrintARM64Reg src3})"
-    | ARM64.MOV_reg (dest, src) ->
+    | ARM64Symbolic.MOV_reg (dest, src) ->
         $"MOV_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.STRB (src, addr, offset) ->
+    | ARM64Symbolic.STRB (src, addr, offset) ->
         $"STRB({prettyPrintARM64Reg src}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDRB (dest, baseAddr, index) ->
+    | ARM64Symbolic.LDRB (dest, baseAddr, index) ->
         $"LDRB({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg baseAddr}, {prettyPrintARM64Reg index})"
-    | ARM64.LDRB_imm (dest, baseAddr, offset) ->
+    | ARM64Symbolic.LDRB_imm (dest, baseAddr, offset) ->
         $"LDRB_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg baseAddr}, {offset})"
-    | ARM64.STRB_reg (src, addr) ->
+    | ARM64Symbolic.STRB_reg (src, addr) ->
         $"STRB_reg({prettyPrintARM64Reg src}, {prettyPrintARM64Reg addr})"
-    | ARM64.CMP_imm (src, imm) ->
+    | ARM64Symbolic.CMP_imm (src, imm) ->
         $"CMP_imm({prettyPrintARM64Reg src}, {imm})"
-    | ARM64.CMP_reg (src1, src2) ->
+    | ARM64Symbolic.CMP_reg (src1, src2) ->
         $"CMP_reg({prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.CSET (dest, cond) ->
+    | ARM64Symbolic.CSET (dest, cond) ->
         $"CSET({prettyPrintARM64Reg dest}, {cond})"
-    | ARM64.AND_reg (dest, src1, src2) ->
+    | ARM64Symbolic.AND_reg (dest, src1, src2) ->
         $"AND_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.AND_imm (dest, src, imm) ->
+    | ARM64Symbolic.AND_imm (dest, src, imm) ->
         $"AND_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, #{imm})"
-    | ARM64.ORR_reg (dest, src1, src2) ->
+    | ARM64Symbolic.ORR_reg (dest, src1, src2) ->
         $"ORR_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.EOR_reg (dest, src1, src2) ->
+    | ARM64Symbolic.EOR_reg (dest, src1, src2) ->
         $"EOR_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src1}, {prettyPrintARM64Reg src2})"
-    | ARM64.LSL_reg (dest, src, shift) ->
+    | ARM64Symbolic.LSL_reg (dest, src, shift) ->
         $"LSL_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {prettyPrintARM64Reg shift})"
-    | ARM64.LSR_reg (dest, src, shift) ->
+    | ARM64Symbolic.LSR_reg (dest, src, shift) ->
         $"LSR_reg({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {prettyPrintARM64Reg shift})"
-    | ARM64.LSL_imm (dest, src, shift) ->
+    | ARM64Symbolic.LSL_imm (dest, src, shift) ->
         $"LSL_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, #{shift})"
-    | ARM64.LSR_imm (dest, src, shift) ->
+    | ARM64Symbolic.LSR_imm (dest, src, shift) ->
         $"LSR_imm({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, #{shift})"
-    | ARM64.MVN (dest, src) ->
+    | ARM64Symbolic.MVN (dest, src) ->
         $"MVN({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.SXTB (dest, src) ->
+    | ARM64Symbolic.SXTB (dest, src) ->
         $"SXTB({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.SXTH (dest, src) ->
+    | ARM64Symbolic.SXTH (dest, src) ->
         $"SXTH({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.SXTW (dest, src) ->
+    | ARM64Symbolic.SXTW (dest, src) ->
         $"SXTW({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.UXTB (dest, src) ->
+    | ARM64Symbolic.UXTB (dest, src) ->
         $"UXTB({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.UXTH (dest, src) ->
+    | ARM64Symbolic.UXTH (dest, src) ->
         $"UXTH({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.UXTW (dest, src) ->
+    | ARM64Symbolic.UXTW (dest, src) ->
         $"UXTW({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.CBZ (reg, label) ->
+    | ARM64Symbolic.CBZ (reg, label) ->
         $"CBZ({prettyPrintARM64Reg reg}, {label})"
-    | ARM64.CBZ_offset (reg, offset) ->
+    | ARM64Symbolic.CBZ_offset (reg, offset) ->
         $"CBZ_offset({prettyPrintARM64Reg reg}, {offset})"
-    | ARM64.CBNZ (reg, label) ->
+    | ARM64Symbolic.CBNZ (reg, label) ->
         $"CBNZ({prettyPrintARM64Reg reg}, {label})"
-    | ARM64.CBNZ_offset (reg, offset) ->
+    | ARM64Symbolic.CBNZ_offset (reg, offset) ->
         $"CBNZ_offset({prettyPrintARM64Reg reg}, {offset})"
-    | ARM64.TBZ (reg, bit, offset) ->
+    | ARM64Symbolic.TBZ (reg, bit, offset) ->
         $"TBZ({prettyPrintARM64Reg reg}, {bit}, {offset})"
-    | ARM64.TBNZ (reg, bit, offset) ->
+    | ARM64Symbolic.TBNZ (reg, bit, offset) ->
         $"TBNZ({prettyPrintARM64Reg reg}, {bit}, {offset})"
-    | ARM64.TBZ_label (reg, bit, label) ->
+    | ARM64Symbolic.TBZ_label (reg, bit, label) ->
         $"TBZ_label({prettyPrintARM64Reg reg}, {bit}, {label})"
-    | ARM64.TBNZ_label (reg, bit, label) ->
+    | ARM64Symbolic.TBNZ_label (reg, bit, label) ->
         $"TBNZ_label({prettyPrintARM64Reg reg}, {bit}, {label})"
-    | ARM64.B offset ->
+    | ARM64Symbolic.B offset ->
         $"B({offset})"
-    | ARM64.B_cond (cond, offset) ->
+    | ARM64Symbolic.B_cond (cond, offset) ->
         $"B_cond({cond}, {offset})"
-    | ARM64.B_label label ->
+    | ARM64Symbolic.B_label label ->
         $"B_label({label})"
-    | ARM64.B_cond_label (cond, label) ->
+    | ARM64Symbolic.B_cond_label (cond, label) ->
         $"B_cond_label({cond}, {label})"
-    | ARM64.NEG (dest, src) ->
+    | ARM64Symbolic.NEG (dest, src) ->
         $"NEG({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src})"
-    | ARM64.STP (reg1, reg2, addr, offset) ->
+    | ARM64Symbolic.STP (reg1, reg2, addr, offset) ->
         $"STP({prettyPrintARM64Reg reg1}, {prettyPrintARM64Reg reg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.STP_pre (reg1, reg2, addr, offset) ->
+    | ARM64Symbolic.STP_pre (reg1, reg2, addr, offset) ->
         $"STP_pre({prettyPrintARM64Reg reg1}, {prettyPrintARM64Reg reg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDP (reg1, reg2, addr, offset) ->
+    | ARM64Symbolic.LDP (reg1, reg2, addr, offset) ->
         $"LDP({prettyPrintARM64Reg reg1}, {prettyPrintARM64Reg reg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDP_post (reg1, reg2, addr, offset) ->
+    | ARM64Symbolic.LDP_post (reg1, reg2, addr, offset) ->
         $"LDP_post({prettyPrintARM64Reg reg1}, {prettyPrintARM64Reg reg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.STR (src, addr, offset) ->
+    | ARM64Symbolic.STR (src, addr, offset) ->
         $"STR({prettyPrintARM64Reg src}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDR (dest, addr, offset) ->
+    | ARM64Symbolic.LDR (dest, addr, offset) ->
         $"LDR({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.STUR (src, addr, offset) ->
+    | ARM64Symbolic.STUR (src, addr, offset) ->
         $"STUR({prettyPrintARM64Reg src}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDUR (dest, addr, offset) ->
+    | ARM64Symbolic.LDUR (dest, addr, offset) ->
         $"LDUR({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.BL label ->
+    | ARM64Symbolic.BL label ->
         $"BL({label})"
-    | ARM64.BLR reg ->
+    | ARM64Symbolic.BLR reg ->
         $"BLR({prettyPrintARM64Reg reg})"
-    | ARM64.RET -> "RET"
-    | ARM64.SVC imm -> $"SVC({imm})"
-    | ARM64.Label label -> $"Label({label})"
-    | ARM64.ADRP (dest, label) ->
-        $"ADRP({prettyPrintARM64Reg dest}, {label})"
-    | ARM64.ADD_label (dest, src, label) ->
-        $"ADD_label({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {label})"
-    | ARM64.ADR (dest, label) ->
-        $"ADR({prettyPrintARM64Reg dest}, {label})"
+    | ARM64Symbolic.RET -> "RET"
+    | ARM64Symbolic.SVC imm -> $"SVC({imm})"
+    | ARM64Symbolic.Label label -> $"Label({label})"
+    | ARM64Symbolic.ADRP (dest, label) ->
+        $"ADRP({prettyPrintARM64Reg dest}, {prettyPrintLabelRef label})"
+    | ARM64Symbolic.ADD_label (dest, src, label) ->
+        $"ADD_label({prettyPrintARM64Reg dest}, {prettyPrintARM64Reg src}, {prettyPrintLabelRef label})"
+    | ARM64Symbolic.ADR (dest, label) ->
+        $"ADR({prettyPrintARM64Reg dest}, {prettyPrintLabelRef label})"
     // Floating-point instructions
-    | ARM64.LDR_fp (dest, addr, offset) ->
+    | ARM64Symbolic.LDR_fp (dest, addr, offset) ->
         $"LDR_fp({dest}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.STR_fp (src, addr, offset) ->
+    | ARM64Symbolic.STR_fp (src, addr, offset) ->
         $"STR_fp({src}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.STP_fp (freg1, freg2, addr, offset) ->
+    | ARM64Symbolic.STP_fp (freg1, freg2, addr, offset) ->
         $"STP_fp({freg1}, {freg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.LDP_fp (freg1, freg2, addr, offset) ->
+    | ARM64Symbolic.LDP_fp (freg1, freg2, addr, offset) ->
         $"LDP_fp({freg1}, {freg2}, {prettyPrintARM64Reg addr}, {offset})"
-    | ARM64.FADD (dest, src1, src2) ->
+    | ARM64Symbolic.FADD (dest, src1, src2) ->
         $"FADD({dest}, {src1}, {src2})"
-    | ARM64.FSUB (dest, src1, src2) ->
+    | ARM64Symbolic.FSUB (dest, src1, src2) ->
         $"FSUB({dest}, {src1}, {src2})"
-    | ARM64.FMUL (dest, src1, src2) ->
+    | ARM64Symbolic.FMUL (dest, src1, src2) ->
         $"FMUL({dest}, {src1}, {src2})"
-    | ARM64.FDIV (dest, src1, src2) ->
+    | ARM64Symbolic.FDIV (dest, src1, src2) ->
         $"FDIV({dest}, {src1}, {src2})"
-    | ARM64.FNEG (dest, src) ->
+    | ARM64Symbolic.FNEG (dest, src) ->
         $"FNEG({dest}, {src})"
-    | ARM64.FABS (dest, src) ->
+    | ARM64Symbolic.FABS (dest, src) ->
         $"FABS({dest}, {src})"
-    | ARM64.FCMP (src1, src2) ->
+    | ARM64Symbolic.FCMP (src1, src2) ->
         $"FCMP({src1}, {src2})"
-    | ARM64.FMOV_reg (dest, src) ->
+    | ARM64Symbolic.FMOV_reg (dest, src) ->
         $"FMOV_reg({dest}, {src})"
-    | ARM64.FMOV_to_gp (dest, src) ->
+    | ARM64Symbolic.FMOV_to_gp (dest, src) ->
         $"FMOV_to_gp({prettyPrintARM64Reg dest}, {src})"
-    | ARM64.FMOV_from_gp (dest, src) ->
+    | ARM64Symbolic.FMOV_from_gp (dest, src) ->
         $"FMOV_from_gp({dest}, {prettyPrintARM64Reg src})"
-    | ARM64.FSQRT (dest, src) ->
+    | ARM64Symbolic.FSQRT (dest, src) ->
         $"FSQRT({dest}, {src})"
-    | ARM64.SCVTF (dest, src) ->
+    | ARM64Symbolic.SCVTF (dest, src) ->
         $"SCVTF({dest}, {prettyPrintARM64Reg src})"
-    | ARM64.FCVTZS (dest, src) ->
+    | ARM64Symbolic.FCVTZS (dest, src) ->
         $"FCVTZS({prettyPrintARM64Reg dest}, {src})"
-    | ARM64.BR reg ->
+    | ARM64Symbolic.BR reg ->
         $"BR({prettyPrintARM64Reg reg})"
 
 /// Pretty-print ARM64 program (filtering out Label pseudo-instructions)
-let prettyPrintARM64 (instrs: ARM64.Instr list) : string =
+let prettyPrintARM64 (instrs: ARM64Symbolic.Instr list) : string =
     instrs
-    |> List.filter (function | ARM64.Label _ -> false | _ -> true)
+    |> List.filter (function | ARM64Symbolic.Label _ -> false | _ -> true)
     |> List.map prettyPrintARM64Instr
     |> String.concat "\n"
 
 /// Load LIR→ARM64 test from file
-let loadLIR2ARM64Test (path: string) : Result<LIR.Program * ARM64.Instr list, string> =
+let loadLIR2ARM64Test (path: string) : Result<LIRSymbolic.Program * ARM64Symbolic.Instr list, string> =
     if not (File.Exists path) then
         Error $"Test file not found: {path}"
     else
@@ -356,14 +361,14 @@ let loadLIR2ARM64Test (path: string) : Result<LIR.Program * ARM64.Instr list, st
                 match getRequiredSection "OUTPUT-ARM64" testFile with
                 | Error e -> Error e
                 | Ok outputText ->
-                    match parseARM64 outputText with
+                    match parseARM64Symbolic outputText with
                     | Error e -> Error $"Failed to parse OUTPUT-ARM64: {e}"
                     | Ok arm64Instrs ->
                         let renamedProgram = renameLIRFunctions "test" lirProgram
                         Ok (renamedProgram, arm64Instrs)
 
 /// Run LIR→ARM64 test
-let runLIR2ARM64Test (input: LIR.Program) (expected: ARM64.Instr list) : PassTestResult =
+let runLIR2ARM64Test (input: LIRSymbolic.Program) (expected: ARM64Symbolic.Instr list) : PassTestResult =
     match CodeGen.generateARM64 input with
     | Error err ->
         { Success = false
@@ -372,7 +377,7 @@ let runLIR2ARM64Test (input: LIR.Program) (expected: ARM64.Instr list) : PassTes
           Actual = None }
     | Ok actualRaw ->
         // Filter out Label pseudo-instructions for comparison
-        let actual = actualRaw |> List.filter (function | ARM64.Label _ -> false | _ -> true)
+        let actual = actualRaw |> List.filter (function | ARM64Symbolic.Label _ -> false | _ -> true)
         if actual = expected then
             { Success = true
               Message = "Test passed"

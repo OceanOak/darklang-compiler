@@ -558,12 +558,6 @@ let private printMIRProgram (title: string) (program: MIR.Program) : unit =
     println (formatMIR program)
     println ""
 
-/// Print LIR program (with CFG) in a consistent format
-let private printLIRProgram (title: string) (program: LIR.Program) : unit =
-    println title
-    println (formatLIR program)
-    println ""
-
 /// Print symbolic LIR program (with CFG) in a consistent format
 let private printLIRSymbolicProgram (title: string) (program: LIRSymbolic.Program) : unit =
     println title
@@ -582,7 +576,7 @@ let private compileMirToLir
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
-    if verbosity >= 1 then println $"  [3.1/8] SSA Construction{suffix}..."
+    if verbosity >= 1 then println $"  [3.1/7] SSA Construction{suffix}..."
     let ssaStart = sw.Elapsed.TotalMilliseconds
     let ssaProgram = SSA_Construction.convertToSSA mirProgram
     let ssaElapsed = sw.Elapsed.TotalMilliseconds - ssaStart
@@ -603,7 +597,7 @@ let private compileMirToLir
                 ("cfg_simplify", mirOptions.EnableCFGSimplify)
                 ("licm", mirOptions.EnableLICM)
             ]
-    if verbosity >= 1 then println $"  [3.5/8] {mirPassLabel}{suffix}..."
+    if verbosity >= 1 then println $"  [3.5/7] {mirPassLabel}{suffix}..."
     let mirOptStart = sw.Elapsed.TotalMilliseconds
     let optimizedProgram =
         if shouldRunMIROptimize mirOptions then
@@ -616,7 +610,7 @@ let private compileMirToLir
         let t = System.Math.Round(mirOptElapsed, 1)
         println $"        {t}ms"
 
-    if verbosity >= 1 then println $"  [4/8] MIR → LIR{suffix}..."
+    if verbosity >= 1 then println $"  [4/7] MIR → LIR{suffix}..."
     let lirStart = sw.Elapsed.TotalMilliseconds
     let lirResult = MIR_to_LIR.toLIR optimizedProgram
     match lirResult with
@@ -634,7 +628,7 @@ let private compileMirToLir
             formatPassGroup
                 "LIR Peephole"
                 [("peephole", not options.DisableLIROpt && not options.DisableLIRPeephole)]
-        if verbosity >= 1 then println $"  [4.5/8] {lirPassLabel}{suffix}..."
+        if verbosity >= 1 then println $"  [4.5/7] {lirPassLabel}{suffix}..."
         let lirOptStart = sw.Elapsed.TotalMilliseconds
         let optimizedLir =
             if options.DisableLIROpt || options.DisableLIRPeephole then
@@ -748,7 +742,7 @@ let private lowerToAllocatedLir
         if List.isEmpty functionsToCompile then
             Ok []
         else
-            if verbosity >= 1 then println $"  [3/8] ANF → MIR{suffix}..."
+            if verbosity >= 1 then println $"  [3/7] ANF → MIR{suffix}..."
             let mirStart = sw.Elapsed.TotalMilliseconds
             let anfProgram = ANF.Program (functionsToCompile, ANF.Return ANF.UnitLiteral)
             let mirResult =
@@ -773,7 +767,7 @@ let private lowerToAllocatedLir
                     println $"        {t}ms"
                 compileMirToLir verbosity options sw passTimingRecorder stageSuffix mirProgram
                 |> Result.bind (fun lirProgram ->
-                    if verbosity >= 1 then println "  [5/8] Register Allocation..."
+                    if verbosity >= 1 then println "  [5/7] Register Allocation..."
                     let allocStart = sw.Elapsed.TotalMilliseconds
                     let (LIRSymbolic.Program lirFuncs) = lirProgram
                     let allocatedFuncs = allocateRegistersForFunctions lirFuncs
@@ -888,7 +882,7 @@ let private buildAnf
                 ("dce", anfOptions.EnableDCE)
                 ("strength_reduction", anfOptions.EnableStrengthReduction)
             ]
-    if verbosity >= 1 then println $"  [2.3/8] {anfPassLabel}..."
+    if verbosity >= 1 then println $"  [2.3/7] {anfPassLabel}..."
     let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (before optimization) ===" anfProgram
@@ -906,7 +900,7 @@ let private buildAnf
     if shouldDumpIR verbosity options.DumpANF then
         printANFProgram "=== ANF (after optimization) ===" anfOptimized
 
-    if verbosity >= 1 then println "  [2.4/8] ANF Inlining..."
+    if verbosity >= 1 then println "  [2.4/7] ANF Inlining..."
     let inlineStart = sw.Elapsed.TotalMilliseconds
     let anfInlined =
         if options.DisableInlining then
@@ -921,7 +915,7 @@ let private buildAnf
 
     let convResult = buildConversionResult anfInlined registries
 
-    if verbosity >= 1 then println "  [2.5/8] Reference Count Insertion..."
+    if verbosity >= 1 then println "  [2.5/7] Reference Count Insertion..."
     let rcStart = sw.Elapsed.TotalMilliseconds
     match RefCountInsertion.insertRCInProgram convResult with
     | Error err -> Error $"Reference count insertion error: {err}"
@@ -945,7 +939,7 @@ let private applyTco
     (functions: ANF.Function list)
     (passTimingRecorder: PassTimingRecorder option)
     : ANF.Function list =
-    if verbosity >= 1 then println "  [2.7/8] Tail Call Detection..."
+    if verbosity >= 1 then println "  [2.7/7] Tail Call Detection..."
     let tcoStart = sw.Elapsed.TotalMilliseconds
     let anfProgram = ANF.Program (functions, ANF.Return ANF.UnitLiteral)
     let anfAfterTCO =
@@ -970,16 +964,15 @@ let private generateBinary
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
     (codegenLabel: string)
-    (encodeLabel: string)
-    (binaryLabel: string)
+    (emitLabel: string)
     (dumpAsm: bool)
     (dumpMachineCode: bool)
-    (allocatedProgram: LIR.Program)
+    (allocatedProgram: LIRSymbolic.Program)
     : Result<byte array, string> =
 
     if verbosity >= 1 then println codegenLabel
     let codegenStart = sw.Elapsed.TotalMilliseconds
-    let coverageExprCount = if options.EnableCoverage then LIR.countCoverageHits allocatedProgram else 0
+    let coverageExprCount = if options.EnableCoverage then LIRSymbolic.countCoverageHits allocatedProgram else 0
     let codegenOptions : CodeGen.CodeGenOptions = {
         DisableFreeList = options.DisableFreeList
         EnableCoverage = options.EnableCoverage
@@ -1005,39 +998,28 @@ let private generateBinary
         match Platform.detectOS () with
         | Error err -> Error $"Platform detection error: {err}"
         | Ok os ->
-            if verbosity >= 1 then println encodeLabel
-            let encodeStart = sw.Elapsed.TotalMilliseconds
-            let (LIR.Program (_, stringPool, floatPool)) = allocatedProgram
-            let machineCode =
-                ARM64_Encoding.encodeAllWithPools arm64Instructions stringPool floatPool os options.EnableLeakCheck
-            let encodeElapsed = sw.Elapsed.TotalMilliseconds - encodeStart
-            recordPassTiming passTimingRecorder "ARM64 Encoding" encodeElapsed
-            if verbosity >= 2 then
-                let t = System.Math.Round(encodeElapsed, 1)
-                println $"        {t}ms"
-
-            if dumpMachineCode && verbosity >= 3 then
-                println "=== Machine Code (hex) ==="
-                for i in 0 .. 4 .. (machineCode.Length - 1) do
-                    if i + 3 < machineCode.Length then
-                        let bytes = sprintf "%02x %02x %02x %02x" machineCode.[i] machineCode.[i+1] machineCode.[i+2] machineCode.[i+3]
-                        println $"  {i:X4}: {bytes}"
-                println $"Total: {machineCode.Length} bytes\n"
-
             let formatName = match os with | Platform.MacOS -> "Mach-O" | Platform.Linux -> "ELF"
-            if verbosity >= 1 then println (binaryLabel.Replace("{format}", formatName))
-            let binaryStart = sw.Elapsed.TotalMilliseconds
-            let binary =
-                match os with
-                | Platform.MacOS -> Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
-                | Platform.Linux -> Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool options.EnableLeakCheck
-            let binaryElapsed = sw.Elapsed.TotalMilliseconds - binaryStart
-            recordPassTiming passTimingRecorder "Binary Generation" binaryElapsed
-            if verbosity >= 2 then
-                let t = System.Math.Round(binaryElapsed, 1)
-                println $"        {t}ms"
+            if verbosity >= 1 then println (emitLabel.Replace("{format}", formatName))
+            let emitStart = sw.Elapsed.TotalMilliseconds
+            let emitResult = ARM64_Emit.emitBinary arm64Instructions os options.EnableLeakCheck
+            match emitResult with
+            | Error err -> Error $"ARM64 emit error: {err}"
+            | Ok emit ->
+                let emitElapsed = sw.Elapsed.TotalMilliseconds - emitStart
+                recordPassTiming passTimingRecorder "ARM64 Emit" emitElapsed
+                if verbosity >= 2 then
+                    let t = System.Math.Round(emitElapsed, 1)
+                    println $"        {t}ms"
 
-            Ok binary
+                if dumpMachineCode && verbosity >= 3 then
+                    println "=== Machine Code (hex) ==="
+                    for i in 0 .. 4 .. (emit.MachineCode.Length - 1) do
+                        if i + 3 < emit.MachineCode.Length then
+                            let bytes = sprintf "%02x %02x %02x %02x" emit.MachineCode.[i] emit.MachineCode.[i+1] emit.MachineCode.[i+2] emit.MachineCode.[i+3]
+                            println $"  {i:X4}: {bytes}"
+                    println $"Total: {emit.MachineCode.Length} bytes\n"
+
+                Ok emit.Binary
 
 
 /// Shared compilation context used across pipeline steps
@@ -1099,10 +1081,8 @@ type StdlibResult = {
     StdlibSourceHash: string
     /// Hash of stdlib source + specialization registry
     StdlibHash: string
-    /// Precompiled LIR program (used for string/float pools)
-    LIRProgram: LIR.Program
     /// Pre-allocated stdlib functions (physical registers assigned, ready for merge)
-    AllocatedFunctions: LIR.Function list
+    AllocatedFunctions: LIRSymbolic.Function list
     /// Call graph for dead code elimination (which stdlib funcs call which other funcs)
     StdlibCallGraph: Map<string, Set<string>>
     /// Stdlib ANF functions indexed by name (for coverage analysis)
@@ -1473,28 +1453,21 @@ let buildStdlibWithCache
                     | Error e ->
                         Error e
                     | Ok allocatedFuncs ->
-                        let allocatedSymbolic = LIRSymbolic.Program allocatedFuncs
-                        match LIRSymbolic.toLIR allocatedSymbolic with
-                        | Error err ->
-                            Error err
-                        | Ok allocatedProgram ->
-                            let (LIR.Program (resolvedFuncs, _, _)) = allocatedProgram
-                            let stdlibCallGraph = DeadCodeElimination.buildCallGraph resolvedFuncs
-                            Ok {
-                                AST = stdlibAst
-                                TypedAST = typedStdlib
-                                Context = context
-                                CacheSettings = cacheSettings
-                                StdlibSourceHash = stdlibSourceHash
-                                StdlibHash = stdlibHash
-                                LIRProgram = allocatedProgram
-                                AllocatedFunctions = resolvedFuncs
-                                StdlibCallGraph = stdlibCallGraph
-                                StdlibANFFunctions = stdlibFuncMap
-                                StdlibANFCallGraph = stdlibANFCallGraph
-                                StdlibTypeMap = typeMap
-                                StdlibFunctionDependencyHashes = stdlibDependencyHashes
-                            }
+                        let stdlibCallGraph = DeadCodeElimination.buildCallGraph allocatedFuncs
+                        Ok {
+                            AST = stdlibAst
+                            TypedAST = typedStdlib
+                            Context = context
+                            CacheSettings = cacheSettings
+                            StdlibSourceHash = stdlibSourceHash
+                            StdlibHash = stdlibHash
+                            AllocatedFunctions = allocatedFuncs
+                            StdlibCallGraph = stdlibCallGraph
+                            StdlibANFFunctions = stdlibFuncMap
+                            StdlibANFCallGraph = stdlibANFCallGraph
+                            StdlibTypeMap = typeMap
+                            StdlibFunctionDependencyHashes = stdlibDependencyHashes
+                        }
 
 /// Build stdlib in isolation with default cache settings
 let buildStdlibWithTrace (passTimingRecorder: PassTimingRecorder option) : Result<StdlibResult, string> =
@@ -1593,43 +1566,44 @@ let buildStdlibSpecializations
                                 externalReturnTypes
                                 specializationDependencyHashes
                             |> Result.bind (fun allocatedFuncs ->
-                                let (LIR.Program (_, stdlibStrings, stdlibFloats)) = stdlib.LIRProgram
-                                LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allocatedFuncs
-                                |> Result.bind (fun (LIR.Program (newLirFuncs, mergedStrings, mergedFloats)) ->
-                                    let allLirFuncs = stdlib.AllocatedFunctions @ newLirFuncs
-                                    let mergedStdlibTypeMap =
-                                        Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
-                                    let mergedStdlibAnfFunctions =
-                                        Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibANFFunctions newAnfFuncMap
-                                    let allAnfFunctions =
-                                        mergedStdlibAnfFunctions
-                                        |> Map.toList
-                                        |> List.map snd
-                                    let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
-                                    let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
-                                    let mergedDependencyHashes =
-                                        if stdlib.CacheSettings.Enabled then
-                                            specializationDependencyHashes
-                                            |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
-                                        else
-                                            stdlib.StdlibFunctionDependencyHashes
-                                    let updatedContext = {
-                                        stdlib.Context with
-                                            Registries = registries
-                                            SpecRegistry = combinedSpecRegistry
-                                    }
-                                    Ok {
-                                        stdlib with
-                                            Context = updatedContext
-                                            StdlibHash = stdlibHash
-                                            LIRProgram = LIR.Program (allLirFuncs, mergedStrings, mergedFloats)
-                                            AllocatedFunctions = allLirFuncs
-                                            StdlibCallGraph = stdlibCallGraph
-                                            StdlibANFFunctions = mergedStdlibAnfFunctions
-                                            StdlibANFCallGraph = stdlibAnfCallGraph
-                                            StdlibTypeMap = mergedStdlibTypeMap
-                                            StdlibFunctionDependencyHashes = mergedDependencyHashes
-                                    }))))))
+                                let allLirFuncs = stdlib.AllocatedFunctions @ allocatedFuncs
+                                let mergedStdlibTypeMap =
+                                    Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
+                                let mergedStdlibAnfFunctions =
+                                    Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibANFFunctions newAnfFuncMap
+                                let allAnfFunctions =
+                                    mergedStdlibAnfFunctions
+                                    |> Map.toList
+                                    |> List.map snd
+                                let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
+                                let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
+                                let mergedDependencyHashes =
+                                    if stdlib.CacheSettings.Enabled then
+                                        specializationDependencyHashes
+                                        |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
+                                    else
+                                        stdlib.StdlibFunctionDependencyHashes
+                                let updatedContext = {
+                                    stdlib.Context with
+                                        Registries = registries
+                                        SpecRegistry = combinedSpecRegistry
+                                }
+                                Ok {
+                                    stdlib with
+                                        Context = updatedContext
+                                        StdlibHash = stdlibHash
+                                        AllocatedFunctions = allLirFuncs
+                                        StdlibCallGraph = stdlibCallGraph
+                                        StdlibANFFunctions = mergedStdlibAnfFunctions
+                                        StdlibANFCallGraph = stdlibAnfCallGraph
+                                        StdlibTypeMap = mergedStdlibTypeMap
+                                        StdlibFunctionDependencyHashes = mergedDependencyHashes
+                                }
+                            )
+                        )
+                    )
+                )
+            )
 
 type private UserCompileLabels = {
     Parse: string
@@ -1735,7 +1709,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                         match anfResult with
                         | Error err -> Error err
                         | Ok (anfFunctions, typeMap) ->
-                            if plan.Verbosity >= 1 then println "  [2.6/8] Print Insertion..."
+                            if plan.Verbosity >= 1 then println "  [2.6/7] Print Insertion..."
                             let printStart = sw.Elapsed.TotalMilliseconds
                             match PrintInsertion.insertPrintInEntry "_start" programType anfFunctions with
                             | Error err -> Error $"Print insertion error: {err}"
@@ -1777,69 +1751,63 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                 match userLirResult with
                                 | Error err -> Error err
                                 | Ok allocatedUserFuncs ->
-                                    let (LIR.Program (_, stdlibStrings, stdlibFloats)) = plan.Stdlib.LIRProgram
                                     let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
+                                    let finalUserFuncs =
+                                        if plan.TreeShakeUserFunctions then
+                                            if plan.Verbosity >= 1 then println "  [5.5/7] Function Tree Shaking..."
+                                            let treeShakeStart = sw.Elapsed.TotalMilliseconds
+                                            let shakenUserFuncs =
+                                                if plan.Options.DisableFunctionTreeShaking then
+                                                    allSymbolicUserFuncs
+                                                else
+                                                    FunctionTreeShaking.filterUserFunctions (Some "_start") allSymbolicUserFuncs
+                                            let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
+                                            recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
+                                            shakenUserFuncs
+                                        else
+                                            allSymbolicUserFuncs
 
-                                    match LIRSymbolic.toLIRWithPools stdlibStrings stdlibFloats allSymbolicUserFuncs with
-                                    | Error err -> Error $"LIR pool resolution error: {err}"
-                                    | Ok (LIR.Program (allUserFuncs, mergedStrings, mergedFloats)) ->
-                                        let finalUserFuncs =
-                                            if plan.TreeShakeUserFunctions then
-                                                if plan.Verbosity >= 1 then println "  [5.5/8] Function Tree Shaking..."
-                                                let treeShakeStart = sw.Elapsed.TotalMilliseconds
-                                                let shakenUserFuncs =
-                                                    if plan.Options.DisableFunctionTreeShaking then
-                                                        allUserFuncs
-                                                    else
-                                                        FunctionTreeShaking.filterUserFunctions (Some "_start") allUserFuncs
+                                    if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
+                                        println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allSymbolicUserFuncs.Length}"
+                                        for f in allSymbolicUserFuncs do
+                                            println $"    - {f.Name}"
+                                        println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
+
+                                    // Filter stdlib functions to only include reachable ones (dead code elimination)
+                                    let reachableStdlib =
+                                        if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
+                                        else
+                                            let treeShakeStart = sw.Elapsed.TotalMilliseconds
+                                            FunctionTreeShaking.filterStdlibFunctions
+                                                plan.Stdlib.StdlibCallGraph
+                                                finalUserFuncs
+                                                plan.Stdlib.AllocatedFunctions
+                                            |> fun shakenStdlib ->
                                                 let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
                                                 recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
-                                                shakenUserFuncs
-                                            else
-                                                allUserFuncs
+                                                shakenStdlib
 
-                                        if plan.EmitFunctionEvents && plan.Verbosity >= 3 then
-                                            println $"  [COMBINED] fresh: {allocatedUserFuncs.Length}, total: {allUserFuncs.Length}"
-                                            for f in allUserFuncs do
-                                                println $"    - {f.Name}"
-                                            println $"  [TreeShaking] user funcs: {finalUserFuncs.Length}"
+                                    // Combine reachable stdlib functions with user functions
+                                    let allFuncs = reachableStdlib @ finalUserFuncs
+                                    let allocatedProgram = LIRSymbolic.Program allFuncs
+                                    if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
+                                        printLIRSymbolicProgram "=== LIR (After Register Allocation) ===" allocatedProgram
 
-                                        // Filter stdlib functions to only include reachable ones (dead code elimination)
-                                        let reachableStdlib =
-                                            if plan.Options.DisableFunctionTreeShaking then plan.Stdlib.AllocatedFunctions
-                                            else
-                                                let treeShakeStart = sw.Elapsed.TotalMilliseconds
-                                                FunctionTreeShaking.filterStdlibFunctions
-                                                    plan.Stdlib.StdlibCallGraph
-                                                    finalUserFuncs
-                                                    plan.Stdlib.AllocatedFunctions
-                                                |> fun shakenStdlib ->
-                                                    let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
-                                                    recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
-                                                    shakenStdlib
-
-                                        // Combine reachable stdlib functions with user functions
-                                        let allFuncs = reachableStdlib @ finalUserFuncs
-                                        let allocatedProgram = LIR.Program (allFuncs, mergedStrings, mergedFloats)
-                                        if shouldDumpIR plan.Verbosity plan.Options.DumpLIR then
-                                            printLIRProgram "=== LIR (After Register Allocation) ===" allocatedProgram
-
-                                        let binaryResult =
-                                            generateBinary
-                                                plan.Verbosity
-                                                plan.Options
-                                                sw
-                                                plan.PassTimingRecorder
-                                                "  [6/8] Code Generation..."
-                                                "  [7/7] ARM64 Encoding..."
-                                                "  [7/7] Binary Generation ({format})..."
-                                                false
-                                                false
-                                                allocatedProgram
-                                        match binaryResult with
-                                        | Error err -> Error err
-                                        | Ok binary ->
-                                            Ok binary
+                                    let binaryResult =
+                                        generateBinary
+                                            plan.Verbosity
+                                            plan.Options
+                                            sw
+                                            plan.PassTimingRecorder
+                                            "  [6/7] Code Generation..."
+                                            "  [7/7] ARM64 Emit ({format})..."
+                                            false
+                                            false
+                                            allocatedProgram
+                                    match binaryResult with
+                                    | Error err -> Error err
+                                    | Ok binary ->
+                                        Ok binary
         with
         | ex ->
             Error $"Compilation failed: {ex.Message}"
@@ -2070,16 +2038,16 @@ let private labelsForMode (mode: CompileMode) : UserCompileLabels =
     match mode with
     | FullProgram ->
         {
-            Parse = "  [1/8] Parse..."
-            TypeCheck = "  [1.5/8] Type Checking (with stdlib env)..."
-            Anf = "  [2/8] AST → ANF (user only)..."
+            Parse = "  [1/7] Parse..."
+            TypeCheck = "  [1.5/7] Type Checking (with stdlib env)..."
+            Anf = "  [2/7] AST → ANF (user only)..."
             StageSuffix = "user only"
         }
     | TestExpression ->
         {
-            Parse = "  [1/8] Parse (test expr only)..."
-            TypeCheck = "  [1.5/8] Type Checking (with preamble env)..."
-            Anf = "  [2/8] AST → ANF (test expr only)..."
+            Parse = "  [1/7] Parse (test expr only)..."
+            TypeCheck = "  [1.5/7] Type Checking (with preamble env)..."
+            Anf = "  [2/7] AST → ANF (test expr only)..."
             StageSuffix = ""
         }
 

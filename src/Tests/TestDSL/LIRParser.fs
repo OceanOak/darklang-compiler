@@ -1,6 +1,6 @@
-// LIRParser.fs - Parser for LIR (Low-level IR) DSL
+// LIRParser.fs - Parser for symbolic LIR DSL
 //
-// Parses human-readable LIR text into LIR.Program data structures.
+// Parses human-readable LIR text into LIRSymbolic.Program data structures.
 //
 // Example LIR:
 //   X1 <- Mov(Imm 42)
@@ -12,6 +12,7 @@ module TestDSL.LIRParser
 open System
 open System.Text.RegularExpressions
 open LIR
+open LIRSymbolic
 open TestDSL.Common
 
 /// Parse physical register from text like "X0", "X1", etc.
@@ -66,7 +67,7 @@ let parseOperand (text: string) : Result<Operand, string> =
     let regMatch = Regex.Match(text, @"^Reg\s+(.+)$")
     if regMatch.Success then
         match parseRegister regMatch.Groups.[1].Value with
-        | Ok reg -> Ok (LIR.Operand.Reg reg)
+        | Ok reg -> Ok (Reg reg)
         | Error e -> Error e
     else
 
@@ -185,7 +186,7 @@ let parseInstructionOrTerminator (lineNum: int) (line: string) : Result<Choice<I
 
 /// Parse LIR program from text
 /// Parses flat instruction list and wraps in a single-block CFG
-let parseLIR (text: string) : Result<LIR.Program, string> =
+let parseLIR (text: string) : Result<LIRSymbolic.Program, string> =
     let lines =
         text.Split('\n')
         |> Array.map (fun line -> line.Trim())
@@ -254,4 +255,4 @@ let parseLIR (text: string) : Result<LIR.Program, string> =
             StackSize = 0
             UsedCalleeSaved = []
         }
-        Ok (Program ([func], MIR.emptyStringPool, MIR.emptyFloatPool))
+        Ok (Program [func])

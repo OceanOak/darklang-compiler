@@ -173,11 +173,8 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                         | Ok lirProgram ->
                             // LIR optimization
                             let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
-                            match LIRSymbolic.toLIR optimizedLir with
-                            | Error err -> Error $"LIR pool resolution error: {err}"
-                            | Ok resolved ->
-                                // Pretty-print
-                                Ok (formatLIR resolved)
+                            // Pretty-print
+                            Ok (formatLIRSymbolic optimizedLir)
 
 /// Run a single optimization test
 let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult) (test: OptimizationTest) : OptimizationTestResult =

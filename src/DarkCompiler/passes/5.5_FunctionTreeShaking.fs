@@ -6,7 +6,7 @@
 module FunctionTreeShaking
 
 /// Build root set for user reachability (explicit entry when provided)
-let private buildUserRoots (entryName: string option) (functions: LIR.Function list) : Set<string> =
+let private buildUserRoots (entryName: string option) (functions: LIRSymbolic.Function list) : Set<string> =
     match entryName with
     | Some name ->
         if functions |> List.exists (fun f -> f.Name = name) then
@@ -17,7 +17,7 @@ let private buildUserRoots (entryName: string option) (functions: LIR.Function l
         functions |> List.map (fun f -> f.Name) |> Set.ofList
 
 /// Filter user functions to only include reachable ones
-let filterUserFunctions (entryName: string option) (functions: LIR.Function list) : LIR.Function list =
+let filterUserFunctions (entryName: string option) (functions: LIRSymbolic.Function list) : LIRSymbolic.Function list =
     let roots = buildUserRoots entryName functions
     let userCallGraph = DeadCodeElimination.buildCallGraph functions
     let reachableNames = DeadCodeElimination.findReachable userCallGraph roots
@@ -26,9 +26,9 @@ let filterUserFunctions (entryName: string option) (functions: LIR.Function list
 /// Filter stdlib functions to only include those reachable from user code
 let filterStdlibFunctions
     (stdlibCallGraph: Map<string, Set<string>>)
-    (userFunctions: LIR.Function list)
-    (stdlibFunctions: LIR.Function list)
-    : LIR.Function list =
+    (userFunctions: LIRSymbolic.Function list)
+    (stdlibFunctions: LIRSymbolic.Function list)
+    : LIRSymbolic.Function list =
     DeadCodeElimination.filterFunctions stdlibCallGraph userFunctions stdlibFunctions
 
 /// Compute reachable stdlib function names from a user ANF program

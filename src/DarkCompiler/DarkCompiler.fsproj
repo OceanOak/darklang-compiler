@@ -36,6 +36,7 @@
     <Compile Include="passes/5.5_FunctionTreeShaking.fs" />
     <Compile Include="passes/5_RegisterAllocation.fs" />
     <Compile Include="ARM64.fs" />
+    <Compile Include="ARM64Symbolic.fs" />
     <Compile Include="Platform.fs" />
     <Compile Include="Runtime.fs" />
     <Compile Include="passes/6_CodeGen.fs" />
@@ -44,6 +45,7 @@
     <Compile Include="Binary_ELF.fs" />
     <Compile Include="passes/8_Binary_Generation_MachO.fs" />
     <Compile Include="passes/8_Binary_Generation_ELF.fs" />
+    <Compile Include="passes/7_ARM64_Emit.fs" />
     <Compile Include="IRPrinter.fs" />
     <Compile Include="Cache.fs" />
     <Compile Include="CompilerLibrary.fs" />

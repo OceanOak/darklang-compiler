@@ -163,6 +163,16 @@ type Function = {
 /// Symbolic LIR program (no pools)
 type Program = Program of functions:Function list
 
+/// Count the number of CoverageHit instructions in a program
+let countCoverageHits (Program functions) : int =
+    functions
+    |> List.collect (fun f ->
+        f.CFG.Blocks
+        |> Map.toList
+        |> List.collect (fun (_, block) -> block.Instrs))
+    |> List.filter (function CoverageHit _ -> true | _ -> false)
+    |> List.length
+
 /// Pool state for resolving symbolic references
 type PoolState = {
     StringPool: MIR.StringPool

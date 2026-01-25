@@ -16,6 +16,7 @@
     <Compile Include="TestDSL/MIRParser.fs" />
     <Compile Include="TestDSL/LIRParser.fs" />
     <Compile Include="TestDSL/ARM64Parser.fs" />
+    <Compile Include="TestDSL/ARM64SymbolicParser.fs" />
     <Compile Include="TestDSL/ARM64EncodingFormat.fs" />
     <Compile Include="TestDSL/E2EFormat.fs" />
     <Compile Include="TestDSL/TypeCheckingFormat.fs" />

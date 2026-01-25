@@ -109,16 +109,9 @@ Source Code
     │
     ▼
 ┌─────────────────────────────────────┐
-│ Pass 7: ARM64 Encoding              │
-│ (7_ARM64_Encoding.fs)               │
-│ ARM64 → Machine Code Bytes          │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│ Pass 8: Binary Generation           │
-│ (8_Binary_Generation_*.fs)          │
-│ Machine Code → Executable           │
+│ Pass 7: ARM64 Emit                  │
+│ (7_ARM64_Emit.fs)                   │
+│ ARM64 → Machine Code → Executable   │
 └─────────────────────────────────────┘
     │
     ▼
@@ -422,33 +415,18 @@ when mixing stdlib, preamble, and user functions.
 
 ---
 
-## Pass 7: ARM64 Encoding (`7_ARM64_Encoding.fs`)
+## Pass 7: ARM64 Emit (`7_ARM64_Emit.fs`)
 
-**Input**: ARM64 instruction list
-**Output**: Machine code bytes
-
-### Responsibilities
-- **Instruction encoding**: Convert to binary per ARM64 spec
-- **Branch offset computation**: Calculate relative jumps
-- **Two-pass encoding**: First pass measures, second encodes
-
-### Why Two Passes?
-Forward branches need to know the target address, which depends on instruction sizes. First pass calculates sizes, second pass encodes with correct offsets.
-
----
-
-## Pass 8: Binary Generation (`8_Binary_Generation_*.fs`)
-
-**Input**: Machine code bytes + data sections
+**Input**: ARM64 instruction list (symbolic data labels)
 **Output**: Executable file (Mach-O or ELF)
 
 ### Responsibilities
-- **Format headers**: Mach-O (macOS) or ELF (Linux) headers
-- **Section layout**: Code, data, string constants
-- **Entry point**: Configure OS to start at main
+- **Literal pool resolution**: Intern string/float literals into pools
+- **Instruction encoding**: Convert to binary per ARM64 spec
+- **Binary generation**: Emit Mach-O (macOS) or ELF (Linux)
 
-### Platform Detection
-Automatically generates correct format based on runtime platform.
+### Internals
+Uses `7_ARM64_Encoding.fs` for encoding and `8_Binary_Generation_*.fs` for binary layout.
 
 ---
 
@@ -460,7 +438,9 @@ Automatically generates correct format based on runtime platform.
 | `ANF.fs` | A-Normal Form types |
 | `MIR.fs` | Mid-level IR types |
 | `LIR.fs` | Low-level IR types |
+| `LIRSymbolic.fs` | Symbolic low-level IR types |
 | `ARM64.fs` | ARM64 instruction types |
+| `ARM64Symbolic.fs` | Symbolic ARM64 instruction types |
 
 ---
 

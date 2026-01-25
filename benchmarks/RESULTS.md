@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-24 10:46:24
-**Commit:** `e9f6acc8` - Fix phi coalescing and prune dead phis
+**Last Updated:** 2026-01-25 09:29:08
+**Commit:** `721e710c` - Avoid quadratic list concatenation in codegen
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

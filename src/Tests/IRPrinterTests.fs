@@ -53,26 +53,26 @@ let testFormatMIR () : TestResult =
 
 let testFormatLIR () : TestResult =
     let entry = LIR.Label "entry"
-    let block: LIR.BasicBlock = {
+    let block: LIRSymbolic.BasicBlock = {
         Label = entry
         Instrs = [
-            LIR.Mov (LIR.Virtual 0, LIR.Imm 1L)
-            LIR.Add (LIR.Virtual 1, LIR.Virtual 0, LIR.Imm 2L)
+            LIRSymbolic.Mov (LIR.Virtual 0, LIRSymbolic.Imm 1L)
+            LIRSymbolic.Add (LIR.Virtual 1, LIR.Virtual 0, LIRSymbolic.Imm 2L)
         ]
-        Terminator = LIR.Ret
+        Terminator = LIRSymbolic.Ret
     }
-    let cfg: LIR.CFG = {
+    let cfg: LIRSymbolic.CFG = {
         Entry = entry
         Blocks = Map.ofList [ (entry, block) ]
     }
-    let func: LIR.Function = {
+    let func: LIRSymbolic.Function = {
         Name = "lir_print"
         TypedParams = []
         CFG = cfg
         StackSize = 0
         UsedCalleeSaved = []
     }
-    let program = LIR.Program ([func], MIR.emptyStringPool, MIR.emptyFloatPool)
+    let program = LIRSymbolic.Program [func]
     let expected =
         [
             "lir_print:"
@@ -82,7 +82,7 @@ let testFormatLIR () : TestResult =
             "    Ret"
         ]
         |> String.concat "\n"
-    let actual = formatLIR program
+    let actual = formatLIRSymbolic program
     if actual = expected then
         Ok ()
     else
