@@ -42,9 +42,7 @@ The codebase uses standard F# Result extensively. See `docs/result-patterns.md` 
 
 Benchmarks are effective (ignore quicksort error). There is a `--quick` mode to speed up development, but the full benchmarks should be used to validate performance.
 
-## Benchmarking (Reporting)
-
-- After running full benchmarks, always report the performance ratio from the table header in `RESULTS.md` (for example, "Performance ratio: X.XX") in your response.
+After running full benchmarks, always report the performance ratio from the table header in `RESULTS.md` (for example, "Performance ratio: X.XX") in your response.
 
 ## Compiler Structure
 
@@ -76,6 +74,10 @@ Examples:
 - Every file should have a comment at the top explaining what it's for
 - Write comments for an experienced senior compiler engineer
 
+## Executable / script conventions
+
+- Always use command-line flags, and never use ENV_VARS
+
 ## Testing - TDD Approach
 
 **ALWAYS create a failing test first before implementing any feature or fixing any bug.**
@@ -85,6 +87,7 @@ Examples:
 3. Implement the fix/feature
 4. Run the test to confirm it passes
 5. Add the smallest test that covers the case, in the right place
+6. Exception: don't create tests for the test harness, or any test that takes more than 50ms
 
 Focus near-exclusively on end-to-end language tests in `src/Tests/e2e/`. If writing a different test, you must have an EXCELLENT reason why it can't be accomplished as an E2E test.
 
