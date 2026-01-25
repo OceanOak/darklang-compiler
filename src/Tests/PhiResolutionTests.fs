@@ -71,7 +71,30 @@ let countMoves (block: BasicBlock) : int =
 
 /// Empty float allocation for tests that don't use float phis
 let emptyFloatAllocation : RegisterAllocation.FAllocationResult =
-    { FMapping = Map.empty; UsedCalleeSavedF = [] }
+    { Domain = { Ids = [||]; IndexOf = [||]; IndexOffset = 0; WordCount = 0 }
+      Allocations = [||]
+      UsedCalleeSavedF = [] }
+
+let buildAllocationResult
+    (domain: RegisterAllocation.VRegDomain)
+    (pairs: (int * RegisterAllocation.Allocation) list)
+    : RegisterAllocation.AllocationResult =
+    let allocations = Array.create domain.Ids.Length None
+    for (vregId, alloc) in pairs do
+        match domain.Ids |> Array.tryFindIndex (fun id -> id = vregId) with
+        | Some idx -> allocations.[idx] <- Some alloc
+        | None -> ()
+    { Domain = domain; Allocations = allocations; StackSize = 0; UsedCalleeSaved = [] }
+
+let cfgFromBlocks (entry: Label) (labels: Label array) (blocks: BasicBlock array) : CFG =
+    { Entry = entry; Blocks = Array.zip labels blocks |> Map.ofArray }
+
+let resolvePhiCFG (cfg: CFG) (allocations: (int * RegisterAllocation.Allocation) list) : CFG =
+    let (domain, blockIndex, _liveness) = RegisterAllocation.computeLivenessBits cfg
+    let blocks = blockIndex.Labels |> Array.map (fun label -> Map.find label cfg.Blocks)
+    let allocationResult = buildAllocationResult domain allocations
+    let resolvedBlocks = RegisterAllocation.resolvePhiNodes blockIndex blocks allocationResult emptyFloatAllocation
+    cfgFromBlocks cfg.Entry blockIndex.Labels resolvedBlocks
 
 /// Check if a block has a specific move instruction
 let hasMove (block: BasicBlock) (dest: Reg) (src: Operand) : bool =
@@ -111,8 +134,8 @@ let testSimplePhiResolution () : TestResult =
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
     // Simple allocation: v1->X1, v2->X2, v3->X3, v4->X4
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X1)
             (1, RegisterAllocation.PhysReg X2)
             (2, RegisterAllocation.PhysReg X3)
@@ -120,7 +143,7 @@ let testSimplePhiResolution () : TestResult =
             (4, RegisterAllocation.PhysReg X5)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
 
     // Check D has no phi nodes
     withBlock labelD resolvedCFG (fun blockD' ->
@@ -163,8 +186,8 @@ let testMultiplePhisParallel () : TestResult =
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X1)
             (1, RegisterAllocation.PhysReg X2)
             (2, RegisterAllocation.PhysReg X3)
@@ -174,7 +197,7 @@ let testMultiplePhisParallel () : TestResult =
             (6, RegisterAllocation.PhysReg X7)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
 
     // D should have no phi nodes
     withBlock labelD resolvedCFG (fun blockD' ->
@@ -220,8 +243,8 @@ let testPhiSwap () : TestResult =
 
     // Allocate to create a swap: v1→X1, v2→X2, v3→X1, v4→X2
     // From B: X1←X2, X2←X1 (swap!)
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X3)
             (1, RegisterAllocation.PhysReg X1)  // v1 in X1
             (2, RegisterAllocation.PhysReg X2)  // v2 in X2
@@ -231,7 +254,7 @@ let testPhiSwap () : TestResult =
             (6, RegisterAllocation.PhysReg X2)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
 
     // D should have no phi nodes
     withBlock labelD resolvedCFG (fun blockD' ->
@@ -269,15 +292,15 @@ let testPhiWithImmediate () : TestResult =
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X1)
             (1, RegisterAllocation.PhysReg X2)
             (2, RegisterAllocation.PhysReg X3)
             (3, RegisterAllocation.PhysReg X4)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
 
     // D should have no phi nodes
     withBlock labelD resolvedCFG (fun blockD' ->
@@ -317,15 +340,15 @@ let testLoopPhi () : TestResult =
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X1)
             (1, RegisterAllocation.PhysReg X2)
             (2, RegisterAllocation.PhysReg X3)
             (99, RegisterAllocation.PhysReg X4)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
 
     // B should have no phi nodes
     withBlock labelB resolvedCFG (fun blockB' ->
@@ -360,8 +383,8 @@ let testDeadPhiPruned () : TestResult =
 
     let cfg = makeCFG labelA [blockA; blockB; blockC; blockD]
 
-    let allocation : Map<int, RegisterAllocation.Allocation> =
-        Map.ofList [
+    let allocation =
+        [
             (0, RegisterAllocation.PhysReg X1)
             (1, RegisterAllocation.PhysReg X2)
             (2, RegisterAllocation.PhysReg X3)
@@ -372,7 +395,7 @@ let testDeadPhiPruned () : TestResult =
             (7, RegisterAllocation.PhysReg X19)
         ]
 
-    let resolvedCFG = RegisterAllocation.resolvePhiNodes cfg allocation emptyFloatAllocation
+    let resolvedCFG = resolvePhiCFG cfg allocation
     withBlock labelD resolvedCFG (fun blockD' ->
         if hasPhiNodes blockD' then
             Error "Block D should not have phi nodes after resolution"

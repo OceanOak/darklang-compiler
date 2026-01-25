@@ -47,7 +47,7 @@ let graphHasVertex (graph: InterferenceGraph) (vregId: int) : bool =
 /// Test 1: Empty graph
 let testEmptyGraph () : TestResult =
     let graph = makeGraph [] []
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     if result.ChromaticNumber = 0 && spillCount result = 0 && coloredCount result = 0 then
         Ok ()
     else
@@ -56,7 +56,7 @@ let testEmptyGraph () : TestResult =
 /// Test 2: Single vertex
 let testSingleVertex () : TestResult =
     let graph = makeGraph [0] []
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     match colorOf result 0 with
     | Some 0 -> Ok ()
     | _ -> Error "Single vertex should get color 0"
@@ -64,7 +64,7 @@ let testSingleVertex () : TestResult =
 /// Test 3: Two non-interfering variables (no edges)
 let testNoInterference () : TestResult =
     let graph = makeGraph [0; 1] []
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Both should get color 0 (same color reused since they don't interfere)
     if result.ChromaticNumber <= 1 then
         Ok ()
@@ -74,7 +74,7 @@ let testNoInterference () : TestResult =
 /// Test 4: Two interfering variables
 let testSimpleInterference () : TestResult =
     let graph = makeGraph [0; 1] [(0, 1)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     match colorOf result 0, colorOf result 1 with
     | Some c0, Some c1 when c0 <> c1 && result.ChromaticNumber = 2 -> Ok ()
     | Some c0, Some c1 ->
@@ -85,7 +85,7 @@ let testSimpleInterference () : TestResult =
 /// Test 5: Triangle (clique of 3) - needs exactly 3 colors
 let testTriangle () : TestResult =
     let graph = makeGraph [0; 1; 2] [(0, 1); (0, 2); (1, 2)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     let colors = [0; 1; 2] |> List.choose (colorOf result)
     let distinctColors = List.distinct colors
     if List.length colors = 3 && List.length distinctColors = 3 && result.ChromaticNumber = 3 then
@@ -96,7 +96,7 @@ let testTriangle () : TestResult =
 /// Test 6: Chain (path graph 0--1--2--3) - needs exactly 2 colors
 let testChain () : TestResult =
     let graph = makeGraph [0; 1; 2; 3] [(0, 1); (1, 2); (2, 3)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Chain is bipartite, so 2 colors suffice
     if result.ChromaticNumber = 2 then
         // Verify alternating colors
@@ -121,7 +121,7 @@ let testSpillRequired () : TestResult =
                 yield (i, j)
     ]
     let graph = makeGraph vertices edges
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Should spill at least 2 vertices (10 - 8 = 2)
     if spillCount result >= 2 then
         // Verify colored vertices got distinct colors
@@ -137,7 +137,7 @@ let testSpillRequired () : TestResult =
 /// Test 8: Pre-coloring respected
 let testPrecoloring () : TestResult =
     let graph = makeGraph [0; 1] [(0, 1)]
-    let precolored = Map.ofList [(0, 3)]  // Force vertex 0 to color 3
+    let precolored = [(0, 3)]  // Force vertex 0 to color 3
     let result = chordalGraphColor graph precolored 8 [] []
     match colorOf result 0, colorOf result 1 with
     | Some c0, Some c1 ->
@@ -178,7 +178,7 @@ let testDiamondCFG () : TestResult =
     // v0 live with v1 (in block B), v0 live with v2 (in block C)
     // v1 live at phi point with v3, v2 live at phi point with v3
     let graph = makeGraph [0; 1; 2; 3] [(0, 1); (0, 2); (1, 3); (2, 3)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Diamond is chordal and should need at most 3 colors
     if result.ChromaticNumber <= 3 then
         Ok ()
@@ -189,7 +189,7 @@ let testDiamondCFG () : TestResult =
 let testStarGraph () : TestResult =
     // Center vertex 0 connected to 1, 2, 3, 4
     let graph = makeGraph [0; 1; 2; 3; 4] [(0, 1); (0, 2); (0, 3); (0, 4)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Star graph needs 2 colors (center + all leaves same color)
     if result.ChromaticNumber = 2 then
         // Center should have different color from all leaves
@@ -209,7 +209,7 @@ let testStarGraph () : TestResult =
 let testMultiplePrecolored () : TestResult =
     // Triangle with two vertices pre-colored
     let graph = makeGraph [0; 1; 2] [(0, 1); (0, 2); (1, 2)]
-    let precolored = Map.ofList [(0, 0); (1, 1)]  // Force specific colors
+    let precolored = [(0, 0); (1, 1)]  // Force specific colors
     let result = chordalGraphColor graph precolored 8 [] []
     match colorOf result 0, colorOf result 1, colorOf result 2 with
     | Some c0, Some c1, Some c2 ->
@@ -230,7 +230,7 @@ let testExactClique () : TestResult =
                 yield (i, j)
     ]
     let graph = makeGraph vertices edges
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     if result.ChromaticNumber = 8 && spillCount result = 0 then
         Ok ()
     else
@@ -240,7 +240,7 @@ let testExactClique () : TestResult =
 let testDisconnectedComponents () : TestResult =
     // Two separate edges: 0--1, 2--3
     let graph = makeGraph [0; 1; 2; 3] [(0, 1); (2, 3)]
-    let result = chordalGraphColor graph Map.empty 8 [] []
+    let result = chordalGraphColor graph [] 8 [] []
     // Should only need 2 colors total (reuse colors across components)
     if result.ChromaticNumber = 2 then
         Ok ()
@@ -382,7 +382,7 @@ let testFullChordalPipeline () : TestResult =
 
     // Build interference graph and run chordal coloring
     let graph = RegisterAllocation.buildInterferenceGraphBitset cfg [0; 1]
-    let colorResult = chordalGraphColor graph Map.empty 16 [] []  // 16 available colors
+    let colorResult = chordalGraphColor graph [] 16 [] []  // 16 available colors
 
     // v0 and v1 must have different colors (they interfere)
     match colorOf colorResult 0, colorOf colorResult 1 with
@@ -446,7 +446,7 @@ let testApply2Pattern () : TestResult =
         Error $"v2 should interfere with v0 and v1. v2 neighbors: {v2Neighbors}"
     else
         // Now check that coloring assigns different colors
-        let colorResult = chordalGraphColor graph Map.empty 16 [] []
+        let colorResult = chordalGraphColor graph [] 16 [] []
         match colorOf colorResult 1, colorOf colorResult 2 with
         | Some c1, Some c2 ->
             if c1 <> c2 then
@@ -476,7 +476,8 @@ let testMoveCoalescingPreference () : TestResult =
         Blocks = Map.ofList [(entryLabel, entryBlock)]
     }
 
-    let pairs = RegisterAllocation.collectMovePairs cfg
+    let blocks = cfg.Blocks |> Seq.toArray |> Array.map (fun kvp -> kvp.Value)
+    let pairs = RegisterAllocation.collectMovePairs blocks
     let normalize (a: int, b: int) = if a < b then (a, b) else (b, a)
     let normalized = pairs |> List.map normalize
     if List.contains (0, 1) normalized then
@@ -489,7 +490,7 @@ let testMoveCoalescingPriority () : TestResult =
     let graph = makeGraph [0; 1; 2] [(1, 2)]
     let preferencePairs = [(0, 1)]
     let movePairs = [(0, 2)]
-    let result = chordalGraphColor graph Map.empty 2 preferencePairs movePairs
+    let result = chordalGraphColor graph [] 2 preferencePairs movePairs
     match colorOf result 0, colorOf result 2 with
     | Some c0, Some c2 ->
         if c0 = c2 then
