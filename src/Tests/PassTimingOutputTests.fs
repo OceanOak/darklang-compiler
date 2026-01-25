@@ -123,7 +123,47 @@ let testPassTimingColumnsOrdering () : TestResult =
     | _ ->
         Error "Expected two compiler-order sections"
 
+let testUnaccountedTimeBreakdown () : TestResult =
+    let makeTiming (name: string) (totalTime: TimeSpan) (runtimeTime: TimeSpan option) : TestFramework.TestTiming =
+        { Name = name
+          TotalTime = totalTime
+          CompileTime = None
+          RuntimeTime = runtimeTime
+          CacheHitCount = None
+          CacheMissCount = None }
+
+    let passTimings =
+        [
+            ("Parse", TimeSpan.FromMilliseconds(100.0))
+            ("Cache Write: insert", TimeSpan.FromMilliseconds(200.0))
+        ]
+        |> Map.ofList
+
+    let timings =
+        [
+            makeTiming "test-a" (TimeSpan.FromMilliseconds(400.0)) (Some (TimeSpan.FromMilliseconds(150.0)))
+            makeTiming "test-b" (TimeSpan.FromMilliseconds(600.0)) (Some (TimeSpan.FromMilliseconds(50.0)))
+        ]
+
+    let totalTime = TimeSpan.FromMilliseconds(2000.0)
+    let breakdown =
+        TestFramework.calculateUnaccountedTimeBreakdown totalTime passTimings timings
+
+    let expectedUnaccounted = TimeSpan.FromMilliseconds(1700.0)
+    let expectedRuntime = TimeSpan.FromMilliseconds(200.0)
+    let expectedOverhead = TimeSpan.FromMilliseconds(1500.0)
+
+    if breakdown.Unaccounted <> expectedUnaccounted then
+        Error $"Unexpected unaccounted total: {breakdown.Unaccounted}"
+    elif breakdown.Runtime <> expectedRuntime then
+        Error $"Unexpected runtime total: {breakdown.Runtime}"
+    elif breakdown.Overhead <> expectedOverhead then
+        Error $"Unexpected overhead total: {breakdown.Overhead}"
+    else
+        Ok ()
+
 let tests : (string * (unit -> Result<unit, string>)) list =
     [
         ("pass timing columns order", testPassTimingColumnsOrdering)
+        ("unaccounted time breakdown", testUnaccountedTimeBreakdown)
     ]

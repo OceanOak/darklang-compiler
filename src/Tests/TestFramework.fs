@@ -50,6 +50,12 @@ type PassTimingColumns = {
     ByTime: PassTimingSection list
 }
 
+type UnaccountedTimeBreakdown = {
+    Unaccounted: TimeSpan
+    Runtime: TimeSpan
+    Overhead: TimeSpan
+}
+
 type CacheTotals = {
     Hits: int
     Misses: int
@@ -309,6 +315,24 @@ let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
     |> consolidateCacheHashSerializeTimings
     |> consolidateCacheWriteTimings
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
+
+let calculateUnaccountedTimeBreakdown
+    (totalTime: TimeSpan)
+    (passTimings: Map<string, TimeSpan>)
+    (timings: seq<TestTiming>)
+    : UnaccountedTimeBreakdown =
+    let passTimingTotal = calculatePassTimingsTotal passTimings
+    let unaccounted = totalTime - passTimingTotal
+    if unaccounted < TimeSpan.Zero then
+        Crash.crash $"calculateUnaccountedTimeBreakdown: pass timings ({passTimingTotal}) exceed total time ({totalTime})"
+    let runtimeTotal =
+        timings
+        |> Seq.choose (fun timing -> timing.RuntimeTime)
+        |> Seq.fold (fun acc runtime -> acc + runtime) TimeSpan.Zero
+    let overhead = unaccounted - runtimeTotal
+    if overhead < TimeSpan.Zero then
+        Crash.crash $"calculateUnaccountedTimeBreakdown: runtime ({runtimeTotal}) exceeds unaccounted ({unaccounted})"
+    { Unaccounted = unaccounted; Runtime = runtimeTotal; Overhead = overhead }
 
 let private normalizePassTimingName (name: string) : string =
     if name.StartsWith("Cache Hash ", StringComparison.Ordinal)
