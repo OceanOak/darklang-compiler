@@ -34,6 +34,21 @@ type TestTiming = {
     CacheMissCount: int option
 }
 
+type PassTimingEntry = {
+    Label: string
+    Elapsed: TimeSpan
+}
+
+type PassTimingSection = {
+    Title: string
+    Entries: PassTimingEntry list
+}
+
+type PassTimingColumns = {
+    Ordered: PassTimingSection list
+    ByTime: PassTimingSection list
+}
+
 type CacheTotals = {
     Hits: int
     Misses: int
@@ -65,6 +80,7 @@ type TestRunState = {
     FailedTests: ResizeArray<FailedTestInfo>
     Timings: ResizeArray<TestTiming>
     mutable PassTimings: Map<string, TimeSpan>
+    PassTimingOrder: ResizeArray<string>
     mutable CacheIoTotals: CacheIoTotals
 }
 
@@ -80,6 +96,7 @@ let createState () : TestRunState =
       FailedTests = ResizeArray()
       Timings = ResizeArray()
       PassTimings = Map.empty
+      PassTimingOrder = ResizeArray()
       CacheIoTotals = {
           ReadCalls = 0
           ReadQueries = 0
@@ -93,6 +110,8 @@ let recordTiming (state: TestRunState) (timing: TestTiming) : unit =
     state.Timings.Add timing
 
 let recordPassTiming (state: TestRunState) (timing: CompilerLibrary.PassTiming) : unit =
+    if not (Map.containsKey timing.Pass state.PassTimings) then
+        state.PassTimingOrder.Add timing.Pass
     let existing =
         Map.tryFind timing.Pass state.PassTimings
         |> Option.defaultValue TimeSpan.Zero
@@ -282,6 +301,107 @@ let consolidateCacheWriteTimings
             Map.add "Cache Write" cacheTotal pruned
         else
             pruned
+
+let private normalizePassTimingName (name: string) : string =
+    if name.StartsWith("Cache Hash ", StringComparison.Ordinal)
+       || name.StartsWith("Cache Serialize:", StringComparison.Ordinal) then
+        "Cache Hash/Serialize total"
+    elif name.StartsWith("Cache Write:", StringComparison.Ordinal) then
+        "Cache Write"
+    else
+        name
+
+let private distinctPreserveOrder (names: string list) : string list =
+    let folder (seen: Set<string>, acc: string list) (name: string) =
+        if Set.contains name seen then
+            (seen, acc)
+        else
+            (Set.add name seen, acc @ [ name ])
+    names |> List.fold folder (Set.empty, []) |> snd
+
+let buildPassTimingColumns
+    (passTimings: Map<string, TimeSpan>)
+    (passTimingOrder: string list)
+    : PassTimingColumns =
+    let consolidated =
+        passTimings
+        |> consolidateCacheHashSerializeTimings
+        |> consolidateCacheWriteTimings
+
+    let passDefinitions : (string * string) list =
+        [
+            ("Parse", "1 Parser")
+            ("Type Checking", "1.5 Type Checking")
+            ("AST -> ANF", "2 AST to ANF")
+            ("ANF Optimizations", "2.3 ANF Optimizations")
+            ("ANF Inlining", "2.4 ANF Inlining")
+            ("Reference Count Insertion", "2.5 Ref Count Insertion")
+            ("Print Insertion", "2.6 Print Insertion")
+            ("Tail Call Detection", "2.7 Tail Call Optimization")
+            ("ANF -> MIR", "3 ANF to MIR")
+            ("SSA Construction", "3.1 SSA Construction")
+            ("MIR Optimizations", "3.5 MIR Optimizations")
+            ("MIR -> LIR", "4 MIR to LIR")
+            ("LIR Peephole", "4.5 LIR Peephole")
+            ("Register Allocation", "5 Register Allocation")
+            ("Function Tree Shaking", "5.5 Function Tree Shaking")
+            ("Code Generation", "6 Code Generation")
+            ("ARM64 Emit", "7 ARM64 Emit")
+        ]
+
+    let passKeys = passDefinitions |> List.map fst |> Set.ofList
+
+    let passEntriesInOrder =
+        passDefinitions
+        |> List.choose (fun (timingKey, label) ->
+            Map.tryFind timingKey consolidated
+            |> Option.map (fun elapsed -> { Label = label; Elapsed = elapsed }))
+
+    let passEntriesByTime =
+        passEntriesInOrder
+        |> List.sortByDescending (fun entry -> entry.Elapsed)
+
+    let nonPassMap =
+        consolidated |> Map.filter (fun name _ -> not (Set.contains name passKeys))
+
+    let normalizedOrder =
+        passTimingOrder
+        |> List.map normalizePassTimingName
+        |> distinctPreserveOrder
+
+    let orderSet = Set.ofList normalizedOrder
+
+    let nonPassEntriesInOrder =
+        normalizedOrder
+        |> List.choose (fun name ->
+            Map.tryFind name nonPassMap
+            |> Option.map (fun elapsed -> { Label = name; Elapsed = elapsed }))
+
+    let nonPassRemainder =
+        nonPassMap
+        |> Map.toList
+        |> List.choose (fun (name, elapsed) ->
+            if Set.contains name orderSet then None else Some { Label = name; Elapsed = elapsed })
+        |> List.sortBy (fun entry -> entry.Label)
+
+    let nonPassEntriesByTime =
+        nonPassMap
+        |> Map.toList
+        |> List.map (fun (name, elapsed) -> { Label = name; Elapsed = elapsed })
+        |> List.sortByDescending (fun entry -> entry.Elapsed)
+
+    {
+        Ordered =
+            [
+                { Title = "Passes (Compiler Order)"; Entries = passEntriesInOrder }
+                { Title = "Other Timings (Run Order)"; Entries = nonPassEntriesInOrder @ nonPassRemainder }
+            ]
+        ByTime =
+            [
+                { Title = "Passes (By Time)"; Entries = passEntriesByTime }
+                { Title = "Other Timings (By Time)"; Entries = nonPassEntriesByTime }
+            ]
+    }
 
 let addExpectedActualDetails (expected: string option) (actual: string option) : string list =
     let details = ResizeArray<string>()

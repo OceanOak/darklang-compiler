@@ -91,6 +91,7 @@ let main args =
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
+        { Name = "Pass Timing Output Tests"; Tests = PassTimingOutputTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -708,14 +709,36 @@ let main args =
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}⏱ Pass Timings{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        let ordered =
-            runState.PassTimings
-            |> consolidateCacheHashSerializeTimings
-            |> consolidateCacheWriteTimings
-            |> Map.toList
-            |> List.sortByDescending (fun (_, elapsed) -> elapsed)
-        for (pass, elapsed) in ordered do
-            println $"  {Colors.gray}{pass,-30} {formatTime elapsed}{Colors.reset}"
+        let columns =
+            TestFramework.buildPassTimingColumns
+                runState.PassTimings
+                (runState.PassTimingOrder |> Seq.toList)
+        let formatEntry (entry: TestFramework.PassTimingEntry) : string =
+            $"  {entry.Label}  {formatTime entry.Elapsed}"
+        let buildLines (sections: TestFramework.PassTimingSection list) : string list =
+            sections
+            |> List.mapi (fun idx section ->
+                let entries =
+                    if List.isEmpty section.Entries then
+                        [ "  (none)" ]
+                    else
+                        section.Entries |> List.map formatEntry
+                let lines = section.Title :: entries
+                if idx < sections.Length - 1 then lines @ [ "" ] else lines)
+            |> List.collect id
+        let leftLines = buildLines columns.Ordered
+        let rightLines = buildLines columns.ByTime
+        let leftWidth =
+            leftLines
+            |> List.map (fun line -> line.Length)
+            |> List.fold max 0
+        let gap = "  "
+        let lineCount = max leftLines.Length rightLines.Length
+        for idx in 0 .. lineCount - 1 do
+            let left = if idx < leftLines.Length then leftLines.[idx] else ""
+            let right = if idx < rightLines.Length then rightLines.[idx] else ""
+            let paddedLeft = left.PadRight leftWidth
+            println $"  {Colors.gray}{paddedLeft}{gap}{right}{Colors.reset}"
         println ""
 
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
