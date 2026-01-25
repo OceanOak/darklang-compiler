@@ -32,7 +32,7 @@ let private externalReturnTypes : Map<string, AST.Type> =
         ("__string_eq", TBool)
     ]
 
-let private typeCheckWithStdlib (stdlib: CompilerLibrary.StdlibResult) (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
+let private typeCheckWithStdlib (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (ast: AST.Program) : Result<AST.Type * AST.Program, string> =
     match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv ast with
     | Error e -> Error $"Type error: {TypeChecking.typeErrorToString e}"
     | Ok (programType, typedAst, _env) -> Ok (programType, typedAst)
@@ -73,7 +73,7 @@ let normalizeIR (ir: string) : string =
     |> String.concat "\n"
 
 /// Compile source and get ANF after optimization
-let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
+let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
@@ -93,7 +93,7 @@ let getOptimizedANF (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                 Ok (formatANF optimized)
 
 /// Compile source and get MIR after optimization
-let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
+let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
@@ -133,7 +133,7 @@ let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                         Ok (formatMIR optimizedMir)
 
 /// Compile source and get LIR after optimization
-let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Result<string, string> =
+let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (source: string) : Result<string, string> =
     // Parse source
     match Parser.parseString true source with
     | Error e -> Error $"Parse error: {e}"
@@ -177,7 +177,7 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                             Ok (formatLIR optimizedLir)
 
 /// Run a single optimization test
-let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult) (test: OptimizationTest) : OptimizationTestResult =
+let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (test: OptimizationTest) : OptimizationTestResult =
     let irResult =
         match test.Stage with
         | ANF -> getOptimizedANF stdlib test.Source
@@ -206,7 +206,7 @@ let runOptimizationTest (stdlib: CompilerLibrary.StdlibResult) (test: Optimizati
               Actual = Some normalizedActual }
 
 /// Load and run tests from a file
-let runTestFile (stdlib: CompilerLibrary.StdlibResult) (stage: IRStage) (path: string) : Result<(OptimizationTest * OptimizationTestResult) list, string> =
+let runTestFile (stdlib: CompilerLibrary.StdlibResult<'Snapshot>) (stage: IRStage) (path: string) : Result<(OptimizationTest * OptimizationTestResult) list, string> =
     match parseTestFile stage path with
     | Error e -> Error e
     | Ok tests ->

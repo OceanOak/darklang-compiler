@@ -14,12 +14,6 @@ open System.Diagnostics
 open System.Reflection
 open Output
 
-/// Result of compilation with timing
-type CompileReport = {
-    Result: Result<byte array, string>
-    CompileTime: TimeSpan
-}
-
 /// Timing for a single compiler pass
 type PassTiming = {
     Pass: string
@@ -39,6 +33,33 @@ type CacheMissInfo = {
 /// Recorder for cache hit/miss stats
 type CacheMissRecorder = CacheMissInfo -> unit
 
+/// Cache scope for read/write callbacks
+type CacheScope =
+    | Stdlib
+    | StdlibSpecializations
+    | Preamble of string
+    | UserProgram of string
+    | TestExpression of string
+
+/// Cache state threaded through compilation
+type CacheState<'Snapshot, 'T> = {
+    Snapshot: 'Snapshot
+    PendingWrites: (Cache.FunctionCacheKey * 'T) list
+}
+
+/// Cache callbacks and state used by the compiler
+type CacheContextData<'Snapshot, 'T> = {
+    State: CacheState<'Snapshot, 'T>
+    Read: CacheScope -> CacheState<'Snapshot, 'T> -> Cache.FunctionCacheKey list -> Result<Map<string, 'T> * CacheState<'Snapshot, 'T>, string>
+    Write: CacheScope -> CacheState<'Snapshot, 'T> -> (Cache.FunctionCacheKey * 'T) list -> Result<CacheState<'Snapshot, 'T>, string>
+    Flush: CacheScope -> CacheState<'Snapshot, 'T> -> Result<CacheState<'Snapshot, 'T>, string>
+}
+
+/// Cache callbacks used by the compiler to load and store cached functions
+type CacheContext<'Snapshot, 'T> =
+    | NoCache
+    | CacheContext of CacheContextData<'Snapshot, 'T>
+
 /// Result of execution with timing
 type ExecutionOutput = {
     ExitCode: int
@@ -53,9 +74,16 @@ type CompileMode =
     | TestExpression
 
 /// Cache settings for compilation
-type CacheSettings = {
-    Enabled: bool
+type CacheSettings<'Snapshot> = {
     CompilerKey: string
+    Context: CacheContext<'Snapshot, LIR.Function>
+}
+
+/// Result of compilation with timing and updated cache state
+type CompileReport<'Snapshot> = {
+    Result: Result<byte array, string>
+    CompileTime: TimeSpan
+    CacheSettings: CacheSettings<'Snapshot>
 }
 
 /// Compiler options for controlling optimization behavior
@@ -187,12 +215,6 @@ let private buildCacheOptions (options: CompilerOptions) : CacheOptions = {
     EnableLeakCheck = options.EnableLeakCheck
 }
 
-let private hashValue (value: 'T) : string =
-    // Use MessagePack encoding for deterministic cache hashes.
-    match Cache.hashData value with
-    | Ok hash -> hash
-    | Error err -> Crash.crash $"Cache hash error: {err}"
-
 let private recordPassTiming
     (recorder: PassTimingRecorder option)
     (pass: string)
@@ -203,24 +225,159 @@ let private recordPassTiming
     | Some record ->
         record { Pass = pass; Elapsed = TimeSpan.FromMilliseconds(elapsedMs) }
 
+let private hashValue (value: 'T) : string =
+    // Use MessagePack encoding for deterministic cache hashes.
+    match Cache.hashData value with
+    | Ok hash -> hash
+    | Error err -> Crash.crash $"Cache hash error: {err}"
+
+let private hashValueWithTiming
+    (label: string)
+    (passTimingRecorder: PassTimingRecorder option)
+    (value: 'T)
+    : string =
+    match passTimingRecorder with
+    | None -> hashValue value
+    | Some _ ->
+        match Cache.hashDataWithTiming value with
+        | Ok (hash, timing) ->
+            recordPassTiming passTimingRecorder $"Cache Hash Serialize: {label}" timing.SerializeMs
+            recordPassTiming passTimingRecorder $"Cache Hash SHA256: {label}" timing.HashMs
+            hash
+        | Error err -> Crash.crash $"Cache hash error: {err}"
+
+let private hashStringWithTiming
+    (label: string)
+    (passTimingRecorder: PassTimingRecorder option)
+    (value: string)
+    : string =
+    match passTimingRecorder with
+    | None -> Cache.hashString value
+    | Some _ ->
+        let sw = Stopwatch.StartNew()
+        let hash = Cache.hashString value
+        let elapsed = sw.Elapsed.TotalMilliseconds
+        recordPassTiming passTimingRecorder $"Cache Hash SHA256 (string): {label}" elapsed
+        hash
+
 // Cache helpers
 
-let private defaultCacheSettings () : Result<CacheSettings, string> =
+let private cacheIsEnabled (cacheSettings: CacheSettings<'Snapshot>) : bool =
+    match cacheSettings.Context with
+    | NoCache -> false
+    | CacheContext _ -> true
+
+let private updateCacheContextState
+    (context: CacheContext<'Snapshot, 'T>)
+    (state: CacheState<'Snapshot, 'T>)
+    : CacheContext<'Snapshot, 'T> =
+    match context with
+    | NoCache -> NoCache
+    | CacheContext ctx -> CacheContext { ctx with State = state }
+
+let private cacheRead
+    (scope: CacheScope)
+    (cacheSettings: CacheSettings<'Snapshot>)
+    (keys: Cache.FunctionCacheKey list)
+    : Result<Map<string, LIR.Function> * CacheSettings<'Snapshot>, string> =
+    match cacheSettings.Context with
+    | NoCache -> Ok (Map.empty, cacheSettings)
+    | CacheContext ctx ->
+        ctx.Read scope ctx.State keys
+        |> Result.map (fun (cached, state) ->
+            let updatedContext = updateCacheContextState cacheSettings.Context state
+            (cached, { cacheSettings with Context = updatedContext }))
+
+let private cacheWrite
+    (scope: CacheScope)
+    (cacheSettings: CacheSettings<'Snapshot>)
+    (entries: (Cache.FunctionCacheKey * LIR.Function) list)
+    : Result<CacheSettings<'Snapshot>, string> =
+    match cacheSettings.Context with
+    | NoCache -> Ok cacheSettings
+    | CacheContext ctx ->
+        ctx.Write scope ctx.State entries
+        |> Result.map (fun state ->
+            let updatedContext = updateCacheContextState cacheSettings.Context state
+            { cacheSettings with Context = updatedContext })
+
+let private cacheFlush
+    (scope: CacheScope)
+    (cacheSettings: CacheSettings<'Snapshot>)
+    : Result<CacheSettings<'Snapshot>, string> =
+    match cacheSettings.Context with
+    | NoCache -> Ok cacheSettings
+    | CacheContext ctx ->
+        ctx.Flush scope ctx.State
+        |> Result.map (fun state ->
+            let updatedContext = updateCacheContextState cacheSettings.Context state
+            { cacheSettings with Context = updatedContext })
+
+let private defaultCacheContext () : CacheContext<unit, LIR.Function> =
+    let read
+        (_scope: CacheScope)
+        (state: CacheState<unit, LIR.Function>)
+        (keys: Cache.FunctionCacheKey list)
+        : Result<Map<string, LIR.Function> * CacheState<unit, LIR.Function>, string> =
+        Cache.getFunctions<LIR.Function> keys
+        |> Result.map (fun cached -> (cached, state))
+
+    let write
+        (_scope: CacheScope)
+        (state: CacheState<unit, LIR.Function>)
+        (entries: (Cache.FunctionCacheKey * LIR.Function) list)
+        : Result<CacheState<unit, LIR.Function>, string> =
+        Cache.setFunctions entries
+        |> Result.map (fun () -> state)
+
+    let flush
+        (_scope: CacheScope)
+        (state: CacheState<unit, LIR.Function>)
+        : Result<CacheState<unit, LIR.Function>, string> =
+        Ok state
+
+    CacheContext {
+        State = { Snapshot = (); PendingWrites = [] }
+        Read = read
+        Write = write
+        Flush = flush
+    }
+
+let private defaultCacheSettings () : Result<CacheSettings<unit>, string> =
     Cache.getCompilerKey ()
-    |> Result.map (fun key -> { Enabled = true; CompilerKey = key })
+    |> Result.map (fun key -> { CompilerKey = key; Context = defaultCacheContext () })
 
-let private combineHashes (hashes: string list) : string =
-    Cache.hashString (String.concat "|" hashes)
+/// Flush pending cache writes through the configured cache context
+let flushCacheSettings
+    (scope: CacheScope)
+    (cacheSettings: CacheSettings<'Snapshot>)
+    : Result<CacheSettings<'Snapshot>, string> =
+    cacheFlush scope cacheSettings
 
-let private hashCacheOptions (options: CompilerOptions) : string =
-    hashValue (buildCacheOptions options)
+let private combineHashes
+    (passTimingRecorder: PassTimingRecorder option)
+    (hashes: string list)
+    : string =
+    hashStringWithTiming "combined hashes" passTimingRecorder (String.concat "|" hashes)
 
-let private hashTypedProgram (program: AST.Program) : string =
-    hashValue program
+let private hashCacheOptions
+    (passTimingRecorder: PassTimingRecorder option)
+    (options: CompilerOptions)
+    : string =
+    hashValueWithTiming "cache options" passTimingRecorder (buildCacheOptions options)
 
-let private hashAnfFunctionBody (func: ANF.Function) : string =
+let private hashTypedProgram
+    (passTimingRecorder: PassTimingRecorder option)
+    (program: AST.Program)
+    : string =
+    hashValueWithTiming "typed program" passTimingRecorder program
+
+let private hashAnfFunctionBody
+    (passTimingRecorder: PassTimingRecorder option)
+    (func: ANF.Function)
+    : string =
     // Hash the post-inlining function body (including signature) so inlining changes invalidate cache keys.
-    hashValue (func.TypedParams, func.ReturnType, func.Body)
+    hashValueWithTiming "ANF body" passTimingRecorder (func.TypedParams, func.ReturnType, func.Body)
 
 let private collectTempIdsInAtom (atom: ANF.Atom) : Set<ANF.TempId> =
     match atom with
@@ -371,6 +528,7 @@ let private buildTypeHash
     (typesUsed: Set<AST.Type>)
     (registries: AST_to_ANF.Registries)
     (sumTypeDefs: Map<string, string list * (string * int * AST.Type option) list>)
+    (passTimingRecorder: PassTimingRecorder option)
     : string =
     let (recordNames, sumNames) =
         typesUsed
@@ -399,21 +557,23 @@ let private buildTypeHash
             | None -> Crash.crash $"Cache: sum type '{name}' not found in variant registry")
 
     let typesSorted = typesUsed |> Set.toList |> List.sort
-    hashValue (typesSorted, recordDefs, sumDefs)
+    hashValueWithTiming "type definitions" passTimingRecorder (typesSorted, recordDefs, sumDefs)
 
 let private buildFunctionSignatureHash
     (funcType: AST.Type)
     (registries: AST_to_ANF.Registries)
     (sumTypeDefs: Map<string, string list * (string * int * AST.Type option) list>)
+    (passTimingRecorder: PassTimingRecorder option)
     : string =
-    let typeHash = buildTypeHash (Set.singleton funcType) registries sumTypeDefs
-    hashValue (funcType, typeHash)
+    let typeHash = buildTypeHash (Set.singleton funcType) registries sumTypeDefs passTimingRecorder
+    hashValueWithTiming "function signature" passTimingRecorder (funcType, typeHash)
 
 let private buildFunctionDependencyHashes
     (functions: ANF.Function list)
     (typeMap: ANF.TypeMap)
     (registries: AST_to_ANF.Registries)
     (_externalFunctionHashes: Map<string, string>)
+    (passTimingRecorder: PassTimingRecorder option)
     : Map<string, string> =
     // Compute dependency hashes from function bodies, types, and callee signatures.
     if List.isEmpty functions then
@@ -432,14 +592,14 @@ let private buildFunctionDependencyHashes
 
         let bodyHashes =
             functions
-            |> List.map (fun func -> func.Name, hashAnfFunctionBody func)
+            |> List.map (fun func -> func.Name, hashAnfFunctionBody passTimingRecorder func)
             |> Map.ofList
 
         let typeHashes =
             functions
             |> List.map (fun func ->
                 let typesUsed = collectTypesUsedByFunction func typeMap
-                func.Name, buildTypeHash typesUsed registries sumTypeDefs)
+                func.Name, buildTypeHash typesUsed registries sumTypeDefs passTimingRecorder)
             |> Map.ofList
 
         let signatureHashes =
@@ -447,7 +607,7 @@ let private buildFunctionDependencyHashes
             |> List.map (fun func ->
                 let paramTypes = func.TypedParams |> List.map (fun p -> p.Type)
                 let funcType = AST.TFunction (paramTypes, func.ReturnType)
-                func.Name, buildFunctionSignatureHash funcType registries sumTypeDefs)
+                func.Name, buildFunctionSignatureHash funcType registries sumTypeDefs passTimingRecorder)
             |> Map.ofList
 
         let externalNames =
@@ -460,7 +620,7 @@ let private buildFunctionDependencyHashes
             |> List.sort
             |> List.map (fun name ->
                 match Map.tryFind name registries.FuncReg with
-                | Some funcType -> (name, buildFunctionSignatureHash funcType registries sumTypeDefs)
+                | Some funcType -> (name, buildFunctionSignatureHash funcType registries sumTypeDefs passTimingRecorder)
                 | None -> Crash.crash $"Cache: external function '{name}' not found in registry")
             |> Map.ofList
 
@@ -491,7 +651,7 @@ let private buildFunctionDependencyHashes
                     match Map.tryFind callee externalSignatureHashes with
                     | Some hash -> (callee, hash)
                     | None -> Crash.crash $"Cache: missing signature hash for external callee {callee}")
-            hashValue (name, bodyHash, typeHash, internalDeps, externalDeps)
+            hashValueWithTiming "dependency hash" passTimingRecorder (name, bodyHash, typeHash, internalDeps, externalDeps)
 
         functions
         |> List.map (fun func -> func.Name, buildDeps func.Name)
@@ -650,7 +810,8 @@ let private allocateRegistersForFunctions
 
 /// Run MIR+LIR passes (including register allocation) from ANF functions
 let private lowerToAllocatedLir
-    (cacheSettings: CacheSettings)
+    (cacheSettings: CacheSettings<'Snapshot>)
+    (cacheScope: CacheScope)
     (verbosity: int)
     (options: CompilerOptions)
     (sw: Stopwatch)
@@ -662,13 +823,15 @@ let private lowerToAllocatedLir
     (registries: AST_to_ANF.Registries)
     (externalReturnTypes: Map<string, AST.Type>)
     (dependencyHashes: Map<string, string>)
-    : Result<LIR.Function list, string> =
+    : Result<LIR.Function list * CacheSettings<'Snapshot>, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
+    let cacheEnabled = cacheIsEnabled cacheSettings
+
     let optionsHashOpt =
-        if cacheSettings.Enabled then
-            Some (hashCacheOptions options)
+        if cacheEnabled then
+            Some (hashCacheOptions passTimingRecorder options)
         else
             None
 
@@ -683,7 +846,7 @@ let private lowerToAllocatedLir
         match cacheMissRecorder with
         | None -> ()
         | Some record ->
-            if cacheSettings.Enabled then
+            if cacheEnabled then
                 let missNames =
                     functionsToCompile
                     |> List.map (fun f -> f.Name)
@@ -695,9 +858,15 @@ let private lowerToAllocatedLir
                     let stageLabel = if stageSuffix = "" then "user" else stageSuffix
                     record { Stage = stageLabel; Hits = hitCount; Misses = missCount }
 
-    let cachePlanResult : Result<string option * Map<string, LIR.Function> * Map<string, string> * ANF.Function list, string> =
+    let recordCacheReadTiming (elapsedMs: float) : unit =
+        recordPassTiming passTimingRecorder "Cache Deserialize" elapsedMs
+
+    let recordCacheWriteTiming (elapsedMs: float) : unit =
+        recordPassTiming passTimingRecorder "Cache Write" elapsedMs
+
+    let cachePlanResult : Result<string option * Map<string, LIR.Function> * Map<string, string> * ANF.Function list * CacheSettings<'Snapshot>, string> =
         match optionsHashOpt with
-        | None -> Ok (None, Map.empty, Map.empty, functions)
+        | None -> Ok (None, Map.empty, Map.empty, functions, cacheSettings)
         | Some optionsHash ->
             let buildKey (func: ANF.Function) (funcHash: string) : Cache.FunctionCacheKey = {
                 CacheVersion = Cache.cacheVersion
@@ -724,9 +893,19 @@ let private lowerToAllocatedLir
                 keyedFunctions
                 |> List.choose (fun (func, _, key) ->
                     if isCacheableFunctionName func.Name then Some key else None)
-            Cache.getFunctions<LIR.Function> keys
+            let readResult =
+                if List.isEmpty keys then
+                    Ok (Map.empty, cacheSettings)
+                else
+                    let readStart = sw.Elapsed.TotalMilliseconds
+                    cacheRead cacheScope cacheSettings keys
+                    |> Result.map (fun (cachedMap, updatedSettings) ->
+                        let readElapsed = sw.Elapsed.TotalMilliseconds - readStart
+                        recordCacheReadTiming readElapsed
+                        (cachedMap, updatedSettings))
+            readResult
             |> Result.mapError (fun err -> $"Cache read error: {err}")
-            |> Result.map (fun cachedMap ->
+            |> Result.map (fun (cachedMap, updatedSettings) ->
                 let functionsToCompile =
                     keyedFunctions
                     |> List.choose (fun (func, _, _) ->
@@ -736,7 +915,7 @@ let private lowerToAllocatedLir
                             match Map.tryFind func.Name cachedMap with
                             | Some _ -> None
                             | None -> Some func)
-                (Some optionsHash, cachedMap, funcHashMap, functionsToCompile))
+                (Some optionsHash, cachedMap, funcHashMap, functionsToCompile, updatedSettings))
 
     let compileMissing (functionsToCompile: ANF.Function list) : Result<LIR.Function list, string> =
         if List.isEmpty functionsToCompile then
@@ -793,10 +972,10 @@ let private lowerToAllocatedLir
                 compiled)
 
     cachePlanResult
-    |> Result.map (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
+    |> Result.map (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile, updatedSettings) ->
         recordCacheStats cachedMap functionsToCompile
-        (optionsHashOpt, cachedMap, funcHashes, functionsToCompile))
-    |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile) ->
+        (optionsHashOpt, cachedMap, funcHashes, functionsToCompile, updatedSettings))
+    |> Result.bind (fun (optionsHashOpt, cachedMap, funcHashes, functionsToCompile, updatedSettings) ->
         let (startFunctions, otherFunctions) =
             functionsToCompile |> List.partition (fun func -> func.Name = "_start")
 
@@ -836,17 +1015,27 @@ let private lowerToAllocatedLir
                                         FunctionHash = hash
                                     }
                                     Some (key, func))
-                    Cache.setFunctions entries
-                    |> Result.mapError (fun err -> $"Cache write error: {err}")
-                | _ -> Ok ()
+                    if List.isEmpty entries then
+                        Ok updatedSettings
+                    else
+                        let writeStart = sw.Elapsed.TotalMilliseconds
+                        cacheWrite cacheScope updatedSettings entries
+                        |> Result.map (fun nextSettings ->
+                            let writeElapsed = sw.Elapsed.TotalMilliseconds - writeStart
+                            recordCacheWriteTiming writeElapsed
+                            nextSettings)
+                        |> Result.mapError (fun err -> $"Cache write error: {err}")
+                | _ -> Ok updatedSettings
 
             writeResult
-            |> Result.map (fun () ->
-                functionOrder
-                |> List.choose (fun name ->
-                    match Map.tryFind name compiledMap with
-                    | Some func -> Some func
-                    | None -> Map.tryFind name cachedMap))))
+            |> Result.map (fun nextSettings ->
+                let resolved =
+                    functionOrder
+                    |> List.choose (fun name ->
+                        match Map.tryFind name compiledMap with
+                        | Some func -> Some func
+                        | None -> Map.tryFind name cachedMap)
+                (resolved, nextSettings))))
 
 let private buildConversionResult
     (program: ANF.Program)
@@ -1068,7 +1257,7 @@ type PreambleAnalysis = {
 }
 
 /// Result of compiling stdlib - can be reused across compilations
-type StdlibResult = {
+type StdlibResult<'Snapshot> = {
     /// Parsed stdlib AST (for merging with user AST)
     AST: AST.Program
     /// Type-checked stdlib with inferred types
@@ -1076,7 +1265,7 @@ type StdlibResult = {
     /// Shared compilation context (typecheck env + registries)
     Context: PipelineContext
     /// Cache settings in effect for this stdlib build
-    CacheSettings: CacheSettings
+    CacheSettings: CacheSettings<'Snapshot>
     /// Hash of stdlib source (typed AST)
     StdlibSourceHash: string
     /// Hash of stdlib source + specialization registry
@@ -1096,13 +1285,13 @@ type StdlibResult = {
 }
 
 /// Context for compiling user code
-type CompileContext =
-    | StdlibOnly of StdlibResult
-    | StdlibWithPreamble of StdlibResult * PreambleContext
+type CompileContext<'Snapshot> =
+    | StdlibOnly of StdlibResult<'Snapshot>
+    | StdlibWithPreamble of StdlibResult<'Snapshot> * PreambleContext
 
 /// Request for compiling source code
-type CompileRequest = {
-    Context: CompileContext
+type CompileRequest<'Snapshot> = {
+    Context: CompileContext<'Snapshot>
     Mode: CompileMode
     Source: string
     SourceFile: string
@@ -1297,7 +1486,7 @@ let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
 /// Parse and typecheck a preamble, returning typed AST + preamble typecheck env
 let analyzePreamble
     (allowInternal: bool)
-    (stdlib: StdlibResult)
+    (stdlib: StdlibResult<'Snapshot>)
     (preamble: string)
     : Result<PreambleAnalysis, string> =
     let preambleSource = preamble + "\n0"
@@ -1381,9 +1570,9 @@ let private loadStdlib () : Result<AST.Program, string> =
 /// Build stdlib in isolation, returning reusable result
 /// This can be called once and the result reused for multiple user program compilations
 let buildStdlibWithCache
-    (cacheSettings: CacheSettings)
+    (cacheSettings: CacheSettings<'Snapshot>)
     (passTimingRecorder: PassTimingRecorder option)
-    : Result<StdlibResult, string> =
+    : Result<StdlibResult<'Snapshot>, string> =
     match loadStdlib() with
     | Error e ->
         Error e
@@ -1397,7 +1586,7 @@ let buildStdlibWithCache
             let msg = TypeChecking.typeErrorToString e
             Error msg
         | Ok (_, typedStdlib, typeCheckEnv) ->
-            let stdlibSourceHash = hashTypedProgram typedStdlib
+            let stdlibSourceHash = hashTypedProgram passTimingRecorder typedStdlib
             // Extract generic function definitions for on-demand monomorphization
             let genericFuncDefs = AST_to_ANF.extractGenericFuncDefs typedStdlib
             // Build module registry once (reused across all compilations)
@@ -1414,8 +1603,8 @@ let buildStdlibWithCache
                     ModuleRegistry = anfResult.ModuleRegistry
                 }
                 let context = buildContext typeCheckEnv genericFuncDefs Map.empty registries
-                let specHash = hashValue context.SpecRegistry
-                let stdlibHash = combineHashes [stdlibSourceHash; specHash]
+                let specHash = hashValueWithTiming "spec registry" passTimingRecorder context.SpecRegistry
+                let stdlibHash = combineHashes passTimingRecorder [stdlibSourceHash; specHash]
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 let sw = Stopwatch.StartNew()
@@ -1431,14 +1620,15 @@ let buildStdlibWithCache
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
                     let stdlibDependencyHashes =
-                        if cacheSettings.Enabled then
-                            buildFunctionDependencyHashes tcoFunctions typeMap registries Map.empty
+                        if cacheIsEnabled cacheSettings then
+                            buildFunctionDependencyHashes tcoFunctions typeMap registries Map.empty passTimingRecorder
                         else
                             Map.empty
 
                     let externalReturnTypes = extractReturnTypes registries.FuncReg
                     match lowerToAllocatedLir
                         cacheSettings
+                        CacheScope.Stdlib
                         0
                         stdlibOptions
                         sw
@@ -1452,13 +1642,13 @@ let buildStdlibWithCache
                         stdlibDependencyHashes with
                     | Error e ->
                         Error e
-                    | Ok allocatedFuncs ->
+                    | Ok (allocatedFuncs, updatedCacheSettings) ->
                         let stdlibCallGraph = DeadCodeElimination.buildCallGraph allocatedFuncs
                         Ok {
                             AST = stdlibAst
                             TypedAST = typedStdlib
                             Context = context
-                            CacheSettings = cacheSettings
+                            CacheSettings = updatedCacheSettings
                             StdlibSourceHash = stdlibSourceHash
                             StdlibHash = stdlibHash
                             AllocatedFunctions = allocatedFuncs
@@ -1470,26 +1660,29 @@ let buildStdlibWithCache
                         }
 
 /// Build stdlib in isolation with default cache settings
-let buildStdlibWithTrace (passTimingRecorder: PassTimingRecorder option) : Result<StdlibResult, string> =
+let buildStdlibWithTrace
+    (passTimingRecorder: PassTimingRecorder option)
+    : Result<StdlibResult<unit>, string> =
     defaultCacheSettings ()
     |> Result.bind (fun cacheSettings -> buildStdlibWithCache cacheSettings passTimingRecorder)
 
 /// Build stdlib in isolation with default cache settings
-let buildStdlib () : Result<StdlibResult, string> =
+let buildStdlib () : Result<StdlibResult<unit>, string> =
     buildStdlibWithTrace None
 
 /// Build stdlib specializations for a spec set and merge them into the stdlib result
 let buildStdlibSpecializations
-    (stdlib: StdlibResult)
+    (stdlib: StdlibResult<'Snapshot>)
     (specs: Set<AST_to_ANF.SpecKey>)
     (passTimingRecorder: PassTimingRecorder option)
-    : Result<StdlibResult, string> =
+    : Result<StdlibResult<'Snapshot>, string> =
     if Set.isEmpty specs then
         Ok stdlib
     else
         let specialization = AST_to_ANF.specializeFromSpecs stdlib.Context.GenericFuncDefs specs
         let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
-        let stdlibHash = combineHashes [stdlib.StdlibSourceHash; hashValue combinedSpecRegistry]
+        let specHash = hashValueWithTiming "spec registry" passTimingRecorder combinedSpecRegistry
+        let stdlibHash = combineHashes passTimingRecorder [stdlib.StdlibSourceHash; specHash]
         let existingNames =
             stdlib.StdlibANFFunctions
             |> Map.keys
@@ -1543,17 +1736,19 @@ let buildStdlibSpecializations
                                 |> List.map (fun f -> f.Name, f)
                                 |> Map.ofList
                             let specializationDependencyHashes =
-                                if stdlib.CacheSettings.Enabled then
+                                if cacheIsEnabled stdlib.CacheSettings then
                                     buildFunctionDependencyHashes
                                         tcoFunctions
                                         typeMap
                                         registries
                                         stdlib.StdlibFunctionDependencyHashes
+                                        passTimingRecorder
                                 else
                                     Map.empty
                             let externalReturnTypes = extractReturnTypes registries.FuncReg
                             lowerToAllocatedLir
                                 stdlib.CacheSettings
+                                CacheScope.StdlibSpecializations
                                 0
                                 stdlibOptions
                                 sw
@@ -1565,7 +1760,7 @@ let buildStdlibSpecializations
                                 registries
                                 externalReturnTypes
                                 specializationDependencyHashes
-                            |> Result.bind (fun allocatedFuncs ->
+                            |> Result.bind (fun (allocatedFuncs, updatedCacheSettings) ->
                                 let allLirFuncs = stdlib.AllocatedFunctions @ allocatedFuncs
                                 let mergedStdlibTypeMap =
                                     Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
@@ -1578,7 +1773,7 @@ let buildStdlibSpecializations
                                 let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
                                 let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
                                 let mergedDependencyHashes =
-                                    if stdlib.CacheSettings.Enabled then
+                                    if cacheIsEnabled stdlib.CacheSettings then
                                         specializationDependencyHashes
                                         |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
                                     else
@@ -1598,6 +1793,7 @@ let buildStdlibSpecializations
                                         StdlibANFCallGraph = stdlibAnfCallGraph
                                         StdlibTypeMap = mergedStdlibTypeMap
                                         StdlibFunctionDependencyHashes = mergedDependencyHashes
+                                        CacheSettings = updatedCacheSettings
                                 }
                             )
                         )
@@ -1612,13 +1808,14 @@ type private UserCompileLabels = {
     StageSuffix: string
 }
 
-type private UserCompilePlan = {
+type private UserCompilePlan<'Snapshot> = {
     AllowInternal: bool
     Verbosity: int
     Options: CompilerOptions
     PassTimingRecorder: PassTimingRecorder option
     CacheMissRecorder: CacheMissRecorder option
-    Stdlib: StdlibResult
+    CacheScope: CacheScope
+    Stdlib: StdlibResult<'Snapshot>
     BaseContext: PipelineContext
     Monomorphization: MonomorphizationMode
     PrebuiltSymbolicFunctions: LIR.Function list
@@ -1632,9 +1829,10 @@ type private UserCompilePlan = {
 }
 
 /// Compile a user/test program against a prebuilt stdlib/preamble context
-let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
+let private compileUserWithPlan (plan: UserCompilePlan<'Snapshot>) : CompileReport<'Snapshot> =
     let sw = Stopwatch.StartNew()
-    let result =
+    let initialCacheSettings = plan.Stdlib.CacheSettings
+    let (result, finalCacheSettings) =
         try
             // Pass 1: Parse user code only
             if plan.Verbosity >= 1 then println plan.Labels.Parse
@@ -1646,7 +1844,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                 println $"        {t}ms"
 
             match parseResult with
-            | Error err -> Error $"Parse error: {err}"
+            | Error err -> (Error $"Parse error: {err}", initialCacheSettings)
             | Ok userAst ->
                 // Pass 1.5: Type Checking (user code with base TypeCheckEnv)
                 if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
@@ -1658,7 +1856,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                     println $"        {t}ms"
 
                 match typeCheckResult with
-                | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
+                | Error typeErr -> (Error $"Type error: {TypeChecking.typeErrorToString typeErr}", initialCacheSettings)
                 | Ok (programType, typedUserAst, _userEnv) ->
                     if plan.Verbosity >= 3 then
                         println $"Program type: {TypeChecking.typeToString programType}"
@@ -1678,7 +1876,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                         println $"        {t}ms"
 
                     match userOnlyResult with
-                    | Error err -> Error $"ANF conversion error: {err}"
+                    | Error err -> (Error $"ANF conversion error: {err}", initialCacheSettings)
                     | Ok userOnly ->
                         let functionsToCompile =
                             userOnly.UserFunctions
@@ -1707,12 +1905,12 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                 (entryFunction :: functionsToCompile)
                                 plan.PassTimingRecorder
                         match anfResult with
-                        | Error err -> Error err
+                        | Error err -> (Error err, initialCacheSettings)
                         | Ok (anfFunctions, typeMap) ->
                             if plan.Verbosity >= 1 then println "  [2.6/7] Print Insertion..."
                             let printStart = sw.Elapsed.TotalMilliseconds
                             match PrintInsertion.insertPrintInEntry "_start" programType anfFunctions with
-                            | Error err -> Error $"Print insertion error: {err}"
+                            | Error err -> (Error $"Print insertion error: {err}", initialCacheSettings)
                             | Ok printedFunctions ->
                                 let printElapsed = sw.Elapsed.TotalMilliseconds - printStart
                                 recordPassTiming plan.PassTimingRecorder "Print Insertion" printElapsed
@@ -1725,7 +1923,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
 
                                 let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions plan.PassTimingRecorder
                                 let userDependencyHashes =
-                                    if plan.Stdlib.CacheSettings.Enabled then
+                                    if cacheIsEnabled plan.Stdlib.CacheSettings then
                                         buildFunctionDependencyHashes
                                             tcoFunctions
                                             typeMap
@@ -1737,6 +1935,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                 let userLirResult =
                                     lowerToAllocatedLir
                                         plan.Stdlib.CacheSettings
+                                        plan.CacheScope
                                         plan.Verbosity
                                         plan.Options
                                         sw
@@ -1749,8 +1948,8 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         externalReturnTypes
                                         userDependencyHashes
                                 match userLirResult with
-                                | Error err -> Error err
-                                | Ok allocatedUserFuncs ->
+                                | Error err -> (Error err, initialCacheSettings)
+                                | Ok (allocatedUserFuncs, updatedCacheSettings) ->
                                     let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
                                     let finalUserFuncs =
                                         if plan.TreeShakeUserFunctions then
@@ -1805,30 +2004,30 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                             false
                                             allocatedProgram
                                     match binaryResult with
-                                    | Error err -> Error err
+                                    | Error err -> (Error err, updatedCacheSettings)
                                     | Ok binary ->
-                                        Ok binary
+                                        (Ok binary, updatedCacheSettings)
         with
         | ex ->
-            Error $"Compilation failed: {ex.Message}"
+            (Error $"Compilation failed: {ex.Message}", initialCacheSettings)
     sw.Stop()
     match result with
     | Ok _ when plan.Verbosity >= 1 ->
         println $"  ✓ Compilation complete ({System.Math.Round(sw.Elapsed.TotalMilliseconds, 1)}ms)"
     | _ -> ()
-    { Result = result; CompileTime = sw.Elapsed }
+    { Result = result; CompileTime = sw.Elapsed; CacheSettings = finalCacheSettings }
 
 /// Build preamble with stdlib as base, returning extended context for test compilation
 /// Preamble functions go through the full pipeline (parse → typecheck → mono → inline → lift → ANF → RC → TCO)
 /// The result is built once per file and reused for all tests in that file
 let buildPreambleContext
     (allowInternal: bool)
-    (stdlib: StdlibResult)
+    (stdlib: StdlibResult<'Snapshot>)
     (preamble: string)
-    (_sourceFile: string)
+    (sourceFile: string)
     (_funcLineMap: Map<string, int>)
     (passTimingRecorder: PassTimingRecorder option)
-    : Result<PreambleContext, string> =
+    : Result<StdlibResult<'Snapshot> * PreambleContext, string> =
     // Handle empty preamble - return a context that just wraps stdlib
     if String.IsNullOrWhiteSpace(preamble) then
         let emptyContext = {
@@ -1836,10 +2035,10 @@ let buildPreambleContext
             ANFFunctions = []
             TypeMap = stdlib.StdlibTypeMap
             SymbolicFunctions = []
-            PreambleHash = Cache.hashString ""
+            PreambleHash = hashStringWithTiming "preamble empty" passTimingRecorder ""
             PreambleFunctionDependencyHashes = Map.empty
         }
-        Ok emptyContext
+        Ok (stdlib, emptyContext)
     else
         // Parse preamble with dummy expression (parser requires a main expression)
         let preambleSource = preamble + "\n0"
@@ -1854,7 +2053,7 @@ let buildPreambleContext
                 let msg = $"Preamble type error: {TypeChecking.typeErrorToString typeErr}"
                 Error msg
             | Ok (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
-                let preambleHash = hashTypedProgram typedPreambleAst
+                let preambleHash = hashTypedProgram passTimingRecorder typedPreambleAst
                 // Extract generic function definitions from preamble
                 let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
                 // Merge stdlib generics with preamble generics
@@ -1889,17 +2088,19 @@ let buildPreambleContext
                     | Ok (preambleFunctions, typeMap) ->
                         let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
                         let preambleDependencyHashes =
-                            if stdlib.CacheSettings.Enabled then
+                            if cacheIsEnabled stdlib.CacheSettings then
                                 buildFunctionDependencyHashes
                                     tcoFunctions
                                     typeMap
                                     preambleRegistries
                                     stdlib.StdlibFunctionDependencyHashes
+                                    passTimingRecorder
                             else
                                 Map.empty
                         let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
                         match lowerToAllocatedLir
                             stdlib.CacheSettings
+                            (CacheScope.Preamble sourceFile)
                             0
                             preambleOptions
                             sw
@@ -1914,7 +2115,7 @@ let buildPreambleContext
                         | Error err ->
                             let msg = $"Preamble {err}"
                             Error msg
-                        | Ok allocatedFuncs ->
+                        | Ok (allocatedFuncs, updatedCacheSettings) ->
                             let stdlibFuncNames =
                                 stdlib.AllocatedFunctions
                                 |> List.map (fun func -> func.Name)
@@ -1937,17 +2138,18 @@ let buildPreambleContext
                                 PreambleHash = preambleHash
                                 PreambleFunctionDependencyHashes = preambleDependencyHashes
                             }
-                            Ok context
+                            let updatedStdlib = { stdlib with CacheSettings = updatedCacheSettings }
+                            Ok (updatedStdlib, context)
 
 /// Build preamble context from a typed preamble analysis and precomputed specializations
 let buildPreambleContextFromAnalysis
-    (stdlib: StdlibResult)
+    (stdlib: StdlibResult<'Snapshot>)
     (analysis: PreambleAnalysis)
     (specialization: AST_to_ANF.SpecializationResult)
-    (_sourceFile: string)
+    (sourceFile: string)
     (_funcLineMap: Map<string, int>)
     (passTimingRecorder: PassTimingRecorder option)
-    : Result<PreambleContext, string> =
+    : Result<StdlibResult<'Snapshot> * PreambleContext, string> =
     let combinedSpecRegistry = mergeSpecRegistries stdlib.Context.SpecRegistry specialization.SpecRegistry
 
     let mergedGenericDefs =
@@ -1957,7 +2159,7 @@ let buildPreambleContextFromAnalysis
     let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
     let programWithSpecializations = AST.Program (specializedTopLevels @ items)
 
-    let preambleHash = hashTypedProgram programWithSpecializations
+    let preambleHash = hashTypedProgram passTimingRecorder programWithSpecializations
     convertTypedProgramToUserOnlyWithMode
         stdlib.Context
         (ReplaceTypeApps combinedSpecRegistry)
@@ -1986,17 +2188,19 @@ let buildPreambleContextFromAnalysis
         | Ok (preambleFunctions, typeMap) ->
             let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
             let preambleDependencyHashes =
-                if stdlib.CacheSettings.Enabled then
+                if cacheIsEnabled stdlib.CacheSettings then
                     buildFunctionDependencyHashes
                         tcoFunctions
                         typeMap
                         preambleRegistries
                         stdlib.StdlibFunctionDependencyHashes
+                        passTimingRecorder
                 else
                     Map.empty
             let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
             match lowerToAllocatedLir
                 stdlib.CacheSettings
+                (CacheScope.Preamble sourceFile)
                 0
                 preambleOptions
                 sw
@@ -2011,7 +2215,7 @@ let buildPreambleContextFromAnalysis
             | Error err ->
                 let msg = $"Preamble {err}"
                 Error msg
-            | Ok allocatedFuncs ->
+            | Ok (allocatedFuncs, updatedCacheSettings) ->
                 let stdlibFuncNames =
                     stdlib.AllocatedFunctions
                     |> List.map (fun func -> func.Name)
@@ -2025,14 +2229,15 @@ let buildPreambleContextFromAnalysis
 
                 let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
 
-                Ok {
+                let updatedStdlib = { stdlib with CacheSettings = updatedCacheSettings }
+                Ok (updatedStdlib, {
                     Context = pipelineContext
                     ANFFunctions = tcoFunctions
                     TypeMap = mergedTypeMap
                     SymbolicFunctions = preambleSymbolicFuncs
                     PreambleHash = preambleHash
                     PreambleFunctionDependencyHashes = preambleDependencyHashes
-                })
+                }))
 
 let private labelsForMode (mode: CompileMode) : UserCompileLabels =
     match mode with
@@ -2051,12 +2256,12 @@ let private labelsForMode (mode: CompileMode) : UserCompileLabels =
             StageSuffix = ""
         }
 
-let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
+let private buildCompilePlan (request: CompileRequest<'Snapshot>) : UserCompilePlan<'Snapshot> =
     let (stdlib, baseContext, prebuiltSymbolic, skipNames, externalDependencyHashes) =
         match request.Context with
         | StdlibOnly stdlib ->
             let externalHashes =
-                if stdlib.CacheSettings.Enabled then
+                if cacheIsEnabled stdlib.CacheSettings then
                     stdlib.StdlibFunctionDependencyHashes
                 else
                     Map.empty
@@ -2066,7 +2271,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
             let preambleFuncNameSet =
                 preambleFuncs |> List.map (fun f -> f.Name) |> Set.ofList
             let externalHashes =
-                if stdlib.CacheSettings.Enabled then
+                if cacheIsEnabled stdlib.CacheSettings then
                     preambleCtx.PreambleFunctionDependencyHashes
                     |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
                 else
@@ -2083,12 +2288,18 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
         | FullProgram -> Monomorphize (Some baseContext.GenericFuncDefs)
         | TestExpression -> SpecializeLocalAndReplace baseContext.SpecRegistry
 
+    let cacheScope =
+        match request.Mode with
+        | FullProgram -> CacheScope.UserProgram request.SourceFile
+        | TestExpression -> CacheScope.TestExpression request.SourceFile
+
     {
         AllowInternal = request.AllowInternal
         Verbosity = request.Verbosity
         Options = request.Options
         PassTimingRecorder = request.PassTimingRecorder
         CacheMissRecorder = request.CacheMissRecorder
+        CacheScope = cacheScope
         Stdlib = stdlib
         BaseContext = baseContext
         Monomorphization = monomorphization
@@ -2103,7 +2314,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
     }
 
 /// Compile source code to binary (in-memory, no file I/O)
-let compile (request: CompileRequest) : CompileReport =
+let compile (request: CompileRequest<'Snapshot>) : CompileReport<'Snapshot> =
     let plan = buildCompilePlan request
     compileUserWithPlan plan
 
@@ -2223,12 +2434,12 @@ let execute (verbosity: int) (binary: byte array) : ExecutionOutput =
     result
 
 /// Get all stdlib function names from the prebuilt stdlib
-let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =
+let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult<'Snapshot>) : Set<string> =
     stdlib.StdlibANFFunctions |> Map.keys |> Set.ofSeq
 
 /// Get the set of stdlib function names reachable from user code (using prebuilt stdlib)
 /// Used for coverage analysis without re-compiling stdlib
-let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string) : Result<Set<string>, string> =
+let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult<'Snapshot>) (source: string) : Result<Set<string>, string> =
     // Parse user code
     match Parser.parseString false source with
     | Error err -> Error $"Parse error: {err}"

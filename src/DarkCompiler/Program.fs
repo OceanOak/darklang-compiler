@@ -149,12 +149,42 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
 }
 
 /// Build cache settings from CLI options
-let buildCacheSettings (cliOpts: CliOptions) : Result<CompilerLibrary.CacheSettings, string> =
+let private sqliteCacheContext () : CompilerLibrary.CacheContext<unit, LIR.Function> =
+    let read
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
+        (keys: Cache.FunctionCacheKey list)
+        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<unit, LIR.Function>, string> =
+        Cache.getFunctions<LIR.Function> keys
+        |> Result.map (fun cached -> (cached, state))
+
+    let write
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
+        (entries: (Cache.FunctionCacheKey * LIR.Function) list)
+        : Result<CompilerLibrary.CacheState<unit, LIR.Function>, string> =
+        Cache.setFunctions entries
+        |> Result.map (fun () -> state)
+
+    let flush
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
+        : Result<CompilerLibrary.CacheState<unit, LIR.Function>, string> =
+        Ok state
+
+    CompilerLibrary.CacheContext {
+        State = { Snapshot = (); PendingWrites = [] }
+        Read = read
+        Write = write
+        Flush = flush
+    }
+
+let buildCacheSettings (cliOpts: CliOptions) : Result<CompilerLibrary.CacheSettings<unit>, string> =
     if cliOpts.NoCache then
-        Ok { Enabled = false; CompilerKey = "" }
+        Ok { CompilerKey = ""; Context = CompilerLibrary.NoCache }
     else
         Cache.getCompilerKey ()
-        |> Result.map (fun key -> { Enabled = true; CompilerKey = key })
+        |> Result.map (fun key -> { CompilerKey = key; Context = sqliteCacheContext () })
 
 /// Parse command-line flags into options
 let parseArgs (argv: string array) : Result<CliOptions, string> =
@@ -375,9 +405,9 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
             eprintln $"Compilation failed: {err}"
             1
         | Ok stdlib ->
-            let request : CompilerLibrary.CompileRequest = {
+            let request : CompilerLibrary.CompileRequest<unit> = {
                 Context = CompilerLibrary.StdlibOnly stdlib
-                Mode = CompilerLibrary.FullProgram
+                Mode = CompilerLibrary.CompileMode.FullProgram
                 Source = source
                 SourceFile = sourceFile
                 AllowInternal = false
@@ -387,6 +417,10 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
                 CacheMissRecorder = None
             }
             let compileReport = CompilerLibrary.compile request
+            let flushScope = CompilerLibrary.CacheScope.UserProgram sourceFile
+            match CompilerLibrary.flushCacheSettings flushScope compileReport.CacheSettings with
+            | Error err -> eprintln $"Cache flush failed: {err}"
+            | Ok _ -> ()
 
             match compileReport.Result with
             | Error err ->
@@ -440,9 +474,9 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                   Stderr = err
                   RuntimeTime = TimeSpan.Zero }
             | Ok stdlib ->
-                let request : CompilerLibrary.CompileRequest = {
+                let request : CompilerLibrary.CompileRequest<unit> = {
                     Context = CompilerLibrary.StdlibOnly stdlib
-                    Mode = CompilerLibrary.FullProgram
+                    Mode = CompilerLibrary.CompileMode.FullProgram
                     Source = source
                     SourceFile = sourceFile
                     AllowInternal = false
@@ -452,14 +486,22 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
                     CacheMissRecorder = None
                 }
                 let compileReport = CompilerLibrary.compile request
-                match compileReport.Result with
+                let flushScope = CompilerLibrary.CacheScope.UserProgram sourceFile
+                match CompilerLibrary.flushCacheSettings flushScope compileReport.CacheSettings with
                 | Error err ->
                     { ExitCode = 1
                       Stdout = ""
-                      Stderr = err
+                      Stderr = $"Cache flush failed: {err}"
                       RuntimeTime = TimeSpan.Zero }
-                | Ok binary ->
-                    CompilerLibrary.execute (verbosityToInt verbosity) binary
+                | Ok _ ->
+                    match compileReport.Result with
+                    | Error err ->
+                        { ExitCode = 1
+                          Stdout = ""
+                          Stderr = err
+                          RuntimeTime = TimeSpan.Zero }
+                    | Ok binary ->
+                        CompilerLibrary.execute (verbosityToInt verbosity) binary
 
     if showNormal then
         if execResult.Stdout <> "" then

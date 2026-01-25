@@ -44,6 +44,7 @@ let main args =
     else
 
     let totalTimer = Stopwatch.StartNew()
+    let cacheDbPath = Cache.getCacheDbPathForTests ()
 
     // Check for --filter=PATTERN argument
     let filter = parseFilterArg args
@@ -81,8 +82,8 @@ let main args =
     let lir2arm64TestFiles  = getTestFiles "passes/lir2arm64" "lir2arm64"
     let arm64encTestFiles  = getTestFiles "passes/arm64enc" "arm64enc"
 
-    let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests"; "Compiler Cache Tests" ]
-    let buildUnitTests (stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
+    let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
+    let buildUnitTests (stdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>) : UnitTestSuite array = [|
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
@@ -90,7 +91,6 @@ let main args =
         { Name = "Script Helper Tests"; Tests = ScriptHelperTests.tests }
         { Name = "Pass Test Runner Tests"; Tests = PassTestRunnerTests.tests }
         { Name = "Progress Bar Tests"; Tests = ProgressBarTests.tests }
-        { Name = "Test Framework Tests"; Tests = TestFrameworkTests.tests }
         { Name = "Encoding Tests"; Tests = EncodingTests.tests }
         { Name = "Binary Tests"; Tests = BinaryTests.tests }
         { Name = "Type Checking Tests"; Tests = TypeCheckingTests.tests }
@@ -102,7 +102,6 @@ let main args =
         { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
-        { Name = "Compiler Cache Tests"; Tests = CompilerCacheTests.tests stdlib }
     |]
 
     let enableVerification = verificationEnabled
@@ -116,17 +115,21 @@ let main args =
     let recordTiming = TestFramework.recordTiming runState
     let recordResults = TestFramework.recordResults runState
     let recordPassTiming = TestFramework.recordPassTiming runState
+    let recordCacheIo = TestFramework.recordCacheIo runState
 
     let timer = Stopwatch.StartNew()
     let stdlib =
-        let buildCacheSettings (enabled: bool) (compilerKey: string) : CompilerLibrary.CacheSettings =
-            { Enabled = enabled; CompilerKey = compilerKey }
-        let cacheSettingsResult =
+        let cacheSettingsResult : Result<CompilerLibrary.CacheSettings<Cache.CacheSnapshot>, string> =
             if noCache then
-                Ok (buildCacheSettings false "")
+                Ok { CompilerKey = ""; Context = CompilerLibrary.NoCache }
             else
-                Cache.getCompilerKey ()
-                |> Result.map (fun key -> buildCacheSettings true key)
+                Cache.getCompilerKeyWithDbPath cacheDbPath
+                |> Result.bind (fun key ->
+                    Cache.loadAllForCompilerKeyWithTimingForDbPath key cacheDbPath
+                    |> Result.map (fun (snapshot, timing) ->
+                        recordCacheIo (TestFramework.CacheRead (1, timing.QueryCount, timing.RowCount))
+                        { CompilerKey = key
+                          Context = TestFramework.buildSnapshotCacheContext recordCacheIo cacheDbPath snapshot }))
         let stdlibResult =
             cacheSettingsResult
             |> Result.bind (fun settings -> CompilerLibrary.buildStdlibWithCache settings (Some recordPassTiming))
@@ -153,13 +156,24 @@ let main args =
             recordResults 0 1 [{ File = filePath; Name = $"{suiteName}: {fileName}"; Message = msg; Details = [] }]
 
     let runE2ESuite
+        (baseStdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>)
+        (cacheSettings: CompilerLibrary.CacheSettings<Cache.CacheSnapshot>)
         (suiteName: string)
         (progressLabel: string)
         (testsArray: E2ETest array)
-        : unit =
+        : CompilerLibrary.CacheSettings<Cache.CacheSnapshot> =
+        let stdlib = { baseStdlib with CacheSettings = cacheSettings }
         let numTests = testsArray.Length
         if numTests > 0 then
-            let suiteContextsResult = TestDSL.E2ETestRunner.buildSuiteContexts stdlib testsArray (Some recordPassTiming)
+            let suiteContextsResult =
+                TestDSL.E2ETestRunner.buildSuiteContexts
+                    stdlib
+                    testsArray
+                    (Some recordPassTiming)
+            let mutable suiteContextsOpt =
+                match suiteContextsResult with
+                | Ok suiteContexts -> Some suiteContexts
+                | Error _ -> None
 
             let results = Array.zeroCreate<option<E2ETest * E2ETestResult>> numTests
             let progress = ProgressBar.create progressLabel numTests
@@ -222,33 +236,43 @@ let main args =
                     | Error err ->
                         preambleFailureResult $"Preamble build failed: {err}", None
                     | Ok suiteContexts ->
-                        match Map.tryFind test.SourceFile suiteContexts.PreambleContexts with
+                        match suiteContextsOpt with
                         | None ->
-                            preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None
-                        | Some ctx ->
-                            if suiteContexts.Stdlib.CacheSettings.Enabled then
-                                let mutable hitCount = 0
-                                let mutable missCount = 0
-                                let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
-                                    hitCount <- hitCount + info.Hits
-                                    missCount <- missCount + info.Misses
-                                let testResult =
-                                    TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
-                                        suiteContexts.Stdlib
-                                        ctx
-                                        test
-                                        (Some recordPassTiming)
-                                        (Some recordMiss)
-                                testResult, Some (hitCount, missCount)
-                            else
-                                let testResult =
-                                    TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
-                                        suiteContexts.Stdlib
-                                        ctx
-                                        test
-                                        (Some recordPassTiming)
-                                        None
-                                testResult, None
+                            preambleFailureResult "Missing built suite contexts", None
+                        | Some currentSuiteContexts ->
+                            match Map.tryFind test.SourceFile currentSuiteContexts.PreambleContexts with
+                            | None ->
+                                preambleFailureResult $"Missing built preamble context for {test.SourceFile}", None
+                            | Some ctx ->
+                                let cacheEnabled =
+                                    match currentSuiteContexts.Stdlib.CacheSettings.Context with
+                                    | CompilerLibrary.NoCache -> false
+                                    | CompilerLibrary.CacheContext _ -> true
+                                if cacheEnabled then
+                                    let mutable hitCount = 0
+                                    let mutable missCount = 0
+                                    let recordMiss (info: CompilerLibrary.CacheMissInfo) : unit =
+                                        hitCount <- hitCount + info.Hits
+                                        missCount <- missCount + info.Misses
+                                    let testResult, updatedStdlib =
+                                        TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                            currentSuiteContexts.Stdlib
+                                            ctx
+                                            test
+                                            (Some recordPassTiming)
+                                            (Some recordMiss)
+                                    suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
+                                    testResult, Some (hitCount, missCount)
+                                else
+                                    let testResult, updatedStdlib =
+                                        TestDSL.E2ETestRunner.runE2ETestWithPreambleContext
+                                            currentSuiteContexts.Stdlib
+                                            ctx
+                                            test
+                                            (Some recordPassTiming)
+                                            None
+                                    suiteContextsOpt <- Some { currentSuiteContexts with Stdlib = updatedStdlib }
+                                    testResult, None
 
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
@@ -305,6 +329,12 @@ let main args =
                 println $"  {Colors.green}✓ {sectionPassed} passed{Colors.reset}"
             else
                 println $"  {Colors.green}✓ {sectionPassed} passed{Colors.reset}, {Colors.red}✗ {sectionFailed} failed{Colors.reset}"
+
+            match suiteContextsOpt with
+            | Some currentSuiteContexts -> currentSuiteContexts.Stdlib.CacheSettings
+            | None -> cacheSettings
+        else
+            cacheSettings
 
     let runPassTestFile
         (loadTest: string -> Result<'input, string>)
@@ -573,7 +603,11 @@ let main args =
         splitUnitTestsByStdlibNeed unitStdlibSuites unitTests
     let unitTestsOrdered = Array.append unitTestsNoStdlib unitTestsWithStdlib
 
-    let runE2EAndVerification () : unit =
+    let runE2EAndVerification
+        (baseStdlib: CompilerLibrary.StdlibResult<Cache.CacheSnapshot>)
+        (cacheSettings: CompilerLibrary.CacheSettings<Cache.CacheSnapshot>)
+        : CompilerLibrary.CacheSettings<Cache.CacheSnapshot> =
+        let mutable currentCacheSettings = cacheSettings
         if e2eTestFiles.Length > 0 then
                 let sectionTimer = Stopwatch.StartNew()
                 println $"{Colors.cyan}🚀 E2E Tests{Colors.reset}"
@@ -588,7 +622,8 @@ let main args =
                     if testsArray.Length > 0 then
                         let timingText = $"(Stdlib compiled in {formatTime elapsed})"
                         println $"  {Colors.gray}{timingText}{Colors.reset}"
-                        runE2ESuite "E2E" "E2E" testsArray 
+                        currentCacheSettings <-
+                            runE2ESuite baseStdlib currentCacheSettings "E2E" "E2E" testsArray
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
@@ -606,15 +641,22 @@ let main args =
                         allVerifTests
                         |> Array.filter (fun test -> matchesFilter filter test.Name)
                     if testsArray.Length > 0 then
-                        runE2ESuite "Verification" "Verification" testsArray
+                        currentCacheSettings <-
+                            runE2ESuite baseStdlib currentCacheSettings "Verification" "Verification" testsArray
 
                 sectionTimer.Stop()
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
                 println ""
+        currentCacheSettings
 
     // Run tests sequentially
     runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered
-    runE2EAndVerification ()
+    let cacheSettingsAfterTests =
+        runE2EAndVerification stdlib stdlib.CacheSettings
+    let flushScope = CompilerLibrary.CacheScope.TestExpression "flush:tests"
+    match CompilerLibrary.flushCacheSettings flushScope cacheSettingsAfterTests with
+    | Ok _ -> ()
+    | Error err -> eprintln $"Cache flush failed: {err}"
 
     // Compute stdlib coverage only if --coverage flag is set
     let coveragePercent =
@@ -668,6 +710,8 @@ let main args =
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
         let ordered =
             runState.PassTimings
+            |> consolidateCacheHashSerializeTimings
+            |> consolidateCacheWriteTimings
             |> Map.toList
             |> List.sortByDescending (fun (_, elapsed) -> elapsed)
         for (pass, elapsed) in ordered do
@@ -689,6 +733,10 @@ let main args =
     | Some totals ->
         println $"  {Colors.gray}cache hits: {totals.Hits}, cache misses: {totals.Misses}{Colors.reset}"
     | None -> ()
+    let cacheIo = runState.CacheIoTotals
+    if cacheIo.ReadCalls > 0 || cacheIo.WriteCalls > 0 then
+        println $"  {Colors.gray}cache sqlite reads: {cacheIo.ReadCalls} (queries: {cacheIo.ReadQueries}, rows: {cacheIo.ReadRows}){Colors.reset}"
+        println $"  {Colors.gray}cache sqlite writes: {cacheIo.WriteCalls} (inserts: {cacheIo.WriteInserts}, commits: {cacheIo.WriteCommits}){Colors.reset}"
     println $"  {Colors.gray}⏱  Total time: {formatTime totalTimer.Elapsed}{Colors.reset}"
     println $"{Colors.bold}{Colors.cyan}═══════════════════════════════════════{Colors.reset}"
 

@@ -38,8 +38,8 @@ type private PreambleBuildSpec = {
 /// Map of built preamble contexts keyed by source file
 type PreambleContextMap = Map<string, CompilerLibrary.PreambleContext>
 
-type SuiteContext = {
-    Stdlib: CompilerLibrary.StdlibResult
+type SuiteContext<'Snapshot> = {
+    Stdlib: CompilerLibrary.StdlibResult<'Snapshot>
     PreambleContexts: PreambleContextMap
 }
 
@@ -110,7 +110,7 @@ let private collectSpecsFromTests
     loop testsToAnalyze Set.empty
 
 let private buildPreamblePlan
-    (stdlib: CompilerLibrary.StdlibResult)
+    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
     (spec: PreambleBuildSpec)
     (tests: E2ETest list)
     : Result<PreamblePlan * Set<SpecKey>, string> =
@@ -162,10 +162,10 @@ let private buildPreamblePlan
 
 /// Build suite stdlib specializations and per-file preamble contexts
 let buildSuiteContexts
-    (stdlib: CompilerLibrary.StdlibResult)
+    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
     (tests: E2ETest array)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
-    : Result<SuiteContext, string> =
+    : Result<SuiteContext<'Snapshot>, string> =
     let groupedTests =
         tests
         |> Array.toList
@@ -202,13 +202,13 @@ let buildSuiteContexts
                 |> List.fold
                     (fun acc plan ->
                         acc
-                        |> Result.bind (fun contexts ->
+                        |> Result.bind (fun (currentStdlib, contexts) ->
                             let ctxResult =
                                 match plan.Analysis with
-                                | None -> Ok (buildEmptyContext ())
+                                | None -> Ok (currentStdlib, buildEmptyContext ())
                                 | Some analysis ->
                                     CompilerLibrary.buildPreambleContextFromAnalysis
-                                        stdlibWithSpecs
+                                        currentStdlib
                                         analysis
                                         plan.Specialization
                                         plan.Spec.SourceFile
@@ -217,13 +217,13 @@ let buildSuiteContexts
                                     |> Result.mapError (fun err ->
                                         $"Preamble build error ({plan.Spec.SourceFile}): {err}")
                             ctxResult
-                            |> Result.map (fun ctx ->
-                                Map.add plan.Spec.SourceFile ctx contexts)))
-                    (Ok Map.empty)
+                            |> Result.map (fun (updatedStdlib, ctx) ->
+                                (updatedStdlib, Map.add plan.Spec.SourceFile ctx contexts))))
+                    (Ok (stdlibWithSpecs, Map.empty))
             contextsResult
-            |> Result.map (fun contexts ->
+            |> Result.map (fun (updatedStdlib, contexts) ->
                 {
-                    Stdlib = stdlibWithSpecs
+                    Stdlib = updatedStdlib
                     PreambleContexts = contexts
                 })))
 
@@ -314,31 +314,32 @@ let private tryExecuteBinary (binary: byte array) : Result<CompilerLibrary.Execu
     try Ok (CompilerLibrary.execute 0 binary)
     with ex -> Error ex.Message
 
-let private compileAndRun (request: CompilerLibrary.CompileRequest) : E2ERun =
+let private compileAndRun (request: CompilerLibrary.CompileRequest<'Snapshot>) : E2ERun * CompilerLibrary.CacheSettings<'Snapshot> =
     let compileReport = CompilerLibrary.compile request
+    let cacheSettings = compileReport.CacheSettings
     match compileReport.Result with
     | Error err ->
-        CompileFailed (1, err, compileReport.CompileTime)
+        (CompileFailed (1, err, compileReport.CompileTime), cacheSettings)
     | Ok binary ->
         match tryExecuteBinary binary with
         | Ok execResult ->
-            Ran (execResult.ExitCode, execResult.Stdout, execResult.Stderr, compileReport.CompileTime, execResult.RuntimeTime)
+            (Ran (execResult.ExitCode, execResult.Stdout, execResult.Stderr, compileReport.CompileTime, execResult.RuntimeTime), cacheSettings)
         | Error err ->
-            Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero)
+            (Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero), cacheSettings)
 
 /// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
-    (stdlib: CompilerLibrary.StdlibResult)
+    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
     (preambleCtx: CompilerLibrary.PreambleContext)
     (test: E2ETest)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
     (cacheMissRecorder: CompilerLibrary.CacheMissRecorder option)
-    : E2ETestResult =
+    : E2ETestResult * CompilerLibrary.StdlibResult<'Snapshot> =
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
-    let request : CompilerLibrary.CompileRequest = {
+    let request : CompilerLibrary.CompileRequest<'Snapshot> = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
-        Mode = CompilerLibrary.TestExpression
+        Mode = CompilerLibrary.CompileMode.TestExpression
         Source = test.Source
         SourceFile = test.SourceFile
         AllowInternal = allowInternal
@@ -347,5 +348,7 @@ let runE2ETestWithPreambleContext
         PassTimingRecorder = passTimingRecorder
         CacheMissRecorder = cacheMissRecorder
     }
-    let run = compileAndRun request
-    evaluateExpectations test run
+    let run, updatedCacheSettings = compileAndRun request
+    let updatedStdlib = { stdlib with CacheSettings = updatedCacheSettings }
+    let result = evaluateExpectations test run
+    (result, updatedStdlib)

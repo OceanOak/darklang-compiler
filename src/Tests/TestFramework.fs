@@ -7,6 +7,7 @@ module TestFramework
 open System
 open System.Diagnostics
 open Output
+open Cache
 
 type UnitTestCase = string * (unit -> Result<unit, string>)
 
@@ -38,6 +39,19 @@ type CacheTotals = {
     Misses: int
 }
 
+type CacheIoTotals = {
+    ReadCalls: int
+    ReadQueries: int
+    ReadRows: int
+    WriteCalls: int
+    WriteInserts: int
+    WriteCommits: int
+}
+
+type CacheIoInfo =
+    | CacheRead of readCalls:int * readQueries:int * readRows:int
+    | CacheWrite of writeCalls:int * writeInserts:int * writeCommits:int
+
 // Summary of per-file test suite results
 type FileSuiteSummary = {
     Passed: int
@@ -51,6 +65,7 @@ type TestRunState = {
     FailedTests: ResizeArray<FailedTestInfo>
     Timings: ResizeArray<TestTiming>
     mutable PassTimings: Map<string, TimeSpan>
+    mutable CacheIoTotals: CacheIoTotals
 }
 
 type OutputSymbols = {
@@ -64,7 +79,15 @@ let createState () : TestRunState =
       Failed = 0
       FailedTests = ResizeArray()
       Timings = ResizeArray()
-      PassTimings = Map.empty }
+      PassTimings = Map.empty
+      CacheIoTotals = {
+          ReadCalls = 0
+          ReadQueries = 0
+          ReadRows = 0
+          WriteCalls = 0
+          WriteInserts = 0
+          WriteCommits = 0
+      } }
 
 let recordTiming (state: TestRunState) (timing: TestTiming) : unit =
     state.Timings.Add timing
@@ -75,6 +98,97 @@ let recordPassTiming (state: TestRunState) (timing: CompilerLibrary.PassTiming) 
         |> Option.defaultValue TimeSpan.Zero
     let updated = existing + timing.Elapsed
     state.PassTimings <- Map.add timing.Pass updated state.PassTimings
+
+let recordCacheIo (state: TestRunState) (info: CacheIoInfo) : unit =
+    match info with
+    | CacheRead (readCalls, readQueries, readRows) ->
+        let current = state.CacheIoTotals
+        state.CacheIoTotals <- {
+            current with
+                ReadCalls = current.ReadCalls + readCalls
+                ReadQueries = current.ReadQueries + readQueries
+                ReadRows = current.ReadRows + readRows
+        }
+    | CacheWrite (writeCalls, writeInserts, writeCommits) ->
+        let current = state.CacheIoTotals
+        state.CacheIoTotals <- {
+            current with
+                WriteCalls = current.WriteCalls + writeCalls
+                WriteInserts = current.WriteInserts + writeInserts
+                WriteCommits = current.WriteCommits + writeCommits
+        }
+
+let private updateSnapshot
+    (snapshot: CacheSnapshot)
+    (entries: (FunctionCacheKey * LIR.Function) list)
+    : Result<CacheSnapshot, string> =
+    let folder
+        (accResult: Result<Map<FunctionCacheKey, byte array>, string>)
+        (key, value)
+        : Result<Map<FunctionCacheKey, byte array>, string> =
+        accResult
+        |> Result.bind (fun acc ->
+            serialize value
+            |> Result.map (fun bytes -> Map.add key bytes acc))
+    entries
+    |> List.fold folder (Ok snapshot.Entries)
+    |> Result.map (fun entriesMap -> { snapshot with Entries = entriesMap })
+
+let buildSnapshotCacheContext
+    (recordCacheIo: CacheIoInfo -> unit)
+    (cacheDbPath: string)
+    (snapshot: CacheSnapshot)
+    : CompilerLibrary.CacheContext<CacheSnapshot, LIR.Function> =
+    let mergePendingWrites
+        (pending: (FunctionCacheKey * LIR.Function) list)
+        (entries: (FunctionCacheKey * LIR.Function) list)
+        : (FunctionCacheKey * LIR.Function) list =
+        let pendingMap =
+            pending |> List.fold (fun acc (key, value) -> Map.add key value acc) Map.empty
+        let updatedMap =
+            entries |> List.fold (fun acc (key, value) -> Map.add key value acc) pendingMap
+        updatedMap |> Map.toList
+
+    let read
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
+        (keys: FunctionCacheKey list)
+        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
+        getFunctionsFromSnapshot<LIR.Function> state.Snapshot keys
+        |> Result.map (fun cached -> (cached, state))
+
+    let write
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
+        (entries: (FunctionCacheKey * LIR.Function) list)
+        : Result<CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
+        if List.isEmpty entries then
+            Ok state
+        else
+            updateSnapshot state.Snapshot entries
+            |> Result.map (fun updatedSnapshot ->
+                let updatedPending = mergePendingWrites state.PendingWrites entries
+                { state with Snapshot = updatedSnapshot; PendingWrites = updatedPending })
+
+    let flush
+        (_scope: CompilerLibrary.CacheScope)
+        (state: CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>)
+        : Result<CompilerLibrary.CacheState<CacheSnapshot, LIR.Function>, string> =
+        if List.isEmpty state.PendingWrites then
+            Ok state
+        else
+            let pendingWrites = state.PendingWrites
+            setFunctionsWithDbPath pendingWrites cacheDbPath
+            |> Result.map (fun () ->
+                recordCacheIo (CacheWrite (1, pendingWrites.Length, 1))
+                { state with PendingWrites = [] })
+
+    CompilerLibrary.CacheContext {
+        State = { Snapshot = snapshot; PendingWrites = [] }
+        Read = read
+        Write = write
+        Flush = flush
+    }
 
 let recordResults
     (state: TestRunState)
@@ -113,6 +227,61 @@ let calculateCacheTotals (timings: seq<TestTiming>) : CacheTotals option =
     let (hits, misses, sawData) =
         timings |> Seq.fold folder (0, 0, false)
     if sawData then Some { Hits = hits; Misses = misses } else None
+
+let consolidateCacheHashSerializeTimings
+    (passTimings: Map<string, TimeSpan>)
+    : Map<string, TimeSpan> =
+    let isCacheHashSerialize (name: string) : bool =
+        name.StartsWith("Cache Hash ", StringComparison.Ordinal)
+        || name.StartsWith("Cache Serialize:", StringComparison.Ordinal)
+
+    let folder
+        (name: string)
+        (elapsed: TimeSpan)
+        (cacheTotal: TimeSpan, acc: Map<string, TimeSpan>)
+        : TimeSpan * Map<string, TimeSpan> =
+        if isCacheHashSerialize name then
+            (cacheTotal + elapsed, acc)
+        else
+            (cacheTotal, Map.add name elapsed acc)
+
+    let (cacheTotal, pruned) =
+        passTimings |> Map.fold (fun acc name elapsed -> folder name elapsed acc) (TimeSpan.Zero, Map.empty)
+
+    if cacheTotal > TimeSpan.Zero then
+        Map.add "Cache Hash/Serialize total" cacheTotal pruned
+    else
+        pruned
+
+let consolidateCacheWriteTimings
+    (passTimings: Map<string, TimeSpan>)
+    : Map<string, TimeSpan> =
+    let isCacheWrite (name: string) : bool =
+        name.StartsWith("Cache Write:", StringComparison.Ordinal)
+
+    let hasParentWrite = Map.containsKey "Cache Write" passTimings
+
+    let folder
+        (name: string)
+        (elapsed: TimeSpan)
+        (cacheTotal: TimeSpan, sawWrite: bool, acc: Map<string, TimeSpan>)
+        : TimeSpan * bool * Map<string, TimeSpan> =
+        if isCacheWrite name then
+            (cacheTotal + elapsed, true, acc)
+        else
+            (cacheTotal, sawWrite, Map.add name elapsed acc)
+
+    if hasParentWrite then
+        passTimings
+        |> Map.filter (fun name _ -> not (isCacheWrite name))
+    else
+        let (cacheTotal, sawWrite, pruned) =
+            passTimings |> Map.fold (fun acc name elapsed -> folder name elapsed acc) (TimeSpan.Zero, false, Map.empty)
+
+        if sawWrite then
+            Map.add "Cache Write" cacheTotal pruned
+        else
+            pruned
 
 let addExpectedActualDetails (expected: string option) (actual: string option) : string list =
     let details = ResizeArray<string>()
