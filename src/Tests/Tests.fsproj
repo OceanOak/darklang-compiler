@@ -32,7 +32,6 @@
 
     <!-- Unit tests -->
     <Compile Include="TestRunnerArgs.fs" />
-    <Compile Include="PassTimingOutputTests.fs" />
     <Compile Include="CliFlagTests.fs" />
     <Compile Include="IRSymbolTests.fs" />
     <Compile Include="IRPrinterTests.fs" />
@@ -40,6 +39,7 @@
     <Compile Include="ScriptHelperTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
+    <Compile Include="PassTimingOutputTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />
@@ -47,7 +47,6 @@
     <Compile Include="SSALivenessTests.fs" />
     <Compile Include="PhiResolutionTests.fs" />
     <Compile Include="ChordalGraphTests.fs" />
-    <Compile Include="RegisterAllocationTimingTests.fs" />
     <Compile Include="ASTToANFTests.fs" />
     <Compile Include="MonomorphizationTests.fs" />
     <Compile Include="LambdaLiftingTests.fs" />

@@ -2224,24 +2224,25 @@ let monomorphize (program: AST.Program) : AST.Program =
             iterate newPendingSpecs (Set.union processedSpecs newSpecs) (newFuncs @ accFuncs)
 
     // Run iterative specialization
-    let specializedFuncs = iterate initialSpecs Set.empty []
+    let specializedFuncs =
+        iterate initialSpecs Set.empty []
 
-    // Now replace all TypeApps with Calls in all specialized functions
-    let specializedFuncsReplaced = specializedFuncs |> List.map replaceTypeAppsInFunc
-
-    // Replace TypeApps with Calls in all original top-levels (except generic function defs)
-    let transformedTopLevels =
-        topLevels
-        |> List.choose (function
-            | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
-                // Skip generic function definitions (they're replaced by specializations)
-                None
-            | AST.FunctionDef f ->
-                Some (AST.FunctionDef (replaceTypeAppsInFunc f))
-            | AST.Expression e ->
-                Some (AST.Expression (replaceTypeApps e))
-            | AST.TypeDef td ->
-                Some (AST.TypeDef td))
+    // Replace all TypeApps with Calls in the program
+    let (specializedFuncsReplaced, transformedTopLevels) =
+        let specializedFuncsReplaced = specializedFuncs |> List.map replaceTypeAppsInFunc
+        let transformedTopLevels =
+            topLevels
+            |> List.choose (function
+                | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
+                    // Skip generic function definitions (they're replaced by specializations)
+                    None
+                | AST.FunctionDef f ->
+                    Some (AST.FunctionDef (replaceTypeAppsInFunc f))
+                | AST.Expression e ->
+                    Some (AST.Expression (replaceTypeApps e))
+                | AST.TypeDef td ->
+                    Some (AST.TypeDef td))
+        (specializedFuncsReplaced, transformedTopLevels)
 
     // Add specialized functions to the program
     let specializationTopLevels =
@@ -2258,7 +2259,8 @@ let monomorphizeWithExternalDefs (externalGenericDefs: GenericFuncDefs) (program
     let (AST.Program topLevels) = program
 
     // Collect generic function definitions from this program
-    let localGenericDefs = extractGenericFuncDefs program
+    let localGenericDefs =
+        extractGenericFuncDefs program
 
     // Merge external defs with local defs (local takes precedence)
     let genericFuncDefs =
@@ -2299,24 +2301,25 @@ let monomorphizeWithExternalDefs (externalGenericDefs: GenericFuncDefs) (program
             iterate newPendingSpecs (Set.union processedSpecs newSpecs) (newFuncs @ accFuncs)
 
     // Run iterative specialization
-    let specializedFuncs = iterate initialSpecs Set.empty []
+    let specializedFuncs =
+        iterate initialSpecs Set.empty []
 
-    // Now replace all TypeApps with Calls in all specialized functions
-    let specializedFuncsReplaced = specializedFuncs |> List.map replaceTypeAppsInFunc
-
-    // Replace TypeApps with Calls in all original top-levels (except generic function defs)
-    let transformedTopLevels =
-        topLevels
-        |> List.choose (function
-            | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
-                // Skip generic function definitions (they're replaced by specializations)
-                None
-            | AST.FunctionDef f ->
-                Some (AST.FunctionDef (replaceTypeAppsInFunc f))
-            | AST.Expression e ->
-                Some (AST.Expression (replaceTypeApps e))
-            | AST.TypeDef td ->
-                Some (AST.TypeDef td))
+    // Replace all TypeApps with Calls in the program
+    let (specializedFuncsReplaced, transformedTopLevels) =
+        let specializedFuncsReplaced = specializedFuncs |> List.map replaceTypeAppsInFunc
+        let transformedTopLevels =
+            topLevels
+            |> List.choose (function
+                | AST.FunctionDef f when not (List.isEmpty f.TypeParams) ->
+                    // Skip generic function definitions (they're replaced by specializations)
+                    None
+                | AST.FunctionDef f ->
+                    Some (AST.FunctionDef (replaceTypeAppsInFunc f))
+                | AST.Expression e ->
+                    Some (AST.Expression (replaceTypeApps e))
+                | AST.TypeDef td ->
+                    Some (AST.TypeDef td))
+        (specializedFuncsReplaced, transformedTopLevels)
 
     // Add specialized functions to the program
     let specializationTopLevels =

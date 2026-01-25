@@ -1211,12 +1211,19 @@ let private generateBinary
                 Ok emit.Binary
 
 
+let private buildBaseFuncNames
+    (registries: AST_to_ANF.Registries)
+    : Set<string> =
+    registries.FuncParams
+    |> Map.fold (fun acc name _ -> Set.add name acc) Set.empty
+
 /// Shared compilation context used across pipeline steps
 type PipelineContext = {
     TypeCheckEnv: TypeChecking.TypeCheckEnv
     GenericFuncDefs: AST_to_ANF.GenericFuncDefs
     SpecRegistry: AST_to_ANF.SpecRegistry
     Registries: AST_to_ANF.Registries
+    BaseFuncNames: Set<string>
 }
 
 let private buildContext
@@ -1225,11 +1232,13 @@ let private buildContext
     (specRegistry: AST_to_ANF.SpecRegistry)
     (registries: AST_to_ANF.Registries)
     : PipelineContext =
+    let baseFuncNames = buildBaseFuncNames registries
     {
         TypeCheckEnv = typeCheckEnv
         GenericFuncDefs = genericFuncDefs
         SpecRegistry = specRegistry
         Registries = registries
+        BaseFuncNames = baseFuncNames
     }
 
 /// Compiled preamble context - extends stdlib for a test file
@@ -1367,6 +1376,7 @@ type private MonomorphizationMode =
 let private prepareProgramForAnf
     (monomorphization: MonomorphizationMode)
     (baseRegistries: AST_to_ANF.Registries)
+    (baseFuncNames: Set<string>)
     (program: AST.Program)
     : Result<AST.Program, string> =
     let monomorphizedResult =
@@ -1390,24 +1400,21 @@ let private prepareProgramForAnf
                 let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
                 let programWithSpecializations = AST.Program (specializedTopLevels @ items)
                 AST_to_ANF.replaceTypeAppsInProgramWithRegistry combinedSpecRegistry programWithSpecializations
-    monomorphizedResult
-    |> Result.bind (fun monomorphized ->
-        let baseFuncNames =
-            baseRegistries.FuncParams
-            |> Map.toList
-            |> List.map fst
-            |> Set.ofList
+    match monomorphizedResult with
+    | Error err -> Error err
+    | Ok monomorphized ->
         let (AST.Program topLevels) = monomorphized
         let localFuncNames =
             topLevels
             |> List.choose (function AST.FunctionDef f -> Some f.Name | _ -> None)
             |> Set.ofList
         let knownFuncNames = Set.union baseFuncNames localFuncNames
-        if AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized then
+        let needsLowering = AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized
+        if needsLowering then
             let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
             liftLambdasWithBase baseRegistries inlined
         else
-            Ok monomorphized)
+            Ok monomorphized
 
 let private buildRegistriesForProgram
     (moduleRegistry: AST.ModuleRegistry)
@@ -1426,7 +1433,8 @@ let private convertTypedProgramToConversionResult
     (typedProgram: AST.Program)
     : Result<AST_to_ANF.ConversionResult, string> =
     let baseRegistries = emptyRegistries moduleRegistry
-    prepareProgramForAnf (Monomorphize None) baseRegistries typedProgram
+    let baseFuncNames = buildBaseFuncNames baseRegistries
+    prepareProgramForAnf (Monomorphize None) baseRegistries baseFuncNames typedProgram
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
@@ -1444,7 +1452,8 @@ let private convertTypedProgramToUserOnlyWithMode
     (monomorphization: MonomorphizationMode)
     (typedProgram: AST.Program)
     : Result<AST_to_ANF.UserOnlyResult, string> =
-    prepareProgramForAnf monomorphization baseContext.Registries typedProgram
+    let baseFuncNames = baseContext.BaseFuncNames
+    prepareProgramForAnf monomorphization baseContext.Registries baseFuncNames typedProgram
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
@@ -1778,10 +1787,12 @@ let buildStdlibSpecializations
                                         |> Map.fold (fun acc name hash -> Map.add name hash acc) stdlib.StdlibFunctionDependencyHashes
                                     else
                                         stdlib.StdlibFunctionDependencyHashes
+                                let baseFuncNames = buildBaseFuncNames registries
                                 let updatedContext = {
                                     stdlib.Context with
                                         Registries = registries
                                         SpecRegistry = combinedSpecRegistry
+                                        BaseFuncNames = baseFuncNames
                                 }
                                 Ok {
                                     stdlib with
@@ -2073,7 +2084,8 @@ let buildPreambleContext
                         FuncParams = preambleUserOnly.FuncParams
                         ModuleRegistry = preambleUserOnly.ModuleRegistry
                     }
-                    let pipelineContext = buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries
+                    let pipelineContext =
+                        buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries
                     let preambleOptions = defaultOptions
                     let sw = Stopwatch.StartNew()
                     match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
@@ -2173,7 +2185,8 @@ let buildPreambleContextFromAnalysis
             FuncParams = preambleUserOnly.FuncParams
             ModuleRegistry = preambleUserOnly.ModuleRegistry
         }
-        let pipelineContext = buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries
+        let pipelineContext =
+            buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries
         let preambleOptions = defaultOptions
         let sw = Stopwatch.StartNew()
         match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
