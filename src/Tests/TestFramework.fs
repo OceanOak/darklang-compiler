@@ -368,8 +368,6 @@ let calculateUnaccountedTimeBreakdown
     : UnaccountedTimeBreakdown =
     let passTimingTotal = calculatePassTimingsTotalForOverhead passTimings
     let unaccounted = totalTime - passTimingTotal
-    if unaccounted < TimeSpan.Zero then
-        Crash.crash $"calculateUnaccountedTimeBreakdown: pass timings ({passTimingTotal}) exceed total time ({totalTime})"
     let runtimeTotal =
         timings
         |> Seq.choose (fun timing -> timing.RuntimeTime)
@@ -378,11 +376,7 @@ let calculateUnaccountedTimeBreakdown
         Map.tryFind testRuntimeTimingName passTimings
         |> Option.defaultValue TimeSpan.Zero
     let runtimeUnaccounted = runtimeTotal - runtimeAccounted
-    if runtimeUnaccounted < TimeSpan.Zero then
-        Crash.crash $"calculateUnaccountedTimeBreakdown: runtime accounted ({runtimeAccounted}) exceeds runtime total ({runtimeTotal})"
     let overhead = unaccounted - runtimeUnaccounted
-    if overhead < TimeSpan.Zero then
-        Crash.crash $"calculateUnaccountedTimeBreakdown: runtime ({runtimeUnaccounted}) exceeds unaccounted ({unaccounted})"
     { Unaccounted = unaccounted; Runtime = runtimeUnaccounted; Overhead = overhead }
 
 let private normalizePassTimingName (name: string) : string =

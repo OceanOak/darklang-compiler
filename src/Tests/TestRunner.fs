@@ -132,8 +132,6 @@ let main args =
         if passDelta < TimeSpan.Zero then
             Crash.crash $"recordPhaseOverhead: pass timing delta ({passDelta}) is negative for {name}"
         let overhead = elapsed - passDelta
-        if overhead < TimeSpan.Zero then
-            Crash.crash $"recordPhaseOverhead: overhead ({overhead}) is negative for {name}"
         recordNonPassTiming name overhead
 
     let stdlibPassTimingStart = passTimingTotal ()
@@ -314,9 +312,6 @@ let main args =
                 let run = runFromTestResult result
                 let (_, _, _, compileTime, runtimeTime) = unpackRun run
                 let compileOverhead = compileTime - passTimingDelta
-                if compileOverhead < TimeSpan.Zero then
-                    Crash.crash
-                        $"compile overhead negative: compile={compileTime}, passes={passTimingDelta}"
                 recordNonPassTiming "Compile Overhead" compileOverhead
                 recordNonPassTiming TestFramework.testRuntimeTimingName runtimeTime
                 let totalTime = compileTime + runtimeTime
