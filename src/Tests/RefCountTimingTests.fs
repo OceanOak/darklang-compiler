@@ -13,6 +13,20 @@ open TypeChecking
 
 type TestResult = Result<unit, string>
 
+let rec countLetBindings (expr: AExpr) : int =
+    match expr with
+    | Return _ -> 0
+    | Let (_, _, body) -> 1 + countLetBindings body
+    | If (_, thenBranch, elseBranch) ->
+        countLetBindings thenBranch + countLetBindings elseBranch
+
+let countProgramLetBindings (Program (functions, mainExpr)) : int =
+    let funcLets =
+        functions
+        |> List.map (fun func -> countLetBindings func.Body)
+        |> List.sum
+    funcLets + countLetBindings mainExpr
+
 let private convertProgramToConversionResult (typedAst: AST.Program) : Result<AST_to_ANF.ConversionResult, string> =
     let moduleRegistry = Stdlib.buildModuleRegistry ()
     let monomorphized = monomorphize typedAst
@@ -76,6 +90,34 @@ let testRcTimingCounters () : TestResult =
                     else
                         Ok ()
 
+let testInferCExprTypeMemoized () : TestResult =
+    let source =
+        "let a = 1 in " +
+        "let b = 1 in " +
+        "let c = 1 in " +
+        "a"
+    match parseString false source with
+    | Error err -> Error $"Parse error: {err}"
+    | Ok ast ->
+        match checkProgram ast with
+        | Error err -> Error $"Type error: {typeErrorToString err}"
+        | Ok (_, typedAst) ->
+            match convertProgramToConversionResult typedAst with
+            | Error err -> Error $"ANF conversion error: {err}"
+            | Ok convResult ->
+                let letCount = countProgramLetBindings convResult.Program
+                match RefCountInsertion.insertRCInProgramWithTiming convResult with
+                | Error err -> Error $"RC insertion error: {err}"
+                | Ok (_, _, timing) ->
+                    if letCount < 2 then
+                        Error $"Expected at least two let bindings, got {letCount}"
+                    elif timing.InferCExprType.Calls >= letCount then
+                        Error
+                            $"Expected InferCExprType calls to be memoized below let count ({letCount}), got {timing.InferCExprType.Calls}"
+                    else
+                        Ok ()
+
 let tests = [
     ("RC timing counters", testRcTimingCounters)
+    ("RC infer memoized", testInferCExprTypeMemoized)
 ]
