@@ -135,9 +135,8 @@ let createContext (result: ConversionResult) : TypeContext =
       TempTypes = Map.empty
       ClosureFuncs = Map.empty }
 
-/// Add a TempId -> Type mapping to context
-let addType (ctx: TypeContext) (tempId: TempId) (typ: AST.Type) : TypeContext =
-    { ctx with TempTypes = Map.add tempId typ ctx.TempTypes }
+let private withTempTypes (ctx: TypeContext) (types: Map<TempId, AST.Type>) : TypeContext =
+    { ctx with TempTypes = types }
 
 /// Add a closure TempId -> function name mapping to context
 let addClosureFunc (ctx: TypeContext) (tempId: TempId) (funcName: string) : TypeContext =
@@ -578,6 +577,7 @@ let rec insertRCWithAnalysis
     (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     : AExpr * VarGen * Map<TempId, AST.Type> * RcTiming =
+    let ctxWithTypes = withTempTypes ctx types
     let rec descend
         (ctx: TypeContext)
         (expr: ReturnAnnotatedExpr)
@@ -636,11 +636,6 @@ let rec insertRCWithAnalysis
                         // Fallback for cases where inference is still incomplete.
                         // TODO: remove this once all CExprs are fully typed.
                         AST.TInt64
-            let ctx' = addType ctx tempId inferredType
-            let ctxWithAliases =
-                match cexpr with
-                | TypedAtom (Var sourceId, aliasType) -> addType ctx' sourceId aliasType
-                | _ -> ctx'
 
             let typesWithBinding =
                 match cexpr with
@@ -649,18 +644,20 @@ let rec insertRCWithAnalysis
                 | _ ->
                     Map.add tempId inferredType types
 
+            let ctxWithTypes = withTempTypes ctx typesWithBinding
+
             // Track closure function names for later ClosureCall type resolution
             let ctx'' =
                 match cexpr with
-                | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithAliases tempId funcName
-                | _ -> ctxWithAliases
+                | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithTypes tempId funcName
+                | _ -> ctxWithTypes
 
             let bodyReturned = returnedSet bodyInfo
             let (returnDecs', timing2) =
                 match maybeType with
                 | Some t when isHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
                     let (size, timing2) =
-                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx'.TypeReg) timing1
+                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timing1
                     ((tempId, size) :: returnDecs, timing2)
                 | _ -> (returnDecs, timing1)
 
@@ -674,7 +671,7 @@ let rec insertRCWithAnalysis
                             match tryGetType ctx tid with
                             | Some t when isHeapType t ->
                                 let (size, timing1) =
-                                    timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx'.TypeReg) timingAcc
+                                    timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timingAcc
                                 ((tid, size) :: acc, timing1)
                             | _ -> (acc, timingAcc)
                         | _ -> (acc, timingAcc)
@@ -686,7 +683,7 @@ let rec insertRCWithAnalysis
                 match maybeType with
                 | Some t when isHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
                     let (size, timing4) =
-                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx'.TypeReg) timing3
+                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timing3
                     (Some size, timing4)
                 | _ -> (None, timing3)
 
@@ -700,7 +697,7 @@ let rec insertRCWithAnalysis
             // Process the body iteratively, then rebuild on the way back out
             descend ctx'' bodyInfo varGen returnDecs' (frame :: frames) timing4 typesWithBinding
 
-    descend ctx expr varGen returnDecs [] timing types
+    descend ctxWithTypes expr varGen returnDecs [] timing types
 
 /// Insert reference counting operations into an AExpr with optional timing
 /// Returns (transformed expr, varGen, accumulated TempTypes, timing)
@@ -712,12 +709,13 @@ let private insertRCInternal
     (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     : AExpr * VarGen * Map<TempId, AST.Type> * RcTiming =
+    let ctxWithTypes = withTempTypes ctx types
     let (analyzed, timing1) =
         timeWithTiming swOpt addAnalyzeReturns (fun t -> analyzeReturns swOpt t Map.empty expr) timing
     let (result, timing2) =
         timeWithTiming swOpt addInsertRC
             (fun t ->
-                let (expr', varGen', types', timing') = insertRCWithAnalysis ctx analyzed varGen [] [] swOpt t types
+                let (expr', varGen', types', timing') = insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] swOpt t types
                 splitTimingResult expr' varGen' types' timing')
             timing1
     let (expr', varGen', types') = result
@@ -739,14 +737,10 @@ let private insertRCInFunctionInternal
     (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     : Function * VarGen * Map<TempId, AST.Type> * RcTiming =
-    // Add parameter types to context (types are now bundled in TypedParams)
-    let ctx' =
-        func.TypedParams
-        |> List.fold (fun c tp -> addType c tp.Id tp.Type) ctx
-
     let typesWithParams =
         func.TypedParams
         |> List.fold (fun m tp -> Map.add tp.Id tp.Type m) types
+    let ctxWithParams = withTempTypes ctx typesWithParams
 
     let (bodyInfo, timing1) =
         timeWithTiming swOpt addAnalyzeReturns (fun t -> analyzeReturns swOpt t Map.empty func.Body) timing
@@ -757,7 +751,7 @@ let private insertRCInFunctionInternal
             | AST.TDict _ -> (acc, timingAcc)  // Dict pointers are tagged; RC ops expect raw pointers.
             | _ when isHeapType param.Type ->
                 let (size, timing1) =
-                    timeWith swOpt addPayloadSize (fun () -> payloadSize param.Type ctx'.TypeReg) timingAcc
+                    timeWith swOpt addPayloadSize (fun () -> payloadSize param.Type ctxWithParams.TypeReg) timingAcc
                 ((param.Id, size) :: acc, timing1)
             | _ -> (acc, timingAcc)
         ) ([], timing1)
@@ -767,7 +761,8 @@ let private insertRCInFunctionInternal
     let (bodyResult, timing3) =
         timeWithTiming swOpt addInsertRC
             (fun t ->
-                let (expr', varGen', types', timing') = insertRCWithAnalysis ctx' bodyInfo varGen [] paramIncs swOpt t typesWithParams
+                let (expr', varGen', types', timing') =
+                    insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs swOpt t typesWithParams
                 splitTimingResult expr' varGen' types' timing')
             timing2
     let (body', varGen', accTypes) = bodyResult
@@ -783,32 +778,42 @@ let insertRCInFunction (ctx: TypeContext) (func: Function) (varGen: VarGen) : Fu
 // TypeMap Completeness Verification
 // ============================================================================
 
-/// Collect all TempIds defined in an AExpr (from Let bindings)
-let rec collectDefinedTempIds (expr: AExpr) : Set<TempId> =
+let private isTempMissing (typeMap: ANF.TypeMap) (tempId: TempId) : bool =
+    not (Map.containsKey tempId typeMap)
+
+let rec collectMissingTempIdsInExpr
+    (typeMap: ANF.TypeMap)
+    (expr: AExpr)
+    (acc: TempId list)
+    : TempId list =
     match expr with
-    | Return _ -> Set.empty
+    | Return _ -> acc
     | Let (tempId, _, body) ->
-        Set.add tempId (collectDefinedTempIds body)
+        let acc' = if isTempMissing typeMap tempId then tempId :: acc else acc
+        collectMissingTempIdsInExpr typeMap body acc'
     | If (_, thenBranch, elseBranch) ->
-        Set.union (collectDefinedTempIds thenBranch) (collectDefinedTempIds elseBranch)
+        let acc' = collectMissingTempIdsInExpr typeMap thenBranch acc
+        collectMissingTempIdsInExpr typeMap elseBranch acc'
 
-/// Collect all TempIds defined in a function (params + body)
-let collectFunctionTempIds (func: Function) : Set<TempId> =
-    let paramIds = func.TypedParams |> List.map (fun tp -> tp.Id) |> Set.ofList
-    Set.union paramIds (collectDefinedTempIds func.Body)
-
-/// Collect all TempIds defined in a program
-let collectProgramTempIds (ANF.Program (functions, mainExpr)) : Set<TempId> =
-    let funcIds = functions |> List.map collectFunctionTempIds |> Set.unionMany
-    Set.union funcIds (collectDefinedTempIds mainExpr)
+let collectMissingTempIdsInFunction
+    (typeMap: ANF.TypeMap)
+    (func: Function)
+    (acc: TempId list)
+    : TempId list =
+    let acc' =
+        func.TypedParams
+        |> List.fold (fun acc tp -> if isTempMissing typeMap tp.Id then tp.Id :: acc else acc) acc
+    collectMissingTempIdsInExpr typeMap func.Body acc'
 
 /// Verify that all defined TempIds have types in the TypeMap
 /// Returns a list of TempIds that are missing from the TypeMap
 let verifyTypeMapCompleteness (program: ANF.Program) (typeMap: ANF.TypeMap) : TempId list =
-    let definedIds = collectProgramTempIds program
-    let typedIds = typeMap |> Map.keys |> Set.ofSeq
-    let missing = Set.difference definedIds typedIds
-    Set.toList missing
+    let (ANF.Program (functions, mainExpr)) = program
+    let missing =
+        functions
+        |> List.fold (fun acc func -> collectMissingTempIdsInFunction typeMap func acc) []
+        |> collectMissingTempIdsInExpr typeMap mainExpr
+    List.rev missing
 
 /// Insert RC operations into a program with optional timing
 /// Returns (ANF.Program, TypeMap, timing) where TypeMap contains all TempId -> Type mappings
