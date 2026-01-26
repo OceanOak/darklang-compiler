@@ -1,5 +1,8 @@
 # Compiler Cache Placement Analysis
 
+Status: removed. The compiler no longer uses a compile cache; this analysis is
+kept for historical context about the removed function cache.
+
 This note evaluates where to compute function cache keys and capture cached
 artifacts in the compiler pipeline. It focuses on correctness, invalidation
 precision, and opportunities to move caching earlier without missing

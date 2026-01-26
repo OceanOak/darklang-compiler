@@ -39,9 +39,6 @@
     <Compile Include="ScriptHelperTests.fs" />
     <Compile Include="PassTestRunnerTests.fs" />
     <Compile Include="ProgressBarTests.fs" />
-    <Compile Include="PassTimingOutputTests.fs" />
-    <Compile Include="TestSummaryOutputTests.fs" />
-    <Compile Include="SnapshotCacheTests.fs" />
     <Compile Include="EncodingTests.fs" />
     <Compile Include="BinaryTests.fs" />
     <Compile Include="TypeCheckingTests.fs" />
@@ -74,9 +71,6 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
-    <PackageReference Include="MessagePack" Version="2.5.187" />
-    <PackageReference Include="MessagePack.FSharpExtensions" Version="4.0.0" />
   </ItemGroup>
 
 </Project>

@@ -96,8 +96,8 @@ Why ref counting?
 
 ## Compiler Cache
 
-The compiler uses a small SQLite cache for compiled functions.
-See `docs/compiler-cache.md` for key details and invalidation rules.
+The compiler does not use a compile cache anymore. `docs/compiler-cache.md`
+remains as a historical record of the removed cache design.
 
 ## Key Invariants
 

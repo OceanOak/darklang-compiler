@@ -7,7 +7,6 @@
 #   --filter=PATTERN   Run only tests matching PATTERN (case-insensitive)
 #   --verification     Enable verification/stress tests
 #   --build-only       Only build, don't run tests
-#   --no-cache         Disable compiler cache during tests
 #   --quiet            Quiet mode: print "success" or list failed tests
 #   --verbose          Print failing tests as soon as they occur
 #   -h, --help         Show this help message
@@ -36,10 +35,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --verification)
             TEST_ARGS+=("--verification")
-            shift
-            ;;
-        --no-cache)
-            TEST_ARGS+=("--no-cache")
             shift
             ;;
         --build-only)
@@ -76,7 +71,6 @@ if [ "$HELP" = true ]; then
     echo "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     echo "  --verification     Enable verification/stress tests"
     echo "  --build-only       Only build, don't run tests"
-    echo "  --no-cache         Disable compiler cache during tests"
     echo "  --quiet            Quiet mode: print 'success' or list failed tests"
     echo "  --verbose          Print failing tests as soon as they occur"
     echo "  -h, --help         Show this help message"

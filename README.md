@@ -91,14 +91,7 @@ echo $?  # Shows exit code
 ./dark -h
 ./dark --version
 
-# Disable compilation cache
-./dark --no-cache prog.dark
 ```
-
-**Compilation cache:**
-
-- Enabled by default, stored at `~/.cache/dark-compiler/cache.db`
-- Disable with `--no-cache`
 
 **Clean build artifacts:**
 

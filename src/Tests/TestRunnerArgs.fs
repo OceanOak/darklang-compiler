@@ -18,10 +18,6 @@ let hasCoverageArg (args: string array) : bool =
 let hasVerificationArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--verification")
 
-// Check if --no-cache flag is present (disable compiler cache)
-let hasNoCacheArg (args: string array) : bool =
-    args |> Array.exists (fun arg -> arg = "--no-cache")
-
 // Check if --verbose flag is present (print failing tests immediately)
 let hasVerboseArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--verbose" || arg = "-v")

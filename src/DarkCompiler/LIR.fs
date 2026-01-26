@@ -5,8 +5,6 @@
 
 module LIR
 
-open MessagePack
-
 /// ARM64 general-purpose registers
 /// X16/X17 are IP0/IP1 scratch registers, X27/X28 are reserved for runtime state.
 type PhysReg =
@@ -59,8 +57,6 @@ type Condition =
 type Label = Label of string
 
 /// Instructions (symbolic)
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type Instr =
     | Mov of dest:Reg * src:Operand
     | Phi of dest:Reg * sources:(Operand * Label) list * valueType:AST.Type option
@@ -159,8 +155,6 @@ type Instr =
     | CoverageHit of exprId:int
 
 /// Terminators
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type Terminator =
     | Ret
     | Branch of cond:Reg * trueLabel:Label * falseLabel:Label

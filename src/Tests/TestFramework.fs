@@ -7,8 +7,6 @@ module TestFramework
 open System
 open System.Diagnostics
 open Output
-open Cache
-
 type UnitTestCase = string * (unit -> Result<unit, string>)
 
 type UnitTestSuite = {
@@ -30,8 +28,6 @@ type TestTiming = {
     TotalTime: TimeSpan
     CompileTime: TimeSpan option
     RuntimeTime: TimeSpan option
-    CacheHitCount: int option
-    CacheMissCount: int option
 }
 
 type PassTimingEntry = {
@@ -58,24 +54,6 @@ type UnaccountedTimeBreakdown = {
 
 let testRuntimeTimingName = "Test Runtime"
 
-type CacheTotals = {
-    Hits: int
-    Misses: int
-}
-
-type CacheIoTotals = {
-    ReadCalls: int
-    ReadQueries: int
-    ReadRows: int
-    WriteCalls: int
-    WriteInserts: int
-    WriteCommits: int
-}
-
-type CacheIoInfo =
-    | CacheRead of readCalls:int * readQueries:int * readRows:int
-    | CacheWrite of writeCalls:int * writeInserts:int * writeCommits:int
-
 // Summary of per-file test suite results
 type FileSuiteSummary = {
     Passed: int
@@ -90,7 +68,6 @@ type TestRunState = {
     Timings: ResizeArray<TestTiming>
     mutable PassTimings: Map<string, TimeSpan>
     PassTimingOrder: ResizeArray<string>
-    mutable CacheIoTotals: CacheIoTotals
 }
 
 type OutputSymbols = {
@@ -105,15 +82,7 @@ let createState () : TestRunState =
       FailedTests = ResizeArray()
       Timings = ResizeArray()
       PassTimings = Map.empty
-      PassTimingOrder = ResizeArray()
-      CacheIoTotals = {
-          ReadCalls = 0
-          ReadQueries = 0
-          ReadRows = 0
-          WriteCalls = 0
-          WriteInserts = 0
-          WriteCommits = 0
-      } }
+      PassTimingOrder = ResizeArray() }
 
 let recordTiming (state: TestRunState) (timing: TestTiming) : unit =
     state.Timings.Add timing
@@ -126,119 +95,6 @@ let recordPassTiming (state: TestRunState) (timing: CompilerLibrary.PassTiming) 
         |> Option.defaultValue TimeSpan.Zero
     let updated = existing + timing.Elapsed
     state.PassTimings <- Map.add timing.Pass updated state.PassTimings
-
-let recordCacheIo (state: TestRunState) (info: CacheIoInfo) : unit =
-    match info with
-    | CacheRead (readCalls, readQueries, readRows) ->
-        let current = state.CacheIoTotals
-        state.CacheIoTotals <- {
-            current with
-                ReadCalls = current.ReadCalls + readCalls
-                ReadQueries = current.ReadQueries + readQueries
-                ReadRows = current.ReadRows + readRows
-        }
-    | CacheWrite (writeCalls, writeInserts, writeCommits) ->
-        let current = state.CacheIoTotals
-        state.CacheIoTotals <- {
-            current with
-                WriteCalls = current.WriteCalls + writeCalls
-                WriteInserts = current.WriteInserts + writeInserts
-                WriteCommits = current.WriteCommits + writeCommits
-        }
-
-type SnapshotCacheState = {
-    RawSnapshot: CacheSnapshot
-    CachedEntries: Map<FunctionCacheKey, LIR.Function>
-    PendingWrites: Map<FunctionCacheKey, LIR.Function>
-}
-
-let createSnapshotCacheState (snapshot: CacheSnapshot) : SnapshotCacheState =
-    { RawSnapshot = snapshot; CachedEntries = Map.empty; PendingWrites = Map.empty }
-
-let buildSnapshotCacheContext
-    (recordCacheIo: CacheIoInfo -> unit)
-    (cacheDbPath: string)
-    (snapshot: SnapshotCacheState)
-    : CompilerLibrary.CacheContext<SnapshotCacheState, LIR.Function> =
-    let addEntriesToMap
-        (entries: (FunctionCacheKey * LIR.Function) list)
-        (initial: Map<FunctionCacheKey, LIR.Function>)
-        : Map<FunctionCacheKey, LIR.Function> =
-        entries |> List.fold (fun acc (key, value) -> Map.add key value acc) initial
-
-    let read
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
-        (keys: FunctionCacheKey list)
-        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
-        if List.isEmpty keys then
-            Ok (Map.empty, state)
-        else
-            match keys |> List.tryFind (fun key -> key.CompilerKey <> state.Snapshot.RawSnapshot.CompilerKey) with
-            | Some key ->
-                Crash.crash $"Cache snapshot compiler key mismatch: expected {state.Snapshot.RawSnapshot.CompilerKey}, got {key.CompilerKey}"
-            | None ->
-                let folder
-                    (accResult: Result<Map<string, LIR.Function> * Map<FunctionCacheKey, LIR.Function>, string>)
-                    (key: FunctionCacheKey)
-                    : Result<Map<string, LIR.Function> * Map<FunctionCacheKey, LIR.Function>, string> =
-                    accResult
-                    |> Result.bind (fun (acc, cached) ->
-                        match Map.tryFind key cached with
-                        | Some value -> Ok (Map.add key.FunctionName value acc, cached)
-                        | None ->
-                            match Map.tryFind key state.Snapshot.RawSnapshot.Entries with
-                            | None -> Ok (acc, cached)
-                            | Some bytes ->
-                                deserialize<LIR.Function> bytes
-                                |> Result.map (fun value ->
-                                    let updatedCached = Map.add key value cached
-                                    (Map.add key.FunctionName value acc, updatedCached)))
-
-                let initial = Ok (Map.empty, state.Snapshot.CachedEntries)
-                keys
-                |> List.fold folder initial
-                |> Result.map (fun (cachedMap, updatedCached) ->
-                    let updatedSnapshot = { state.Snapshot with CachedEntries = updatedCached }
-                    (cachedMap, { state with Snapshot = updatedSnapshot }))
-
-    let write
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
-        (entries: (FunctionCacheKey * LIR.Function) list)
-        : Result<CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
-        if List.isEmpty entries then
-            Ok state
-        else
-            let updatedCached =
-                addEntriesToMap entries state.Snapshot.CachedEntries
-            let updatedPending =
-                addEntriesToMap entries state.Snapshot.PendingWrites
-            let updatedSnapshot =
-                { state.Snapshot with CachedEntries = updatedCached; PendingWrites = updatedPending }
-            Ok { state with Snapshot = updatedSnapshot }
-
-    let flush
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>)
-        : Result<CompilerLibrary.CacheState<SnapshotCacheState, LIR.Function>, string> =
-        if Map.isEmpty state.Snapshot.PendingWrites then
-            Ok state
-        else
-            let pendingWrites = state.Snapshot.PendingWrites |> Map.toList
-            let pendingCount = Map.count state.Snapshot.PendingWrites
-            setFunctionsWithDbPath pendingWrites cacheDbPath
-            |> Result.map (fun () ->
-                recordCacheIo (CacheWrite (1, pendingCount, 1))
-                let updatedSnapshot = { state.Snapshot with PendingWrites = Map.empty }
-                { state with Snapshot = updatedSnapshot })
-
-    CompilerLibrary.CacheContext {
-        State = { Snapshot = snapshot; PendingWrites = [] }
-        Read = read
-        Write = write
-        Flush = flush
-    }
 
 let recordResults
     (state: TestRunState)
@@ -260,95 +116,8 @@ let formatTime (elapsed: TimeSpan) =
         let seconds = elapsed.TotalSeconds.ToString("0.00")
         $"{seconds}s"
 
-let formatCacheMissCount (missCountOpt: int option) : string option =
-    match missCountOpt with
-    | Some count when count > 0 -> Some $"cache-misses: {count}"
-    | _ -> None
-
-let calculateCacheTotals (timings: seq<TestTiming>) : CacheTotals option =
-    let folder (hits, misses, sawData) (timing: TestTiming) =
-        match timing.CacheHitCount, timing.CacheMissCount with
-        | Some hitCount, Some missCount ->
-            (hits + hitCount, misses + missCount, true)
-        | None, None ->
-            (hits, misses, sawData)
-        | _ ->
-            Crash.crash "calculateCacheTotals: cache hit/miss counts must be recorded together"
-    let (hits, misses, sawData) =
-        timings |> Seq.fold folder (0, 0, false)
-    if sawData then Some { Hits = hits; Misses = misses } else None
-
-let formatCacheTotalsLine (totalsOpt: CacheTotals option) : string =
-    let totals =
-        match totalsOpt with
-        | Some value -> value
-        | None -> { Hits = 0; Misses = 0 }
-    $"Cache hits/misses: {totals.Hits}/{totals.Misses}"
-
-let formatCacheIoTotalsLine (totals: CacheIoTotals) : string =
-    $"SQLite IO: reads {totals.ReadCalls} (queries {totals.ReadQueries}, rows {totals.ReadRows}), writes {totals.WriteCalls} (inserts {totals.WriteInserts}, commits {totals.WriteCommits})"
-
-
-let consolidateCacheHashSerializeTimings
-    (passTimings: Map<string, TimeSpan>)
-    : Map<string, TimeSpan> =
-    let isCacheHashSerialize (name: string) : bool =
-        name.StartsWith("Cache Hash ", StringComparison.Ordinal)
-        || name.StartsWith("Cache Serialize:", StringComparison.Ordinal)
-
-    let folder
-        (name: string)
-        (elapsed: TimeSpan)
-        (cacheTotal: TimeSpan, acc: Map<string, TimeSpan>)
-        : TimeSpan * Map<string, TimeSpan> =
-        if isCacheHashSerialize name then
-            (cacheTotal + elapsed, acc)
-        else
-            (cacheTotal, Map.add name elapsed acc)
-
-    let (cacheTotal, pruned) =
-        passTimings |> Map.fold (fun acc name elapsed -> folder name elapsed acc) (TimeSpan.Zero, Map.empty)
-
-    if cacheTotal > TimeSpan.Zero then
-        Map.add "Cache Hash/Serialize total" cacheTotal pruned
-    else
-        pruned
-
-let consolidateCacheWriteTimings
-    (passTimings: Map<string, TimeSpan>)
-    : Map<string, TimeSpan> =
-    let isCacheWrite (name: string) : bool =
-        name.StartsWith("Cache Write:", StringComparison.Ordinal)
-
-    let hasParentWrite = Map.containsKey "Cache Write" passTimings
-
-    let folder
-        (name: string)
-        (elapsed: TimeSpan)
-        (cacheTotal: TimeSpan, sawWrite: bool, acc: Map<string, TimeSpan>)
-        : TimeSpan * bool * Map<string, TimeSpan> =
-        if isCacheWrite name then
-            (cacheTotal + elapsed, true, acc)
-        else
-            (cacheTotal, sawWrite, Map.add name elapsed acc)
-
-    if hasParentWrite then
-        passTimings
-        |> Map.filter (fun name _ -> not (isCacheWrite name))
-    else
-        let (cacheTotal, sawWrite, pruned) =
-            passTimings |> Map.fold (fun acc name elapsed -> folder name elapsed acc) (TimeSpan.Zero, false, Map.empty)
-
-        if sawWrite then
-            Map.add "Cache Write" cacheTotal pruned
-        else
-            pruned
-
 let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
     passTimings
-    |> consolidateCacheHashSerializeTimings
-    |> consolidateCacheWriteTimings
-    |> Map.filter (fun name _ -> not (name.StartsWith("RC: ", StringComparison.Ordinal)))
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
 
 let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<string, TimeSpan> =
@@ -357,10 +126,7 @@ let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<stri
             "Start Function Compilation"
         ]
     passTimings
-    |> consolidateCacheHashSerializeTimings
-    |> consolidateCacheWriteTimings
     |> Map.filter (fun name _ -> not (Set.contains name overlapTimingNames))
-    |> Map.filter (fun name _ -> not (name.StartsWith("RC: ", StringComparison.Ordinal)))
 
 let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
     passTimings
@@ -390,10 +156,7 @@ let buildPassTimingColumns
     (_passTimingOrder: string list)
     (unaccountedTime: TimeSpan)
     : PassTimingColumns =
-    let consolidated =
-        passTimings
-        |> consolidateCacheHashSerializeTimings
-        |> consolidateCacheWriteTimings
+    let consolidated = passTimings
 
     let passDefinitions : (string * string * string) list =
         [
@@ -417,21 +180,21 @@ let buildPassTimingColumns
         ]
 
     let orderedDefinitions : (string * string option * string) list =
-        [
-            ("Cache Deserialize", None, "Cache Deserialize")
-            ("Stdlib Build Overhead", None, "Stdlib Build Overhead")
-            ("E2E Test Parse", None, "E2E Test Parse")
-            ("E2E Suite Context Overhead", None, "E2E Suite Context Overhead")
-        ]
-        @ (passDefinitions
-           |> List.map (fun (timingKey, number, name) ->
-               (timingKey, Some number, name)))
+        (passDefinitions
+        |> List.map (fun (timingKey, number, name) ->
+            (timingKey, Some number, name)))
         @ [
-            ("Compile Overhead", None, "Compile Overhead")
-            ("Cache Hash/Serialize total", None, "Cache Hash/Serialize total")
-            ("Cache Write", None, "Cache Write")
             (testRuntimeTimingName, None, testRuntimeTimingName)
-            ("Cache Flush", None, "Cache Flush")
+        ]
+
+    let overheadDefinitions : (string * string) list =
+        [
+            ("Stdlib Build Overhead", "Stdlib Build Overhead")
+            ("E2E Test Parse", "E2E Test Parse")
+            ("E2E Suite Context Overhead", "E2E Suite Context Overhead")
+            ("Verification Test Parse", "Verification Test Parse")
+            ("Verification Suite Context Overhead", "Verification Suite Context Overhead")
+            ("Compile Overhead", "Compile Overhead")
         ]
 
     let minDisplayDuration = TimeSpan.FromMilliseconds(50.0)
@@ -447,11 +210,19 @@ let buildPassTimingColumns
                 Some { Number = number; Name = name; Elapsed = elapsed }
             | _ -> None)
 
+    let overheadEntries =
+        overheadDefinitions
+        |> List.choose (fun (timingKey, name) ->
+            match Map.tryFind timingKey consolidated with
+            | Some elapsed when shouldDisplay elapsed ->
+                Some { Number = None; Name = name; Elapsed = elapsed }
+            | _ -> None)
+
     let knownTotal =
         consolidated
         |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
     let displayedTotal =
-        orderedEntries
+        orderedEntries @ overheadEntries
         |> List.fold (fun acc entry -> acc + entry.Elapsed) TimeSpan.Zero
     let otherKnown = knownTotal - displayedTotal
     if otherKnown < TimeSpan.Zero then
@@ -469,18 +240,28 @@ let buildPassTimingColumns
         else
             []
 
-    let entries = orderedEntries @ otherKnownEntries @ otherUnknownEntries
-    let entriesByTime =
-        entries |> List.sortByDescending (fun entry -> entry.Elapsed)
+    let overheadEntriesWithOther = overheadEntries @ otherKnownEntries @ otherUnknownEntries
+    let orderedEntriesByTime =
+        orderedEntries |> List.sortByDescending (fun entry -> entry.Elapsed)
+    let overheadSection =
+        if List.isEmpty overheadEntriesWithOther then
+            None
+        else
+            Some { Title = "Overhead"; Entries = overheadEntriesWithOther }
+
+    let combinedByTimeEntries =
+        orderedEntries @ overheadEntriesWithOther
+        |> List.sortByDescending (fun entry -> entry.Elapsed)
 
     {
         Ordered =
             [
-                { Title = "Order"; Entries = entries }
+                { Title = "Passes"; Entries = orderedEntries }
             ]
+            @ (overheadSection |> Option.toList)
         ByTime =
             [
-                { Title = "By Time"; Entries = entriesByTime }
+                { Title = "By Time"; Entries = combinedByTimeEntries }
             ]
     }
 
@@ -536,8 +317,6 @@ let runFileSuite
                 TotalTime = testTimer.Elapsed
                 CompileTime = None
                 RuntimeTime = None
-                CacheHitCount = None
-                CacheMissCount = None
             }
             sectionPassed <- sectionPassed + summary.Passed
             sectionFailed <- sectionFailed + summary.Failed
@@ -584,8 +363,6 @@ let runUnitTestSuites
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
-                    CacheHitCount = None
-                    CacheMissCount = None
                 }
                 unitSectionPassed <- unitSectionPassed + 1
                 ProgressBar.increment unitProgress true
@@ -596,16 +373,12 @@ let runUnitTestSuites
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
-                    CacheHitCount = None
-                    CacheMissCount = None
                 }
                 recordTiming state {
                     Name = $"Unit: {displayName}"
                     TotalTime = timer.Elapsed
                     CompileTime = None
                     RuntimeTime = None
-                    CacheHitCount = None
-                    CacheMissCount = None
                 }
                 ProgressBar.increment unitProgress false
                 ProgressBar.finish unitProgress

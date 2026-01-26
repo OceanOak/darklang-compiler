@@ -38,8 +38,8 @@ type private PreambleBuildSpec = {
 /// Map of built preamble contexts keyed by source file
 type PreambleContextMap = Map<string, CompilerLibrary.PreambleContext>
 
-type SuiteContext<'Snapshot> = {
-    Stdlib: CompilerLibrary.StdlibResult<'Snapshot>
+type SuiteContext = {
+    Stdlib: CompilerLibrary.StdlibResult
     PreambleContexts: PreambleContextMap
 }
 
@@ -110,7 +110,7 @@ let private collectSpecsFromTests
     loop testsToAnalyze Set.empty
 
 let private buildPreamblePlan
-    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
+    (stdlib: CompilerLibrary.StdlibResult)
     (spec: PreambleBuildSpec)
     (tests: E2ETest list)
     : Result<PreamblePlan * Set<SpecKey>, string> =
@@ -162,10 +162,10 @@ let private buildPreamblePlan
 
 /// Build suite stdlib specializations and per-file preamble contexts
 let buildSuiteContexts
-    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
+    (stdlib: CompilerLibrary.StdlibResult)
     (tests: E2ETest array)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
-    : Result<SuiteContext<'Snapshot>, string> =
+    : Result<SuiteContext, string> =
     let groupedTests =
         tests
         |> Array.toList
@@ -194,8 +194,6 @@ let buildSuiteContexts
                     ANFFunctions = []
                     TypeMap = stdlibWithSpecs.StdlibTypeMap
                     SymbolicFunctions = []
-                    PreambleHash = Cache.hashString ""
-                    PreambleFunctionDependencyHashes = Map.empty
                 }
             let contextsResult =
                 plans
@@ -314,30 +312,28 @@ let private tryExecuteBinary (binary: byte array) : Result<CompilerLibrary.Execu
     try Ok (CompilerLibrary.execute 0 binary)
     with ex -> Error ex.Message
 
-let private compileAndRun (request: CompilerLibrary.CompileRequest<'Snapshot>) : E2ERun * CompilerLibrary.CacheSettings<'Snapshot> =
+let private compileAndRun (request: CompilerLibrary.CompileRequest) : E2ERun =
     let compileReport = CompilerLibrary.compile request
-    let cacheSettings = compileReport.CacheSettings
     match compileReport.Result with
     | Error err ->
-        (CompileFailed (1, err, compileReport.CompileTime), cacheSettings)
+        CompileFailed (1, err, compileReport.CompileTime)
     | Ok binary ->
         match tryExecuteBinary binary with
         | Ok execResult ->
-            (Ran (execResult.ExitCode, execResult.Stdout, execResult.Stderr, compileReport.CompileTime, execResult.RuntimeTime), cacheSettings)
+            Ran (execResult.ExitCode, execResult.Stdout, execResult.Stderr, compileReport.CompileTime, execResult.RuntimeTime)
         | Error err ->
-            (Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero), cacheSettings)
+            Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero)
 
 /// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
-    (stdlib: CompilerLibrary.StdlibResult<'Snapshot>)
+    (stdlib: CompilerLibrary.StdlibResult)
     (preambleCtx: CompilerLibrary.PreambleContext)
     (test: E2ETest)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
-    (cacheMissRecorder: CompilerLibrary.CacheMissRecorder option)
-    : E2ETestResult * CompilerLibrary.StdlibResult<'Snapshot> =
+    : E2ETestResult =
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
-    let request : CompilerLibrary.CompileRequest<'Snapshot> = {
+    let request : CompilerLibrary.CompileRequest = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
         Mode = CompilerLibrary.CompileMode.TestExpression
         Source = test.Source
@@ -346,9 +342,6 @@ let runE2ETestWithPreambleContext
         Verbosity = 0
         Options = options
         PassTimingRecorder = passTimingRecorder
-        CacheMissRecorder = cacheMissRecorder
     }
-    let run, updatedCacheSettings = compileAndRun request
-    let updatedStdlib = { stdlib with CacheSettings = updatedCacheSettings }
-    let result = evaluateExpectations test run
-    (result, updatedStdlib)
+    let run = compileAndRun request
+    evaluateExpectations test run

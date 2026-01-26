@@ -2,7 +2,8 @@
 
 This document describes the performance optimization systems that were removed from the compiler to simplify the codebase. These were removed in the commit that added this document (see `git log --oneline docs/removed-optimizations.md`).
 
-Note: a new, simpler cache has since been reintroduced. See `docs/compiler-cache.md` for the current design.
+Note: the v4 SQLite function cache was removed again. See `docs/compiler-cache.md`
+for the historical design and the performance hacks it used.
 
 ## Why They Were Removed
 
@@ -19,19 +20,24 @@ The decision was made to prioritize simplicity over compilation speed.
 
 ### 1. SQLite Persistent Cache (`Cache.fs`)
 
-**What it was**: A ~390 line module that persisted compilation artifacts to SQLite across compiler runs.
+**What it was**: A SQLite-backed cache that stored post-register-allocation
+`LIR.Function` artifacts across compiler runs.
 
 **How it worked**:
-- Used MessagePack serialization for binary encoding of AST/ANF/MIR/LIR structures
-- Stored compiled stdlib functions keyed by content hash
-- Cached E2E test results keyed by test source hash
-- Used dependency hashing to invalidate caches when upstream functions changed
+- Used MessagePack serialization for binary encoding of `LIR.Function` values
+- Keyed entries by cache version, compiler hash, options hash, function name,
+  and a dependency hash derived from post-inlining ANF
+- Batched reads/writes via prepared statements and a single transaction per
+  scope, with aggressive SQLite pragma tuning for speed
+- Preloaded `CacheSnapshot` entries for test runs to reduce repeated I/O
 
 **Files affected**:
 - `Cache.fs` - Deleted entirely
 - `DarkCompiler.fsproj` - Removed MessagePack and Microsoft.Data.Sqlite package references
-- `AST.fs`, `LIR.fs` - Removed `[<MessagePackObject>]` attributes
-- `ANF_Inlining.fs` - Removed `buildDependencyHashMap`, `computeDependencyHash` functions
+- `CompilerLibrary.fs` - Removed cache settings/types and cache-aware compilation
+- `Program.fs` - Removed `--cache-key` and `--no-cache` flags
+- `AST.fs`, `ANF.fs`, `LIR.fs` - Removed MessagePack serialization attributes
+- `TestRunner.fs`, `TestFramework.fs` - Removed cache plumbing and summary output
 
 ### 2. Parallelization (`ResultList.fs`)
 
@@ -85,8 +91,8 @@ The decision was made to prioritize simplicity over compilation speed.
 ## Performance Impact
 
 After removal:
-- **Compilation is slower**: Each test recompiles stdlib from scratch
-- **Test suite is slower**: No test result caching, no parallel execution
+- **Compilation is slower**: Each compiler invocation recompiles stdlib and functions
+- **Test suite is slower**: No cache reuse across runs, no parallel execution
 - **Memory usage is simpler**: No long-lived caches accumulating entries
 
 The trade-off was deemed acceptable for the current development phase.
@@ -109,6 +115,7 @@ If compilation speed becomes a problem again, consider:
 | `src/DarkCompiler/CompilerLibrary.fs` | Major simplification |
 | `src/DarkCompiler/Stdlib.fs` | Removed lazy singleton |
 | `src/DarkCompiler/AST.fs` | Removed MessagePack attributes |
+| `src/DarkCompiler/ANF.fs` | Removed MessagePack attributes |
 | `src/DarkCompiler/LIR.fs` | Removed MessagePack attributes |
 | `src/DarkCompiler/passes/2.4_ANF_Inlining.fs` | Removed dependency hash functions |
 | `src/DarkCompiler/passes/3_ANF_to_MIR.fs` | Sequential mapping |

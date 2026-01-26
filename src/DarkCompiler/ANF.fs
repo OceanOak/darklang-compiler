@@ -20,8 +20,6 @@
 
 module ANF
 
-open MessagePack
-
 /// Unique identifier for temporary variables
 type TempId = TempId of int
 
@@ -107,8 +105,6 @@ type UnaryOp =
     | BitNot  // Bitwise NOT: ~~~expr
 
 /// Complex expressions (produce values)
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type CExpr =
     | Atom of Atom
     | TypedAtom of Atom * AST.Type  // Atom with explicit type (for pattern matching where inferred types would be wrong)
@@ -164,8 +160,6 @@ type CExpr =
     | FloatToString of Atom                   // Convert Float to heap String
 
 /// ANF expressions with explicit sequencing
-/// MessagePackObject(false) uses integer keys to avoid named field parameter matching bug
-[<MessagePackObject(false)>]
 type AExpr =
     | Let of TempId * CExpr * AExpr
     | Return of Atom

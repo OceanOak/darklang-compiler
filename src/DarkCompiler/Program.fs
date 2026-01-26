@@ -54,8 +54,6 @@ type CliOptions = {
     Verbosity: VerbosityLevel
     Help: bool
     Version: bool
-    CacheKey: bool               // True = output cache key (SHA256 of compiler binary)
-    NoCache: bool                // True = disable compilation cache
     Argument: string option
     LeakCheck: bool
     // Optimization flags
@@ -92,8 +90,6 @@ let defaultOptions = {
     Verbosity = Normal
     Help = false
     Version = false
-    CacheKey = false
-    NoCache = false
     Argument = None
     LeakCheck = false
     DisableFreeList = false
@@ -147,44 +143,6 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
     DumpMIR = cliOpts.DumpMIR
     DumpLIR = cliOpts.DumpLIR
 }
-
-/// Build cache settings from CLI options
-let private sqliteCacheContext () : CompilerLibrary.CacheContext<unit, LIR.Function> =
-    let read
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
-        (keys: Cache.FunctionCacheKey list)
-        : Result<Map<string, LIR.Function> * CompilerLibrary.CacheState<unit, LIR.Function>, string> =
-        Cache.getFunctions<LIR.Function> keys
-        |> Result.map (fun cached -> (cached, state))
-
-    let write
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
-        (entries: (Cache.FunctionCacheKey * LIR.Function) list)
-        : Result<CompilerLibrary.CacheState<unit, LIR.Function>, string> =
-        Cache.setFunctions entries
-        |> Result.map (fun () -> state)
-
-    let flush
-        (_scope: CompilerLibrary.CacheScope)
-        (state: CompilerLibrary.CacheState<unit, LIR.Function>)
-        : Result<CompilerLibrary.CacheState<unit, LIR.Function>, string> =
-        Ok state
-
-    CompilerLibrary.CacheContext {
-        State = { Snapshot = (); PendingWrites = [] }
-        Read = read
-        Write = write
-        Flush = flush
-    }
-
-let buildCacheSettings (cliOpts: CliOptions) : Result<CompilerLibrary.CacheSettings<unit>, string> =
-    if cliOpts.NoCache then
-        Ok { CompilerKey = ""; Context = CompilerLibrary.NoCache }
-    else
-        Cache.getCompilerKey ()
-        |> Result.map (fun key -> { CompilerKey = key; Context = sqliteCacheContext () })
 
 /// Parse command-line flags into options
 let parseArgs (argv: string array) : Result<CliOptions, string> =
@@ -260,12 +218,6 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
         | "--version" :: rest ->
             parseFlags rest { opts with Version = true } lastVerbosity
 
-        | "--cache-key" :: rest ->
-            parseFlags rest { opts with CacheKey = true } lastVerbosity
-
-        | "--no-cache" :: rest ->
-            parseFlags rest { opts with NoCache = true } lastVerbosity
-
         | "--no-free-list" :: rest | "--disable-opt-freelist" :: rest ->
             parseFlags rest { opts with DisableFreeList = true } lastVerbosity
 
@@ -333,7 +285,7 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
             else
                 parseFlags rest { opts with Argument = Some "-" } lastVerbosity
 
-        | flag :: rest when flag.StartsWith("-") && flag.Length > 1 ->
+        | flag :: rest when flag.StartsWith("-") && not (flag.StartsWith("--")) && flag.Length > 1 ->
             // Handle combined short flags like -qr, -re, etc.
             let chars = flag.Substring(1).ToCharArray()
             let rec expandFlags (cs: char list) (acc: string list) =
@@ -369,8 +321,8 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
 /// Validate parsed options
 let validateOptions (opts: CliOptions) : Result<CliOptions, string> =
-    // Help, version, and cache-key override everything else
-    if opts.Help || opts.Version || opts.CacheKey then
+    // Help and version override everything else
+    if opts.Help || opts.Version then
         Ok opts
     else
         // Check for required argument
@@ -391,59 +343,48 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
 
     // Use library for compilation
     let options = buildCompilerOptions cliOpts
-    match buildCacheSettings cliOpts with
+    let sourceFile =
+        if cliOpts.IsExpression then ""
+        else cliOpts.Argument |> Option.defaultValue ""
+
+    match CompilerLibrary.buildStdlib () with
     | Error err ->
         eprintln $"Compilation failed: {err}"
         1
-    | Ok cacheSettings ->
-        let sourceFile =
-            if cliOpts.IsExpression then ""
-            else cliOpts.Argument |> Option.defaultValue ""
-
-        match CompilerLibrary.buildStdlibWithCache cacheSettings None with
+    | Ok stdlib ->
+        let request : CompilerLibrary.CompileRequest = {
+            Context = CompilerLibrary.StdlibOnly stdlib
+            Mode = CompilerLibrary.CompileMode.FullProgram
+            Source = source
+            SourceFile = sourceFile
+            AllowInternal = false
+            Verbosity = verbosityToInt verbosity
+            Options = options
+            PassTimingRecorder = None
+        }
+        let compileReport = CompilerLibrary.compile request
+        match compileReport.Result with
         | Error err ->
             eprintln $"Compilation failed: {err}"
             1
-        | Ok stdlib ->
-            let request : CompilerLibrary.CompileRequest<unit> = {
-                Context = CompilerLibrary.StdlibOnly stdlib
-                Mode = CompilerLibrary.CompileMode.FullProgram
-                Source = source
-                SourceFile = sourceFile
-                AllowInternal = false
-                Verbosity = verbosityToInt verbosity
-                Options = options
-                PassTimingRecorder = None
-                CacheMissRecorder = None
-            }
-            let compileReport = CompilerLibrary.compile request
-            let flushScope = CompilerLibrary.CacheScope.UserProgram sourceFile
-            match CompilerLibrary.flushCacheSettings flushScope compileReport.CacheSettings with
-            | Error err -> eprintln $"Cache flush failed: {err}"
-            | Ok _ -> ()
-
-            match compileReport.Result with
+        | Ok binary ->
+            // Write to file
+            match Platform.detectOS () with
             | Error err ->
-                eprintln $"Compilation failed: {err}"
+                eprintln $"Platform detection failed: {err}"
                 1
-            | Ok binary ->
-                // Write to file
-                match Platform.detectOS () with
+            | Ok os ->
+                let writeResult =
+                    match os with
+                    | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
+                    | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
+                match writeResult with
                 | Error err ->
-                    eprintln $"Platform detection failed: {err}"
+                    eprintln $"Failed to write binary: {err}"
                     1
-                | Ok os ->
-                    let writeResult =
-                        match os with
-                        | Platform.MacOS -> Binary_Generation_MachO.writeToFile outputPath binary
-                        | Platform.Linux -> Binary_Generation_ELF.writeToFile outputPath binary
-                    match writeResult with
-                    | Error err ->
-                        eprintln $"Failed to write binary: {err}"
-                        1
-                    | Ok () ->
-                        if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
-                        0
+                | Ok () ->
+                    if showNormal then println $"Successfully wrote {binary.Length} bytes to {outputPath}"
+                    0
 
 /// Run an expression (compile to temp and execute)
 let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int =
@@ -456,52 +397,36 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
     // Use library for compile and run
     let options = buildCompilerOptions cliOpts
     let execResult : CompilerLibrary.ExecutionOutput =
-        match buildCacheSettings cliOpts with
+        let sourceFile =
+            if cliOpts.IsExpression then ""
+            else cliOpts.Argument |> Option.defaultValue ""
+
+        match CompilerLibrary.buildStdlib () with
         | Error err ->
             { ExitCode = 1
               Stdout = ""
               Stderr = err
               RuntimeTime = TimeSpan.Zero }
-        | Ok cacheSettings ->
-            let sourceFile =
-                if cliOpts.IsExpression then ""
-                else cliOpts.Argument |> Option.defaultValue ""
-
-            match CompilerLibrary.buildStdlibWithCache cacheSettings None with
+        | Ok stdlib ->
+            let request : CompilerLibrary.CompileRequest = {
+                Context = CompilerLibrary.StdlibOnly stdlib
+                Mode = CompilerLibrary.CompileMode.FullProgram
+                Source = source
+                SourceFile = sourceFile
+                AllowInternal = false
+                Verbosity = verbosityToInt verbosity
+                Options = options
+                PassTimingRecorder = None
+            }
+            let compileReport = CompilerLibrary.compile request
+            match compileReport.Result with
             | Error err ->
                 { ExitCode = 1
                   Stdout = ""
                   Stderr = err
                   RuntimeTime = TimeSpan.Zero }
-            | Ok stdlib ->
-                let request : CompilerLibrary.CompileRequest<unit> = {
-                    Context = CompilerLibrary.StdlibOnly stdlib
-                    Mode = CompilerLibrary.CompileMode.FullProgram
-                    Source = source
-                    SourceFile = sourceFile
-                    AllowInternal = false
-                    Verbosity = verbosityToInt verbosity
-                    Options = options
-                    PassTimingRecorder = None
-                    CacheMissRecorder = None
-                }
-                let compileReport = CompilerLibrary.compile request
-                let flushScope = CompilerLibrary.CacheScope.UserProgram sourceFile
-                match CompilerLibrary.flushCacheSettings flushScope compileReport.CacheSettings with
-                | Error err ->
-                    { ExitCode = 1
-                      Stdout = ""
-                      Stderr = $"Cache flush failed: {err}"
-                      RuntimeTime = TimeSpan.Zero }
-                | Ok _ ->
-                    match compileReport.Result with
-                    | Error err ->
-                        { ExitCode = 1
-                          Stdout = ""
-                          Stderr = err
-                          RuntimeTime = TimeSpan.Zero }
-                    | Ok binary ->
-                        CompilerLibrary.execute (verbosityToInt verbosity) binary
+            | Ok binary ->
+                CompilerLibrary.execute (verbosityToInt verbosity) binary
 
     if showNormal then
         if execResult.Stdout <> "" then
@@ -512,11 +437,6 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
         println $"Exit code: {execResult.ExitCode}"
 
     execResult.ExitCode
-
-/// Get a cache key based on the SHA256 hash of the compiler binary.
-/// This uniquely identifies this build of the compiler.
-let getCacheKey () : Result<string, string> =
-    Cache.getCompilerKey ()
 
 /// Print version information
 let printVersion () =
@@ -548,8 +468,6 @@ let printUsage () =
     println "  --leak-check         Enable leak checking (debug builds only)"
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
-    println "  --cache-key          Output compiler binary hash (for caching)"
-    println "  --no-cache           Disable compilation cache"
     println ""
     println "Optimization flags (for debugging):"
     println "  --disable-opt-anf       Disable ANF-level optimizations"
@@ -593,15 +511,6 @@ let main argv =
         | Ok options when options.Version ->
             printVersion()
             0
-
-        | Ok options when options.CacheKey ->
-            match getCacheKey () with
-            | Ok key ->
-                printf "%s" key
-                0
-            | Error err ->
-                eprintln $"Cache key error: {err}"
-                1
 
         | Ok options ->
             // Get source code (from stdin, file, or inline expression)
