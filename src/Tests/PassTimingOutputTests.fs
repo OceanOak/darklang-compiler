@@ -11,11 +11,19 @@ type TestResult = Result<unit, string>
 let testPassTimingColumnsOrdering () : TestResult =
     let timings =
         [
-            ("Parse", TimeSpan.FromMilliseconds(1.0))
-            ("Type Checking", TimeSpan.FromMilliseconds(2.0))
-            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(5.0))
-            ("Start Function Compilation", TimeSpan.FromMilliseconds(4.0))
-            ("Cache Write: insert", TimeSpan.FromMilliseconds(10.0))
+            ("Parse", TimeSpan.FromMilliseconds(120.0))
+            ("Type Checking", TimeSpan.FromMilliseconds(200.0))
+            ("AST -> ANF", TimeSpan.FromMilliseconds(80.0))
+            ("Cache Deserialize", TimeSpan.FromMilliseconds(60.0))
+            ("E2E Test Parse", TimeSpan.FromMilliseconds(40.0))
+            ("Verification Test Parse", TimeSpan.FromMilliseconds(100.0))
+            ("Verification Suite Context Overhead", TimeSpan.FromMilliseconds(130.0))
+            ("Compile Overhead", TimeSpan.FromMilliseconds(150.0))
+            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(90.0))
+            ("Cache Write: insert", TimeSpan.FromMilliseconds(140.0))
+            ("Cache Flush", TimeSpan.FromMilliseconds(160.0))
+            ("Custom Timing", TimeSpan.FromMilliseconds(70.0))
+            ("Start Function Compilation", TimeSpan.FromMilliseconds(110.0))
         ]
         |> Map.ofList
 
@@ -27,9 +35,11 @@ let testPassTimingColumnsOrdering () : TestResult =
             "Start Function Compilation"
             "Cache Write: insert"
             "AST -> ANF"
+            "Compile Overhead"
         ]
 
-    let columns = TestFramework.buildPassTimingColumns timings order
+    let unaccounted = TimeSpan.FromMilliseconds(500.0)
+    let columns = TestFramework.buildPassTimingColumns timings order unaccounted
 
     let names (entries: TestFramework.PassTimingEntry list) : string list =
         entries |> List.map (fun entry -> entry.Name)
@@ -38,99 +48,105 @@ let testPassTimingColumnsOrdering () : TestResult =
         entries |> List.map (fun entry -> entry.Number)
 
     match columns.Ordered with
-    | ordered :: others :: [] ->
-        let orderedPassEntries =
-            ordered.Entries
-            |> List.choose (fun entry -> entry.Number |> Option.map (fun number -> (number, entry.Name)))
-        let passNumbers = orderedPassEntries |> List.map fst |> List.map Some
-        let passNames = orderedPassEntries |> List.map snd
+    | ordered :: [] ->
         let orderedNames = names ordered.Entries
-        let otherNames = names others.Entries
-        let passNumberText = String.concat ", " (passNumbers |> List.map (Option.defaultValue ""))
-        let passNameText = String.concat ", " passNames
-        let otherNameText = String.concat ", " otherNames
-        let expectedNumbers =
-            [
-                "1"
-                "1.5"
-                "2"
-                "2.3"
-                "2.4"
-                "2.5"
-                "2.6"
-                "2.7"
-                "3"
-                "3.1"
-                "3.5"
-                "4"
-                "4.5"
-                "5"
-                "5.5"
-                "6"
-                "7"
-            ]
+        let orderedNumbers = numbers ordered.Entries
         let expectedNames =
             [
+                "Cache Deserialize"
                 "Parser"
                 "Type Checking"
                 "AST to ANF"
-                "ANF Optimizations"
-                "ANF Inlining"
-                "Ref Count Insertion"
-                "Print Insertion"
-                "Tail Call Optimization"
-                "ANF to MIR"
-                "SSA Construction"
-                "MIR Optimizations"
-                "MIR to LIR"
-                "LIR Peephole"
-                "Register Allocation"
-                "Function Tree Shaking"
-                "Code Generation"
-                "ARM64 Emit"
+                "Compile Overhead"
+                "Cache Hash/Serialize total"
+                "Cache Write"
+                "Cache Flush"
+                "Other (known)"
+                "Other (unknown)"
             ]
-        if passNumbers <> (expectedNumbers |> List.map Some) then
-            Error $"Unexpected compiler-order pass numbers: {passNumberText}"
-        elif passNames <> expectedNames then
-            Error $"Unexpected compiler-order pass names: {passNameText}"
-        elif not (List.contains "Cache Hash/Serialize total" orderedNames) then
-            Error "Expected Cache Hash/Serialize total in ordered steps"
-        elif otherNames <> [ "Start Function Compilation"; "Cache Write" ] then
-            Error $"Unexpected run-order non-pass names: {otherNameText}"
+        let expectedNumbers =
+            [
+                None
+                Some "1"
+                Some "1.5"
+                Some "2"
+                None
+                None
+                None
+                None
+                None
+                None
+            ]
+        let orderedNameText = String.concat ", " orderedNames
+        let orderedNumberText =
+            orderedNumbers
+            |> List.map (Option.defaultValue "")
+            |> String.concat ", "
+        let otherKnownExpected = TimeSpan.FromMilliseconds(450.0)
+        let otherUnknownExpected = TimeSpan.FromMilliseconds(500.0)
+        let findEntry (target: string) =
+            ordered.Entries |> List.tryFind (fun entry -> entry.Name = target)
+        let otherKnownEntry = findEntry "Other (known)"
+        let otherUnknownEntry = findEntry "Other (unknown)"
+        let parseEntry = findEntry "Parser"
+        let typeCheckEntry = findEntry "Type Checking"
+        let anfEntry = findEntry "AST to ANF"
+        let otherKnownOk =
+            match otherKnownEntry with
+            | Some entry -> entry.Elapsed = otherKnownExpected
+            | None -> false
+        let otherUnknownOk =
+            match otherUnknownEntry with
+            | Some entry -> entry.Elapsed = otherUnknownExpected
+            | None -> false
+        if ordered.Title <> "Order" then
+            Error $"Unexpected ordered section title: {ordered.Title}"
+        elif orderedNames <> expectedNames then
+            Error $"Unexpected ordered names: {orderedNameText}"
+        elif orderedNumbers <> expectedNumbers then
+            Error $"Unexpected ordered numbers: {orderedNumberText}"
+        elif List.contains "E2E Test Parse" orderedNames then
+            Error "Expected E2E Test Parse to be excluded below threshold"
+        elif List.contains "Verification Test Parse" orderedNames then
+            Error "Expected Verification Test Parse to be excluded"
+        elif List.contains "Verification Suite Context Overhead" orderedNames then
+            Error "Expected Verification Suite Context Overhead to be excluded"
+        elif List.contains "Start Function Compilation" orderedNames then
+            Error "Expected Start Function Compilation to be excluded"
+        elif parseEntry |> Option.exists (fun entry -> entry.Number <> Some "1") then
+            Error "Expected Parser to have number 1"
+        elif typeCheckEntry |> Option.exists (fun entry -> entry.Number <> Some "1.5") then
+            Error "Expected Type Checking to have number 1.5"
+        elif anfEntry |> Option.exists (fun entry -> entry.Number <> Some "2") then
+            Error "Expected AST to ANF to have number 2"
+        elif not otherKnownOk then
+            Error "Unexpected Other (known) elapsed"
+        elif not otherUnknownOk then
+            Error "Unexpected Other (unknown) elapsed"
         else
-            let astEntry =
-                ordered.Entries |> List.tryFind (fun entry -> entry.Name = "AST to ANF")
-            match astEntry with
-            | Some entry when entry.Elapsed = TimeSpan.Zero ->
-                match columns.ByTime with
-                | timeOrdered :: timeOthers :: [] ->
-                    let timePassEntries =
-                        timeOrdered.Entries
-                        |> List.choose (fun entry -> entry.Number |> Option.map (fun number -> (number, entry.Name)))
-                    let timePassNumbers = timePassEntries |> List.map fst |> List.map Some
-                    let timePassNames = timePassEntries |> List.map snd
-                    let timeOtherNames = names timeOthers.Entries
-                    let timePassNumberText = String.concat ", " (timePassNumbers |> List.map (Option.defaultValue ""))
-                    let timePassNameText = String.concat ", " timePassNames
-                    let timeOtherNameText = String.concat ", " timeOtherNames
-                    let timeFirstTwoNumbers = timePassNumbers |> List.truncate 2
-                    let timeFirstTwoNames = timePassNames |> List.truncate 2
-                    if timeFirstTwoNumbers <> [ Some "1.5"; Some "1" ] then
-                        Error $"Unexpected time-ordered pass numbers: {timePassNumberText}"
-                    elif timeFirstTwoNames <> [ "Type Checking"; "Parser" ] then
-                        Error $"Unexpected time-ordered pass names: {timePassNameText}"
-                    elif timeOtherNames <> [ "Cache Write"; "Start Function Compilation" ] then
-                        Error $"Unexpected time-ordered non-pass names: {timeOtherNameText}"
-                    else
-                        Ok ()
-                | _ ->
-                    Error "Expected two time-ordered sections"
-            | Some _ ->
-                Error "Expected AST to ANF timing to be zero when missing"
-            | None ->
-                Error "Expected AST to ANF to be present even when missing"
+            match columns.ByTime with
+            | byTime :: [] ->
+                let byTimeNames = names byTime.Entries
+                let byTimeNameText = String.concat ", " byTimeNames
+                let times = byTime.Entries |> List.map (fun entry -> entry.Elapsed)
+                let rec isDescending (values: TimeSpan list) : bool =
+                    match values with
+                    | [] -> true
+                    | _ :: [] -> true
+                    | first :: second :: rest ->
+                        first >= second && isDescending (second :: rest)
+                if byTime.Title <> "By Time" then
+                    Error $"Unexpected by-time section title: {byTime.Title}"
+                elif Set.ofList byTimeNames <> Set.ofList orderedNames then
+                    Error $"Unexpected by-time names: {byTimeNameText}"
+                elif not (isDescending times) then
+                    Error "Expected by-time entries to be sorted descending"
+                else
+                    Ok ()
+            | _ ->
+                Error "Expected one by-time section"
     | _ ->
-        Error "Expected two ordered sections"
+        Error "Expected one ordered section"
 
 let testUnaccountedTimeBreakdown () : TestResult =
     let makeTiming (name: string) (totalTime: TimeSpan) (runtimeTime: TimeSpan option) : TestFramework.TestTiming =
@@ -257,12 +273,11 @@ let testUnaccountedTimeWithOverlappingTimings () : TestResult =
 let testOrderedStepsIncludeNonPass () : TestResult =
     let timings =
         [
-            ("Parse", TimeSpan.FromMilliseconds(1.0))
-            ("Compile Overhead", TimeSpan.FromMilliseconds(2.0))
-            (TestFramework.testRuntimeTimingName, TimeSpan.FromMilliseconds(3.0))
-            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(4.0))
-            ("Start Function Compilation", TimeSpan.FromMilliseconds(5.0))
-            ("Cache Write: insert", TimeSpan.FromMilliseconds(6.0))
+            ("Parse", TimeSpan.FromMilliseconds(120.0))
+            ("Compile Overhead", TimeSpan.FromMilliseconds(200.0))
+            (TestFramework.testRuntimeTimingName, TimeSpan.FromMilliseconds(180.0))
+            ("Cache Hash Serialize: typed program", TimeSpan.FromMilliseconds(140.0))
+            ("Cache Write: insert", TimeSpan.FromMilliseconds(160.0))
         ]
         |> Map.ofList
 
@@ -272,75 +287,48 @@ let testOrderedStepsIncludeNonPass () : TestResult =
             "Compile Overhead"
             TestFramework.testRuntimeTimingName
             "Cache Hash Serialize: typed program"
-            "Start Function Compilation"
             "Cache Write: insert"
         ]
 
-    let columns = TestFramework.buildPassTimingColumns timings order
+    let columns = TestFramework.buildPassTimingColumns timings order TimeSpan.Zero
     let names (entries: TestFramework.PassTimingEntry list) : string list =
         entries |> List.map (fun entry -> entry.Name)
-    let numbers (entries: TestFramework.PassTimingEntry list) : string option list =
-        entries |> List.map (fun entry -> entry.Number)
-
-    let expectedPassNames =
-        [
-            "Parser"
-            "Type Checking"
-            "AST to ANF"
-            "ANF Optimizations"
-            "ANF Inlining"
-            "Ref Count Insertion"
-            "Print Insertion"
-            "Tail Call Optimization"
-            "ANF to MIR"
-            "SSA Construction"
-            "MIR Optimizations"
-            "MIR to LIR"
-            "LIR Peephole"
-            "Register Allocation"
-            "Function Tree Shaking"
-            "Code Generation"
-            "ARM64 Emit"
-        ]
+    let findEntry (target: string) (entries: TestFramework.PassTimingEntry list) =
+        entries |> List.tryFind (fun entry -> entry.Name = target)
 
     match columns.Ordered with
-    | ordered :: other :: [] ->
-        let orderedPassEntries =
-            ordered.Entries
-            |> List.choose (fun entry -> entry.Number |> Option.map (fun number -> (number, entry.Name)))
-        let orderedPassNames = orderedPassEntries |> List.map snd
-        let orderedNonPassEntries =
-            ordered.Entries |> List.filter (fun entry -> Option.isNone entry.Number)
-        let orderedNonPassNames = names orderedNonPassEntries
-        let orderedNonPassNumbers = numbers orderedNonPassEntries
-        let nonPassNames = names other.Entries
-        let nonPassNameText = String.concat ", " nonPassNames
-        let orderedNonPassNameText = String.concat ", " orderedNonPassNames
-        let expectedOrderedNonPassNames =
-            [
-                "Cache Deserialize"
-                "Stdlib Build Overhead"
-                "E2E Test Parse"
-                "E2E Suite Context Overhead"
-                "Verification Test Parse"
-                "Verification Suite Context Overhead"
-                "Compile Overhead"
-                "Cache Hash/Serialize total"
-                TestFramework.testRuntimeTimingName
-                "Cache Flush"
-            ]
-        if orderedPassNames <> expectedPassNames then
-            Error "Unexpected ordered pass names in ordered steps"
-        elif orderedNonPassNames <> expectedOrderedNonPassNames then
-            Error $"Unexpected ordered non-pass steps: {orderedNonPassNameText}"
-        elif orderedNonPassNumbers <> (List.replicate expectedOrderedNonPassNames.Length None) then
-            Error "Expected ordered non-pass steps to have no numbering"
-        elif nonPassNames <> [ "Start Function Compilation"; "Cache Write" ] then
-            Error $"Unexpected grouped timings: {nonPassNameText}"
+    | ordered :: [] ->
+        let orderedNames = names ordered.Entries
+        let parserNumber =
+            findEntry "Parser" ordered.Entries |> Option.bind (fun entry -> entry.Number)
+        let compileOverheadNumber =
+            findEntry "Compile Overhead" ordered.Entries |> Option.bind (fun entry -> entry.Number)
+        let cacheHashNumber =
+            findEntry "Cache Hash/Serialize total" ordered.Entries |> Option.bind (fun entry -> entry.Number)
+        let cacheWriteNumber =
+            findEntry "Cache Write" ordered.Entries |> Option.bind (fun entry -> entry.Number)
+        let runtimeNumber =
+            findEntry TestFramework.testRuntimeTimingName ordered.Entries |> Option.bind (fun entry -> entry.Number)
+        if not (List.contains "Cache Write" orderedNames) then
+            Error "Expected Cache Write in ordered steps"
+        elif parserNumber <> Some "1" then
+            Error "Expected Parser to have number 1"
+        elif compileOverheadNumber.IsSome then
+            Error "Expected Compile Overhead to have no numbering"
+        elif cacheHashNumber.IsSome then
+            Error "Expected Cache Hash/Serialize total to have no numbering"
+        elif cacheWriteNumber.IsSome then
+            Error "Expected Cache Write to have no numbering"
+        elif runtimeNumber.IsSome then
+            Error "Expected Test Runtime to have no numbering"
+        elif List.contains "Other (known)" orderedNames then
+            Error "Did not expect Other (known) when all timings are displayed"
+        elif List.contains "Other (unknown)" orderedNames then
+            Error "Did not expect Other (unknown) when unaccounted is zero"
         else
             Ok ()
     | _ ->
-        Error "Expected two ordered sections"
+        Error "Expected one ordered section"
 
 let testOverheadTotalsExcludeNestedTimings () : TestResult =
     let timings =
@@ -359,26 +347,21 @@ let testOverheadTotalsExcludeNestedTimings () : TestResult =
         Ok ()
 
 let testOtherTimingsIncludeDefaultsWhenMissing () : TestResult =
-    let columns = TestFramework.buildPassTimingColumns Map.empty []
-    let names (entries: TestFramework.PassTimingEntry list) : string list =
-        entries |> List.map (fun entry -> entry.Name)
-    let elapsed (entries: TestFramework.PassTimingEntry list) : TimeSpan list =
-        entries |> List.map (fun entry -> entry.Elapsed)
-    match columns.Ordered with
-    | _ :: other :: [] ->
-        let otherNames = names other.Entries
-        let otherElapsed = elapsed other.Entries
-        let expectedNames = [ "Start Function Compilation"; "Cache Write" ]
-        let expectedElapsed = [ TimeSpan.Zero; TimeSpan.Zero ]
-        if otherNames <> expectedNames then
-            let otherNameText = String.concat ", " otherNames
-            Error $"Unexpected default other timings: {otherNameText}"
-        elif otherElapsed <> expectedElapsed then
-            Error "Expected default other timings to be zero"
+    let columns = TestFramework.buildPassTimingColumns Map.empty [] TimeSpan.Zero
+    match columns.Ordered, columns.ByTime with
+    | ordered :: [], byTime :: [] ->
+        if ordered.Title <> "Order" then
+            Error $"Unexpected ordered title: {ordered.Title}"
+        elif byTime.Title <> "By Time" then
+            Error $"Unexpected by-time title: {byTime.Title}"
+        elif not (List.isEmpty ordered.Entries) then
+            Error "Expected ordered entries to be empty when no timings are present"
+        elif not (List.isEmpty byTime.Entries) then
+            Error "Expected by-time entries to be empty when no timings are present"
         else
             Ok ()
     | _ ->
-        Error "Expected two ordered sections"
+        Error "Expected one section per column"
 
 let tests : (string * (unit -> Result<unit, string>)) list =
     [

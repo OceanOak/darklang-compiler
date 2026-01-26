@@ -350,7 +350,7 @@ let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
     |> consolidateCacheWriteTimings
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
 
-let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
+let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<string, TimeSpan> =
     let overlapTimingNames =
         Set.ofList [
             "Start Function Compilation"
@@ -359,6 +359,10 @@ let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : 
     |> consolidateCacheHashSerializeTimings
     |> consolidateCacheWriteTimings
     |> Map.filter (fun name _ -> not (Set.contains name overlapTimingNames))
+
+let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
+    passTimings
+    |> filterPassTimingsForOverhead
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
 
 let calculateUnaccountedTimeBreakdown
@@ -379,26 +383,10 @@ let calculateUnaccountedTimeBreakdown
     let overhead = unaccounted - runtimeUnaccounted
     { Unaccounted = unaccounted; Runtime = runtimeUnaccounted; Overhead = overhead }
 
-let private normalizePassTimingName (name: string) : string =
-    if name.StartsWith("Cache Hash ", StringComparison.Ordinal)
-       || name.StartsWith("Cache Serialize:", StringComparison.Ordinal) then
-        "Cache Hash/Serialize total"
-    elif name.StartsWith("Cache Write:", StringComparison.Ordinal) then
-        "Cache Write"
-    else
-        name
-
-let private distinctPreserveOrder (names: string list) : string list =
-    let folder (seen: Set<string>, acc: string list) (name: string) =
-        if Set.contains name seen then
-            (seen, acc)
-        else
-            (Set.add name seen, acc @ [ name ])
-    names |> List.fold folder (Set.empty, []) |> snd
-
 let buildPassTimingColumns
     (passTimings: Map<string, TimeSpan>)
-    (passTimingOrder: string list)
+    (_passTimingOrder: string list)
+    (unaccountedTime: TimeSpan)
     : PassTimingColumns =
     let consolidated =
         passTimings
@@ -426,98 +414,71 @@ let buildPassTimingColumns
             ("ARM64 Emit", "7", "ARM64 Emit")
         ]
 
-    let orderedDefinitions : (string * string option * string * bool) list =
+    let orderedDefinitions : (string * string option * string) list =
         [
-            ("Cache Deserialize", None, "Cache Deserialize", true)
-            ("Stdlib Build Overhead", None, "Stdlib Build Overhead", true)
-            ("E2E Test Parse", None, "E2E Test Parse", true)
-            ("E2E Suite Context Overhead", None, "E2E Suite Context Overhead", true)
-            ("Verification Test Parse", None, "Verification Test Parse", true)
-            ("Verification Suite Context Overhead", None, "Verification Suite Context Overhead", true)
+            ("Cache Deserialize", None, "Cache Deserialize")
+            ("Stdlib Build Overhead", None, "Stdlib Build Overhead")
+            ("E2E Test Parse", None, "E2E Test Parse")
+            ("E2E Suite Context Overhead", None, "E2E Suite Context Overhead")
         ]
         @ (passDefinitions
            |> List.map (fun (timingKey, number, name) ->
-               (timingKey, Some number, name, true)))
+               (timingKey, Some number, name)))
         @ [
-            ("Compile Overhead", None, "Compile Overhead", true)
-            ("Cache Hash/Serialize total", None, "Cache Hash/Serialize total", true)
-            (testRuntimeTimingName, None, testRuntimeTimingName, true)
-            ("Cache Flush", None, "Cache Flush", true)
+            ("Compile Overhead", None, "Compile Overhead")
+            ("Cache Hash/Serialize total", None, "Cache Hash/Serialize total")
+            ("Cache Write", None, "Cache Write")
+            (testRuntimeTimingName, None, testRuntimeTimingName)
+            ("Cache Flush", None, "Cache Flush")
         ]
 
-    let orderedKeys =
-        orderedDefinitions |> List.map (fun (key, _, _, _) -> key) |> Set.ofList
+    let minDisplayDuration = TimeSpan.FromMilliseconds(50.0)
+
+    let shouldDisplay (elapsed: TimeSpan) : bool =
+        elapsed >= minDisplayDuration
 
     let orderedEntries =
         orderedDefinitions
-        |> List.choose (fun (timingKey, number, name, alwaysInclude) ->
+        |> List.choose (fun (timingKey, number, name) ->
             match Map.tryFind timingKey consolidated with
-            | Some elapsed -> Some { Number = number; Name = name; Elapsed = elapsed }
-            | None when alwaysInclude -> Some { Number = number; Name = name; Elapsed = TimeSpan.Zero }
-            | None -> None)
+            | Some elapsed when shouldDisplay elapsed ->
+                Some { Number = number; Name = name; Elapsed = elapsed }
+            | _ -> None)
 
-    let orderedEntriesByTime =
+    let knownTotal =
+        consolidated
+        |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
+    let displayedTotal =
         orderedEntries
-        |> List.sortByDescending (fun entry -> entry.Elapsed)
+        |> List.fold (fun acc entry -> acc + entry.Elapsed) TimeSpan.Zero
+    let otherKnown = knownTotal - displayedTotal
+    if otherKnown < TimeSpan.Zero then
+        Crash.crash $"buildPassTimingColumns: known timings ({knownTotal}) smaller than displayed ({displayedTotal})"
 
-    let nonOrderedMap =
-        consolidated |> Map.filter (fun name _ -> not (Set.contains name orderedKeys))
+    let otherKnownEntries =
+        if shouldDisplay otherKnown then
+            [ { Number = None; Name = "Other (known)"; Elapsed = otherKnown } ]
+        else
+            []
 
-    let normalizedOrder =
-        passTimingOrder
-        |> List.map normalizePassTimingName
-        |> distinctPreserveOrder
+    let otherUnknownEntries =
+        if shouldDisplay unaccountedTime then
+            [ { Number = None; Name = "Other (unknown)"; Elapsed = unaccountedTime } ]
+        else
+            []
 
-    let orderSet = Set.ofList normalizedOrder
-
-    let nonPassDefinitions = [ "Start Function Compilation"; "Cache Write" ]
-    let nonPassDefinitionSet = Set.ofList nonPassDefinitions
-
-    let entryForNonPass (name: string) : PassTimingEntry =
-        let elapsed = Map.tryFind name nonOrderedMap |> Option.defaultValue TimeSpan.Zero
-        { Number = None; Name = name; Elapsed = elapsed }
-
-    let nonPassEntriesInOrder =
-        normalizedOrder
-        |> List.filter (fun name -> Set.contains name nonPassDefinitionSet)
-        |> List.map entryForNonPass
-
-    let nonPassRemainderDefinitions =
-        nonPassDefinitions
-        |> List.filter (fun name -> not (Set.contains name orderSet))
-        |> List.map entryForNonPass
-
-    let nonPassRemainderOther =
-        nonOrderedMap
-        |> Map.toList
-        |> List.choose (fun (name, elapsed) ->
-            if Set.contains name orderSet || Set.contains name nonPassDefinitionSet then
-                None
-            else
-                Some { Number = None; Name = name; Elapsed = elapsed })
-        |> List.sortBy (fun entry -> entry.Name)
-
-    let nonPassEntriesByTime =
-        let baseEntries = nonPassDefinitions |> List.map entryForNonPass
-        let extraEntries =
-            nonOrderedMap
-            |> Map.toList
-            |> List.choose (fun (name, elapsed) ->
-                if Set.contains name nonPassDefinitionSet then None
-                else Some { Number = None; Name = name; Elapsed = elapsed })
-        (baseEntries @ extraEntries)
-        |> List.sortByDescending (fun entry -> entry.Elapsed)
+    let entries = orderedEntries @ otherKnownEntries @ otherUnknownEntries
+    let entriesByTime =
+        entries |> List.sortByDescending (fun entry -> entry.Elapsed)
 
     {
         Ordered =
             [
-                { Title = "Ordered Steps (Suite Order)"; Entries = orderedEntries }
-                { Title = "Other Timings (Grouped)"; Entries = nonPassEntriesInOrder @ nonPassRemainderDefinitions @ nonPassRemainderOther }
+                { Title = "Order"; Entries = entries }
             ]
         ByTime =
             [
-                { Title = "Ordered Steps (By Time)"; Entries = orderedEntriesByTime }
-                { Title = "Other Timings (By Time)"; Entries = nonPassEntriesByTime }
+                { Title = "By Time"; Entries = entriesByTime }
             ]
     }
 

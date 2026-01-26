@@ -730,6 +730,11 @@ let main args =
             else None
 
     totalTimer.Stop()
+    let unaccountedBreakdown =
+        TestFramework.calculateUnaccountedTimeBreakdown
+            totalTimer.Elapsed
+            runState.PassTimings
+            runState.Timings
 
     // Print slowest tests
     if runState.Timings.Count > 0 then
@@ -759,11 +764,15 @@ let main args =
         TestFramework.buildPassTimingColumns
             runState.PassTimings
             (runState.PassTimingOrder |> Seq.toList)
+            unaccountedBreakdown.Unaccounted
     let formatColumn (sections: TestFramework.PassTimingSection list) : string list =
         let entries = sections |> List.collect (fun section -> section.Entries)
-        let formatMilliseconds (elapsed: TimeSpan) : string =
-            let ms = elapsed.TotalMilliseconds.ToString("0")
-            $"{ms}ms"
+        let formatSeconds (elapsed: TimeSpan) : string =
+            if elapsed.TotalMilliseconds < 100.0 then
+                ">0.1s"
+            else
+                let seconds = elapsed.TotalSeconds.ToString("0.0")
+                $"{seconds}s"
         let numberText (entry: TestFramework.PassTimingEntry) : string =
             match entry.Number with
             | Some number -> number
@@ -782,12 +791,22 @@ let main args =
             |> List.fold max 0
         let timeWidth =
             entries
-            |> List.map (fun entry -> (formatMilliseconds entry.Elapsed).Length)
+            |> List.map (fun entry -> (formatSeconds entry.Elapsed).Length)
             |> List.fold max 0
         let formatEntry (entry: TestFramework.PassTimingEntry) : string =
             let label = labelFor entry
-            let timeText = formatMilliseconds entry.Elapsed
-            $"  {label.PadRight labelWidth}  {timeText.PadLeft timeWidth}"
+            let timeText = formatSeconds entry.Elapsed
+            let paddedTime = timeText.PadLeft timeWidth
+            let timeWithColor =
+                if entry.Elapsed.TotalSeconds > 3.0 then
+                    $"{Colors.red}{paddedTime}{Colors.gray}"
+                elif entry.Elapsed.TotalSeconds > 2.0 then
+                    $"{Colors.yellow}{paddedTime}{Colors.gray}"
+                elif entry.Elapsed.TotalSeconds > 1.0 then
+                    $"{Colors.white}{paddedTime}{Colors.gray}"
+                else
+                    paddedTime
+            $"  {label.PadRight labelWidth}  {timeWithColor}"
         let sectionCount = List.length sections
         sections
         |> List.mapi (fun idx section ->
@@ -801,16 +820,23 @@ let main args =
         |> List.collect id
     let leftLines = formatColumn columns.Ordered
     let rightLines = formatColumn columns.ByTime
+    let visibleLength (text: string) : int =
+        [ Colors.red; Colors.yellow; Colors.white; Colors.gray; Colors.bold; Colors.reset ]
+        |> List.fold (fun (acc: string) (code: string) -> acc.Replace(code, "")) text
+        |> fun stripped -> stripped.Length
+    let padRightVisible (text: string) (width: int) : string =
+        let visible = visibleLength text
+        if visible >= width then text else text + String(' ', width - visible)
     let leftWidth =
         leftLines
-        |> List.map (fun line -> line.Length)
+        |> List.map visibleLength
         |> List.fold max 0
     let gap = "  "
     let lineCount = max leftLines.Length rightLines.Length
     for idx in 0 .. lineCount - 1 do
         let left = if idx < leftLines.Length then leftLines.[idx] else ""
         let right = if idx < rightLines.Length then rightLines.[idx] else ""
-        let paddedLeft = left.PadRight leftWidth
+        let paddedLeft = padRightVisible left leftWidth
         println $"  {Colors.gray}{paddedLeft}{gap}{right}{Colors.reset}"
     println ""
 
@@ -832,13 +858,8 @@ let main args =
     let cacheIoLine =
         runState.CacheIoTotals
         |> TestFramework.formatCacheIoTotalsLine
-    println $"  {Colors.gray}{cacheTotalsLine}{Colors.reset}"
-    println $"  {Colors.gray}{cacheIoLine}{Colors.reset}"
-    let unaccountedBreakdown =
-        TestFramework.calculateUnaccountedTimeBreakdown
-            totalTimer.Elapsed
-            runState.PassTimings
-            runState.Timings
+    let cacheSummaryLine = $"{cacheTotalsLine} | {cacheIoLine}"
+    println $"  {Colors.gray}{cacheSummaryLine}{Colors.reset}"
     println
         $"  {Colors.gray}⏱  Unaccounted time: {formatTime unaccountedBreakdown.Unaccounted} (runtime: {formatTime unaccountedBreakdown.Runtime}, overhead: {formatTime unaccountedBreakdown.Overhead}){Colors.reset}"
     println $"  {Colors.gray}⏱  Total time: {formatTime totalTimer.Elapsed}{Colors.reset}"
