@@ -20,7 +20,6 @@ module RefCountInsertion
 
 open ANF
 open AST_to_ANF
-open System.Diagnostics
 
 /// Type context for inferring types during RC insertion
 type TypeContext = {
@@ -37,99 +36,7 @@ type TypeContext = {
 /// Cached CExpr type inference results
 type CExprTypeCache = Map<CExpr, AST.Type option>
 
-/// Timing counter for RC insertion profiling
-type TimingCounter = {
-    Ms: float
-    Calls: int
-}
-
-/// Fine-grained timing breakdown for RC insertion
-type RcTiming = {
-    AnalyzeReturns: TimingCounter
-    CollectAliasChain: TimingCounter
-    InsertRC: TimingCounter
-    InferCExprType: TimingCounter
-    PayloadSize: TimingCounter
-    InsertParamIncs: TimingCounter
-    InsertReturnDecs: TimingCounter
-    ApplyLetFrame: TimingCounter
-    ApplyLetFrames: TimingCounter
-    MergeTypes: TimingCounter
-    VerifyTypeMap: TimingCounter
-}
-
-let emptyTimingCounter : TimingCounter = { Ms = 0.0; Calls = 0 }
-
-let emptyRcTiming : RcTiming = {
-    AnalyzeReturns = emptyTimingCounter
-    CollectAliasChain = emptyTimingCounter
-    InsertRC = emptyTimingCounter
-    InferCExprType = emptyTimingCounter
-    PayloadSize = emptyTimingCounter
-    InsertParamIncs = emptyTimingCounter
-    InsertReturnDecs = emptyTimingCounter
-    ApplyLetFrame = emptyTimingCounter
-    ApplyLetFrames = emptyTimingCounter
-    MergeTypes = emptyTimingCounter
-    VerifyTypeMap = emptyTimingCounter
-}
-
 let emptyCExprTypeCache : CExprTypeCache = Map.empty
-
-let private addTiming (elapsedMs: float) (counter: TimingCounter) : TimingCounter =
-    { Ms = counter.Ms + elapsedMs; Calls = counter.Calls + 1 }
-
-let private addAnalyzeReturns elapsed timing =
-    { timing with AnalyzeReturns = addTiming elapsed timing.AnalyzeReturns }
-
-let private addCollectAliasChain elapsed timing =
-    { timing with CollectAliasChain = addTiming elapsed timing.CollectAliasChain }
-
-let private addInsertRC elapsed timing =
-    { timing with InsertRC = addTiming elapsed timing.InsertRC }
-
-let private addInferCExprType elapsed timing =
-    { timing with InferCExprType = addTiming elapsed timing.InferCExprType }
-
-let private addPayloadSize elapsed timing =
-    { timing with PayloadSize = addTiming elapsed timing.PayloadSize }
-
-let private addInsertParamIncs elapsed timing =
-    { timing with InsertParamIncs = addTiming elapsed timing.InsertParamIncs }
-
-let private addInsertReturnDecs elapsed timing =
-    { timing with InsertReturnDecs = addTiming elapsed timing.InsertReturnDecs }
-
-let private addApplyLetFrame elapsed timing =
-    { timing with ApplyLetFrame = addTiming elapsed timing.ApplyLetFrame }
-
-let private addApplyLetFrames elapsed timing =
-    { timing with ApplyLetFrames = addTiming elapsed timing.ApplyLetFrames }
-
-let private addVerifyTypeMap elapsed timing =
-    { timing with VerifyTypeMap = addTiming elapsed timing.VerifyTypeMap }
-
-let private timeWithTiming
-    (swOpt: Stopwatch option)
-    (update: float -> RcTiming -> RcTiming)
-    (f: RcTiming -> 'a * RcTiming)
-    (timing: RcTiming)
-    : 'a * RcTiming =
-    match swOpt with
-    | None -> f timing
-    | Some sw ->
-        let start = sw.Elapsed.TotalMilliseconds
-        let (result, timing1) = f timing
-        let elapsed = sw.Elapsed.TotalMilliseconds - start
-        (result, update elapsed timing1)
-
-let private timeWith
-    (swOpt: Stopwatch option)
-    (update: float -> RcTiming -> RcTiming)
-    (f: unit -> 'a)
-    (timing: RcTiming)
-    : 'a * RcTiming =
-    timeWithTiming swOpt update (fun t -> (f (), t)) timing
 
 /// Create initial context from conversion result
 let createContext (result: ConversionResult) : TypeContext =
@@ -426,30 +333,28 @@ let rec collectAliasChain (aliases: Map<TempId, TempId>) (tempId: TempId) : Set<
 
 /// Analyze return values and track alias chains in a single pass
 let rec analyzeReturns
-    (swOpt: Stopwatch option)
-    (timing: RcTiming)
     (aliases: Map<TempId, TempId>)
     (expr: AExpr)
-    : ReturnAnnotatedExpr * RcTiming =
+    : ReturnAnnotatedExpr =
     match expr with
     | Return atom ->
-        let (returned, timing1) =
+        let returned =
             match atom with
-            | Var tid -> timeWith swOpt addCollectAliasChain (fun () -> collectAliasChain aliases tid) timing
-            | _ -> (Set.empty, timing)
-        (RReturn (atom, returned), timing1)
+            | Var tid -> collectAliasChain aliases tid
+            | _ -> Set.empty
+        RReturn (atom, returned)
     | Let (tempId, cexpr, body) ->
         let aliases' =
             match cexpr with
             | Atom (Var sourceId) -> Map.add tempId sourceId aliases
             | _ -> aliases
-        let (bodyInfo, timing1) = analyzeReturns swOpt timing aliases' body
-        (RLet (tempId, cexpr, bodyInfo, returnedSet bodyInfo), timing1)
+        let bodyInfo = analyzeReturns aliases' body
+        RLet (tempId, cexpr, bodyInfo, returnedSet bodyInfo)
     | If (cond, thenBranch, elseBranch) ->
-        let (thenInfo, timing1) = analyzeReturns swOpt timing aliases thenBranch
-        let (elseInfo, timing2) = analyzeReturns swOpt timing1 aliases elseBranch
+        let thenInfo = analyzeReturns aliases thenBranch
+        let elseInfo = analyzeReturns aliases elseBranch
         let returned = Set.union (returnedSet thenInfo) (returnedSet elseInfo)
-        (RIf (cond, thenInfo, elseInfo, returned), timing2)
+        RIf (cond, thenInfo, elseInfo, returned)
 
 /// Check if a CExpr is a borrowing/aliasing operation
 /// Borrowed/aliased values should NOT get their own RefCountDec - the original value owns the memory
@@ -510,20 +415,11 @@ type LetFrame = {
     ReturnIncSize: int option
 }
 
-let private splitTimingResult
-    (expr: AExpr)
-    (varGen: VarGen)
-    (types: Map<TempId, AST.Type>)
-    (timing: RcTiming)
-    : (AExpr * VarGen * Map<TempId, AST.Type>) * RcTiming =
-    ((expr, varGen, types), timing)
-
 /// Apply a single Let frame around an expression (uses current varGen/types)
 let applyLetFrame
     (frame: LetFrame)
     (expr: AExpr, varGen: VarGen, types: Map<TempId, AST.Type>)
-    (timing: RcTiming)
-    : AExpr * VarGen * Map<TempId, AST.Type> * RcTiming =
+    : AExpr * VarGen * Map<TempId, AST.Type> =
     let (incBindingsRev, varGen1) =
         frame.TupleIncTargets
         |> List.fold (fun (acc, vg) (tid, size) ->
@@ -547,28 +443,19 @@ let applyLetFrame
     let bodyWithReturnInc = wrapBindings returnIncBinding expr
     let letExpr = Let (frame.TempId, frame.CExpr, bodyWithReturnInc)
     let exprWithIncs = wrapBindings incBindings letExpr
-    (exprWithIncs, varGen2, typesWithReturnInc, timing)
+    (exprWithIncs, varGen2, typesWithReturnInc)
 
 /// Apply a stack of Let frames (innermost-first)
 let applyLetFrames
-    (swOpt: Stopwatch option)
     (frames: LetFrame list)
     (expr: AExpr, varGen: VarGen, types: Map<TempId, AST.Type>)
-    (timing: RcTiming)
-    : AExpr * VarGen * Map<TempId, AST.Type> * RcTiming =
+    : AExpr * VarGen * Map<TempId, AST.Type> =
     let folder
-        ((accExpr, accVarGen, accTypes, accTiming): AExpr * VarGen * Map<TempId, AST.Type> * RcTiming)
+        ((accExpr, accVarGen, accTypes): AExpr * VarGen * Map<TempId, AST.Type>)
         (frame: LetFrame)
-        : AExpr * VarGen * Map<TempId, AST.Type> * RcTiming =
-        let (result, timing1) =
-            timeWithTiming swOpt addApplyLetFrame
-                (fun t ->
-                    let (expr', varGen', types', timing') = applyLetFrame frame (accExpr, accVarGen, accTypes) t
-                    splitTimingResult expr' varGen' types' timing')
-                accTiming
-        let (expr', varGen', types') = result
-        (expr', varGen', types', timing1)
-    List.fold folder (expr, varGen, types, timing) frames
+        : AExpr * VarGen * Map<TempId, AST.Type> =
+        applyLetFrame frame (accExpr, accVarGen, accTypes)
+    List.fold folder (expr, varGen, types) frames
 
 /// Insert reference counting operations using return analysis and a dec stack
 /// Returns (transformed expr, varGen, types defined in this subtree)
@@ -578,11 +465,9 @@ let rec insertRCWithAnalysis
     (varGen: VarGen)
     (returnDecs: (TempId * int) list)
     (paramIncs: (TempId * int) list)
-    (swOpt: Stopwatch option)
-    (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     (typeCache: CExprTypeCache)
-    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache * RcTiming =
+    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
     let ctxWithTypes = withTempTypes ctx types
     let rec descend
         (ctx: TypeContext)
@@ -590,52 +475,35 @@ let rec insertRCWithAnalysis
         (varGen: VarGen)
         (returnDecs: (TempId * int) list)
         (frames: LetFrame list)
-        (timing: RcTiming)
         (types: Map<TempId, AST.Type>)
         (typeCache: CExprTypeCache)
-        : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache * RcTiming =
+        : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
         match expr with
         | RReturn (atom, returned) ->
             let baseExpr = Return atom
-            let (withParamIncsResult, timing1) =
-                timeWith swOpt addInsertParamIncs (fun () -> insertParamIncsAtReturn paramIncs returned baseExpr varGen types) timing
-            let (withParamIncs, varGen1, types1) = withParamIncsResult
-            let (withDecsResult, timing2) =
-                timeWith swOpt addInsertReturnDecs (fun () -> insertReturnDecs returnDecs withParamIncs varGen1 types1) timing1
-            let (withDecs, varGen2, types2) = withDecsResult
-            let (result, timing3) =
-                timeWithTiming swOpt addApplyLetFrames
-                    (fun t ->
-                        let (expr', varGen', types', timing') = applyLetFrames swOpt frames (withDecs, varGen2, types2) t
-                        splitTimingResult expr' varGen' types' timing')
-                    timing2
-            let (finalExpr, finalVarGen, finalTypes) = result
-            (finalExpr, finalVarGen, finalTypes, typeCache, timing3)
+            let (withParamIncs, varGen1, types1) =
+                insertParamIncsAtReturn paramIncs returned baseExpr varGen types
+            let (withDecs, varGen2, types2) = insertReturnDecs returnDecs withParamIncs varGen1 types1
+            let (finalExpr, finalVarGen, finalTypes) = applyLetFrames frames (withDecs, varGen2, types2)
+            (finalExpr, finalVarGen, finalTypes, typeCache)
 
         | RIf (cond, thenBranch, elseBranch, _) ->
-            let (thenBranch', varGen1, types1, typeCache1, timing1) =
-                insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs swOpt timing types typeCache
-            let (elseBranch', varGen2, types2, typeCache2, timing2) =
-                insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs swOpt timing1 types1 typeCache1
-            let (result, timing4) =
-                timeWithTiming swOpt addApplyLetFrames
-                    (fun t ->
-                        let (expr', varGen', types', timing') =
-                            applyLetFrames swOpt frames (If (cond, thenBranch', elseBranch'), varGen2, types2) t
-                        splitTimingResult expr' varGen' types' timing')
-                    timing2
-            let (finalExpr, finalVarGen, finalTypes) = result
-            (finalExpr, finalVarGen, finalTypes, typeCache2, timing4)
+            let (thenBranch', varGen1, types1, typeCache1) =
+                insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs types typeCache
+            let (elseBranch', varGen2, types2, typeCache2) =
+                insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs types1 typeCache1
+            let (finalExpr, finalVarGen, finalTypes) =
+                applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
+            (finalExpr, finalVarGen, finalTypes, typeCache2)
 
         | RLet (tempId, cexpr, bodyInfo, _) ->
             // First, infer the type of this binding and add to context
-            let (maybeType, typeCache1, timing1) =
+            let (maybeType, typeCache1) =
                 match Map.tryFind cexpr typeCache with
-                | Some cached -> (cached, typeCache, timing)
+                | Some cached -> (cached, typeCache)
                 | None ->
-                    let (inferred, timing1) =
-                        timeWith swOpt addInferCExprType (fun () -> inferCExprType ctx cexpr) timing
-                    (inferred, Map.add cexpr inferred typeCache, timing1)
+                    let inferred = inferCExprType ctx cexpr
+                    (inferred, Map.add cexpr inferred typeCache)
             // Use a TypedAtom alias in the body to preserve the intended payload type
             // when TupleGet cannot infer it from a multi-parameter sum.
             let inferredType =
@@ -666,39 +534,36 @@ let rec insertRCWithAnalysis
                 | _ -> ctxWithTypes
 
             let bodyReturned = returnedSet bodyInfo
-            let (returnDecs', timing2) =
+            let returnDecs' =
                 match maybeType with
                 | Some t when isHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
-                    let (size, timing2) =
-                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timing1
-                    ((tempId, size) :: returnDecs, timing2)
-                | _ -> (returnDecs, timing1)
+                    let size = payloadSize t ctx.TypeReg
+                    (tempId, size) :: returnDecs
+                | _ -> returnDecs
 
-            let (tupleIncTargets, timing3) =
+            let tupleIncTargets =
                 match cexpr with
                 | TupleAlloc elems ->
                     elems
-                    |> List.fold (fun (acc, timingAcc) atom ->
+                    |> List.fold (fun acc atom ->
                         match atom with
                         | Var tid ->
                             match tryGetType ctx tid with
                             | Some t when isHeapType t ->
-                                let (size, timing1) =
-                                    timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timingAcc
-                                ((tid, size) :: acc, timing1)
-                            | _ -> (acc, timingAcc)
-                        | _ -> (acc, timingAcc)
-                    ) ([], timing2)
-                    |> fun (acc, timingAcc) -> (List.rev acc, timingAcc)
-                | _ -> ([], timing2)
+                                let size = payloadSize t ctx.TypeReg
+                                (tid, size) :: acc
+                            | _ -> acc
+                        | _ -> acc
+                    ) []
+                    |> List.rev
+                | _ -> []
 
-            let (returnIncSize, timing4) =
+            let returnIncSize =
                 match maybeType with
                 | Some t when isHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
-                    let (size, timing4) =
-                        timeWith swOpt addPayloadSize (fun () -> payloadSize t ctx.TypeReg) timing3
-                    (Some size, timing4)
-                | _ -> (None, timing3)
+                    let size = payloadSize t ctx.TypeReg
+                    Some size
+                | _ -> None
 
             let frame = {
                 TempId = tempId
@@ -708,88 +573,69 @@ let rec insertRCWithAnalysis
             }
 
             // Process the body iteratively, then rebuild on the way back out
-            descend ctx'' bodyInfo varGen returnDecs' (frame :: frames) timing4 typesWithBinding typeCache1
+            descend ctx'' bodyInfo varGen returnDecs' (frame :: frames) typesWithBinding typeCache1
 
-    descend ctxWithTypes expr varGen returnDecs [] timing types typeCache
+    descend ctxWithTypes expr varGen returnDecs [] types typeCache
 
-/// Insert reference counting operations into an AExpr with optional timing
-/// Returns (transformed expr, varGen, accumulated TempTypes, timing)
+/// Insert reference counting operations into an AExpr
+/// Returns (transformed expr, varGen, accumulated TempTypes)
 let private insertRCInternal
     (ctx: TypeContext)
     (expr: AExpr)
     (varGen: VarGen)
-    (swOpt: Stopwatch option)
-    (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     (typeCache: CExprTypeCache)
-    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache * RcTiming =
+    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
     let ctxWithTypes = withTempTypes ctx types
-    let (analyzed, timing1) =
-        timeWithTiming swOpt addAnalyzeReturns (fun t -> analyzeReturns swOpt t Map.empty expr) timing
-    let (result, timing2) =
-        timeWithTiming swOpt addInsertRC
-            (fun t ->
-                let (expr', varGen', types', typeCache', timing') =
-                    insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] swOpt t types typeCache
-                ((expr', varGen', types', typeCache'), timing'))
-            timing1
-    let (expr', varGen', types', typeCache') = result
-    (expr', varGen', types', typeCache', timing2)
+    let analyzed = analyzeReturns Map.empty expr
+    let (expr', varGen', types', typeCache') =
+        insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] types typeCache
+    (expr', varGen', types', typeCache')
 
 /// Insert reference counting operations into an AExpr
 /// Returns (transformed expr, varGen, accumulated TempTypes)
 let insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * Map<TempId, AST.Type> =
-    let (expr', varGen', types', _typeCache, _timing) =
-        insertRCInternal ctx expr varGen None emptyRcTiming Map.empty emptyCExprTypeCache
+    let (expr', varGen', types', _typeCache) =
+        insertRCInternal ctx expr varGen Map.empty emptyCExprTypeCache
     (expr', varGen', types')
 
-/// Insert RC operations into a function with optional timing
-/// Returns (transformed function, varGen, accumulated TempTypes, timing)
+/// Insert RC operations into a function
+/// Returns (transformed function, varGen, accumulated TempTypes)
 let private insertRCInFunctionInternal
     (ctx: TypeContext)
     (func: Function)
     (varGen: VarGen)
-    (swOpt: Stopwatch option)
-    (timing: RcTiming)
     (types: Map<TempId, AST.Type>)
     (typeCache: CExprTypeCache)
-    : Function * VarGen * Map<TempId, AST.Type> * CExprTypeCache * RcTiming =
+    : Function * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
     let typesWithParams =
         func.TypedParams
         |> List.fold (fun m tp -> Map.add tp.Id tp.Type m) types
     let ctxWithParams = withTempTypes ctx typesWithParams
 
-    let (bodyInfo, timing1) =
-        timeWithTiming swOpt addAnalyzeReturns (fun t -> analyzeReturns swOpt t Map.empty func.Body) timing
-    let (paramIncsRev, timing2) =
+    let bodyInfo = analyzeReturns Map.empty func.Body
+    let paramIncsRev =
         func.TypedParams
-        |> List.fold (fun (acc, timingAcc) param ->
+        |> List.fold (fun acc param ->
             match param.Type with
-            | AST.TDict _ -> (acc, timingAcc)  // Dict pointers are tagged; RC ops expect raw pointers.
+            | AST.TDict _ -> acc  // Dict pointers are tagged; RC ops expect raw pointers.
             | _ when isHeapType param.Type ->
-                let (size, timing1) =
-                    timeWith swOpt addPayloadSize (fun () -> payloadSize param.Type ctxWithParams.TypeReg) timingAcc
-                ((param.Id, size) :: acc, timing1)
-            | _ -> (acc, timingAcc)
-        ) ([], timing1)
+                let size = payloadSize param.Type ctxWithParams.TypeReg
+                (param.Id, size) :: acc
+            | _ -> acc
+        ) []
     let paramIncs = List.rev paramIncsRev
 
     // Process function body with return analysis
-    let (bodyResult, timing3) =
-        timeWithTiming swOpt addInsertRC
-            (fun t ->
-                let (expr', varGen', types', typeCache', timing') =
-                    insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs swOpt t typesWithParams typeCache
-                ((expr', varGen', types', typeCache'), timing'))
-            timing2
-    let (body', varGen', accTypes, typeCache') = bodyResult
-    ({ func with Body = body' }, varGen', accTypes, typeCache', timing3)
+    let (body', varGen', accTypes, typeCache') =
+        insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs typesWithParams typeCache
+    ({ func with Body = body' }, varGen', accTypes, typeCache')
 
 /// Insert RC operations into a function
 /// Returns (transformed function, varGen, accumulated TempTypes)
 let insertRCInFunction (ctx: TypeContext) (func: Function) (varGen: VarGen) : Function * VarGen * Map<TempId, AST.Type> =
-    let (func', varGen', types', _typeCache, _timing) =
-        insertRCInFunctionInternal ctx func varGen None emptyRcTiming Map.empty emptyCExprTypeCache
+    let (func', varGen', types', _typeCache) =
+        insertRCInFunctionInternal ctx func varGen Map.empty emptyCExprTypeCache
     (func', varGen', types')
 
 // ============================================================================
@@ -833,13 +679,11 @@ let verifyTypeMapCompleteness (program: ANF.Program) (typeMap: ANF.TypeMap) : Te
         |> collectMissingTempIdsInExpr typeMap mainExpr
     List.rev missing
 
-/// Insert RC operations into a program with optional timing
-/// Returns (ANF.Program, TypeMap, timing) where TypeMap contains all TempId -> Type mappings
+/// Insert RC operations into a program
+/// Returns (ANF.Program, TypeMap) where TypeMap contains all TempId -> Type mappings
 let private insertRCInProgramInternal
     (result: ConversionResult)
-    (swOpt: Stopwatch option)
-    (timing: RcTiming)
-    : Result<ANF.Program * ANF.TypeMap * RcTiming, string> =
+    : Result<ANF.Program * ANF.TypeMap, string> =
     let ctx = createContext result
     let (ANF.Program (functions, mainExpr)) = result.Program
     let varGen = VarGen 1000  // Start high to avoid conflicts
@@ -851,40 +695,31 @@ let private insertRCInProgramInternal
         (accFuncs: Function list)
         (accTypes: Map<TempId, AST.Type>)
         (accTypeCache: CExprTypeCache)
-        (timing: RcTiming)
-        : Function list * VarGen * Map<TempId, AST.Type> * CExprTypeCache * RcTiming =
+        : Function list * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
         match funcs with
-        | [] -> (List.rev accFuncs, vg, accTypes, accTypeCache, timing)
+        | [] -> (List.rev accFuncs, vg, accTypes, accTypeCache)
         | f :: rest ->
-            let (f', vg', types, typeCache, timing1) =
-                insertRCInFunctionInternal ctx f vg swOpt timing accTypes accTypeCache
-            processFuncs rest vg' (f' :: accFuncs) types typeCache timing1
+            let (f', vg', types, typeCache) =
+                insertRCInFunctionInternal ctx f vg accTypes accTypeCache
+            processFuncs rest vg' (f' :: accFuncs) types typeCache
 
-    let (functions', varGen1, typesFromFuncs, typeCacheFromFuncs, timing1) =
-        processFuncs functions varGen [] Map.empty emptyCExprTypeCache timing
+    let (functions', varGen1, typesFromFuncs, typeCacheFromFuncs) =
+        processFuncs functions varGen [] Map.empty emptyCExprTypeCache
 
     // Process main expression
-    let (mainExpr', _, finalTypeMap, _typeCache, timing2) =
-        insertRCInternal ctx mainExpr varGen1 swOpt timing1 typesFromFuncs typeCacheFromFuncs
+    let (mainExpr', _, finalTypeMap, _typeCache) =
+        insertRCInternal ctx mainExpr varGen1 typesFromFuncs typeCacheFromFuncs
 
     // Verify TypeMap completeness - all defined TempIds should have types
     let program' = ANF.Program (functions', mainExpr')
-    let (missingTypes, timing3) =
-        timeWith swOpt addVerifyTypeMap (fun () -> verifyTypeMapCompleteness program' finalTypeMap) timing2
+    let missingTypes = verifyTypeMapCompleteness program' finalTypeMap
     if not (List.isEmpty missingTypes) then
         let missingStr = missingTypes |> List.map (fun (TempId n) -> $"t{n}") |> String.concat ", "
         Crash.crash $"RefCountInsertion: TypeMap incomplete - missing types for: {missingStr}"
 
-    Ok (program', finalTypeMap, timing3)
+    Ok (program', finalTypeMap)
 
 /// Insert RC operations into a program
 /// Returns (ANF.Program, TypeMap) where TypeMap contains all TempId -> Type mappings
 let insertRCInProgram (result: ConversionResult) : Result<ANF.Program * ANF.TypeMap, string> =
-    insertRCInProgramInternal result None emptyRcTiming
-    |> Result.map (fun (program, typeMap, _timing) -> (program, typeMap))
-
-/// Insert RC operations into a program with fine-grained timing
-/// Returns (ANF.Program, TypeMap, RcTiming)
-let insertRCInProgramWithTiming (result: ConversionResult) : Result<ANF.Program * ANF.TypeMap * RcTiming, string> =
-    let sw = Stopwatch.StartNew()
-    insertRCInProgramInternal result (Some sw) emptyRcTiming
+    insertRCInProgramInternal result
