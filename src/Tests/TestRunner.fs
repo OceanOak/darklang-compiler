@@ -104,6 +104,7 @@ let main args =
         { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
+        { Name = "RC Timing Tests"; Tests = RefCountTimingTests.tests }
     |]
 
     let enableVerification = verificationEnabled

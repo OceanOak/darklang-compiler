@@ -348,6 +348,7 @@ let calculatePassTimingsTotal (passTimings: Map<string, TimeSpan>) : TimeSpan =
     passTimings
     |> consolidateCacheHashSerializeTimings
     |> consolidateCacheWriteTimings
+    |> Map.filter (fun name _ -> not (name.StartsWith("RC: ", StringComparison.Ordinal)))
     |> Map.fold (fun acc _ elapsed -> acc + elapsed) TimeSpan.Zero
 
 let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<string, TimeSpan> =
@@ -359,6 +360,7 @@ let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<stri
     |> consolidateCacheHashSerializeTimings
     |> consolidateCacheWriteTimings
     |> Map.filter (fun name _ -> not (Set.contains name overlapTimingNames))
+    |> Map.filter (fun name _ -> not (name.StartsWith("RC: ", StringComparison.Ordinal)))
 
 let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
     passTimings

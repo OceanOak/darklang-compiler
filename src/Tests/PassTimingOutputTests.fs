@@ -346,6 +346,22 @@ let testOverheadTotalsExcludeNestedTimings () : TestResult =
     else
         Ok ()
 
+let testOverheadTotalsExcludeRcDetail () : TestResult =
+    let timings =
+        [
+            ("Parse", TimeSpan.FromMilliseconds(10.0))
+            ("RC: Merge Types", TimeSpan.FromMilliseconds(50.0))
+            ("Start Function Compilation", TimeSpan.FromMilliseconds(15.0))
+        ]
+        |> Map.ofList
+
+    let total = TestFramework.calculatePassTimingsTotalForOverhead timings
+    let expected = TimeSpan.FromMilliseconds(10.0)
+    if total <> expected then
+        Error $"Expected overhead total {expected}, got {total}"
+    else
+        Ok ()
+
 let testOtherTimingsIncludeDefaultsWhenMissing () : TestResult =
     let columns = TestFramework.buildPassTimingColumns Map.empty [] TimeSpan.Zero
     match columns.Ordered, columns.ByTime with
@@ -371,5 +387,6 @@ let tests : (string * (unit -> Result<unit, string>)) list =
         ("unaccounted time with overlapping timings", testUnaccountedTimeWithOverlappingTimings)
         ("ordered steps include non-pass timings", testOrderedStepsIncludeNonPass)
         ("overhead totals exclude nested timings", testOverheadTotalsExcludeNestedTimings)
+        ("overhead totals exclude rc detail timings", testOverheadTotalsExcludeRcDetail)
         ("default other timings always present", testOtherTimingsIncludeDefaultsWhenMissing)
     ]

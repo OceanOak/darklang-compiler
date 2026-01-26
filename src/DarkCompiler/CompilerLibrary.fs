@@ -1106,14 +1106,49 @@ let private buildAnf
 
     if verbosity >= 1 then println "  [2.5/7] Reference Count Insertion..."
     let rcStart = sw.Elapsed.TotalMilliseconds
-    match RefCountInsertion.insertRCInProgram convResult with
+    let wantRcTiming = verbosity >= 2 || passTimingRecorder.IsSome
+    let rcResult =
+        if wantRcTiming then
+            RefCountInsertion.insertRCInProgramWithTiming convResult
+            |> Result.map (fun (anfAfterRC, typeMap, timing) -> (anfAfterRC, typeMap, Some timing))
+        else
+            RefCountInsertion.insertRCInProgram convResult
+            |> Result.map (fun (anfAfterRC, typeMap) -> (anfAfterRC, typeMap, None))
+    match rcResult with
     | Error err -> Error $"Reference count insertion error: {err}"
-    | Ok (anfAfterRC, typeMap) ->
+    | Ok (anfAfterRC, typeMap, rcTimingOpt) ->
         let rcElapsed = sw.Elapsed.TotalMilliseconds - rcStart
         recordPassTiming passTimingRecorder "Reference Count Insertion" rcElapsed
         if verbosity >= 2 then
             let t = System.Math.Round(rcElapsed, 1)
             println $"        {t}ms"
+        rcTimingOpt
+        |> Option.iter (fun timing ->
+            let entries =
+                [
+                    ("RC: Analyze Returns", timing.AnalyzeReturns)
+                    ("RC: Collect Alias Chain", timing.CollectAliasChain)
+                    ("RC: Insert RC", timing.InsertRC)
+                    ("RC: Infer CExpr Type", timing.InferCExprType)
+                    ("RC: Payload Size", timing.PayloadSize)
+                    ("RC: Insert Param Incs", timing.InsertParamIncs)
+                    ("RC: Insert Return Decs", timing.InsertReturnDecs)
+                    ("RC: Apply Let Frame", timing.ApplyLetFrame)
+                    ("RC: Apply Let Frames", timing.ApplyLetFrames)
+                    ("RC: Merge Types", timing.MergeTypes)
+                    ("RC: Verify Type Map", timing.VerifyTypeMap)
+                ]
+            let recordEntry (label: string, counter: RefCountInsertion.TimingCounter) : unit =
+                if counter.Calls > 0 && counter.Ms > 0.0 then
+                    recordPassTiming passTimingRecorder label counter.Ms
+            entries |> List.iter recordEntry
+            if verbosity >= 2 then
+                println "        RC detail timings:"
+                entries
+                |> List.iter (fun (label, counter) ->
+                    if counter.Calls > 0 then
+                        let ms = System.Math.Round(counter.Ms, 1)
+                        println $"          {label}: {ms}ms (calls={counter.Calls})"))
         if shouldDumpIR verbosity options.DumpANF then
             printANFProgram "=== ANF (after RC insertion) ===" anfAfterRC
 
