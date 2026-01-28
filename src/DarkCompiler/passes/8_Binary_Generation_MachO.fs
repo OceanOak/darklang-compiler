@@ -274,9 +274,10 @@ let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
         floatPool.Floats
         |> Map.toList
         |> List.sortBy fst
-        |> List.collect (fun (_idx, floatVal) ->
-            System.BitConverter.GetBytes(floatVal) |> Array.toList)
+        |> List.map (fun (_idx, floatVal) ->
+            System.BitConverter.GetBytes(floatVal))
         |> Array.ofList
+        |> Array.concat
 
 /// Create string data bytes and label map from string pool
 /// Format: [length:8][data:N][null:1] for each string
@@ -320,9 +321,9 @@ let createExecutableWithPools
     let codeBytes =
         timePhase microTimingRecorder "MachO: code bytes" (fun () ->
             machineCode
-            |> List.collect (fun word ->
-                uint32ToBytes word |> Array.toList)
-            |> Array.ofList)
+            |> List.map uint32ToBytes
+            |> Array.ofList
+            |> Array.concat)
 
     // Create float data (goes after code, before strings)
     let floatBytes =
@@ -590,9 +591,9 @@ let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: Literal
     // but allows the binary to be generated
     let codeBytes =
         machineCode
-        |> List.collect (fun word ->
-            uint32ToBytes word |> Array.toList)
+        |> List.map uint32ToBytes
         |> Array.ofList
+        |> Array.concat
 
     // Create float data
     let floatBytes = createFloatData floatPool

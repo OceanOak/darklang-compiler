@@ -124,9 +124,10 @@ let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
         floatPool.Floats
         |> Map.toList
         |> List.sortBy fst
-        |> List.collect (fun (_idx, floatVal) ->
-            System.BitConverter.GetBytes(floatVal) |> Array.toList)
+        |> List.map (fun (_idx, floatVal) ->
+            System.BitConverter.GetBytes(floatVal))
         |> Array.ofList
+        |> Array.concat
 
 /// Create string data bytes from string pool
 /// Format: [length:8 bytes][data:N bytes][null:1 byte] for each string
@@ -139,11 +140,12 @@ let createStringData (stringPool: LiteralPool.StringPool) : byte array =
         stringPool.Strings
         |> Map.toList
         |> List.sortBy fst
-        |> List.collect (fun (_idx, (str, len)) ->
-            let lenBytes = uint64ToBytes (uint64 len) |> Array.toList  // 8-byte length
-            let strBytes = System.Text.Encoding.UTF8.GetBytes(str) |> Array.toList
-            lenBytes @ strBytes @ [0uy])  // length + data + null
+        |> List.map (fun (_idx, (str, len)) ->
+            let lenBytes = uint64ToBytes (uint64 len)  // 8-byte length
+            let strBytes = System.Text.Encoding.UTF8.GetBytes(str)
+            Array.concat [| lenBytes; strBytes; [|0uy|] |])  // length + data + null
         |> Array.ofList
+        |> Array.concat
 
 /// Create an ELF executable with float and string data
 let createExecutableWithPools
@@ -156,9 +158,9 @@ let createExecutableWithPools
     let codeBytes =
         timePhase microTimingRecorder "ELF: code bytes" (fun () ->
             machineCode
-            |> List.collect (fun word ->
-                uint32ToBytes word |> Array.toList)
-            |> Array.ofList)
+            |> List.map uint32ToBytes
+            |> Array.ofList
+            |> Array.concat)
 
     // Create float data (goes after code, before strings)
     let floatBytes =
