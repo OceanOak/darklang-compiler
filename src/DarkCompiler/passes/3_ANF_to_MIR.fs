@@ -114,6 +114,32 @@ let sequenceResults (results: Result<'a, string> list) : Result<'a list, string>
 let private appendInstrsRev (instrs: MIR.Instr list) (revInstrs: MIR.Instr list) : MIR.Instr list =
     (List.rev instrs) @ revInstrs
 
+/// Build a dense type lookup array for TempIds up to maxId
+let private buildTypeById (maxId: int) (typeMap: ANF.TypeMap) : AST.Type option array =
+    if maxId < 0 then
+        [||]
+    else
+        let arr = Array.create (maxId + 1) None
+        typeMap
+        |> Map.iter (fun (ANF.TempId id) typ ->
+            if id >= 0 && id <= maxId then
+                arr.[id] <- Some typ)
+        arr
+
+/// Lookup a TempId by raw integer id, checking extra types for newly created regs
+let private tryFindTypeById (builder: CFGBuilder) (id: int) : AST.Type option =
+    if id >= 0 && id < builder.TypeById.Length then
+        match builder.TypeById.[id] with
+        | Some t -> Some t
+        | None -> Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
+    else
+        Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
+
+/// Lookup a TempId, checking extra types for newly created regs
+let private tryFindType (builder: CFGBuilder) (tempId: ANF.TempId) : AST.Type option =
+    let (ANF.TempId id) = tempId
+    tryFindTypeById builder id
+
 /// Time a phase if a recorder is provided
 let private timePhase
     (recorder: MicroTimingRecorder option)
@@ -453,7 +479,8 @@ type CFGBuilder = {
     Blocks: Map<MIR.Label, MIR.BasicBlock>
     LabelGen: MIR.LabelGen
     RegGen: MIR.RegGen
-    TypeMap: ANF.TypeMap
+    TypeById: AST.Type option array
+    ExtraTypeMap: Map<ANF.TempId, AST.Type>
     TypeReg: Map<string, (string * AST.Type) list>
     ReturnTypeReg: Map<string, AST.Type>  // Function name -> return type
     FuncName: string  // For generating unique labels per function
@@ -491,7 +518,7 @@ let atomType (builder: CFGBuilder) (atom: ANF.Atom) : AST.Type =
         let result =
             if Set.contains id builder.FloatRegs then AST.TFloat64
             else
-                match Map.tryFind (ANF.TempId id) builder.TypeMap with
+                match tryFindTypeById builder id with
                 | Some t -> t
                 | None ->
                     // TypeMap is populated by RefCountInsertion pass with fallback to TInt64.
@@ -521,7 +548,7 @@ let operandType (builder: CFGBuilder) (operand: MIR.Operand) : AST.Type =
         // Check if this VReg is known to hold a float or has a tracked type
         if Set.contains id builder.FloatRegs then AST.TFloat64
         else
-            match Map.tryFind (ANF.TempId id) builder.TypeMap with
+            match tryFindTypeById builder id with
             | Some t -> t
             | None -> Crash.crash $"operandType: missing type for v{id}"
 
@@ -824,7 +851,7 @@ let rec convertExpr
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =
                         let fallback () =
-                            match Map.tryFind tempId builder.TypeMap with
+                            match tryFindType builder tempId with
                             | Some (AST.TFunction (_, retType)) -> retType
                             | Some t -> t
                             | None -> Crash.crash $"ClosureCall: Return type not found for {tempId}"
@@ -907,12 +934,12 @@ let rec convertExpr
                         match tupleGetAliasType with
                         | Some AST.TFloat64 -> destType := AST.TFloat64
                         | _ -> ()
-                        match Map.tryFind tempId builder.TypeMap with
+                        match tryFindType builder tempId with
                         | Some AST.TFloat64 -> destType := AST.TFloat64
                         | _ -> ()
                         // Look up the tuple's type to determine the element type at this index
                         // This is needed for Float elements to be properly tracked in FloatRegs
-                        let tupleType = Map.tryFind tid builder.TypeMap
+                        let tupleType = tryFindType builder tid
                         let _ =
                             match tupleType with
                             | Some (AST.TTuple elemTypes) when index < List.length elemTypes ->
@@ -1195,7 +1222,7 @@ let rec convertExpr
         // Track the result type for nested ifs that return through this register
         let (MIR.VReg resultId) = resultReg
         let builder6WithType =
-            { builder6 with TypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.TypeMap }
+            { builder6 with ExtraTypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.ExtraTypeMap }
 
         // Update FloatRegs if the result is a float
         let builder7 =
@@ -1436,7 +1463,7 @@ and convertExprToOperand
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =
                         let fallback () =
-                            match Map.tryFind tempId builder.TypeMap with
+                            match tryFindType builder tempId with
                             | Some (AST.TFunction (_, retType)) -> retType
                             | Some t -> t
                             | None -> Crash.crash $"ClosureCall: Return type not found for {tempId}"
@@ -1519,12 +1546,12 @@ and convertExprToOperand
                         match tupleGetAliasType with
                         | Some AST.TFloat64 -> destType := AST.TFloat64
                         | _ -> ()
-                        match Map.tryFind tempId builder.TypeMap with
+                        match tryFindType builder tempId with
                         | Some AST.TFloat64 -> destType := AST.TFloat64
                         | _ -> ()
                         // Look up the tuple's type to determine the element type at this index
                         // This is needed for Float elements to be properly tracked in FloatRegs
-                        let tupleType = Map.tryFind tid builder.TypeMap
+                        let tupleType = tryFindType builder tid
                         let _ =
                             match tupleType with
                             | Some (AST.TTuple elemTypes) when index < List.length elemTypes ->
@@ -1796,7 +1823,7 @@ and convertExprToOperand
             // Track the result type for nested ifs that return through this register
             let (MIR.VReg resultId) = resultReg
             let builder6WithType =
-                { builder6 with TypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.TypeMap }
+                { builder6 with ExtraTypeMap = Map.add (ANF.TempId resultId) thenResultType builder6.ExtraTypeMap }
 
             // Update FloatRegs if the result is a float
             let builder7 =
@@ -1848,13 +1875,15 @@ let convertANFFunction
                 getReturnTypeAndMaxTempId floatParamIds typeMap returnTypeReg anfFunc.Body)
         let maxId = max paramMax bodyMaxId
         let regGen = MIR.RegGen (maxId + 1)
+        let typeById = buildTypeById maxId typeMap
 
         // Create initial builder
         let initialBuilder = {
             RegGen = regGen
             LabelGen = MIR.initialLabelGen
             Blocks = Map.empty
-            TypeMap = typeMap
+            TypeById = typeById
+            ExtraTypeMap = Map.empty
             TypeReg = typeReg
             ReturnTypeReg = returnTypeReg
             FuncName = anfFunc.Name
@@ -1952,12 +1981,14 @@ let toMIR
         timePhase microTimingRecorder "_start: maxTempId" (fun () ->
             maxTempIdInAExpr mainExpr)
     let startRegGen = MIR.RegGen (startMaxId + 1)
+    let startTypeById = buildTypeById startMaxId typeMap
     let entryLabel = MIR.Label "_start_body"
     let initialBuilder = {
         RegGen = startRegGen
         LabelGen = MIR.initialLabelGen
         Blocks = Map.empty
-        TypeMap = typeMap
+        TypeById = startTypeById
+        ExtraTypeMap = Map.empty
         TypeReg = typeReg
         ReturnTypeReg = returnTypeReg
         FuncName = "_start"
