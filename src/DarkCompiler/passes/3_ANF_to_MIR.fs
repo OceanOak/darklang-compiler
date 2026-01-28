@@ -262,6 +262,22 @@ let cexprProducesFloat (floatRegs: Set<int>) (returnTypeReg: Map<string, AST.Typ
         false
     | _ -> false
 
+/// Collect direct callee names referenced in a CExpr (only direct calls affect return types)
+let calleeNamesInCExpr (cexpr: ANF.CExpr) : Set<string> =
+    match cexpr with
+    | ANF.Call (funcName, _) -> Set.singleton funcName
+    | ANF.TailCall (funcName, _) -> Set.singleton funcName
+    | _ -> Set.empty
+
+/// Collect direct callee names referenced in an AExpr
+let rec calleeNamesInAExpr (expr: ANF.AExpr) : Set<string> =
+    match expr with
+    | ANF.Return _ -> Set.empty
+    | ANF.Let (_, cexpr, rest) ->
+        Set.union (calleeNamesInCExpr cexpr) (calleeNamesInAExpr rest)
+    | ANF.If (_, thenBranch, elseBranch) ->
+        Set.union (calleeNamesInAExpr thenBranch) (calleeNamesInAExpr elseBranch)
+
 /// Analyze return statements in an ANF expression, tracking float temps
 /// Returns the type of the expression's result
 /// returnTypeReg: map from function name to return type (for checking Call results)
@@ -313,30 +329,67 @@ let buildReturnTypeReg
     (externalReturnTypes: Map<string, AST.Type>)
     (microTimingRecorder: MicroTimingRecorder option)
     : Map<string, AST.Type> =
-    // Iterate until the map stabilizes (handles mutual recursion and call dependencies)
-    let rec fixpoint (currentReg: Map<string, AST.Type>) (iterations: int) : Map<string, AST.Type> * int =
-        if iterations > 100 then (currentReg, iterations)  // Safety limit
-        else
-            let computedReg =
-                functions
-                |> List.map (fun f ->
-                    let retType = computeReturnTypeWithReg f typeMap typeReg currentReg
-                    (f.Name, retType))
-                |> Map.ofList
-            // Merge external types with computed types (computed takes precedence)
-            let newReg = Map.fold (fun acc k v -> Map.add k v acc) externalReturnTypes computedReg
-            if newReg = currentReg then (newReg, iterations)
-            else fixpoint newReg (iterations + 1)
+    // Worklist algorithm: only re-evaluate dependents when a return type changes
+    let funcByName = functions |> List.map (fun f -> (f.Name, f)) |> Map.ofList
+    let calleesByFunc =
+        functions
+        |> List.map (fun f -> (f.Name, calleeNamesInAExpr f.Body))
+        |> Map.ofList
+    let callersByFunc =
+        calleesByFunc
+        |> Map.fold (fun acc caller callees ->
+            callees
+            |> Set.fold (fun acc callee ->
+                let existing = Map.tryFind callee acc |> Option.defaultValue []
+                Map.add callee (caller :: existing) acc) acc) Map.empty
+
+    let initialQueue = functions |> List.map (fun f -> f.Name)
+    let initialQueued = Set.ofList initialQueue
+    let maxSteps = 100 * max 1 functions.Length
+
+    let rec loop
+        (queue: string list)
+        (queued: Set<string>)
+        (currentReg: Map<string, AST.Type>)
+        (stepsRemaining: int)
+        (stepsUsed: int)
+        : Map<string, AST.Type> * int =
+        match queue with
+        | [] -> (currentReg, stepsUsed)
+        | _ when stepsRemaining <= 0 -> (currentReg, stepsUsed)
+        | funcName :: rest ->
+            let queued' = Set.remove funcName queued
+            match Map.tryFind funcName funcByName with
+            | None ->
+                loop rest queued' currentReg (stepsRemaining - 1) (stepsUsed + 1)
+            | Some func ->
+                let newType = computeReturnTypeWithReg func typeMap typeReg currentReg
+                let changed =
+                    match Map.tryFind funcName currentReg with
+                    | Some existing when existing = newType -> false
+                    | _ -> true
+                let updatedReg =
+                    if changed then Map.add funcName newType currentReg else currentReg
+                if not changed then
+                    loop rest queued' updatedReg (stepsRemaining - 1) (stepsUsed + 1)
+                else
+                    let dependents = Map.tryFind funcName callersByFunc |> Option.defaultValue []
+                    let (rest', queued'') =
+                        dependents
+                        |> List.fold (fun (q, s) dep ->
+                            if Set.contains dep s then (q, s)
+                            else (dep :: q, Set.add dep s)) (rest, queued')
+                    loop rest' queued'' updatedReg (stepsRemaining - 1) (stepsUsed + 1)
 
     match microTimingRecorder with
     | None ->
-        let (result, _iterations) = fixpoint externalReturnTypes 0
+        let (result, _steps) = loop initialQueue initialQueued externalReturnTypes maxSteps 0
         result
     | Some record ->
         let sw = Stopwatch.StartNew()
-        let (result, iterations) = fixpoint externalReturnTypes 0
+        let (result, stepsUsed) = loop initialQueue initialQueued externalReturnTypes maxSteps 0
         let elapsedMs = sw.Elapsed.TotalMilliseconds
-        record $"Return type fixpoint ({iterations} iters)" elapsedMs
+        record $"Return type worklist ({stepsUsed} steps)" elapsedMs
         result
 
 /// Return type for monomorphized intrinsics not tracked in the return type registry
