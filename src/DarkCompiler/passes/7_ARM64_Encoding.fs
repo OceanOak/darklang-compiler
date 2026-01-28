@@ -1000,16 +1000,9 @@ let computeLabelPositions (instructions: ARM64.Instr list) : Map<string, int> =
             | ARM64.Label name ->
                 // Record this label's position, don't increment offset (pseudo-instruction)
                 loop rest offset (Map.add name offset labelMap)
-            | ARM64.CBZ _ | ARM64.CBNZ _ | ARM64.B_label _ | ARM64.B_cond_label _ | ARM64.BL _
-            | ARM64.ADRP _ | ARM64.ADR _ | ARM64.ADD_label _
-            | ARM64.TBZ_label _ | ARM64.TBNZ_label _ ->
-                // These will be resolved in pass 2, each is 4 bytes
-                loop rest (offset + 4) labelMap
             | _ ->
-                // Encode instruction to get actual size
-                let machineCode = encode instr
-                let size = List.length machineCode * 4
-                loop rest (offset + size) labelMap
+                // All ARM64 instructions are fixed 4 bytes
+                loop rest (offset + 4) labelMap
     loop instructions 0 Map.empty
 
 /// Encode an instruction with label resolution
