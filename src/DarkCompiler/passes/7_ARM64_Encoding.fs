@@ -1005,14 +1005,33 @@ let computeLabelPositions (instructions: ARM64.Instr list) : Map<string, int> =
                 loop rest (offset + 4) labelMap
     loop instructions 0 Map.empty
 
+let private tryFindDataLabel
+    (label: string)
+    (stringLabels: Map<string, int>)
+    (floatLabels: Map<string, int>)
+    (dataLabels: Map<string, int>)
+    : int option =
+    if label.StartsWith("str_") then
+        Map.tryFind label stringLabels
+    elif label.StartsWith("_float") then
+        Map.tryFind label floatLabels
+    else
+        Map.tryFind label dataLabels
+
 /// Encode an instruction with label resolution
 /// currentOffset: byte offset of current instruction
-/// labelMap: map of label names to byte offsets
-let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<string, int>) : ARM64.MachineCode list =
+let encodeWithLabels
+    (instr: ARM64.Instr)
+    (currentOffset: int)
+    (codeLabels: Map<string, int>)
+    (stringLabels: Map<string, int>)
+    (floatLabels: Map<string, int>)
+    (dataLabels: Map<string, int>)
+    : ARM64.MachineCode list =
     match instr with
     // Label-based branches - resolve to offsets
     | ARM64.CBZ (reg, label) ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             // Compute relative offset in instructions (divide by 4)
             let byteOffset = targetOffset - currentOffset
@@ -1028,7 +1047,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"CBZ: Label '{label}' not found in labelMap"
 
     | ARM64.CBNZ (reg, label) ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1043,7 +1062,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"CBNZ: Label '{label}' not found in labelMap"
 
     | ARM64.TBZ_label (reg, bit, label) ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1059,7 +1078,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"TBZ: Label '{label}' not found in labelMap"
 
     | ARM64.TBNZ_label (reg, bit, label) ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1075,7 +1094,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"TBNZ: Label '{label}' not found in labelMap"
 
     | ARM64.B_label label ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1087,7 +1106,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"B: Label '{label}' not found in labelMap"
 
     | ARM64.B_cond_label (cond, label) ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1107,7 +1126,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
             Crash.crash $"B.cond: Label '{label}' not found in labelMap"
 
     | ARM64.BL label ->
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             let byteOffset = targetOffset - currentOffset
             let instrOffset = byteOffset / 4
@@ -1127,7 +1146,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
         // ADRP: form PC-relative address to 4KB page
         // Encoding: 1 immlo(2) 10000 immhi(19) Rd(5)
         // The label should point to data in .rodata section
-        match Map.tryFind label labelMap with
+        match tryFindDataLabel label stringLabels floatLabels dataLabels with
         | Some targetOffset ->
             // Compute page-relative offset (4KB pages)
             // ADRP uses the page containing PC, so we compute:
@@ -1149,7 +1168,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
         // ADR: form PC-relative address
         // Encoding: 0 immlo(2) 10000 immhi(19) Rd(5)
         // immlo is bits 0-1, immhi is bits 2-20 of the 21-bit signed offset
-        match Map.tryFind label labelMap with
+        match Map.tryFind label codeLabels with
         | Some targetOffset ->
             // Compute byte offset from current PC to label
             let byteOffset = targetOffset - currentOffset
@@ -1168,7 +1187,7 @@ let encodeWithLabels (instr: ARM64.Instr) (currentOffset: int) (labelMap: Map<st
         // ADD with label offset (page offset portion)
         // Used with ADRP to get full address
         // This adds the lower 12 bits of the address (page offset)
-        match Map.tryFind label labelMap with
+        match tryFindDataLabel label stringLabels floatLabels dataLabels with
         | Some targetOffset ->
             // Get the 12-bit page offset
             let pageOffset = targetOffset &&& 0xFFF
@@ -1353,20 +1372,14 @@ let encodeAllWithPools
         timePhase microTimingRecorder "encode: code label map" (fun () ->
             rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset))
 
-    // Step 5: Merge all labels
-    let labelMap =
-        timePhase microTimingRecorder "encode: merge label maps" (fun () ->
-            codeLabelMap
-            |> Map.fold (fun acc k v -> Map.add k v acc) floatLabels
-            |> Map.fold (fun acc k v -> Map.add k v acc) stringLabels
-            |> Map.fold (fun acc k v -> Map.add k v acc) leakLabels)
+    let dataLabels = leakLabels
 
     // Step 5: Encode with label resolution (current offset includes file offset)
     let rec encodeLoop instrs offset acc =
         match instrs with
         | [] -> List.rev acc
         | instr :: rest ->
-            let machineCode = encodeWithLabels instr offset labelMap
+            let machineCode = encodeWithLabels instr offset codeLabelMap stringLabels floatLabels dataLabels
             let (nextAcc, wordCount) =
                 machineCode
                 |> List.fold (fun (acc', count) code -> (code :: acc', count + 1)) (acc, 0)
