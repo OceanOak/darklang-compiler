@@ -155,19 +155,6 @@ let private buildTypeById (maxId: int) (typeMap: ANF.TypeMap) : AST.Type option 
                 arr.[id] <- Some typ)
         arr
 
-/// Lookup a TempId by raw integer id, checking extra types for newly created regs
-let private tryFindTypeById (builder: CFGBuilder) (id: int) : AST.Type option =
-    if id >= 0 && id < builder.TypeById.Length then
-        match builder.TypeById.[id] with
-        | Some t -> Some t
-        | None -> Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
-    else
-        Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
-
-/// Lookup a TempId, checking extra types for newly created regs
-let private tryFindType (builder: CFGBuilder) (tempId: ANF.TempId) : AST.Type option =
-    let (ANF.TempId id) = tempId
-    tryFindTypeById builder id
 
 /// Time a phase if a recorder is provided
 let private timePhase
@@ -521,6 +508,20 @@ type CFGBuilder = {
     ExprIdGen: ANF.ExprIdGen
     CoverageMapping: ANF.CoverageMapping
 }
+
+/// Lookup a TempId by raw integer id, checking extra types for newly created regs
+let private tryFindTypeById (builder: CFGBuilder) (id: int) : AST.Type option =
+    if id >= 0 && id < builder.TypeById.Length then
+        match builder.TypeById.[id] with
+        | Some t -> Some t
+        | None -> Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
+    else
+        Map.tryFind (ANF.TempId id) builder.ExtraTypeMap
+
+/// Lookup a TempId, checking extra types for newly created regs
+let private tryFindType (builder: CFGBuilder) (tempId: ANF.TempId) : AST.Type option =
+    let (ANF.TempId id) = tempId
+    tryFindTypeById builder id
 
 /// Convert ANF Atom to MIR Operand using lookups from builder
 /// Returns Error if float/string lookup fails (internal invariant violation)
