@@ -293,19 +293,21 @@ let createStringData (stringPool: LiteralPool.StringPool) : byte array * Map<str
 
         // Build string bytes and track offsets using fold
         // Each string has format: [length:8][data:N][null:1]
-        let (allBytes, labelMap, _finalOffset) =
+        let nullByte = [|0uy|]
+        let (segmentsRev, labelMap, _finalOffset) =
             sortedStrings
-            |> List.fold (fun (bytes, labels, offset) (idx, (str, len)) ->
+            |> List.fold (fun (segments, labels, offset) (idx, (str, len)) ->
                 let label = "str_" + string idx  // Match label format in CodeGen
-                let lenBytes = uint64ToBytes (uint64 len) |> Array.toList  // 8-byte length
-                let strBytes = System.Text.Encoding.UTF8.GetBytes(str) |> Array.toList
-                let newBytes = bytes @ lenBytes @ strBytes @ [0uy]  // length + data + null
+                let lenBytes = uint64ToBytes (uint64 len)  // 8-byte length
+                let strBytes = System.Text.Encoding.UTF8.GetBytes(str)
+                let segment = Array.concat [| lenBytes; strBytes; nullByte |]
                 let newLabels = Map.add label offset labels
-                let newOffset = offset + 8 + strBytes.Length + 1  // 8 for length + data + 1 for null
-                (newBytes, newLabels, newOffset))
+                let newOffset = offset + 8 + len + 1  // 8 for length + data + 1 for null
+                (segment :: segments, newLabels, newOffset))
                 ([], Map.empty, 0)
 
-        (Array.ofList allBytes, labelMap)
+        let allBytes = segmentsRev |> List.rev |> Array.concat
+        (allBytes, labelMap)
 
 /// Create a Mach-O executable with float and string data
 let createExecutableWithPools
