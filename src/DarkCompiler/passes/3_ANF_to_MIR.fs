@@ -99,6 +99,35 @@ let convertUnaryOp (op: ANF.UnaryOp) : MIR.UnaryOp =
     | ANF.Not -> MIR.Not
     | ANF.BitNot -> MIR.BitNot
 
+/// Precomputed descriptions for primitive ops (avoids formatting on hot path)
+let private binOpDescription (op: ANF.BinOp) : string =
+    match op with
+    | ANF.Add -> "Prim Add"
+    | ANF.Sub -> "Prim Sub"
+    | ANF.Mul -> "Prim Mul"
+    | ANF.Div -> "Prim Div"
+    | ANF.Mod -> "Prim Mod"
+    | ANF.Shl -> "Prim Shl"
+    | ANF.Shr -> "Prim Shr"
+    | ANF.BitAnd -> "Prim BitAnd"
+    | ANF.BitOr -> "Prim BitOr"
+    | ANF.BitXor -> "Prim BitXor"
+    | ANF.Eq -> "Prim Eq"
+    | ANF.Neq -> "Prim Neq"
+    | ANF.Lt -> "Prim Lt"
+    | ANF.Gt -> "Prim Gt"
+    | ANF.Lte -> "Prim Lte"
+    | ANF.Gte -> "Prim Gte"
+    | ANF.And -> "Prim And"
+    | ANF.Or -> "Prim Or"
+
+/// Precomputed descriptions for unary ops (avoids formatting on hot path)
+let private unaryOpDescription (op: ANF.UnaryOp) : string =
+    match op with
+    | ANF.Neg -> "UnaryPrim Neg"
+    | ANF.Not -> "UnaryPrim Not"
+    | ANF.BitNot -> "UnaryPrim BitNot"
+
 /// Sequence a list of Results into a Result of list
 let sequenceResults (results: Result<'a, string> list) : Result<'a list, string> =
     let rec loop acc remaining =
@@ -557,14 +586,14 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     match cexpr with
     | ANF.Atom _ -> "Atom"
     | ANF.TypedAtom _ -> "TypedAtom"
-    | ANF.Prim (op, _, _) -> $"Prim {op}"
-    | ANF.UnaryPrim (op, _) -> $"UnaryPrim {op}"
+    | ANF.Prim (op, _, _) -> binOpDescription op
+    | ANF.UnaryPrim (op, _) -> unaryOpDescription op
     | ANF.IfValue _ -> "IfValue"
-    | ANF.Call (name, _) -> $"Call {name}"
-    | ANF.TailCall (name, _) -> $"TailCall {name}"
+    | ANF.Call (name, _) -> System.String.Concat("Call ", name)
+    | ANF.TailCall (name, _) -> System.String.Concat("TailCall ", name)
     | ANF.IndirectCall _ -> "IndirectCall"
     | ANF.IndirectTailCall _ -> "IndirectTailCall"
-    | ANF.ClosureAlloc (name, _) -> $"ClosureAlloc {name}"
+    | ANF.ClosureAlloc (name, _) -> System.String.Concat("ClosureAlloc ", name)
     | ANF.ClosureCall _ -> "ClosureCall"
     | ANF.ClosureTailCall _ -> "ClosureTailCall"
     | ANF.TupleAlloc _ -> "TupleAlloc"
@@ -603,7 +632,7 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
 let withCoverage (builder: CFGBuilder) (cexpr: ANF.CExpr) : MIR.Instr list * CFGBuilder =
     if builder.EnableCoverage then
         let (exprId, exprIdGen') = ANF.freshExprId builder.ExprIdGen
-        let description = $"{builder.FuncName}: {cexprDescription cexpr}"
+        let description = System.String.Concat(builder.FuncName, ": ", cexprDescription cexpr)
         let mapping' = ANF.addCoverageEntry exprId description builder.CoverageMapping
         let builder' = { builder with ExprIdGen = exprIdGen'; CoverageMapping = mapping' }
         ([MIR.CoverageHit exprId], builder')
