@@ -66,6 +66,15 @@ let uint64ToBytes (value: uint64) : byte array =
         byte ((value >>> 56) &&& 0xFFUL)
     |]
 
+/// Convert machine code words to little-endian bytes without per-word arrays
+let private machineCodeToBytes (machineCode: uint32 list) : byte array =
+    let words = machineCode |> List.toArray
+    let byteCount = words.Length * 4
+    Array.init byteCount (fun i ->
+        let word = words.[i / 4]
+        let shift = (i % 4) * 8
+        byte ((word >>> shift) &&& 0xFFu))
+
 /// Serialize ELF64 header to bytes
 let serializeElf64Header (header: Binary_ELF.Elf64Header) : byte array =
     [|
@@ -157,10 +166,7 @@ let createExecutableWithPools
     : byte array =
     let codeBytes =
         timePhase microTimingRecorder "ELF: code bytes" (fun () ->
-            machineCode
-            |> List.map uint32ToBytes
-            |> Array.ofList
-            |> Array.concat)
+            machineCodeToBytes machineCode)
 
     // Create float data (goes after code, before strings)
     let floatBytes =
@@ -276,10 +282,7 @@ let createExecutable (machineCode: uint32 list) : byte array =
 /// Uses a single RWX segment for simplicity (code + data + coverage)
 let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) (floatPool: LiteralPool.FloatPool) (coverageExprCount: int) (enableLeakCheck: bool) : byte array =
     let codeBytes =
-        machineCode
-        |> List.collect (fun word ->
-            uint32ToBytes word |> Array.toList)
-        |> Array.ofList
+        machineCodeToBytes machineCode
 
     // Create float data (goes after code, before strings)
     let floatBytes = createFloatData floatPool
