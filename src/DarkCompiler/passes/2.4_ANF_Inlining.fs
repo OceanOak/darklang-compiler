@@ -14,29 +14,11 @@
 // connected components (SCCs) in the call graph. Any function in an SCC
 // of size > 1, or that calls itself, is considered recursive.
 //
-// LIMITATION: Literal Arguments Not Supported
-// --------------------------------------------
-// Currently, we only inline calls where ALL arguments are Var references.
-// Calls with literal arguments (IntLiteral, StringLiteral, etc.) are skipped.
-//
-// The naive fix (allocate fresh TempIds for literals, wrap body with Let
-// bindings) causes a subtle bug related to depth tracking:
-//
-// Problem: After inlining function A, we recursively process the result at
-// depth+1. But the result contains BOTH the inlined function body AND the
-// original continuation (code after the call). The continuation should be
-// processed at the original depth, not depth+1.
-//
-// Example: In __expandLeaf, when we inline __allocLeaf (which contains
-// __setTag with a literal tag), the nested inlining causes depth to increase
-// incorrectly for subsequent calls in __expandLeaf. This causes some __setTag
-// calls to not be inlined (hitting depth limit), resulting in inconsistent
-// code where some tags are inlined BitOr operations and others are function
-// calls. This breaks Dict operations when keys collide.
-//
-// Fix required: Restructure inlineCall to process the function body and
-// continuation separately, with the body at depth+1 and continuation at the
-// original depth. This requires changes to how substituteReturn merges them.
+// Literal arguments
+// -----------------
+// We inline calls even when arguments are literals by binding each literal to a
+// fresh TempId before inlining. This preserves ANF shape and avoids re-evaluating
+// literal expressions while allowing more helpers to inline.
 
 module ANF_Inlining
 
@@ -336,31 +318,53 @@ let rec substituteReturn (resultTid: TempId) (continuation: AExpr) (expr: AExpr)
             substituteReturn resultTid continuation thenBranch,
             substituteReturn resultTid continuation elseBranch)
 
+/// Bind literal arguments to fresh TempIds and build parameter mapping
+let bindLiteralArgs
+    (parameters: TypedParam list)
+    (args: Atom list)
+    (varGen: VarGen)
+    : Map<TempId, TempId> * (TempId * Atom) list * VarGen =
+    let rec loop
+        (paramList: TypedParam list)
+        (args: Atom list)
+        (mapping: Map<TempId, TempId>)
+        (bindings: (TempId * Atom) list)
+        (varGen: VarGen)
+        : Map<TempId, TempId> * (TempId * Atom) list * VarGen =
+        match paramList, args with
+        | [], [] -> (mapping, List.rev bindings, varGen)
+        | param :: restParams, arg :: restArgs ->
+            match arg with
+            | Var tid ->
+                loop restParams restArgs (Map.add param.Id tid mapping) bindings varGen
+            | _ ->
+                let (litTid, varGen') = freshVar varGen
+                loop restParams restArgs (Map.add param.Id litTid mapping) ((litTid, arg) :: bindings) varGen'
+        | _ ->
+            Crash.crash "ANF_Inlining: argument count mismatch when inlining"
+
+    loop parameters args Map.empty [] varGen
+
 /// Inline a function call
 /// Returns the inlined expression and updated VarGen
 let inlineCall (info: FunctionInfo) (args: Atom list) (resultTid: TempId)
                (continuation: AExpr) (varGen: VarGen)
     : AExpr * VarGen =
-    // Step 1: Build parameter -> argument mapping
-    let paramMapping =
-        List.zip (info.Func.TypedParams |> List.map (fun p -> p.Id)) args
-        |> List.fold (fun m (param, arg) ->
-            match arg with
-            | Var tid -> Map.add param tid m
-            | _ -> m  // Literal args handled differently
-        ) Map.empty
+    // Step 1: Bind literal args and build parameter -> TempId mapping
+    let (paramMapping, literalBindings, varGen') =
+        bindLiteralArgs info.Func.TypedParams args varGen
 
-    // Note: Literal arguments are silently ignored here. The caller (inlineInExpr)
-    // checks allVars and skips inlining if any args are literals.
-    // See file header for why literal arg support is non-trivial (depth tracking bug).
+    // Step 2: Rename all TempIds in the function body to fresh ones
+    let (renamedBody, varGen'') = renameExpr paramMapping varGen' info.Func.Body
 
-    // Step 3: Rename all TempIds in the function body to fresh ones
-    let (renamedBody, varGen') = renameExpr paramMapping varGen info.Func.Body
+    // Step 3: Insert literal bindings in front of the body
+    let bodyWithLiteralBindings =
+        List.foldBack (fun (tid, atom) acc -> Let (tid, Atom atom, acc)) literalBindings renamedBody
 
     // Step 4: Substitute Return with continuation
-    let inlinedExpr = substituteReturn resultTid continuation renamedBody
+    let inlinedExpr = substituteReturn resultTid continuation bodyWithLiteralBindings
 
-    (inlinedExpr, varGen')
+    (inlinedExpr, varGen'')
 
 /// Recursively inline calls in an expression
 let rec inlineInExpr (funcs: Map<string, FunctionInfo>) (config: InliningConfig)
@@ -371,19 +375,11 @@ let rec inlineInExpr (funcs: Map<string, FunctionInfo>) (config: InliningConfig)
         // Check if this is a regular call (not tail call) to a user function
         match Map.tryFind funcName funcs with
         | Some info when shouldInline info config depth ->
-            // Skip calls with literal args - see file header for why this is non-trivial
-            let allVars = args |> List.forall (function Var _ -> true | _ -> false)
-            if allVars then
-                // Inline the call
-                let (inlinedExpr, varGen') = inlineCall info args tid body varGen
-                // Recursively inline in the result (with increased depth)
-                let (result, varGen'', _) = inlineInExpr funcs config (depth + 1) varGen' inlinedExpr
-                (result, varGen'', true)
-            else
-                // Can't inline - args contain literals
-                // Continue processing body
-                let (body', varGen', changed) = inlineInExpr funcs config depth varGen body
-                (Let (tid, Call (funcName, args), body'), varGen', changed)
+            // Inline the call
+            let (inlinedExpr, varGen') = inlineCall info args tid body varGen
+            // Recursively inline in the result (with increased depth)
+            let (result, varGen'', _) = inlineInExpr funcs config (depth + 1) varGen' inlinedExpr
+            (result, varGen'', true)
         | _ ->
             // Don't inline - continue processing body
             let (body', varGen', changed) = inlineInExpr funcs config depth varGen body

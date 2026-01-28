@@ -47,6 +47,7 @@
     <Compile Include="PhiResolutionTests.fs" />
     <Compile Include="ChordalGraphTests.fs" />
     <Compile Include="ASTToANFTests.fs" />
+    <Compile Include="ANFInliningTests.fs" />
     <Compile Include="MonomorphizationTests.fs" />
     <Compile Include="LambdaLiftingTests.fs" />
 
