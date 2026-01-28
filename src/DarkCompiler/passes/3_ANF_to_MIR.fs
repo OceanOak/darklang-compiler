@@ -26,6 +26,10 @@
 module ANF_to_MIR
 
 open ResultList
+open System.Diagnostics
+
+/// Recorder for ANF -> MIR micro-timings (phase label -> elapsed ms)
+type MicroTimingRecorder = string -> float -> unit
 
 /// Helper to create VariantInfo record
 let private mkVariantInfo (name: string) (tag: int) (payload: AST.Type option) : MIR.VariantInfo =
@@ -105,6 +109,21 @@ let sequenceResults (results: Result<'a, string> list) : Result<'a list, string>
             | Ok v -> loop (v :: acc) rest
             | Error e -> Error e
     loop [] results
+
+/// Time a phase if a recorder is provided
+let private timePhase
+    (recorder: MicroTimingRecorder option)
+    (phase: string)
+    (f: unit -> 'a)
+    : 'a =
+    match recorder with
+    | None -> f ()
+    | Some record ->
+        let sw = Stopwatch.StartNew()
+        let result = f ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds
+        record phase elapsedMs
+        result
 
 /// Map ANF TempId to MIR virtual register
 let tempToVReg (ANF.TempId id) : MIR.VReg = MIR.VReg id
@@ -283,10 +302,16 @@ let computeReturnTypeWithReg (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typ
 /// Build a map from function name to return type for all functions
 /// Uses iterative fixpoint algorithm since functions may call each other
 /// externalReturnTypes: return types for functions not in `functions` (e.g., specialized functions compiled elsewhere)
-let buildReturnTypeReg (functions: ANF.Function list) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (externalReturnTypes: Map<string, AST.Type>) : Map<string, AST.Type> =
+let buildReturnTypeReg
+    (functions: ANF.Function list)
+    (typeMap: ANF.TypeMap)
+    (typeReg: Map<string, (string * AST.Type) list>)
+    (externalReturnTypes: Map<string, AST.Type>)
+    (microTimingRecorder: MicroTimingRecorder option)
+    : Map<string, AST.Type> =
     // Iterate until the map stabilizes (handles mutual recursion and call dependencies)
-    let rec fixpoint (currentReg: Map<string, AST.Type>) (iterations: int) =
-        if iterations > 100 then currentReg  // Safety limit
+    let rec fixpoint (currentReg: Map<string, AST.Type>) (iterations: int) : Map<string, AST.Type> * int =
+        if iterations > 100 then (currentReg, iterations)  // Safety limit
         else
             let computedReg =
                 functions
@@ -296,9 +321,19 @@ let buildReturnTypeReg (functions: ANF.Function list) (typeMap: ANF.TypeMap) (ty
                 |> Map.ofList
             // Merge external types with computed types (computed takes precedence)
             let newReg = Map.fold (fun acc k v -> Map.add k v acc) externalReturnTypes computedReg
-            if newReg = currentReg then newReg
+            if newReg = currentReg then (newReg, iterations)
             else fixpoint newReg (iterations + 1)
-    fixpoint externalReturnTypes 0
+
+    match microTimingRecorder with
+    | None ->
+        let (result, _iterations) = fixpoint externalReturnTypes 0
+        result
+    | Some record ->
+        let sw = Stopwatch.StartNew()
+        let (result, iterations) = fixpoint externalReturnTypes 0
+        let elapsedMs = sw.Elapsed.TotalMilliseconds
+        record $"Return type fixpoint ({iterations} iters)" elapsedMs
+        result
 
 /// Return type for monomorphized intrinsics not tracked in the return type registry
 let tryGetIntrinsicReturnType (funcName: string) : AST.Type option =
@@ -1677,117 +1712,134 @@ and convertExprToOperand
 /// Convert an ANF function to a MIR function
 /// Each function gets its own RegGen starting from (maxTempId + 1) for deterministic VReg assignment.
 /// This ensures the same function always produces identical MIR regardless of compilation context.
-let convertANFFunction (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (returnTypeReg: Map<string, AST.Type>) (enableCoverage: bool) : Result<MIR.Function, string> =
-    // Calculate RegGen for THIS function only
-    // freshReg must generate VRegs that don't conflict with TempId-derived VRegs.
-    // tempToVReg (TempId n) → VReg n, so freshReg must start past the max TempId used.
-    let maxId = maxTempIdInFunction anfFunc
-    let regGen = MIR.RegGen (maxId + 1)
+let convertANFFunction
+    (anfFunc: ANF.Function)
+    (typeMap: ANF.TypeMap)
+    (typeReg: Map<string, (string * AST.Type) list>)
+    (returnTypeReg: Map<string, AST.Type>)
+    (enableCoverage: bool)
+    (microTimingRecorder: MicroTimingRecorder option)
+    : Result<MIR.Function, string> =
+    let convertCore () : Result<MIR.Function, string> =
+        // Calculate RegGen for THIS function only
+        // freshReg must generate VRegs that don't conflict with TempId-derived VRegs.
+        // tempToVReg (TempId n) → VReg n, so freshReg must start past the max TempId used.
+        let maxId =
+            timePhase microTimingRecorder $"func {anfFunc.Name}: maxTempId" (fun () ->
+                maxTempIdInFunction anfFunc)
+        let regGen = MIR.RegGen (maxId + 1)
 
-    // Initialize FloatRegs with float parameter IDs (types are now bundled in TypedParams)
-    let floatParamIds =
-        anfFunc.TypedParams
-        |> List.filter (fun tp -> tp.Type = AST.TFloat64)
-        |> List.map (fun tp -> let (ANF.TempId id) = tp.Id in id)
-        |> Set.ofList
+        // Initialize FloatRegs with float parameter IDs (types are now bundled in TypedParams)
+        let floatParamIds =
+            anfFunc.TypedParams
+            |> List.filter (fun tp -> tp.Type = AST.TFloat64)
+            |> List.map (fun tp -> let (ANF.TempId id) = tp.Id in id)
+            |> Set.ofList
 
-    // Convert ANF parameter TempIds to MIR VRegs
-    // Must use tempToVReg to preserve the TempId values, not fresh VRegs,
-    // because the body uses Var (TempId n) which converts to VReg n
-    let paramVRegs = anfFunc.TypedParams |> List.map (fun tp -> tempToVReg tp.Id)
+        // Convert ANF parameter TempIds to MIR VRegs
+        // Must use tempToVReg to preserve the TempId values, not fresh VRegs,
+        // because the body uses Var (TempId n) which converts to VReg n
+        let paramVRegs = anfFunc.TypedParams |> List.map (fun tp -> tempToVReg tp.Id)
 
-    // Create initial builder
-    let initialBuilder = {
-        RegGen = regGen
-        LabelGen = MIR.initialLabelGen
-        Blocks = Map.empty
-        TypeMap = typeMap
-        TypeReg = typeReg
-        ReturnTypeReg = returnTypeReg
-        FuncName = anfFunc.Name
-        ParamRegs = paramVRegs  // For self-recursive tail call loop optimization
-        FloatRegs = floatParamIds
-        ClosureFuncs = Map.empty
-        EnableCoverage = enableCoverage
-        ExprIdGen = ANF.initialExprIdGen
-        CoverageMapping = ANF.emptyCoverageMapping
-    }
+        // Create initial builder
+        let initialBuilder = {
+            RegGen = regGen
+            LabelGen = MIR.initialLabelGen
+            Blocks = Map.empty
+            TypeMap = typeMap
+            TypeReg = typeReg
+            ReturnTypeReg = returnTypeReg
+            FuncName = anfFunc.Name
+            ParamRegs = paramVRegs  // For self-recursive tail call loop optimization
+            FloatRegs = floatParamIds
+            ClosureFuncs = Map.empty
+            EnableCoverage = enableCoverage
+            ExprIdGen = ANF.initialExprIdGen
+            CoverageMapping = ANF.emptyCoverageMapping
+        }
 
-    // Create entry label for CFG (internal to function body)
-    let entryLabel = MIR.Label $"{anfFunc.Name}_body"
+        // Create entry label for CFG (internal to function body)
+        let entryLabel = MIR.Label $"{anfFunc.Name}_body"
 
-    // Get parameter types from TypedParams (types are now bundled)
-    let paramTypes = anfFunc.TypedParams |> List.map (fun tp -> tp.Type)
+        // Get parameter types from TypedParams (types are now bundled)
+        let paramTypes = anfFunc.TypedParams |> List.map (fun tp -> tp.Type)
 
-    // Helper to get return type by finding return atoms in the body
-    // Uses returnTypeReg to check if function calls return floats
-    let rec getReturnType (floatRegs: Set<int>) (expr: ANF.AExpr) : AST.Type =
-        match expr with
-        | ANF.Return atom ->
-            match atom with
-            | ANF.FloatLiteral _ -> AST.TFloat64
-            | ANF.IntLiteral n -> ANF.sizedIntToType n  // Use actual type from SizedInt
-            | ANF.BoolLiteral _ -> AST.TBool
-            | ANF.StringLiteral _ -> AST.TString
-            | ANF.UnitLiteral -> AST.TUnit
-            | ANF.Var (ANF.TempId id) ->
-                if Set.contains id floatRegs then AST.TFloat64
-                else
-                    match Map.tryFind (ANF.TempId id) typeMap with
-                    | Some t -> t
-                    | None -> AST.TInt64
-            | ANF.FuncRef _ -> AST.TInt64
-        | ANF.Let (ANF.TempId destId, cexpr, rest) ->
-            // Update floatRegs if this binding produces a float
-            let floatRegs' =
-                if cexprProducesFloat floatRegs returnTypeReg cexpr then
-                    Set.add destId floatRegs
-                else
-                    floatRegs
-            getReturnType floatRegs' rest
-        | ANF.If (_, thenBranch, _) -> getReturnType floatRegs thenBranch  // Assume both branches have same type
+        // Helper to get return type by finding return atoms in the body
+        // Uses returnTypeReg to check if function calls return floats
+        let rec getReturnType (floatRegs: Set<int>) (expr: ANF.AExpr) : AST.Type =
+            match expr with
+            | ANF.Return atom ->
+                match atom with
+                | ANF.FloatLiteral _ -> AST.TFloat64
+                | ANF.IntLiteral n -> ANF.sizedIntToType n  // Use actual type from SizedInt
+                | ANF.BoolLiteral _ -> AST.TBool
+                | ANF.StringLiteral _ -> AST.TString
+                | ANF.UnitLiteral -> AST.TUnit
+                | ANF.Var (ANF.TempId id) ->
+                    if Set.contains id floatRegs then AST.TFloat64
+                    else
+                        match Map.tryFind (ANF.TempId id) typeMap with
+                        | Some t -> t
+                        | None -> AST.TInt64
+                | ANF.FuncRef _ -> AST.TInt64
+            | ANF.Let (ANF.TempId destId, cexpr, rest) ->
+                // Update floatRegs if this binding produces a float
+                let floatRegs' =
+                    if cexprProducesFloat floatRegs returnTypeReg cexpr then
+                        Set.add destId floatRegs
+                    else
+                        floatRegs
+                getReturnType floatRegs' rest
+            | ANF.If (_, thenBranch, _) -> getReturnType floatRegs thenBranch  // Assume both branches have same type
 
-    let returnType = getReturnType floatParamIds anfFunc.Body
+        let returnType =
+            timePhase microTimingRecorder $"func {anfFunc.Name}: returnType" (fun () ->
+                getReturnType floatParamIds anfFunc.Body)
 
-    // For self-recursive functions, we need a separate entry block that jumps to the body.
-    // This allows the body to be a proper loop header with two predecessors:
-    // 1. The entry block (first call with initial param values)
-    // 2. The recursive block (back-edge with updated param values)
-    // This structure enables SSA to insert phi nodes at the loop header.
-    let trueEntryLabel = MIR.Label $"{anfFunc.Name}_entry"
-    let entryBlock = {
-        MIR.Label = trueEntryLabel
-        MIR.Instrs = []  // Params are implicitly defined here by calling convention
-        MIR.Terminator = MIR.Jump entryLabel
-    }
+        // For self-recursive functions, we need a separate entry block that jumps to the body.
+        // This allows the body to be a proper loop header with two predecessors:
+        // 1. The entry block (first call with initial param values)
+        // 2. The recursive block (back-edge with updated param values)
+        // This structure enables SSA to insert phi nodes at the loop header.
+        let trueEntryLabel = MIR.Label $"{anfFunc.Name}_entry"
+        let entryBlock = {
+            MIR.Label = trueEntryLabel
+            MIR.Instrs = []  // Params are implicitly defined here by calling convention
+            MIR.Terminator = MIR.Jump entryLabel
+        }
 
-    // Convert function body to CFG
-    match convertExpr anfFunc.Body entryLabel [] initialBuilder with
-    | Error err -> Error err
-    | Ok (_, finalBuilder) ->
+        // Convert function body to CFG
+        match
+            timePhase microTimingRecorder $"func {anfFunc.Name}: convertExpr" (fun () ->
+                convertExpr anfFunc.Body entryLabel [] initialBuilder)
+        with
+        | Error err -> Error err
+        | Ok (_, finalBuilder) ->
 
-    // Add the entry block to the CFG
-    let allBlocks = Map.add trueEntryLabel entryBlock finalBuilder.Blocks
+        // Add the entry block to the CFG
+        let allBlocks = Map.add trueEntryLabel entryBlock finalBuilder.Blocks
 
-    let cfg = {
-        MIR.Entry = trueEntryLabel
-        MIR.Blocks = allBlocks
-    }
+        let cfg = {
+            MIR.Entry = trueEntryLabel
+            MIR.Blocks = allBlocks
+        }
 
-    // Create TypedMIRParams by zipping VRegs with types
-    let typedMIRParams : MIR.TypedMIRParam list =
-        List.zip paramVRegs paramTypes
-        |> List.map (fun (reg, typ) -> { Reg = reg; Type = typ })
+        // Create TypedMIRParams by zipping VRegs with types
+        let typedMIRParams : MIR.TypedMIRParam list =
+            List.zip paramVRegs paramTypes
+            |> List.map (fun (reg, typ) -> { Reg = reg; Type = typ })
 
-    let mirFunc = {
-        MIR.Name = anfFunc.Name
-        MIR.TypedParams = typedMIRParams
-        MIR.ReturnType = returnType
-        MIR.CFG = cfg
-        MIR.FloatRegs = finalBuilder.FloatRegs
-    }
+        let mirFunc = {
+            MIR.Name = anfFunc.Name
+            MIR.TypedParams = typedMIRParams
+            MIR.ReturnType = returnType
+            MIR.CFG = cfg
+            MIR.FloatRegs = finalBuilder.FloatRegs
+        }
 
-    Ok mirFunc
+        Ok mirFunc
+
+    timePhase microTimingRecorder $"func {anfFunc.Name}: total" convertCore
 
 /// Convert ANF program to MIR program
 /// mainExprType: the type of the main expression (used for _start's return type)
@@ -1795,17 +1847,27 @@ let convertANFFunction (anfFunc: ANF.Function) (typeMap: ANF.TypeMap) (typeReg: 
 /// typeReg: mapping from record type names to field info (for record printing, converted to RecordRegistry)
 /// externalReturnTypes: return types for functions not in the program (e.g., specialized functions compiled elsewhere)
 /// Each function gets its own RegGen for deterministic VReg assignment.
-let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (mainExprType: AST.Type) (variantLookup: AST_to_ANF.VariantLookup) (typeRegForRecords: Map<string, (string * AST.Type) list>) (enableCoverage: bool) (externalReturnTypes: Map<string, AST.Type>) : Result<MIR.Program, string> =
+let toMIR
+    (program: ANF.Program)
+    (typeMap: ANF.TypeMap)
+    (typeReg: Map<string, (string * AST.Type) list>)
+    (mainExprType: AST.Type)
+    (variantLookup: AST_to_ANF.VariantLookup)
+    (typeRegForRecords: Map<string, (string * AST.Type) list>)
+    (enableCoverage: bool)
+    (externalReturnTypes: Map<string, AST.Type>)
+    (microTimingRecorder: MicroTimingRecorder option)
+    : Result<MIR.Program, string> =
     let (ANF.Program (functions, mainExpr)) = program
 
     // Build return type registry for all functions (needed for caller to know return type)
-    let returnTypeReg = buildReturnTypeReg functions typeMap typeReg externalReturnTypes
+    let returnTypeReg = buildReturnTypeReg functions typeMap typeReg externalReturnTypes microTimingRecorder
 
     // Phase 2: Convert all functions to MIR
     // Each function gets its own RegGen starting from (maxTempId + 1) for deterministic compilation
     match
         mapResults
-            (fun anfFunc -> convertANFFunction anfFunc typeMap typeReg returnTypeReg enableCoverage)
+            (fun anfFunc -> convertANFFunction anfFunc typeMap typeReg returnTypeReg enableCoverage microTimingRecorder)
             functions
     with
     | Error err -> Error err
@@ -1813,7 +1875,9 @@ let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (s
 
     // Convert main expression to a synthetic "_start" function
     // _start gets its own RegGen based on the main expression's TempIds
-    let startMaxId = maxTempIdInAExpr mainExpr
+    let startMaxId =
+        timePhase microTimingRecorder "_start: maxTempId" (fun () ->
+            maxTempIdInAExpr mainExpr)
     let startRegGen = MIR.RegGen (startMaxId + 1)
     let entryLabel = MIR.Label "_start_body"
     let initialBuilder = {
@@ -1831,7 +1895,10 @@ let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (s
         ExprIdGen = ANF.initialExprIdGen
         CoverageMapping = ANF.emptyCoverageMapping
     }
-    match convertExpr mainExpr entryLabel [] initialBuilder with
+    match
+        timePhase microTimingRecorder "_start: convertExpr" (fun () ->
+            convertExpr mainExpr entryLabel [] initialBuilder)
+    with
     | Error err -> Error err
     | Ok (_, finalBuilder) ->
     let cfg = {
@@ -1858,17 +1925,26 @@ let toMIR (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (s
 /// Returns just the function list, variant registry, and record registry without wrapping in MIR.Program.
 /// externalReturnTypes: return types for functions not in the program (e.g., specialized functions compiled elsewhere)
 /// Each function gets its own RegGen for deterministic VReg assignment.
-let toMIRFunctionsOnly (program: ANF.Program) (typeMap: ANF.TypeMap) (typeReg: Map<string, (string * AST.Type) list>) (variantLookup: AST_to_ANF.VariantLookup) (typeRegForRecords: Map<string, (string * AST.Type) list>) (enableCoverage: bool) (externalReturnTypes: Map<string, AST.Type>) : Result<MIR.Function list * MIR.VariantRegistry * MIR.RecordRegistry, string> =
+let toMIRFunctionsOnly
+    (program: ANF.Program)
+    (typeMap: ANF.TypeMap)
+    (typeReg: Map<string, (string * AST.Type) list>)
+    (variantLookup: AST_to_ANF.VariantLookup)
+    (typeRegForRecords: Map<string, (string * AST.Type) list>)
+    (enableCoverage: bool)
+    (externalReturnTypes: Map<string, AST.Type>)
+    (microTimingRecorder: MicroTimingRecorder option)
+    : Result<MIR.Function list * MIR.VariantRegistry * MIR.RecordRegistry, string> =
     let (ANF.Program (functions, _mainExpr)) = program
 
     // Build return type registry for all functions (needed for caller to know return type)
-    let returnTypeReg = buildReturnTypeReg functions typeMap typeReg externalReturnTypes
+    let returnTypeReg = buildReturnTypeReg functions typeMap typeReg externalReturnTypes microTimingRecorder
 
     // Phase 2: Convert all functions to MIR (skip main/_start)
     // Each function gets its own RegGen starting from (maxTempId + 1) for deterministic compilation
     match
         mapResults
-            (fun anfFunc -> convertANFFunction anfFunc typeMap typeReg returnTypeReg enableCoverage)
+            (fun anfFunc -> convertANFFunction anfFunc typeMap typeReg returnTypeReg enableCoverage microTimingRecorder)
             functions
     with
     | Error err -> Error err

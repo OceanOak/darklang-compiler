@@ -86,6 +86,8 @@ type CompilerOptions = {
     EnableCoverage: bool
     /// Enable leak checking (debug only)
     EnableLeakCheck: bool
+    /// Enable ANF -> MIR micro-timing output
+    EnableANFToMIRProfiling: bool
     /// Dump ANF representations to stdout
     DumpANF: bool
     /// Dump MIR representations to stdout
@@ -117,6 +119,7 @@ let defaultOptions : CompilerOptions = {
     DisableFunctionTreeShaking = false
     EnableCoverage = false
     EnableLeakCheck = false
+    EnableANFToMIRProfiling = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -297,6 +300,17 @@ let private lowerToAllocatedLir
     : Result<LIR.Function list, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
+    let microTimingRecorder : ANF_to_MIR.MicroTimingRecorder option =
+        if options.EnableANFToMIRProfiling then
+            let prefix =
+                if stageSuffix = "" then "ANF->MIR"
+                else $"ANF->MIR {stageSuffix}"
+            let record (phase: string) (elapsedMs: float) =
+                let t = System.Math.Round(elapsedMs, 3)
+                println $"        [{prefix}] {phase}: {t}ms"
+            Some record
+        else
+            None
 
     let functionOrder = functions |> List.map (fun f -> f.Name)
     let compileFunctions (functionsToCompile: ANF.Function list) : Result<LIR.Function list, string> =
@@ -315,6 +329,7 @@ let private lowerToAllocatedLir
                     registries.TypeReg
                     options.EnableCoverage
                     externalReturnTypes
+                    microTimingRecorder
             match mirResult with
             | Error err -> Error $"MIR conversion error: {err}"
             | Ok (mirFuncs, variantRegistry, mirRecordRegistry) ->

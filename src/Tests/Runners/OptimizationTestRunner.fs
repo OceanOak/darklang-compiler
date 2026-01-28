@@ -119,7 +119,7 @@ let getOptimizedMIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR
-                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes with
+                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes None with
                     | Error e -> Error $"MIR conversion error: {e}"
                     | Ok mirProgram ->
                         // SSA construction
@@ -159,7 +159,7 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                     let anfProgram = PrintInsertion.insertPrint functions mainExpr programType
 
                     // Convert to MIR
-                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes with
+                    match ANF_to_MIR.toMIR anfProgram typeMap Map.empty programType convResultOptimized.VariantLookup convResultOptimized.TypeReg false externalReturnTypes None with
                     | Error e -> Error $"MIR conversion error: {e}"
                     | Ok mirProgram ->
                         // SSA construction and optimization

@@ -122,7 +122,7 @@ let runANF2MIRTest (input: ANF.Program) (expected: MIR.Program) : PassTestResult
             |> List.map (fun id -> (ANF.TempId id, AST.TInt64))
             |> Map.ofList
     let emptyTypeReg : Map<string, (string * AST.Type) list> = Map.empty
-    match ANF_to_MIR.toMIR input typeMap emptyTypeReg AST.TInt64 Map.empty Map.empty false Map.empty with
+    match ANF_to_MIR.toMIR input typeMap emptyTypeReg AST.TInt64 Map.empty Map.empty false Map.empty None with
     | Error err ->
         { Success = false
           Message = $"MIR conversion error: {err}"

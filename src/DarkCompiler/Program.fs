@@ -76,6 +76,7 @@ type CliOptions = {
     DisableLIROpt: bool
     DisableLIRPeephole: bool
     DisableFunctionTreeShaking: bool
+    ProfileANFToMIR: bool
     // IR dump flags
     DumpANF: bool
     DumpMIR: bool
@@ -111,6 +112,7 @@ let defaultOptions = {
     DisableLIROpt = false
     DisableLIRPeephole = false
     DisableFunctionTreeShaking = false
+    ProfileANFToMIR = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -139,6 +141,7 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
     DisableFunctionTreeShaking = cliOpts.DisableFunctionTreeShaking
     EnableCoverage = false
     EnableLeakCheck = cliOpts.LeakCheck
+    EnableANFToMIRProfiling = cliOpts.ProfileANFToMIR
     DumpANF = cliOpts.DumpANF
     DumpMIR = cliOpts.DumpMIR
     DumpLIR = cliOpts.DumpLIR
@@ -211,6 +214,10 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
         | "--leak-check" :: rest ->
             parseFlags rest { opts with LeakCheck = true } lastVerbosity
+
+        | "--profile-anf-to-mir" :: rest
+        | "--profile-anf-mir" :: rest ->
+            parseFlags rest { opts with ProfileANFToMIR = true } lastVerbosity
 
         | "-h" :: rest | "--help" :: rest ->
             parseFlags rest { opts with Help = true } lastVerbosity
@@ -466,6 +473,7 @@ let printUsage () =
     println "  --dump-mir           Dump MIR (control-flow graph)"
     println "  --dump-lir           Dump LIR (before and after register allocation)"
     println "  --leak-check         Enable leak checking (debug builds only)"
+    println "  --profile-anf-to-mir Show ANF → MIR micro-timings"
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
     println ""
