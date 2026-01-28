@@ -20,6 +20,23 @@
 
 module Binary_Generation_ELF
 
+open System.Diagnostics
+
+/// Time a phase if a recorder is provided
+let private timePhase
+    (recorder: (string -> float -> unit) option)
+    (phase: string)
+    (f: unit -> 'a)
+    : 'a =
+    match recorder with
+    | None -> f ()
+    | Some record ->
+        let sw = Stopwatch.StartNew()
+        let result = f ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds
+        record phase elapsedMs
+        result
+
 /// Helper: Convert uint16 to little-endian bytes
 let uint16ToBytes (value: uint16) : byte array =
     [|
@@ -129,28 +146,40 @@ let createStringData (stringPool: LiteralPool.StringPool) : byte array =
         |> Array.ofList
 
 /// Create an ELF executable with float and string data
-let createExecutableWithPools (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) (floatPool: LiteralPool.FloatPool) (enableLeakCheck: bool) : byte array =
+let createExecutableWithPools
+    (machineCode: uint32 list)
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
+    (enableLeakCheck: bool)
+    (microTimingRecorder: (string -> float -> unit) option)
+    : byte array =
     let codeBytes =
-        machineCode
-        |> List.collect (fun word ->
-            uint32ToBytes word |> Array.toList)
-        |> Array.ofList
+        timePhase microTimingRecorder "ELF: code bytes" (fun () ->
+            machineCode
+            |> List.collect (fun word ->
+                uint32ToBytes word |> Array.toList)
+            |> Array.ofList)
 
     // Create float data (goes after code, before strings)
-    let floatBytes = createFloatData floatPool
+    let floatBytes =
+        timePhase microTimingRecorder "ELF: float data" (fun () ->
+            createFloatData floatPool)
 
     // Create string data
-    let stringBytes = createStringData stringPool
+    let stringBytes =
+        timePhase microTimingRecorder "ELF: string data" (fun () ->
+            createStringData stringPool)
 
-    let floatAndStringBytes = Array.append floatBytes stringBytes
-    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
-    let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
-    let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
     let dataBytes =
-        if enableLeakCheck then
-            Array.concat [floatAndStringBytes; leakPadding; leakBytes]
-        else
-            floatAndStringBytes
+        timePhase microTimingRecorder "ELF: data bytes" (fun () ->
+            let floatAndStringBytes = Array.append floatBytes stringBytes
+            let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+            let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
+            let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
+            if enableLeakCheck then
+                Array.concat [floatAndStringBytes; leakPadding; leakBytes]
+            else
+                floatAndStringBytes)
 
     let codeSize = uint64 codeBytes.Length
     let dataSize = uint64 dataBytes.Length
@@ -228,15 +257,16 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: LiteralPoo
         StringData = dataBytes  // Contains floats + strings
     }
 
-    serializeElf binary
+    timePhase microTimingRecorder "ELF: serialize" (fun () ->
+        serializeElf binary)
 
 /// Create an ELF executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false
+    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false None
 
 /// Create a minimal ELF executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false
+    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false None
 
 /// Create an ELF executable with coverage data section
 /// coverageExprCount: number of coverage expressions (each needs 8 bytes)

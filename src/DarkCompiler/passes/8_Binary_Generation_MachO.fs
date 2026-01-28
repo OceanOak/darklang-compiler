@@ -27,6 +27,23 @@
 
 module Binary_Generation_MachO
 
+open System.Diagnostics
+
+/// Time a phase if a recorder is provided
+let private timePhase
+    (recorder: (string -> float -> unit) option)
+    (phase: string)
+    (f: unit -> 'a)
+    : 'a =
+    match recorder with
+    | None -> f ()
+    | Some record ->
+        let sw = Stopwatch.StartNew()
+        let result = f ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds
+        record phase elapsedMs
+        result
+
 /// Helper: Pad string to fixed size with null bytes
 let padString (s: string) (size: int) : byte array =
     let bytes = System.Text.Encoding.UTF8.GetBytes(s)
@@ -291,28 +308,40 @@ let createStringData (stringPool: LiteralPool.StringPool) : byte array * Map<str
         (Array.ofList allBytes, labelMap)
 
 /// Create a Mach-O executable with float and string data
-let createExecutableWithPools (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) (floatPool: LiteralPool.FloatPool) (enableLeakCheck: bool) : byte array =
+let createExecutableWithPools
+    (machineCode: uint32 list)
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
+    (enableLeakCheck: bool)
+    (microTimingRecorder: (string -> float -> unit) option)
+    : byte array =
     let codeBytes =
-        machineCode
-        |> List.collect (fun word ->
-            uint32ToBytes word |> Array.toList)
-        |> Array.ofList
+        timePhase microTimingRecorder "MachO: code bytes" (fun () ->
+            machineCode
+            |> List.collect (fun word ->
+                uint32ToBytes word |> Array.toList)
+            |> Array.ofList)
 
     // Create float data (goes after code, before strings)
-    let floatBytes = createFloatData floatPool
+    let floatBytes =
+        timePhase microTimingRecorder "MachO: float data" (fun () ->
+            createFloatData floatPool)
 
     // Create string data
-    let (stringBytes, _stringLabelMap) = createStringData stringPool
+    let (stringBytes, _stringLabelMap) =
+        timePhase microTimingRecorder "MachO: string data" (fun () ->
+            createStringData stringPool)
 
-    let floatAndStringBytes = Array.append floatBytes stringBytes
-    let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
-    let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
-    let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
     let dataBytes =
-        if enableLeakCheck then
-            Array.concat [floatAndStringBytes; leakPadding; leakBytes]
-        else
-            floatAndStringBytes
+        timePhase microTimingRecorder "MachO: data bytes" (fun () ->
+            let floatAndStringBytes = Array.append floatBytes stringBytes
+            let leakBytes = if enableLeakCheck then Array.create 8 0uy else [||]
+            let leakStart = ((floatAndStringBytes.Length + 7) / 8) * 8
+            let leakPadding = Array.create (leakStart - floatAndStringBytes.Length) 0uy
+            if enableLeakCheck then
+                Array.concat [floatAndStringBytes; leakPadding; leakBytes]
+            else
+                floatAndStringBytes)
     let hasData = dataBytes.Length > 0
 
     let codeSize = uint64 codeBytes.Length
@@ -539,15 +568,16 @@ let createExecutableWithPools (machineCode: uint32 list) (stringPool: LiteralPoo
         StringData = dataBytes  // Contains floats + strings
     }
 
-    serializeMachO binary
+    timePhase microTimingRecorder "MachO: serialize" (fun () ->
+        serializeMachO binary)
 
 /// Create a Mach-O executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false
+    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false None
 
 /// Create a minimal Mach-O executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false
+    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false None
 
 /// Create a Mach-O executable with coverage data section
 /// For now, coverage data is included in the __const section
@@ -587,7 +617,7 @@ let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: Literal
 
     // For now, use the existing creation logic but with extended data
     // This is a simplified approach - proper coverage on macOS needs __DATA segment
-    createExecutableWithPools machineCode stringPool floatPool enableLeakCheck
+    createExecutableWithPools machineCode stringPool floatPool enableLeakCheck None
 
 /// Write bytes to file and sign it
 let writeToFile (path: string) (bytes: byte array) : Result<unit, string> =

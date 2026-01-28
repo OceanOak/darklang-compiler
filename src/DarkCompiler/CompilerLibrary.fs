@@ -88,6 +88,8 @@ type CompilerOptions = {
     EnableLeakCheck: bool
     /// Enable ANF -> MIR micro-timing output
     EnableANFToMIRProfiling: bool
+    /// Enable ARM64 Emit micro-timing output
+    EnableARM64EmitProfiling: bool
     /// Dump ANF representations to stdout
     DumpANF: bool
     /// Dump MIR representations to stdout
@@ -120,6 +122,7 @@ let defaultOptions : CompilerOptions = {
     EnableCoverage = false
     EnableLeakCheck = false
     EnableANFToMIRProfiling = false
+    EnableARM64EmitProfiling = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -543,8 +546,16 @@ let private generateBinary
         | Ok os ->
             let formatName = match os with | Platform.MacOS -> "Mach-O" | Platform.Linux -> "ELF"
             if verbosity >= 1 then println (emitLabel.Replace("{format}", formatName))
+            let emitMicroTimingRecorder : (string -> float -> unit) option =
+                if options.EnableARM64EmitProfiling then
+                    let record (phase: string) (elapsedMs: float) =
+                        let t = System.Math.Round(elapsedMs, 3)
+                        println $"        [ARM64 Emit] {phase}: {t}ms"
+                    Some record
+                else
+                    None
             let emitStart = sw.Elapsed.TotalMilliseconds
-            let emitResult = ARM64_Emit.emitBinary arm64Instructions os options.EnableLeakCheck
+            let emitResult = ARM64_Emit.emitBinary arm64Instructions os options.EnableLeakCheck emitMicroTimingRecorder
             match emitResult with
             | Error err -> Error $"ARM64 emit error: {err}"
             | Ok emit ->

@@ -18,6 +18,8 @@
 
 module ARM64_Encoding
 
+open System.Diagnostics
+
 /// Encode general-purpose register to 5-bit value
 let encodeReg (reg: ARM64.Reg) : uint32 =
     match reg with
@@ -969,6 +971,21 @@ let encode (instr: ARM64.Instr) : ARM64.MachineCode list =
         let rd = encodeReg dest
         [sf ||| opc ||| fixedBits ||| n ||| immr ||| imms ||| rn ||| rd]
 
+/// Time a phase if a recorder is provided
+let private timePhase
+    (recorder: (string -> float -> unit) option)
+    (phase: string)
+    (f: unit -> 'a)
+    : 'a =
+    match recorder with
+    | None -> f ()
+    | Some record ->
+        let sw = Stopwatch.StartNew()
+        let result = f ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds
+        record phase elapsedMs
+        result
+
 /// Two-Pass Encoding for Label Resolution
 
 /// Pass 1: Compute byte offset for each label
@@ -1304,19 +1321,32 @@ let encodeAllWithPools
     (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
+    (microTimingRecorder: (string -> float -> unit) option)
     : ARM64.MachineCode list =
-    let codeFileOffset = computeCodeFileOffset os stringPool floatPool enableLeakCheck
+    let codeFileOffset =
+        timePhase microTimingRecorder "encode: code file offset" (fun () ->
+            computeCodeFileOffset os stringPool floatPool enableLeakCheck)
     // Step 1: Compute code size
-    let codeSize = getCodeSize instructions
+    let codeSize =
+        timePhase microTimingRecorder "encode: code size" (fun () ->
+            getCodeSize instructions)
 
     // Step 2: Compute float label positions (after headers + code, 8-byte aligned)
-    let floatLabels = computeFloatLabels codeFileOffset codeSize floatPool
-    let floatPoolSize = getFloatPoolSize floatPool
+    let floatLabels =
+        timePhase microTimingRecorder "encode: float labels" (fun () ->
+            computeFloatLabels codeFileOffset codeSize floatPool)
+    let floatPoolSize =
+        timePhase microTimingRecorder "encode: float pool size" (fun () ->
+            getFloatPoolSize floatPool)
 
     // Step 3: Compute string label positions (after headers + code + floats)
-    let stringLabels = computeStringLabels codeFileOffset codeSize floatPoolSize stringPool
+    let stringLabels =
+        timePhase microTimingRecorder "encode: string labels" (fun () ->
+            computeStringLabels codeFileOffset codeSize floatPoolSize stringPool)
 
-    let stringPoolSize = getStringPoolSize stringPool
+    let stringPoolSize =
+        timePhase microTimingRecorder "encode: string pool size" (fun () ->
+            getStringPoolSize stringPool)
     let leakLabels =
         if enableLeakCheck then
             computeLeakCounterLabel codeFileOffset codeSize floatPoolSize stringPoolSize
@@ -1324,15 +1354,20 @@ let encodeAllWithPools
             Map.empty
 
     // Step 4: Compute code label positions (relative to code start, add file offset)
-    let rawCodeLabels = computeLabelPositions instructions
-    let codeLabelMap = rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset)
+    let rawCodeLabels =
+        timePhase microTimingRecorder "encode: code label positions" (fun () ->
+            computeLabelPositions instructions)
+    let codeLabelMap =
+        timePhase microTimingRecorder "encode: code label map" (fun () ->
+            rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset))
 
     // Step 5: Merge all labels
     let labelMap =
-        codeLabelMap
-        |> Map.fold (fun acc k v -> Map.add k v acc) floatLabels
-        |> Map.fold (fun acc k v -> Map.add k v acc) stringLabels
-        |> Map.fold (fun acc k v -> Map.add k v acc) leakLabels
+        timePhase microTimingRecorder "encode: merge label maps" (fun () ->
+            codeLabelMap
+            |> Map.fold (fun acc k v -> Map.add k v acc) floatLabels
+            |> Map.fold (fun acc k v -> Map.add k v acc) stringLabels
+            |> Map.fold (fun acc k v -> Map.add k v acc) leakLabels)
 
     // Step 5: Encode with label resolution (current offset includes file offset)
     let rec encodeLoop instrs offset acc =
@@ -1343,4 +1378,5 @@ let encodeAllWithPools
             let newOffset = offset + (List.length machineCode * 4)
             encodeLoop rest newOffset (List.rev machineCode @ acc)
 
-    encodeLoop instructions codeFileOffset []
+    timePhase microTimingRecorder "encode: encode loop" (fun () ->
+        encodeLoop instructions codeFileOffset [])

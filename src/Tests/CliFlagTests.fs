@@ -50,6 +50,17 @@ let testLeakCheckFlag () : TestResult =
         else
             Ok ()
 
+/// Test that ARM64 emit profiling flag parses and sets the expected option
+let testARM64EmitProfileFlag () : TestResult =
+    let args = [| "--profile-arm64-emit"; "input.dark" |]
+    match parseArgs args with
+    | Error msg -> Error $"Expected ARM64 emit profiling flag to parse, got error: {msg}"
+    | Ok opts ->
+        if not opts.ProfileARM64Emit then
+            Error "Expected ProfileARM64Emit to be true"
+        else
+            Ok ()
+
 /// Test that ANF optimization flags parse and set the expected options
 let testANFOptFlags () : TestResult =
     let args = [|
@@ -162,6 +173,7 @@ let testBuildCompilerOptions () : TestResult =
             DisableLIRPeephole = true
             DisableFunctionTreeShaking = true
             LeakCheck = true
+            ProfileARM64Emit = true
             DumpANF = true
             DumpMIR = true
             DumpLIR = true
@@ -213,6 +225,8 @@ let testBuildCompilerOptions () : TestResult =
         Error "Expected DumpLIR to map into CompilerOptions"
     else if not compilerOpts.EnableLeakCheck then
         Error "Expected EnableLeakCheck to map into CompilerOptions"
+    else if not compilerOpts.EnableARM64EmitProfiling then
+        Error "Expected EnableARM64EmitProfiling to map into CompilerOptions"
     else if compilerOpts.EnableCoverage then
         Error "Expected EnableCoverage to remain false"
     else
@@ -222,6 +236,7 @@ let tests = [
     ("IR dump flags", testDumpIrFlags)
     ("show normal output", testShouldShowNormal)
     ("leak check flag", testLeakCheckFlag)
+    ("ARM64 emit profiling flag", testARM64EmitProfileFlag)
     ("ANF opt flags", testANFOptFlags)
     ("MIR opt flags", testMIROptFlags)
     ("LIR peephole flag", testLIRPeepholeFlag)
