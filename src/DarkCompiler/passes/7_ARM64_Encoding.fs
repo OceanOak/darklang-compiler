@@ -1368,8 +1368,11 @@ let encodeAllWithPools
         | [] -> List.rev acc
         | instr :: rest ->
             let machineCode = encodeWithLabels instr offset labelMap
-            let newOffset = offset + (List.length machineCode * 4)
-            encodeLoop rest newOffset (List.rev machineCode @ acc)
+            let (nextAcc, wordCount) =
+                machineCode
+                |> List.fold (fun (acc', count) code -> (code :: acc', count + 1)) (acc, 0)
+            let newOffset = offset + (wordCount * 4)
+            encodeLoop rest newOffset nextAcc
 
     timePhase microTimingRecorder "encode: encode loop" (fun () ->
         encodeLoop instructions codeFileOffset [])
