@@ -110,6 +110,10 @@ let sequenceResults (results: Result<'a, string> list) : Result<'a list, string>
             | Error e -> Error e
     loop [] results
 
+/// Append a list of instructions (in order) to a reversed instruction list
+let private appendInstrsRev (instrs: MIR.Instr list) (revInstrs: MIR.Instr list) : MIR.Instr list =
+    (List.rev instrs) @ revInstrs
+
 /// Time a phase if a recorder is provided
 let private timePhase
     (recorder: MicroTimingRecorder option)
@@ -491,7 +495,7 @@ let withCoverage (builder: CFGBuilder) (cexpr: ANF.CExpr) : MIR.Instr list * CFG
 let rec convertExpr
     (expr: ANF.AExpr)
     (currentLabel: MIR.Label)
-    (currentInstrs: MIR.Instr list)
+    (currentInstrsRev: MIR.Instr list)
     (builder: CFGBuilder)
     : Result<MIR.Operand * CFGBuilder, string> =
 
@@ -502,7 +506,7 @@ let rec convertExpr
         |> Result.bind (fun operand ->
             let block = {
                 MIR.Label = currentLabel
-                MIR.Instrs = currentInstrs
+                MIR.Instrs = List.rev currentInstrsRev
                 MIR.Terminator = MIR.Ret operand
             }
             let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks }
@@ -569,7 +573,7 @@ let rec convertExpr
             // Create block with accumulated instructions + param assignments + Jump
             let block = {
                 MIR.Label = currentLabel
-                MIR.Instrs = currentInstrs @ paramAssignments
+                MIR.Instrs = currentInstrsRev |> appendInstrsRev paramAssignments |> List.rev
                 MIR.Terminator = MIR.Jump loopLabel
             }
             let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks; RegGen = regGen' }
@@ -607,9 +611,10 @@ let rec convertExpr
                         let (joinLabel, labelGen3) = MIR.freshLabelWithPrefix builderWithCoverage.FuncName labelGen2
 
                         // Current block ends with branch (after coverage hit)
+                        let instrsRev = appendInstrsRev coverageInstrs currentInstrsRev
                         let currentBlock = {
                             MIR.Label = currentLabel
-                            MIR.Instrs = currentInstrs @ coverageInstrs
+                            MIR.Instrs = List.rev instrsRev
                             MIR.Terminator = MIR.Branch (condOp, thenLabel, elseLabel)
                         }
 
@@ -973,7 +978,7 @@ let rec convertExpr
                     | ANF.ClosureAlloc (funcName, _) ->
                         { builderWithCoverage with ClosureFuncs = Map.add tempId funcName builderWithCoverage.ClosureFuncs }
                     | _ -> builderWithCoverage
-                let newInstrs = currentInstrs @ coverageInstrs @ instrs
+                let newInstrsRev = appendInstrsRev (coverageInstrs @ instrs) currentInstrsRev
                 // Update FloatRegs if this dest is a float
                 let (MIR.VReg destId) = destReg
                 let builder' =
@@ -981,7 +986,7 @@ let rec convertExpr
                         { builderWithClosure with FloatRegs = Set.add destId builderWithClosure.FloatRegs }
                     else
                         builderWithClosure
-                convertExpr rest currentLabel newInstrs builder'
+                convertExpr rest currentLabel newInstrsRev builder'
 
     | ANF.If (condAtom, thenBranch, elseBranch) ->
         // If expression:
@@ -1004,7 +1009,7 @@ let rec convertExpr
         // End current block with conditional branch
         let currentBlock = {
             MIR.Label = currentLabel
-            MIR.Instrs = currentInstrs
+            MIR.Instrs = List.rev currentInstrsRev
             MIR.Terminator = MIR.Branch (condOp, thenLabel, elseLabel)
         }
 
@@ -1117,7 +1122,7 @@ let rec convertExpr
 and convertExprToOperand
     (expr: ANF.AExpr)
     (startLabel: MIR.Label)
-    (startInstrs: MIR.Instr list)
+    (startInstrsRev: MIR.Instr list)
     (builder: CFGBuilder)
     : Result<MIR.Operand * MIR.Label option * CFGBuilder, string> =
 
@@ -1127,14 +1132,14 @@ and convertExprToOperand
         // Otherwise just return the operand
         atomToOperand builder atom
         |> Result.bind (fun operand ->
-            if List.isEmpty startInstrs then
+            if List.isEmpty startInstrsRev then
                 Ok (operand, None, builder)
             else
                 // Create a block with accumulated instructions
                 // Use temporary Ret terminator - caller will patch if needed
                 let block = {
                     MIR.Label = startLabel
-                    MIR.Instrs = startInstrs
+                    MIR.Instrs = List.rev startInstrsRev
                     MIR.Terminator = MIR.Ret operand
                 }
                 let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks }
@@ -1189,7 +1194,7 @@ and convertExprToOperand
             // Create block with accumulated instructions + param assignments + Jump
             let block = {
                 MIR.Label = startLabel
-                MIR.Instrs = startInstrs @ paramAssignments
+                MIR.Instrs = startInstrsRev |> appendInstrsRev paramAssignments |> List.rev
                 MIR.Terminator = MIR.Jump loopLabel
             }
             let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks; RegGen = regGen' }
@@ -1221,7 +1226,7 @@ and convertExprToOperand
                         // Current block ends with branch
                         let startBlock = {
                             MIR.Label = startLabel
-                            MIR.Instrs = startInstrs
+                            MIR.Instrs = List.rev startInstrsRev
                             MIR.Terminator = MIR.Branch (condOp, thenLabel, elseLabel)
                         }
 
@@ -1591,7 +1596,8 @@ and convertExprToOperand
                         { builderWithClosure with FloatRegs = Set.add destId builderWithClosure.FloatRegs }
                     else
                         builderWithClosure
-                convertExprToOperand rest startLabel (startInstrs @ instrs) builder'
+                let newInstrsRev = appendInstrsRev instrs startInstrsRev
+                convertExprToOperand rest startLabel newInstrsRev builder'
 
     | ANF.If (condAtom, thenBranch, elseBranch) ->
         // If expression: creates blocks with branch/jump/join structure
@@ -1604,7 +1610,7 @@ and convertExprToOperand
 
             let startBlock = {
                 MIR.Label = startLabel
-                MIR.Instrs = startInstrs
+                MIR.Instrs = List.rev startInstrsRev
                 MIR.Terminator = MIR.Branch (condOp, thenLabel, elseLabel)
             }
 
