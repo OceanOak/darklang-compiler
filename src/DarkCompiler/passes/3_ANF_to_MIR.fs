@@ -307,6 +307,46 @@ let rec getExprReturnType (floatRegs: Set<int>) (typeMap: ANF.TypeMap) (returnTy
         getExprReturnType floatRegs' typeMap returnTypeReg rest
     | ANF.If (_, thenBranch, _) -> getExprReturnType floatRegs typeMap returnTypeReg thenBranch
 
+/// Compute return type and maximum TempId in a single pass over an expression
+let rec getReturnTypeAndMaxTempId
+    (floatRegs: Set<int>)
+    (typeMap: ANF.TypeMap)
+    (returnTypeReg: Map<string, AST.Type>)
+    (expr: ANF.AExpr)
+    : int * AST.Type =
+    match expr with
+    | ANF.Return atom ->
+        let maxId = maxTempIdInAtom atom
+        let retType =
+            match atom with
+            | ANF.FloatLiteral _ -> AST.TFloat64
+            | ANF.IntLiteral n -> ANF.sizedIntToType n
+            | ANF.BoolLiteral _ -> AST.TBool
+            | ANF.StringLiteral _ -> AST.TString
+            | ANF.UnitLiteral -> AST.TUnit
+            | ANF.Var (ANF.TempId id) ->
+                if Set.contains id floatRegs then AST.TFloat64
+                else
+                    match Map.tryFind (ANF.TempId id) typeMap with
+                    | Some t -> t
+                    | None -> AST.TInt64
+            | ANF.FuncRef _ -> AST.TInt64
+        (maxId, retType)
+    | ANF.Let (ANF.TempId destId, cexpr, rest) ->
+        let maxInCExpr = maxTempIdInCExpr cexpr
+        let floatRegs' =
+            if cexprProducesFloat floatRegs returnTypeReg cexpr then
+                Set.add destId floatRegs
+            else
+                floatRegs
+        let (maxRest, retType) = getReturnTypeAndMaxTempId floatRegs' typeMap returnTypeReg rest
+        (max destId (max maxInCExpr maxRest), retType)
+    | ANF.If (cond, thenBranch, elseBranch) ->
+        let maxCond = maxTempIdInAtom cond
+        let (maxThen, thenType) = getReturnTypeAndMaxTempId floatRegs typeMap returnTypeReg thenBranch
+        let (maxElse, _elseType) = getReturnTypeAndMaxTempId floatRegs typeMap returnTypeReg elseBranch
+        (max maxCond (max maxThen maxElse), thenType)
+
 /// Compute return type for an ANF function by analyzing return statements
 /// Uses typeReg to determine which parameters are floats
 /// Uses returnTypeReg to check return types of called functions
@@ -1783,10 +1823,10 @@ let convertANFFunction
         // Calculate RegGen for THIS function only
         // freshReg must generate VRegs that don't conflict with TempId-derived VRegs.
         // tempToVReg (TempId n) → VReg n, so freshReg must start past the max TempId used.
-        let maxId =
-            timePhase microTimingRecorder $"func {anfFunc.Name}: maxTempId" (fun () ->
-                maxTempIdInFunction anfFunc)
-        let regGen = MIR.RegGen (maxId + 1)
+        let paramMax =
+            anfFunc.TypedParams
+            |> List.map (fun tp -> let (ANF.TempId id) = tp.Id in id)
+            |> List.fold max -1
 
         // Initialize FloatRegs with float parameter IDs (types are now bundled in TypedParams)
         let floatParamIds =
@@ -1799,6 +1839,15 @@ let convertANFFunction
         // Must use tempToVReg to preserve the TempId values, not fresh VRegs,
         // because the body uses Var (TempId n) which converts to VReg n
         let paramVRegs = anfFunc.TypedParams |> List.map (fun tp -> tempToVReg tp.Id)
+
+        // Get parameter types from TypedParams (types are now bundled)
+        let paramTypes = anfFunc.TypedParams |> List.map (fun tp -> tp.Type)
+
+        let (bodyMaxId, returnType) =
+            timePhase microTimingRecorder $"func {anfFunc.Name}: returnType+maxTempId" (fun () ->
+                getReturnTypeAndMaxTempId floatParamIds typeMap returnTypeReg anfFunc.Body)
+        let maxId = max paramMax bodyMaxId
+        let regGen = MIR.RegGen (maxId + 1)
 
         // Create initial builder
         let initialBuilder = {
@@ -1819,41 +1868,6 @@ let convertANFFunction
 
         // Create entry label for CFG (internal to function body)
         let entryLabel = MIR.Label $"{anfFunc.Name}_body"
-
-        // Get parameter types from TypedParams (types are now bundled)
-        let paramTypes = anfFunc.TypedParams |> List.map (fun tp -> tp.Type)
-
-        // Helper to get return type by finding return atoms in the body
-        // Uses returnTypeReg to check if function calls return floats
-        let rec getReturnType (floatRegs: Set<int>) (expr: ANF.AExpr) : AST.Type =
-            match expr with
-            | ANF.Return atom ->
-                match atom with
-                | ANF.FloatLiteral _ -> AST.TFloat64
-                | ANF.IntLiteral n -> ANF.sizedIntToType n  // Use actual type from SizedInt
-                | ANF.BoolLiteral _ -> AST.TBool
-                | ANF.StringLiteral _ -> AST.TString
-                | ANF.UnitLiteral -> AST.TUnit
-                | ANF.Var (ANF.TempId id) ->
-                    if Set.contains id floatRegs then AST.TFloat64
-                    else
-                        match Map.tryFind (ANF.TempId id) typeMap with
-                        | Some t -> t
-                        | None -> AST.TInt64
-                | ANF.FuncRef _ -> AST.TInt64
-            | ANF.Let (ANF.TempId destId, cexpr, rest) ->
-                // Update floatRegs if this binding produces a float
-                let floatRegs' =
-                    if cexprProducesFloat floatRegs returnTypeReg cexpr then
-                        Set.add destId floatRegs
-                    else
-                        floatRegs
-                getReturnType floatRegs' rest
-            | ANF.If (_, thenBranch, _) -> getReturnType floatRegs thenBranch  // Assume both branches have same type
-
-        let returnType =
-            timePhase microTimingRecorder $"func {anfFunc.Name}: returnType" (fun () ->
-                getReturnType floatParamIds anfFunc.Body)
 
         // For self-recursive functions, we need a separate entry block that jumps to the body.
         // This allows the body to be a proper loop header with two predecessors:
