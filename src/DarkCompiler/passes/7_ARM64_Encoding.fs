@@ -1005,6 +1005,146 @@ let computeLabelPositions (instructions: ARM64.Instr list) : Map<string, int> =
                 loop rest (offset + 4) labelMap
     loop instructions 0 Map.empty
 
+/// Pass 1 (symbolic): Compute byte offset for each label
+let computeSymbolicLabelPositions (instructions: ARM64Symbolic.Instr list) : Map<string, int> =
+    let rec loop instrs offset labelMap =
+        match instrs with
+        | [] -> labelMap
+        | instr :: rest ->
+            match instr with
+            | ARM64Symbolic.Label name ->
+                loop rest offset (Map.add name offset labelMap)
+            | _ ->
+                loop rest (offset + 4) labelMap
+    loop instructions 0 Map.empty
+
+/// Compute the size of code in bytes from symbolic instructions
+let getSymbolicCodeSize (instructions: ARM64Symbolic.Instr list) : int =
+    instructions
+    |> List.sumBy (fun instr ->
+        match instr with
+        | ARM64Symbolic.Label _ -> 0
+        | _ -> 4)
+
+let private resolveLabelRefWithPools
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
+    (labelRef: ARM64Symbolic.LabelRef)
+    : string =
+    match labelRef with
+    | ARM64Symbolic.CodeLabel name -> name
+    | ARM64Symbolic.DataLabel dataRef ->
+        match dataRef with
+        | ARM64Symbolic.Named name -> name
+        | ARM64Symbolic.StringLiteral value ->
+            match Map.tryFind value stringPool.StringToId with
+            | Some idx -> "str_" + string idx
+            | None -> Crash.crash $"String literal label missing from pool: {value}"
+        | ARM64Symbolic.FloatLiteral value ->
+            let bits = System.BitConverter.DoubleToInt64Bits value
+            match Map.tryFind bits floatPool.FloatBitsToId with
+            | Some idx -> "_float" + string idx
+            | None -> Crash.crash $"Float literal label missing from pool: {value}"
+
+let private resolveSymbolicInstr
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
+    (instr: ARM64Symbolic.Instr)
+    : ARM64.Instr =
+    match instr with
+    | ARM64Symbolic.MOVZ (dest, imm, shift) -> ARM64.MOVZ (dest, imm, shift)
+    | ARM64Symbolic.MOVN (dest, imm, shift) -> ARM64.MOVN (dest, imm, shift)
+    | ARM64Symbolic.MOVK (dest, imm, shift) -> ARM64.MOVK (dest, imm, shift)
+    | ARM64Symbolic.ADD_imm (dest, src, imm) -> ARM64.ADD_imm (dest, src, imm)
+    | ARM64Symbolic.ADD_reg (dest, src1, src2) -> ARM64.ADD_reg (dest, src1, src2)
+    | ARM64Symbolic.ADD_shifted (dest, src1, src2, shift) -> ARM64.ADD_shifted (dest, src1, src2, shift)
+    | ARM64Symbolic.SUB_imm (dest, src, imm) -> ARM64.SUB_imm (dest, src, imm)
+    | ARM64Symbolic.SUB_imm12 (dest, src, imm) -> ARM64.SUB_imm12 (dest, src, imm)
+    | ARM64Symbolic.SUB_reg (dest, src1, src2) -> ARM64.SUB_reg (dest, src1, src2)
+    | ARM64Symbolic.SUB_shifted (dest, src1, src2, shift) -> ARM64.SUB_shifted (dest, src1, src2, shift)
+    | ARM64Symbolic.SUBS_imm (dest, src, imm) -> ARM64.SUBS_imm (dest, src, imm)
+    | ARM64Symbolic.MUL (dest, src1, src2) -> ARM64.MUL (dest, src1, src2)
+    | ARM64Symbolic.SDIV (dest, src1, src2) -> ARM64.SDIV (dest, src1, src2)
+    | ARM64Symbolic.UDIV (dest, src1, src2) -> ARM64.UDIV (dest, src1, src2)
+    | ARM64Symbolic.MSUB (dest, src1, src2, src3) -> ARM64.MSUB (dest, src1, src2, src3)
+    | ARM64Symbolic.MADD (dest, src1, src2, src3) -> ARM64.MADD (dest, src1, src2, src3)
+    | ARM64Symbolic.CMP_imm (src, imm) -> ARM64.CMP_imm (src, imm)
+    | ARM64Symbolic.CMP_reg (src1, src2) -> ARM64.CMP_reg (src1, src2)
+    | ARM64Symbolic.CSET (dest, cond) -> ARM64.CSET (dest, cond)
+    | ARM64Symbolic.AND_reg (dest, src1, src2) -> ARM64.AND_reg (dest, src1, src2)
+    | ARM64Symbolic.AND_imm (dest, src, imm) -> ARM64.AND_imm (dest, src, imm)
+    | ARM64Symbolic.ORR_reg (dest, src1, src2) -> ARM64.ORR_reg (dest, src1, src2)
+    | ARM64Symbolic.EOR_reg (dest, src1, src2) -> ARM64.EOR_reg (dest, src1, src2)
+    | ARM64Symbolic.LSL_reg (dest, src, shift) -> ARM64.LSL_reg (dest, src, shift)
+    | ARM64Symbolic.LSR_reg (dest, src, shift) -> ARM64.LSR_reg (dest, src, shift)
+    | ARM64Symbolic.LSL_imm (dest, src, shift) -> ARM64.LSL_imm (dest, src, shift)
+    | ARM64Symbolic.LSR_imm (dest, src, shift) -> ARM64.LSR_imm (dest, src, shift)
+    | ARM64Symbolic.MVN (dest, src) -> ARM64.MVN (dest, src)
+    | ARM64Symbolic.MOV_reg (dest, src) -> ARM64.MOV_reg (dest, src)
+    | ARM64Symbolic.STRB (src, addr, offset) -> ARM64.STRB (src, addr, offset)
+    | ARM64Symbolic.LDRB (dest, baseAddr, index) -> ARM64.LDRB (dest, baseAddr, index)
+    | ARM64Symbolic.LDRB_imm (dest, baseAddr, offset) -> ARM64.LDRB_imm (dest, baseAddr, offset)
+    | ARM64Symbolic.STRB_reg (src, addr) -> ARM64.STRB_reg (src, addr)
+    | ARM64Symbolic.STP (reg1, reg2, addr, offset) -> ARM64.STP (reg1, reg2, addr, offset)
+    | ARM64Symbolic.STP_pre (reg1, reg2, addr, offset) -> ARM64.STP_pre (reg1, reg2, addr, offset)
+    | ARM64Symbolic.LDP (reg1, reg2, addr, offset) -> ARM64.LDP (reg1, reg2, addr, offset)
+    | ARM64Symbolic.LDP_post (reg1, reg2, addr, offset) -> ARM64.LDP_post (reg1, reg2, addr, offset)
+    | ARM64Symbolic.STR (src, addr, offset) -> ARM64.STR (src, addr, offset)
+    | ARM64Symbolic.LDR (dest, addr, offset) -> ARM64.LDR (dest, addr, offset)
+    | ARM64Symbolic.STUR (src, addr, offset) -> ARM64.STUR (src, addr, offset)
+    | ARM64Symbolic.LDUR (dest, addr, offset) -> ARM64.LDUR (dest, addr, offset)
+    | ARM64Symbolic.BL label -> ARM64.BL label
+    | ARM64Symbolic.BLR reg -> ARM64.BLR reg
+    | ARM64Symbolic.BR reg -> ARM64.BR reg
+    | ARM64Symbolic.CBZ (reg, label) -> ARM64.CBZ (reg, label)
+    | ARM64Symbolic.CBNZ (reg, label) -> ARM64.CBNZ (reg, label)
+    | ARM64Symbolic.B_label label -> ARM64.B_label label
+    | ARM64Symbolic.B_cond_label (cond, label) -> ARM64.B_cond_label (cond, label)
+    | ARM64Symbolic.CBZ_offset (reg, offset) -> ARM64.CBZ_offset (reg, offset)
+    | ARM64Symbolic.CBNZ_offset (reg, offset) -> ARM64.CBNZ_offset (reg, offset)
+    | ARM64Symbolic.TBZ (reg, bit, offset) -> ARM64.TBZ (reg, bit, offset)
+    | ARM64Symbolic.TBNZ (reg, bit, offset) -> ARM64.TBNZ (reg, bit, offset)
+    | ARM64Symbolic.TBZ_label (reg, bit, label) -> ARM64.TBZ_label (reg, bit, label)
+    | ARM64Symbolic.TBNZ_label (reg, bit, label) -> ARM64.TBNZ_label (reg, bit, label)
+    | ARM64Symbolic.B offset -> ARM64.B offset
+    | ARM64Symbolic.B_cond (cond, offset) -> ARM64.B_cond (cond, offset)
+    | ARM64Symbolic.NEG (dest, src) -> ARM64.NEG (dest, src)
+    | ARM64Symbolic.RET -> ARM64.RET
+    | ARM64Symbolic.SVC imm -> ARM64.SVC imm
+    | ARM64Symbolic.Label name -> ARM64.Label name
+    | ARM64Symbolic.ADRP (dest, labelRef) ->
+        let label = resolveLabelRefWithPools stringPool floatPool labelRef
+        ARM64.ADRP (dest, label)
+    | ARM64Symbolic.ADD_label (dest, src, labelRef) ->
+        let label = resolveLabelRefWithPools stringPool floatPool labelRef
+        ARM64.ADD_label (dest, src, label)
+    | ARM64Symbolic.ADR (dest, labelRef) ->
+        let label = resolveLabelRefWithPools stringPool floatPool labelRef
+        ARM64.ADR (dest, label)
+    | ARM64Symbolic.LDR_fp (dest, addr, offset) -> ARM64.LDR_fp (dest, addr, offset)
+    | ARM64Symbolic.STR_fp (src, addr, offset) -> ARM64.STR_fp (src, addr, offset)
+    | ARM64Symbolic.STP_fp (freg1, freg2, addr, offset) -> ARM64.STP_fp (freg1, freg2, addr, offset)
+    | ARM64Symbolic.LDP_fp (freg1, freg2, addr, offset) -> ARM64.LDP_fp (freg1, freg2, addr, offset)
+    | ARM64Symbolic.FADD (dest, src1, src2) -> ARM64.FADD (dest, src1, src2)
+    | ARM64Symbolic.FSUB (dest, src1, src2) -> ARM64.FSUB (dest, src1, src2)
+    | ARM64Symbolic.FMUL (dest, src1, src2) -> ARM64.FMUL (dest, src1, src2)
+    | ARM64Symbolic.FDIV (dest, src1, src2) -> ARM64.FDIV (dest, src1, src2)
+    | ARM64Symbolic.FNEG (dest, src) -> ARM64.FNEG (dest, src)
+    | ARM64Symbolic.FABS (dest, src) -> ARM64.FABS (dest, src)
+    | ARM64Symbolic.FSQRT (dest, src) -> ARM64.FSQRT (dest, src)
+    | ARM64Symbolic.FCMP (src1, src2) -> ARM64.FCMP (src1, src2)
+    | ARM64Symbolic.FMOV_reg (dest, src) -> ARM64.FMOV_reg (dest, src)
+    | ARM64Symbolic.FMOV_to_gp (dest, src) -> ARM64.FMOV_to_gp (dest, src)
+    | ARM64Symbolic.FMOV_from_gp (dest, src) -> ARM64.FMOV_from_gp (dest, src)
+    | ARM64Symbolic.SCVTF (dest, src) -> ARM64.SCVTF (dest, src)
+    | ARM64Symbolic.FCVTZS (dest, src) -> ARM64.FCVTZS (dest, src)
+    | ARM64Symbolic.SXTB (dest, src) -> ARM64.SXTB (dest, src)
+    | ARM64Symbolic.SXTH (dest, src) -> ARM64.SXTH (dest, src)
+    | ARM64Symbolic.SXTW (dest, src) -> ARM64.SXTW (dest, src)
+    | ARM64Symbolic.UXTB (dest, src) -> ARM64.UXTB (dest, src)
+    | ARM64Symbolic.UXTH (dest, src) -> ARM64.UXTH (dest, src)
+    | ARM64Symbolic.UXTW (dest, src) -> ARM64.UXTW (dest, src)
+
 let private tryFindDataLabel
     (label: string)
     (stringLabels: Map<string, int>)
@@ -1380,6 +1520,77 @@ let encodeAllWithPools
         | [] -> List.rev acc
         | instr :: rest ->
             let machineCode = encodeWithLabels instr offset codeLabelMap stringLabels floatLabels dataLabels
+            match machineCode with
+            | [] ->
+                encodeLoop rest offset acc
+            | [code] ->
+                encodeLoop rest (offset + 4) (code :: acc)
+            | _ ->
+                let (nextAcc, wordCount) =
+                    machineCode
+                    |> List.fold (fun (acc', count) code -> (code :: acc', count + 1)) (acc, 0)
+                encodeLoop rest (offset + (wordCount * 4)) nextAcc
+
+    timePhase microTimingRecorder "encode: encode loop" (fun () ->
+        encodeLoop instructions codeFileOffset [])
+
+/// Encode symbolic instructions with string and float pool support
+/// Resolves label refs on the fly to avoid allocating a concrete instruction list
+let encodeSymbolicWithPools
+    (instructions: ARM64Symbolic.Instr list)
+    (stringPool: LiteralPool.StringPool)
+    (floatPool: LiteralPool.FloatPool)
+    (os: Platform.OS)
+    (enableLeakCheck: bool)
+    (microTimingRecorder: (string -> float -> unit) option)
+    : ARM64.MachineCode list =
+    let codeFileOffset =
+        timePhase microTimingRecorder "encode: code file offset" (fun () ->
+            computeCodeFileOffset os stringPool floatPool enableLeakCheck)
+    // Step 1: Compute code size
+    let codeSize =
+        timePhase microTimingRecorder "encode: code size" (fun () ->
+            getSymbolicCodeSize instructions)
+
+    // Step 2: Compute float label positions (after headers + code, 8-byte aligned)
+    let floatLabels =
+        timePhase microTimingRecorder "encode: float labels" (fun () ->
+            computeFloatLabels codeFileOffset codeSize floatPool)
+    let floatPoolSize =
+        timePhase microTimingRecorder "encode: float pool size" (fun () ->
+            getFloatPoolSize floatPool)
+
+    // Step 3: Compute string label positions (after headers + code + floats)
+    let stringLabels =
+        timePhase microTimingRecorder "encode: string labels" (fun () ->
+            computeStringLabels codeFileOffset codeSize floatPoolSize stringPool)
+
+    let stringPoolSize =
+        timePhase microTimingRecorder "encode: string pool size" (fun () ->
+            getStringPoolSize stringPool)
+    let leakLabels =
+        if enableLeakCheck then
+            computeLeakCounterLabel codeFileOffset codeSize floatPoolSize stringPoolSize
+        else
+            Map.empty
+
+    // Step 4: Compute code label positions (relative to code start, add file offset)
+    let rawCodeLabels =
+        timePhase microTimingRecorder "encode: code label positions" (fun () ->
+            computeSymbolicLabelPositions instructions)
+    let codeLabelMap =
+        timePhase microTimingRecorder "encode: code label map" (fun () ->
+            rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset))
+
+    let dataLabels = leakLabels
+
+    // Step 5: Encode with label resolution (current offset includes file offset)
+    let rec encodeLoop instrs offset acc =
+        match instrs with
+        | [] -> List.rev acc
+        | instr :: rest ->
+            let resolvedInstr = resolveSymbolicInstr stringPool floatPool instr
+            let machineCode = encodeWithLabels resolvedInstr offset codeLabelMap stringLabels floatLabels dataLabels
             match machineCode with
             | [] ->
                 encodeLoop rest offset acc

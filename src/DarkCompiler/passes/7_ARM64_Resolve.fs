@@ -5,6 +5,8 @@
 
 module ARM64_Resolve
 
+open System.Diagnostics
+
 type ResolveResult = {
     Instructions: ARM64.Instr list
     StringPool: LiteralPool.StringPool
@@ -15,6 +17,31 @@ type private PoolState = {
     StringPool: LiteralPool.StringPool
     FloatPool: LiteralPool.FloatPool
 }
+
+type private ResolveTimings = {
+    LabelRefMs: float
+    AddStringMs: float
+    AddFloatMs: float
+}
+
+let private zeroTimings : ResolveTimings = {
+    LabelRefMs = 0.0
+    AddStringMs = 0.0
+    AddFloatMs = 0.0
+}
+
+let private addTimings (left: ResolveTimings) (right: ResolveTimings) : ResolveTimings = {
+    LabelRefMs = left.LabelRefMs + right.LabelRefMs
+    AddStringMs = left.AddStringMs + right.AddStringMs
+    AddFloatMs = left.AddFloatMs + right.AddFloatMs
+}
+
+let private timeBlock (f: unit -> 'a) : 'a * float =
+    let start = Stopwatch.GetTimestamp()
+    let result = f ()
+    let elapsedTicks = Stopwatch.GetTimestamp() - start
+    let elapsedMs = (float elapsedTicks) * 1000.0 / (float Stopwatch.Frequency)
+    (result, elapsedMs)
 
 let private resolveLabelRef
     (state: PoolState)
@@ -31,6 +58,120 @@ let private resolveLabelRef
         | ARM64Symbolic.FloatLiteral value ->
             let (idx, pool') = LiteralPool.addFloat state.FloatPool value
             ("_float" + string idx, { state with FloatPool = pool' })
+
+let private resolveLabelRefTimed
+    (state: PoolState)
+    (labelRef: ARM64Symbolic.LabelRef)
+    : string * PoolState * ResolveTimings =
+    let (result, labelRefMs) =
+        timeBlock (fun () ->
+            match labelRef with
+            | ARM64Symbolic.CodeLabel name -> (name, state, 0.0, 0.0)
+            | ARM64Symbolic.DataLabel dataRef ->
+                match dataRef with
+                | ARM64Symbolic.Named name -> (name, state, 0.0, 0.0)
+                | ARM64Symbolic.StringLiteral value ->
+                    let ((idx, pool'), addMs) =
+                        timeBlock (fun () -> LiteralPool.addString state.StringPool value)
+                    ("str_" + string idx, { state with StringPool = pool' }, addMs, 0.0)
+                | ARM64Symbolic.FloatLiteral value ->
+                    let ((idx, pool'), addMs) =
+                        timeBlock (fun () -> LiteralPool.addFloat state.FloatPool value)
+                    ("_float" + string idx, { state with FloatPool = pool' }, 0.0, addMs))
+
+    let (label, nextState, addStringMs, addFloatMs) = result
+    let timings = {
+        LabelRefMs = labelRefMs
+        AddStringMs = addStringMs
+        AddFloatMs = addFloatMs
+    }
+    (label, nextState, timings)
+
+let private addLabelRefToPools
+    (state: PoolState)
+    (labelRef: ARM64Symbolic.LabelRef)
+    : PoolState =
+    match labelRef with
+    | ARM64Symbolic.CodeLabel _ -> state
+    | ARM64Symbolic.DataLabel dataRef ->
+        match dataRef with
+        | ARM64Symbolic.Named _ -> state
+        | ARM64Symbolic.StringLiteral value ->
+            let (_, pool') = LiteralPool.addString state.StringPool value
+            { state with StringPool = pool' }
+        | ARM64Symbolic.FloatLiteral value ->
+            let (_, pool') = LiteralPool.addFloat state.FloatPool value
+            { state with FloatPool = pool' }
+
+let private addLabelRefToPoolsTimed
+    (state: PoolState)
+    (labelRef: ARM64Symbolic.LabelRef)
+    : PoolState * ResolveTimings =
+    match labelRef with
+    | ARM64Symbolic.CodeLabel _ -> (state, zeroTimings)
+    | ARM64Symbolic.DataLabel dataRef ->
+        match dataRef with
+        | ARM64Symbolic.Named _ -> (state, zeroTimings)
+        | ARM64Symbolic.StringLiteral value ->
+            let ((_, pool'), addMs) =
+                timeBlock (fun () -> LiteralPool.addString state.StringPool value)
+            let timings = { zeroTimings with AddStringMs = addMs }
+            ({ state with StringPool = pool' }, timings)
+        | ARM64Symbolic.FloatLiteral value ->
+            let ((_, pool'), addMs) =
+                timeBlock (fun () -> LiteralPool.addFloat state.FloatPool value)
+            let timings = { zeroTimings with AddFloatMs = addMs }
+            ({ state with FloatPool = pool' }, timings)
+
+let collectPools
+    (instructions: ARM64Symbolic.Instr list)
+    (microTimingRecorder: (string -> float -> unit) option)
+    : LiteralPool.StringPool * LiteralPool.FloatPool =
+    let initialState = { StringPool = LiteralPool.emptyStringPool; FloatPool = LiteralPool.emptyFloatPool }
+
+    let updatePools (state: PoolState) (instr: ARM64Symbolic.Instr) : PoolState =
+        match instr with
+        | ARM64Symbolic.ADRP (_, labelRef)
+        | ARM64Symbolic.ADD_label (_, _, labelRef)
+        | ARM64Symbolic.ADR (_, labelRef) ->
+            addLabelRefToPools state labelRef
+        | _ -> state
+
+    let updatePoolsTimed (state: PoolState) (timings: ResolveTimings) (instr: ARM64Symbolic.Instr) : PoolState * ResolveTimings =
+        match instr with
+        | ARM64Symbolic.ADRP (_, labelRef)
+        | ARM64Symbolic.ADD_label (_, _, labelRef)
+        | ARM64Symbolic.ADR (_, labelRef) ->
+            let (nextState, deltaTimings) = addLabelRefToPoolsTimed state labelRef
+            (nextState, addTimings timings deltaTimings)
+        | _ -> (state, timings)
+
+    match microTimingRecorder with
+    | None ->
+        let rec loop state remaining =
+            match remaining with
+            | [] -> state
+            | instr :: rest ->
+                let nextState = updatePools state instr
+                loop nextState rest
+        let pools = loop initialState instructions
+        (pools.StringPool, pools.FloatPool)
+    | Some record ->
+        let ((pools, timings), loopMs) =
+            timeBlock (fun () ->
+                let rec loop state timingAcc remaining =
+                    match remaining with
+                    | [] -> (state, timingAcc)
+                    | instr :: rest ->
+                        let (nextState, nextTimings) = updatePoolsTimed state timingAcc instr
+                        loop nextState nextTimings rest
+                loop initialState zeroTimings instructions)
+        record "resolve: pool scan" loopMs
+        if timings.AddStringMs > 0.0 then
+            record "resolve: add string literal" timings.AddStringMs
+        if timings.AddFloatMs > 0.0 then
+            record "resolve: add float literal" timings.AddFloatMs
+        (pools.StringPool, pools.FloatPool)
 
 let private resolveInstr
     (state: PoolState)
@@ -130,6 +271,24 @@ let private resolveInstr
     | ARM64Symbolic.UXTH (dest, src) -> (ARM64.UXTH (dest, src), state)
     | ARM64Symbolic.UXTW (dest, src) -> (ARM64.UXTW (dest, src), state)
 
+let private resolveInstrTimed
+    (state: PoolState)
+    (instr: ARM64Symbolic.Instr)
+    : ARM64.Instr * PoolState * ResolveTimings =
+    match instr with
+    | ARM64Symbolic.ADRP (dest, labelRef) ->
+        let (label, state', timings) = resolveLabelRefTimed state labelRef
+        (ARM64.ADRP (dest, label), state', timings)
+    | ARM64Symbolic.ADD_label (dest, src, labelRef) ->
+        let (label, state', timings) = resolveLabelRefTimed state labelRef
+        (ARM64.ADD_label (dest, src, label), state', timings)
+    | ARM64Symbolic.ADR (dest, labelRef) ->
+        let (label, state', timings) = resolveLabelRefTimed state labelRef
+        (ARM64.ADR (dest, label), state', timings)
+    | _ ->
+        let (resolved, nextState) = resolveInstr state instr
+        (resolved, nextState, zeroTimings)
+
 let private resolveInstrs
     (instrs: ARM64Symbolic.Instr list)
     : ARM64.Instr list * PoolState =
@@ -142,11 +301,44 @@ let private resolveInstrs
             loop (resolved :: acc) nextState rest
     loop [] initialState instrs
 
+let private resolveInstrsWithTiming
+    (instrs: ARM64Symbolic.Instr list)
+    : ARM64.Instr list * PoolState * ResolveTimings =
+    let initialState = { StringPool = LiteralPool.emptyStringPool; FloatPool = LiteralPool.emptyFloatPool }
+    let rec loop acc state timings remaining =
+        match remaining with
+        | [] -> (List.rev acc, state, timings)
+        | instr :: rest ->
+            let (resolved, nextState, instrTimings) = resolveInstrTimed state instr
+            let nextTimings = addTimings timings instrTimings
+            loop (resolved :: acc) nextState nextTimings rest
+    loop [] initialState zeroTimings instrs
+
 /// Resolve symbolic instructions into concrete ARM64 instructions and literal pools.
-let resolve (instructions: ARM64Symbolic.Instr list) : ResolveResult =
-    let (resolvedInstrs, pools) = resolveInstrs instructions
-    {
-        Instructions = resolvedInstrs
-        StringPool = pools.StringPool
-        FloatPool = pools.FloatPool
-    }
+let resolve
+    (instructions: ARM64Symbolic.Instr list)
+    (microTimingRecorder: (string -> float -> unit) option)
+    : ResolveResult =
+    match microTimingRecorder with
+    | None ->
+        let (resolvedInstrs, pools) = resolveInstrs instructions
+        {
+            Instructions = resolvedInstrs
+            StringPool = pools.StringPool
+            FloatPool = pools.FloatPool
+        }
+    | Some record ->
+        let ((resolvedInstrs, pools, timings), loopMs) =
+            timeBlock (fun () -> resolveInstrsWithTiming instructions)
+        record "resolve: instr loop" loopMs
+        if timings.LabelRefMs > 0.0 then
+            record "resolve: label refs" timings.LabelRefMs
+        if timings.AddStringMs > 0.0 then
+            record "resolve: add string literal" timings.AddStringMs
+        if timings.AddFloatMs > 0.0 then
+            record "resolve: add float literal" timings.AddFloatMs
+        {
+            Instructions = resolvedInstrs
+            StringPool = pools.StringPool
+            FloatPool = pools.FloatPool
+        }

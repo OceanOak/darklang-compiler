@@ -33,15 +33,15 @@ let emitBinary
     (enableLeakCheck: bool)
     (microTimingRecorder: (string -> float -> unit) option)
     : Result<EmitResult, string> =
-    let resolved =
+    let (stringPool, floatPool) =
         timePhase microTimingRecorder "resolve" (fun () ->
-            ARM64_Resolve.resolve instructions)
+            ARM64_Resolve.collectPools instructions microTimingRecorder)
     let machineCode =
         timePhase microTimingRecorder "encode" (fun () ->
-            ARM64_Encoding.encodeAllWithPools
-                resolved.Instructions
-                resolved.StringPool
-                resolved.FloatPool
+            ARM64_Encoding.encodeSymbolicWithPools
+                instructions
+                stringPool
+                floatPool
                 os
                 enableLeakCheck
                 microTimingRecorder)
@@ -50,7 +50,7 @@ let emitBinary
         timePhase microTimingRecorder $"binary ({formatName})" (fun () ->
             match os with
             | Platform.MacOS ->
-                Binary_Generation_MachO.createExecutableWithPools machineCode resolved.StringPool resolved.FloatPool enableLeakCheck microTimingRecorder
+                Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
             | Platform.Linux ->
-                Binary_Generation_ELF.createExecutableWithPools machineCode resolved.StringPool resolved.FloatPool enableLeakCheck microTimingRecorder)
+                Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder)
     Ok { MachineCode = machineCode; Binary = binary }
