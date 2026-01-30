@@ -90,6 +90,8 @@ type CompilerOptions = {
     EnableANFToMIRProfiling: bool
     /// Enable ARM64 Emit micro-timing output
     EnableARM64EmitProfiling: bool
+    /// Enable LIR Peephole micro-timing output
+    EnableLIRPeepholeProfiling: bool
     /// Dump ANF representations to stdout
     DumpANF: bool
     /// Dump MIR representations to stdout
@@ -123,6 +125,7 @@ let defaultOptions : CompilerOptions = {
     EnableLeakCheck = false
     EnableANFToMIRProfiling = false
     EnableARM64EmitProfiling = false
+    EnableLIRPeepholeProfiling = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -270,12 +273,21 @@ let private compileMirToLir
                 "LIR Peephole"
                 [("peephole", not options.DisableLIROpt && not options.DisableLIRPeephole)]
         if verbosity >= 1 then println $"  [4.5/7] {lirPassLabel}{suffix}..."
+        let peepholeMicroTimingRecorder : (string -> float -> unit) option =
+            if options.EnableLIRPeepholeProfiling then
+                let labelSuffix = if stageSuffix = "" then "" else $" {stageSuffix}"
+                let record (phase: string) (elapsedMs: float) =
+                    let t = System.Math.Round(elapsedMs, 3)
+                    println $"        [LIR Peephole{labelSuffix}] {phase}: {t}ms"
+                Some record
+            else
+                None
         let lirOptStart = sw.Elapsed.TotalMilliseconds
         let optimizedLir =
             if options.DisableLIROpt || options.DisableLIRPeephole then
                 lirProgram
             else
-                LIR_Peephole.optimizeProgram lirProgram
+                LIR_Peephole.optimizeProgram lirProgram peepholeMicroTimingRecorder
         let lirOptElapsed = sw.Elapsed.TotalMilliseconds - lirOptStart
         recordPassTiming passTimingRecorder "LIR Peephole" lirOptElapsed
         if verbosity >= 2 then
