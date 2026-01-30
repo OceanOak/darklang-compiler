@@ -19,6 +19,11 @@ open System.Diagnostics
    3) Hoist loop-invariant Mov(Imm ...) for virtual regs into the preheader and remove from loop blocks.
    4) Run LICM alongside existing peephole passes in optimizeCFGOnce. *)
 
+type private DominatorCache = {
+    Succs: Map<Label, Label list>
+    Dominators: Map<Label, Set<Label>>
+}
+
 /// Time a phase if a recorder is provided
 let private timePhase
     (recorder: (string -> float -> unit) option)
@@ -108,16 +113,29 @@ let computeDominators (cfg: CFG) (preds: Map<Label, Label list>) : Map<Label, Se
     loop initial
 
 /// Identify natural loops via backedges (header dominates source)
-let findNaturalLoops (cfg: CFG) (microTimingRecorder: (string -> float -> unit) option) : Map<Label, Set<Label>> =
+let private findNaturalLoopsWithCache
+    (cfg: CFG)
+    (microTimingRecorder: (string -> float -> unit) option)
+    (domCache: DominatorCache option)
+    : Map<Label, Set<Label>> * DominatorCache option =
     let preds =
         timePhase microTimingRecorder "peephole: preds (loops)" (fun () ->
             buildPredecessors cfg)
-    let doms =
-        timePhase microTimingRecorder "peephole: dominators" (fun () ->
-            computeDominators cfg preds)
     let succs =
         timePhase microTimingRecorder "peephole: succs" (fun () ->
             buildSuccessors cfg)
+    let (doms, cache') =
+        match domCache with
+        | Some cache when cache.Succs = succs ->
+            match microTimingRecorder with
+            | None -> ()
+            | Some record -> record "peephole: dominators (cached)" 0.0
+            (cache.Dominators, domCache)
+        | _ ->
+            let doms =
+                timePhase microTimingRecorder "peephole: dominators" (fun () ->
+                    computeDominators cfg preds)
+            (doms, Some { Succs = succs; Dominators = doms })
 
     let dominates (dominator: Label) (node: Label) : bool =
         Map.tryFind node doms
@@ -138,33 +156,36 @@ let findNaturalLoops (cfg: CFG) (microTimingRecorder: (string -> float -> unit) 
                 ) acc
             ) Map.empty)
 
-    timePhase microTimingRecorder "peephole: loop growth" (fun () ->
-        backedges
-        |> Map.fold (fun loops header sources ->
-            let loopBlocks =
-                sources
-                |> List.fold (fun acc source ->
-                    let initial = Set.ofList [header; source]
-                    let rec grow work loopSet =
-                        match work with
-                        | [] -> loopSet
-                        | node :: rest ->
-                            let nodePreds = Map.tryFind node preds |> Option.defaultValue []
-                            let (loopSet', work') =
-                                nodePreds
-                                |> List.fold (fun (setAcc, workAcc) pred ->
-                                    if Set.contains pred setAcc then
-                                        (setAcc, workAcc)
-                                    elif dominates header pred then
-                                        (Set.add pred setAcc, pred :: workAcc)
-                                    else
-                                        (setAcc, workAcc)
-                                ) (loopSet, rest)
-                            grow work' loopSet'
-                    Set.union acc (grow [source] initial)
-                ) Set.empty
-            if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
-        ) Map.empty)
+    let loops =
+        timePhase microTimingRecorder "peephole: loop growth" (fun () ->
+            backedges
+            |> Map.fold (fun loops header sources ->
+                let loopBlocks =
+                    sources
+                    |> List.fold (fun acc source ->
+                        let initial = Set.ofList [header; source]
+                        let rec grow work loopSet =
+                            match work with
+                            | [] -> loopSet
+                            | node :: rest ->
+                                let nodePreds = Map.tryFind node preds |> Option.defaultValue []
+                                let (loopSet', work') =
+                                    nodePreds
+                                    |> List.fold (fun (setAcc, workAcc) pred ->
+                                        if Set.contains pred setAcc then
+                                            (setAcc, workAcc)
+                                        elif dominates header pred then
+                                            (Set.add pred setAcc, pred :: workAcc)
+                                        else
+                                            (setAcc, workAcc)
+                                    ) (loopSet, rest)
+                                grow work' loopSet'
+                        Set.union acc (grow [source] initial)
+                    ) Set.empty
+                if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
+            ) Map.empty)
+
+    (loops, cache')
 
 /// Check whether an instruction is a hoistable constant move
 let isHoistableConstMove (instr: Instr) : Reg option =
@@ -232,19 +253,21 @@ let isPureLoopInstr (instr: Instr) : bool =
     | _ -> false
 
 /// Hoist loop-invariant Mov(Imm ...) into simple preheaders
-let applyLoopInvariantConstHoist
+let private applyLoopInvariantConstHoist
     (cfg: CFG)
     (microTimingRecorder: (string -> float -> unit) option)
-    : CFG * bool =
+    (domCache: DominatorCache option)
+    : CFG * bool * DominatorCache option =
     timePhase microTimingRecorder "peephole: licm total" (fun () ->
-        let loops = findNaturalLoops cfg microTimingRecorder
+        let (loops, cache') = findNaturalLoopsWithCache cfg microTimingRecorder domCache
         let preds =
             timePhase microTimingRecorder "peephole: preds (hoist)" (fun () ->
                 buildPredecessors cfg)
         let labelName (LIR.Label name) = name
 
-        loops
-        |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
+        let result =
+            loops
+            |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
             let outsidePreds =
                 Map.tryFind header preds
                 |> Option.defaultValue []
@@ -323,7 +346,9 @@ let applyLoopInvariantConstHoist
                                 block
                         )
                     ({ cfgAcc with Blocks = blocks' }, true)
-        ) (cfg, false))
+            ) (cfg, false)
+        let (cfg', changed) = result
+        (cfg', changed, cache'))
 
 /// Optimize a single instruction (returns None to remove, Some to replace)
 let optimizeInstr (instr: Instr) : Instr option =
@@ -591,7 +616,11 @@ let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
     (block', block' <> block)
 
 /// Optimize a CFG in a single pass (returns whether anything changed)
-let optimizeCFGOnce (cfg: CFG) (microTimingRecorder: (string -> float -> unit) option) : CFG * bool =
+let private optimizeCFGOnce
+    (cfg: CFG)
+    (microTimingRecorder: (string -> float -> unit) option)
+    (domCache: DominatorCache option)
+    : CFG * bool * DominatorCache option =
     let (blocks', changed) =
         timePhase microTimingRecorder "peephole: blocks" (fun () ->
             cfg.Blocks
@@ -600,23 +629,23 @@ let optimizeCFGOnce (cfg: CFG) (microTimingRecorder: (string -> float -> unit) o
                 (Map.add label block' acc, ch || blockChanged)
             ) (Map.empty, false))
     let cfg' = { cfg with Blocks = blocks' }
-    let (cfg'', hoisted) = applyLoopInvariantConstHoist cfg' microTimingRecorder
-    (cfg'', changed || hoisted)
+    let (cfg'', hoisted, cache') = applyLoopInvariantConstHoist cfg' microTimingRecorder domCache
+    (cfg'', changed || hoisted, cache')
 
 /// Optimize a CFG until fixed point
 let optimizeCFG (cfg: CFG) (microTimingRecorder: (string -> float -> unit) option) : CFG =
-    let rec loop current remaining iteration =
+    let rec loop current remaining iteration domCache =
         if remaining <= 0 then
             current
         else
-            let (next, changed) =
+            let (next, changed, nextCache) =
                 timePhase microTimingRecorder $"peephole: iteration {iteration}" (fun () ->
-                    optimizeCFGOnce current microTimingRecorder)
+                    optimizeCFGOnce current microTimingRecorder domCache)
             if changed then
-                loop next (remaining - 1) (iteration + 1)
+                loop next (remaining - 1) (iteration + 1) nextCache
             else
                 next
-    loop cfg 10 1
+    loop cfg 10 1 None
 
 /// Optimize a function
 let optimizeFunction (func: Function) (microTimingRecorder: (string -> float -> unit) option) : Function =
