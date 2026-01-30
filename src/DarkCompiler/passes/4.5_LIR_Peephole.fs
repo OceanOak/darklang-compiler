@@ -19,10 +19,70 @@ open System.Diagnostics
    3) Hoist loop-invariant Mov(Imm ...) for virtual regs into the preheader and remove from loop blocks.
    4) Run LICM alongside existing peephole passes in optimizeCFGOnce. *)
 
+type private DomBitSet = uint64 array
+
+type private Dominators = {
+    IndexOf: Map<Label, int>
+    Sets: DomBitSet array
+}
+
 type private DominatorCache = {
     Succs: Map<Label, Label list>
-    Dominators: Map<Label, Set<Label>>
+    Dominators: Dominators
 }
+
+let private bitsetWordCount (labelCount: int) : int =
+    (labelCount + 63) / 64
+
+let private bitsetAll (labelCount: int) : DomBitSet =
+    let wordCount = bitsetWordCount labelCount
+    if wordCount = 0 then
+        [||]
+    else
+        let extraBits = labelCount % 64
+        let lastMask =
+            if extraBits = 0 then System.UInt64.MaxValue
+            else (1UL <<< extraBits) - 1UL
+        Array.init wordCount (fun i ->
+            if i = wordCount - 1 then lastMask else System.UInt64.MaxValue)
+
+let private bitsetSingleton (wordCount: int) (idx: int) : DomBitSet =
+    if wordCount = 0 then
+        [||]
+    else
+        let word = idx / 64
+        let bit = 1UL <<< (idx % 64)
+        Array.init wordCount (fun i ->
+            if i = word then bit else 0UL)
+
+let private bitsetIntersectMany (first: DomBitSet) (rest: DomBitSet list) : DomBitSet =
+    let wordCount = first.Length
+    Array.init wordCount (fun i ->
+        rest |> List.fold (fun acc set -> acc &&& set[i]) first[i])
+
+let private bitsetAdd (idx: int) (set: DomBitSet) : DomBitSet =
+    let wordCount = set.Length
+    if wordCount = 0 then
+        set
+    else
+        let word = idx / 64
+        let bit = 1UL <<< (idx % 64)
+        Array.init wordCount (fun i ->
+            if i = word then set[i] ||| bit else set[i])
+
+let private bitsetContains (set: DomBitSet) (idx: int) : bool =
+    let word = idx / 64
+    if word >= set.Length then
+        false
+    else
+        (set[word] &&& (1UL <<< (idx % 64))) <> 0UL
+
+let private bitsetEqual (left: DomBitSet) (right: DomBitSet) : bool =
+    left.Length = right.Length && Array.forall2 (=) left right
+
+let private dominatorSetsEqual (left: DomBitSet array) (right: DomBitSet array) : bool =
+    left.Length = right.Length
+    && Array.forall2 (fun leftSet rightSet -> bitsetEqual leftSet rightSet) left right
 
 /// Time a phase if a recorder is provided
 let private timePhase
@@ -79,38 +139,53 @@ let buildSuccessors (cfg: CFG) : Map<Label, Label list> =
     cfg.Blocks |> Map.map (fun _ block -> getSuccessors block.Terminator)
 
 /// Compute dominator sets for each block
-let computeDominators (cfg: CFG) (preds: Map<Label, Label list>) : Map<Label, Set<Label>> =
-    let labels = cfg.Blocks |> Map.toList |> List.map fst |> Set.ofList
-    let entry = cfg.Entry
+let private computeDominators (cfg: CFG) (preds: Map<Label, Label list>) : Dominators =
+    let labels =
+        cfg.Blocks
+        |> Map.toList
+        |> List.map fst
+        |> Array.ofList
+    let indexOf =
+        labels
+        |> Array.mapi (fun idx label -> (label, idx))
+        |> Array.toList
+        |> Map.ofList
+    let entryIndex =
+        match Map.tryFind cfg.Entry indexOf with
+        | Some idx -> idx
+        | None -> Crash.crash $"LIR Peephole: entry label {cfg.Entry} not found in CFG blocks"
+    let labelCount = labels.Length
+    let wordCount = bitsetWordCount labelCount
+    let allBits = bitsetAll labelCount
+    let entryBits = bitsetSingleton wordCount entryIndex
+    let predIndices =
+        labels
+        |> Array.map (fun label ->
+            Map.tryFind label preds
+            |> Option.defaultValue []
+            |> List.choose (fun pred -> Map.tryFind pred indexOf))
 
     let initial =
-        labels
-        |> Set.fold (fun acc label ->
-            let doms =
-                if label = entry then Set.singleton label
-                else labels
-            Map.add label doms acc
-        ) Map.empty
+        Array.init labelCount (fun idx ->
+            if idx = entryIndex then entryBits else allBits)
 
-    let rec loop doms =
+    let rec loop (doms: DomBitSet array) : DomBitSet array =
         let updated =
-            labels
-            |> Set.fold (fun acc label ->
-                if label = entry then
-                    Map.add label (Set.singleton label) acc
+            Array.init labelCount (fun idx ->
+                if idx = entryIndex then
+                    entryBits
                 else
                     let predSets =
-                        Map.tryFind label preds
-                        |> Option.defaultValue []
-                        |> List.choose (fun pred -> Map.tryFind pred doms)
-                    let intersect =
-                        match predSets with
-                        | [] -> Set.singleton label
-                        | first :: rest -> rest |> List.fold Set.intersect first |> Set.add label
-                    Map.add label intersect acc
-            ) Map.empty
-        if updated = doms then updated else loop updated
-    loop initial
+                        predIndices[idx]
+                        |> List.choose (fun predIdx -> Array.tryItem predIdx doms)
+                    match predSets with
+                    | [] -> bitsetSingleton wordCount idx
+                    | first :: rest ->
+                        let intersected = bitsetIntersectMany first rest
+                        bitsetAdd idx intersected)
+        if dominatorSetsEqual doms updated then updated else loop updated
+
+    { IndexOf = indexOf; Sets = loop initial }
 
 /// Identify natural loops via backedges (header dominates source)
 let private findNaturalLoopsWithCache
@@ -138,9 +213,12 @@ let private findNaturalLoopsWithCache
             (doms, Some { Succs = succs; Dominators = doms })
 
     let dominates (dominator: Label) (node: Label) : bool =
-        Map.tryFind node doms
-        |> Option.map (Set.contains dominator)
-        |> Option.defaultValue false
+        match Map.tryFind dominator doms.IndexOf, Map.tryFind node doms.IndexOf with
+        | Some domIdx, Some nodeIdx ->
+            match Array.tryItem nodeIdx doms.Sets with
+            | Some set -> bitsetContains set domIdx
+            | None -> false
+        | _ -> false
 
     let backedges =
         timePhase microTimingRecorder "peephole: backedges" (fun () ->
