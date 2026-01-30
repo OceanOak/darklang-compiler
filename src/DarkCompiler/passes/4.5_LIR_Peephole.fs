@@ -117,7 +117,7 @@ let private findNaturalLoopsWithCache
     (cfg: CFG)
     (microTimingRecorder: (string -> float -> unit) option)
     (domCache: DominatorCache option)
-    : Map<Label, Set<Label>> * DominatorCache option =
+    : Map<Label, Set<Label>> * Map<Label, Label list> * DominatorCache option =
     let preds =
         timePhase microTimingRecorder "peephole: preds (loops)" (fun () ->
             buildPredecessors cfg)
@@ -185,7 +185,7 @@ let private findNaturalLoopsWithCache
                 if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
             ) Map.empty)
 
-    (loops, cache')
+    (loops, preds, cache')
 
 /// Check whether an instruction is a hoistable constant move
 let isHoistableConstMove (instr: Instr) : Reg option =
@@ -259,10 +259,10 @@ let private applyLoopInvariantConstHoist
     (domCache: DominatorCache option)
     : CFG * bool * DominatorCache option =
     timePhase microTimingRecorder "peephole: licm total" (fun () ->
-        let (loops, cache') = findNaturalLoopsWithCache cfg microTimingRecorder domCache
-        let preds =
-            timePhase microTimingRecorder "peephole: preds (hoist)" (fun () ->
-                buildPredecessors cfg)
+        let (loops, preds, cache') = findNaturalLoopsWithCache cfg microTimingRecorder domCache
+        match microTimingRecorder with
+        | None -> ()
+        | Some record -> record "peephole: preds (hoist) (reused)" 0.0
         let labelName (LIR.Label name) = name
 
         let result =
