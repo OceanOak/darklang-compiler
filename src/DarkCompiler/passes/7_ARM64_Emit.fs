@@ -5,26 +5,10 @@
 
 module ARM64_Emit
 
-open System.Diagnostics
-
 type EmitResult = {
     MachineCode: ARM64.MachineCode list
     Binary: byte array
 }
-
-let private timePhase
-    (recorder: (string -> float -> unit) option)
-    (phase: string)
-    (f: unit -> 'a)
-    : 'a =
-    match recorder with
-    | None -> f ()
-    | Some record ->
-        let sw = Stopwatch.StartNew()
-        let result = f ()
-        let elapsedMs = sw.Elapsed.TotalMilliseconds
-        record phase elapsedMs
-        result
 
 /// Resolve label refs, encode machine code, and generate a binary for the target OS
 let emitBinary
@@ -33,24 +17,19 @@ let emitBinary
     (enableLeakCheck: bool)
     (microTimingRecorder: (string -> float -> unit) option)
     : Result<EmitResult, string> =
-    let (stringPool, floatPool) =
-        timePhase microTimingRecorder "resolve" (fun () ->
-            ARM64_Resolve.collectPools instructions microTimingRecorder)
+    let (stringPool, floatPool) = ARM64_Resolve.collectPools instructions
     let machineCode =
-        timePhase microTimingRecorder "encode" (fun () ->
-            ARM64_Encoding.encodeSymbolicWithPools
-                instructions
-                stringPool
-                floatPool
-                os
-                enableLeakCheck
-                microTimingRecorder)
+        ARM64_Encoding.encodeSymbolicWithPools
+            instructions
+            stringPool
+            floatPool
+            os
+            enableLeakCheck
+            microTimingRecorder
     let binary =
-        let formatName = match os with | Platform.MacOS -> "Mach-O" | Platform.Linux -> "ELF"
-        timePhase microTimingRecorder $"binary ({formatName})" (fun () ->
-            match os with
-            | Platform.MacOS ->
-                Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
-            | Platform.Linux ->
-                Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder)
+        match os with
+        | Platform.MacOS ->
+            Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
+        | Platform.Linux ->
+            Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
     Ok { MachineCode = machineCode; Binary = binary }

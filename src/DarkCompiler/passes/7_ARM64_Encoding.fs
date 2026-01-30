@@ -18,8 +18,6 @@
 
 module ARM64_Encoding
 
-open System.Diagnostics
-
 /// Encode general-purpose register to 5-bit value
 let encodeReg (reg: ARM64.Reg) : uint32 =
     match reg with
@@ -971,21 +969,6 @@ let encode (instr: ARM64.Instr) : ARM64.MachineCode list =
         let rd = encodeReg dest
         [sf ||| opc ||| fixedBits ||| n ||| immr ||| imms ||| rn ||| rd]
 
-/// Time a phase if a recorder is provided
-let private timePhase
-    (recorder: (string -> float -> unit) option)
-    (phase: string)
-    (f: unit -> 'a)
-    : 'a =
-    match recorder with
-    | None -> f ()
-    | Some record ->
-        let sw = Stopwatch.StartNew()
-        let result = f ()
-        let elapsedMs = sw.Elapsed.TotalMilliseconds
-        record phase elapsedMs
-        result
-
 /// Two-Pass Encoding for Label Resolution
 
 /// Pass 1: Compute byte offset for each label
@@ -1472,32 +1455,26 @@ let encodeAllWithPools
     (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
-    (microTimingRecorder: (string -> float -> unit) option)
+    (_microTimingRecorder: (string -> float -> unit) option)
     : ARM64.MachineCode list =
     let codeFileOffset =
-        timePhase microTimingRecorder "encode: code file offset" (fun () ->
-            computeCodeFileOffset os stringPool floatPool enableLeakCheck)
+        computeCodeFileOffset os stringPool floatPool enableLeakCheck
     // Step 1: Compute code size
     let codeSize =
-        timePhase microTimingRecorder "encode: code size" (fun () ->
-            getCodeSize instructions)
+        getCodeSize instructions
 
     // Step 2: Compute float label positions (after headers + code, 8-byte aligned)
     let floatLabels =
-        timePhase microTimingRecorder "encode: float labels" (fun () ->
-            computeFloatLabels codeFileOffset codeSize floatPool)
+        computeFloatLabels codeFileOffset codeSize floatPool
     let floatPoolSize =
-        timePhase microTimingRecorder "encode: float pool size" (fun () ->
-            getFloatPoolSize floatPool)
+        getFloatPoolSize floatPool
 
     // Step 3: Compute string label positions (after headers + code + floats)
     let stringLabels =
-        timePhase microTimingRecorder "encode: string labels" (fun () ->
-            computeStringLabels codeFileOffset codeSize floatPoolSize stringPool)
+        computeStringLabels codeFileOffset codeSize floatPoolSize stringPool
 
     let stringPoolSize =
-        timePhase microTimingRecorder "encode: string pool size" (fun () ->
-            getStringPoolSize stringPool)
+        getStringPoolSize stringPool
     let leakLabels =
         if enableLeakCheck then
             computeLeakCounterLabel codeFileOffset codeSize floatPoolSize stringPoolSize
@@ -1506,11 +1483,9 @@ let encodeAllWithPools
 
     // Step 4: Compute code label positions (relative to code start, add file offset)
     let rawCodeLabels =
-        timePhase microTimingRecorder "encode: code label positions" (fun () ->
-            computeLabelPositions instructions)
+        computeLabelPositions instructions
     let codeLabelMap =
-        timePhase microTimingRecorder "encode: code label map" (fun () ->
-            rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset))
+        rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset)
 
     let dataLabels = leakLabels
 
@@ -1531,8 +1506,7 @@ let encodeAllWithPools
                     |> List.fold (fun (acc', count) code -> (code :: acc', count + 1)) (acc, 0)
                 encodeLoop rest (offset + (wordCount * 4)) nextAcc
 
-    timePhase microTimingRecorder "encode: encode loop" (fun () ->
-        encodeLoop instructions codeFileOffset [])
+    encodeLoop instructions codeFileOffset []
 
 /// Encode symbolic instructions with string and float pool support
 /// Resolves label refs on the fly to avoid allocating a concrete instruction list
@@ -1542,32 +1516,26 @@ let encodeSymbolicWithPools
     (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
-    (microTimingRecorder: (string -> float -> unit) option)
+    (_microTimingRecorder: (string -> float -> unit) option)
     : ARM64.MachineCode list =
     let codeFileOffset =
-        timePhase microTimingRecorder "encode: code file offset" (fun () ->
-            computeCodeFileOffset os stringPool floatPool enableLeakCheck)
+        computeCodeFileOffset os stringPool floatPool enableLeakCheck
     // Step 1: Compute code size
     let codeSize =
-        timePhase microTimingRecorder "encode: code size" (fun () ->
-            getSymbolicCodeSize instructions)
+        getSymbolicCodeSize instructions
 
     // Step 2: Compute float label positions (after headers + code, 8-byte aligned)
     let floatLabels =
-        timePhase microTimingRecorder "encode: float labels" (fun () ->
-            computeFloatLabels codeFileOffset codeSize floatPool)
+        computeFloatLabels codeFileOffset codeSize floatPool
     let floatPoolSize =
-        timePhase microTimingRecorder "encode: float pool size" (fun () ->
-            getFloatPoolSize floatPool)
+        getFloatPoolSize floatPool
 
     // Step 3: Compute string label positions (after headers + code + floats)
     let stringLabels =
-        timePhase microTimingRecorder "encode: string labels" (fun () ->
-            computeStringLabels codeFileOffset codeSize floatPoolSize stringPool)
+        computeStringLabels codeFileOffset codeSize floatPoolSize stringPool
 
     let stringPoolSize =
-        timePhase microTimingRecorder "encode: string pool size" (fun () ->
-            getStringPoolSize stringPool)
+        getStringPoolSize stringPool
     let leakLabels =
         if enableLeakCheck then
             computeLeakCounterLabel codeFileOffset codeSize floatPoolSize stringPoolSize
@@ -1576,11 +1544,9 @@ let encodeSymbolicWithPools
 
     // Step 4: Compute code label positions (relative to code start, add file offset)
     let rawCodeLabels =
-        timePhase microTimingRecorder "encode: code label positions" (fun () ->
-            computeSymbolicLabelPositions instructions)
+        computeSymbolicLabelPositions instructions
     let codeLabelMap =
-        timePhase microTimingRecorder "encode: code label map" (fun () ->
-            rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset))
+        rawCodeLabels |> Map.map (fun _ offset -> codeFileOffset + offset)
 
     let dataLabels = leakLabels
 
@@ -1602,5 +1568,4 @@ let encodeSymbolicWithPools
                     |> List.fold (fun (acc', count) code -> (code :: acc', count + 1)) (acc, 0)
                 encodeLoop rest (offset + (wordCount * 4)) nextAcc
 
-    timePhase microTimingRecorder "encode: encode loop" (fun () ->
-        encodeLoop instructions codeFileOffset [])
+    encodeLoop instructions codeFileOffset []
