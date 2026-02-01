@@ -15,7 +15,6 @@ let emitBinary
     (instructions: ARM64Symbolic.Instr list)
     (os: Platform.OS)
     (enableLeakCheck: bool)
-    (microTimingRecorder: (string -> float -> unit) option)
     : Result<EmitResult, string> =
     let (stringPool, floatPool) = ARM64_Resolve.collectPools instructions
     let machineCode =
@@ -25,11 +24,10 @@ let emitBinary
             floatPool
             os
             enableLeakCheck
-            microTimingRecorder
     let binary =
         match os with
         | Platform.MacOS ->
-            Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
+            Binary_Generation_MachO.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck
         | Platform.Linux ->
-            Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck microTimingRecorder
+            Binary_Generation_ELF.createExecutableWithPools machineCode stringPool floatPool enableLeakCheck
     Ok { MachineCode = machineCode; Binary = binary }

@@ -1455,7 +1455,6 @@ let encodeAllWithPools
     (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
-    (_microTimingRecorder: (string -> float -> unit) option)
     : ARM64.MachineCode list =
     let codeFileOffset =
         computeCodeFileOffset os stringPool floatPool enableLeakCheck
@@ -1516,7 +1515,6 @@ let encodeSymbolicWithPools
     (floatPool: LiteralPool.FloatPool)
     (os: Platform.OS)
     (enableLeakCheck: bool)
-    (_microTimingRecorder: (string -> float -> unit) option)
     : ARM64.MachineCode list =
     let codeFileOffset =
         computeCodeFileOffset os stringPool floatPool enableLeakCheck

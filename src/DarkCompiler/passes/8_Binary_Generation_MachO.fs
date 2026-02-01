@@ -308,7 +308,6 @@ let createExecutableWithPools
     (stringPool: LiteralPool.StringPool)
     (floatPool: LiteralPool.FloatPool)
     (enableLeakCheck: bool)
-    (_microTimingRecorder: (string -> float -> unit) option)
     : byte array =
     let codeBytes =
         machineCodeToBytes machineCode
@@ -560,11 +559,11 @@ let createExecutableWithPools
 
 /// Create a Mach-O executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false None
+    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false
 
 /// Create a minimal Mach-O executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false None
+    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false
 
 /// Create a Mach-O executable with coverage data section
 /// For now, coverage data is included in the __const section
@@ -601,7 +600,7 @@ let createExecutableWithCoverage (machineCode: uint32 list) (stringPool: Literal
 
     // For now, use the existing creation logic but with extended data
     // This is a simplified approach - proper coverage on macOS needs __DATA segment
-    createExecutableWithPools machineCode stringPool floatPool enableLeakCheck None
+    createExecutableWithPools machineCode stringPool floatPool enableLeakCheck
 
 /// Write bytes to file and sign it
 let writeToFile (path: string) (bytes: byte array) : Result<unit, string> =

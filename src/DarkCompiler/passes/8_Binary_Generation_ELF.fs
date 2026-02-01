@@ -145,7 +145,6 @@ let createExecutableWithPools
     (stringPool: LiteralPool.StringPool)
     (floatPool: LiteralPool.FloatPool)
     (enableLeakCheck: bool)
-    (_microTimingRecorder: (string -> float -> unit) option)
     : byte array =
     let codeBytes =
         machineCodeToBytes machineCode
@@ -248,11 +247,11 @@ let createExecutableWithPools
 
 /// Create an ELF executable with string data (legacy wrapper for backwards compatibility)
 let createExecutableWithStrings (machineCode: uint32 list) (stringPool: LiteralPool.StringPool) : byte array =
-    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false None
+    createExecutableWithPools machineCode stringPool LiteralPool.emptyFloatPool false
 
 /// Create a minimal ELF executable from ARM64 machine code (legacy, no data)
 let createExecutable (machineCode: uint32 list) : byte array =
-    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false None
+    createExecutableWithPools machineCode LiteralPool.emptyStringPool LiteralPool.emptyFloatPool false
 
 /// Create an ELF executable with coverage data section
 /// coverageExprCount: number of coverage expressions (each needs 8 bytes)
