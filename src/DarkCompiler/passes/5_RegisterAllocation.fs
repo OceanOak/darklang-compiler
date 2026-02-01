@@ -45,9 +45,7 @@ type LiveInterval = {
 }
 
 /// Bitset of VRegDomain indices
-type BitSet = {
-    Words: uint64 array
-}
+type BitSet = Bitset.Bitset
 
 /// Dense domain for VReg IDs used by bitsets
 type VRegDomain = {
@@ -145,171 +143,82 @@ let private tryIndexOf (domain: VRegDomain) (value: int) : int option =
             if mapped >= 0 then Some mapped else None
 
 let private bitsetEmpty (wordCount: int) : BitSet =
-    { Words = Array.zeroCreate<uint64> wordCount }
+    Bitset.empty wordCount
 
 let private bitsetClone (bits: BitSet) : BitSet =
-    { Words = Array.copy bits.Words }
+    Bitset.clone bits
 
 let private bitsetIsEmpty (bits: BitSet) : bool =
-    bits.Words |> Array.forall (fun word -> word = 0UL)
+    Bitset.isEmpty bits
 
 let private bitsetEqual (left: BitSet) (right: BitSet) : bool =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet equality requires matching word counts"
-    else
-        Array.forall2 (=) left.Words right.Words
+    Bitset.equal left right
 
 let private bitsetUnion (left: BitSet) (right: BitSet) : BitSet =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet union requires matching word counts"
-    else if bitsetIsEmpty left then
-        right
-    else if bitsetIsEmpty right then
-        left
-    else
-        let words = Array.init left.Words.Length (fun i -> left.Words.[i] ||| right.Words.[i])
-        { Words = words }
+    Bitset.union left right
 
 let private bitsetDiff (left: BitSet) (right: BitSet) : BitSet =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet difference requires matching word counts"
-    else if bitsetIsEmpty right then
-        left
-    else
-        let words = Array.init left.Words.Length (fun i -> left.Words.[i] &&& (~~~right.Words.[i]))
-        { Words = words }
+    Bitset.diff left right
 
 let bitsetContains (domain: VRegDomain) (bits: BitSet) (value: int) : bool =
     match tryIndexOf domain value with
-    | Some idx ->
-        let wordIdx = idx >>> 6
-        let bitIdx = idx &&& 63
-        if wordIdx < bits.Words.Length then
-            (bits.Words.[wordIdx] &&& (1UL <<< bitIdx)) <> 0UL
-        else
-            false
+    | Some idx -> Bitset.containsIndex idx bits
     | None -> false
 
 let private bitsetAddInPlace (domain: VRegDomain) (value: int) (bits: BitSet) : unit =
     match tryIndexOf domain value with
-    | Some idx ->
-        let wordIdx = idx >>> 6
-        let bitIdx = idx &&& 63
-        if wordIdx < bits.Words.Length then
-            bits.Words.[wordIdx] <- bits.Words.[wordIdx] ||| (1UL <<< bitIdx)
+    | Some idx -> Bitset.addIndexInPlace idx bits
     | None -> ()
 
 let private bitsetRemoveInPlace (domain: VRegDomain) (value: int) (bits: BitSet) : unit =
     match tryIndexOf domain value with
-    | Some idx ->
-        let wordIdx = idx >>> 6
-        let bitIdx = idx &&& 63
-        if wordIdx < bits.Words.Length then
-            bits.Words.[wordIdx] <- bits.Words.[wordIdx] &&& (~~~(1UL <<< bitIdx))
+    | Some idx -> Bitset.removeIndexInPlace idx bits
     | None -> ()
 
 let private bitsetAddIndexInPlace (idx: int) (bits: BitSet) : unit =
-    let wordIdx = idx >>> 6
-    let bitIdx = idx &&& 63
-    if wordIdx < bits.Words.Length then
-        bits.Words.[wordIdx] <- bits.Words.[wordIdx] ||| (1UL <<< bitIdx)
+    Bitset.addIndexInPlace idx bits
 
 let private bitsetRemoveIndexInPlace (idx: int) (bits: BitSet) : unit =
-    let wordIdx = idx >>> 6
-    let bitIdx = idx &&& 63
-    if wordIdx < bits.Words.Length then
-        bits.Words.[wordIdx] <- bits.Words.[wordIdx] &&& (~~~(1UL <<< bitIdx))
+    Bitset.removeIndexInPlace idx bits
 
 let private bitsetContainsIndex (idx: int) (bits: BitSet) : bool =
-    let wordIdx = idx >>> 6
-    let bitIdx = idx &&& 63
-    if wordIdx < bits.Words.Length then
-        (bits.Words.[wordIdx] &&& (1UL <<< bitIdx)) <> 0UL
-    else
-        false
+    Bitset.containsIndex idx bits
 
 let private bitsetUnionInPlace (left: BitSet) (right: BitSet) : unit =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet union requires matching word counts"
-    else
-        for i in 0 .. left.Words.Length - 1 do
-            left.Words.[i] <- left.Words.[i] ||| right.Words.[i]
+    Bitset.unionInPlace left right
 
 let private bitsetIntersects (left: BitSet) (right: BitSet) : bool =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet intersection requires matching word counts"
-    else
-        let mutable found = false
-        let mutable i = 0
-        while not found && i < left.Words.Length do
-            if (left.Words.[i] &&& right.Words.[i]) <> 0UL then
-                found <- true
-            i <- i + 1
-        found
-
-let private countTrailingZeros (word: uint64) : int =
-    let mutable temp = word
-    let mutable count = 0
-    while (temp &&& 1UL) = 0UL do
-        temp <- temp >>> 1
-        count <- count + 1
-    count
+    Bitset.intersects left right
 
 let private bitsetIter (domain: VRegDomain) (bits: BitSet) (f: int -> unit) : unit =
-    for wordIdx in 0 .. bits.Words.Length - 1 do
-        let mutable word = bits.Words.[wordIdx]
-        let baseIdx = wordIdx * 64
-        while word <> 0UL do
-            let tz = countTrailingZeros word
-            let idx = baseIdx + tz
-            if idx < domain.Ids.Length then
-                f domain.Ids.[idx]
-            word <- word &&& (word - 1UL)
+    Bitset.iterIndices bits (fun idx ->
+        if idx < domain.Ids.Length then
+            f domain.Ids.[idx])
 
 let private bitsetIterIndices (bits: BitSet) (f: int -> unit) : unit =
-    for wordIdx in 0 .. bits.Words.Length - 1 do
-        let mutable word = bits.Words.[wordIdx]
-        let baseIdx = wordIdx * 64
-        while word <> 0UL do
-            let tz = countTrailingZeros word
-            f (baseIdx + tz)
-            word <- word &&& (word - 1UL)
+    Bitset.iterIndices bits f
 
 let private bitsetFromList (domain: VRegDomain) (values: int list) : BitSet =
     if List.isEmpty values then
         bitsetEmpty domain.WordCount
     else
-        let words = Array.zeroCreate<uint64> domain.WordCount
+        let bits = Bitset.empty domain.WordCount
         for value in values do
             match tryIndexOf domain value with
             | Some idx ->
-                let wordIdx = idx >>> 6
-                let bitIdx = idx &&& 63
-                words.[wordIdx] <- words.[wordIdx] ||| (1UL <<< bitIdx)
+                Bitset.addIndexInPlace idx bits
             | None ->
                 Crash.crash $"BitSet: Missing vreg {value} in domain"
-        { Words = words }
+        bits
 
 let private bitsetDiffInPlace (left: BitSet) (right: BitSet) : unit =
-    if left.Words.Length <> right.Words.Length then
-        Crash.crash "BitSet difference requires matching word counts"
-    else
-        for i in 0 .. left.Words.Length - 1 do
-            left.Words.[i] <- left.Words.[i] &&& (~~~right.Words.[i])
+    Bitset.diffInPlace left right
 
 let private bitsetCount (bits: BitSet) : int =
-    let mutable count = 0
-    for word in bits.Words do
-        let mutable w = word
-        while w <> 0UL do
-            w <- w &&& (w - 1UL)
-            count <- count + 1
-    count
+    Bitset.count bits
 
 let private bitsetIndicesToList (bits: BitSet) : int list =
-    let mutable acc = []
-    bitsetIterIndices bits (fun idx -> acc <- idx :: acc)
-    List.rev acc
+    Bitset.indicesToList bits
 
 let private tryLabelIndex (labels: LIR.Label array) (label: LIR.Label) : int option =
     if labels.Length = 0 then
