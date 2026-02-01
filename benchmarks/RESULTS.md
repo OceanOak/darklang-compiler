@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-26 17:27:38
-**Commit:** `a44c6c67` - Align pass timing output
+**Last Updated:** 2026-01-30 16:07:05
+**Commit:** `5ec92a40` - Inline literal args in ANF inliner
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

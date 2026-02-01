@@ -76,7 +76,38 @@ let testInliningWithLiteralArgumentsBindsTemp () : TestResult =
     else
         Error "Expected inlined literal argument to be bound to a fresh TempId"
 
+let testInliningUnderscoreFunctionName () : TestResult =
+    let param = { Id = TempId 0; Type = AST.TInt64 }
+    let addBody =
+        Let (
+            TempId 1,
+            Prim (Add, Var param.Id, intAtom 1L),
+            Return (Var (TempId 1))
+        )
+    let addOne =
+        { Name = "_addOne"
+          TypedParams = [param]
+          ReturnType = AST.TInt64
+          Body = addBody }
+    let main =
+        Let (
+            TempId 2,
+            Atom (intAtom 41L),
+            Let (
+                TempId 3,
+                Call ("_addOne", [Var (TempId 2)]),
+                Return (Var (TempId 3))
+            )
+        )
+    let (Program (_, inlinedMain)) =
+        ANF_Inlining.inlineProgramDefault (Program ([addOne], main))
+    if containsCall "_addOne" inlinedMain then
+        Error "Expected underscore-named function to be inlined, but Call remained in main expression"
+    else
+        Ok ()
+
 let tests = [
     ("Inlining literal args removes call", testInliningWithLiteralArgumentsRemovesCall)
     ("Inlining literal args binds literal TempId", testInliningWithLiteralArgumentsBindsTemp)
+    ("Inlining underscore-named functions", testInliningUnderscoreFunctionName)
 ]

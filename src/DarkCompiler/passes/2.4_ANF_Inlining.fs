@@ -371,7 +371,7 @@ let rec inlineInExpr (funcs: Map<string, FunctionInfo>) (config: InliningConfig)
                      (depth: int) (varGen: VarGen) (expr: AExpr)
     : AExpr * VarGen * bool =  // Returns (expr, varGen, changed)
     match expr with
-    | Let (tid, Call (funcName, args), body) when not (funcName.StartsWith("_")) ->
+    | Let (tid, Call (funcName, args), body) ->
         // Check if this is a regular call (not tail call) to a user function
         match Map.tryFind funcName funcs with
         | Some info when shouldInline info config depth ->
