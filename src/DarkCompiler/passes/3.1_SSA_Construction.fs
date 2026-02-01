@@ -15,6 +15,20 @@ open MIR
 /// Predecessors map: for each label, which labels can jump to it
 type Predecessors = Map<Label, Label list>
 
+type private LabelIndex = {
+    Labels: Label array
+    IndexOf: Map<Label, int>
+}
+
+let private buildLabelIndex (cfg: CFG) : LabelIndex =
+    let labels = cfg.Blocks |> Map.keys |> Seq.toArray
+    let indexOf =
+        labels
+        |> Array.mapi (fun idx label -> (label, idx))
+        |> Array.toList
+        |> Map.ofList
+    { Labels = labels; IndexOf = indexOf }
+
 /// Build predecessors map from CFG
 let buildPredecessors (cfg: CFG) : Predecessors =
     let addEdge (from: Label) (toLabel: Label) (preds: Predecessors) : Predecessors =
@@ -36,7 +50,8 @@ let buildPredecessors (cfg: CFG) : Predecessors =
 type Dominators = Map<Label, Label>
 
 let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
-    let labels = cfg.Blocks |> Map.keys |> List.ofSeq
+    let labelIndex = buildLabelIndex cfg
+    let labels = labelIndex.Labels |> Array.toList
     let entry = cfg.Entry
 
     // First, compute reachable blocks from entry using BFS
@@ -63,23 +78,40 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
 
     let reachableBlocks = findReachable [entry] Set.empty
     let reachableLabels = labels |> List.filter (fun l -> Set.contains l reachableBlocks)
+    let reachableLabelIndices =
+        reachableLabels
+        |> List.map (fun label ->
+            match Map.tryFind label labelIndex.IndexOf with
+            | Some idx -> (label, idx)
+            | None -> Crash.crash $"SSA: Missing label index for {label}")
+
+    let wordCount = Bitset.wordCount labelIndex.Labels.Length
+    let reachableMask =
+        let bits = Bitset.empty wordCount
+        reachableLabelIndices |> List.iter (fun (_, idx) -> Bitset.addIndexInPlace idx bits)
+        bits
+    let entryIndex =
+        match Map.tryFind entry labelIndex.IndexOf with
+        | Some idx -> idx
+        | None -> Crash.crash $"SSA: Missing entry label index for {entry}"
+    let entryBits = Bitset.singleton wordCount entryIndex
 
     // Initialize: entry dominates itself, other reachable blocks dominated by all reachable
     // Unreachable blocks are NOT included in the dominator computation
     let initialDoms =
-        reachableLabels
-        |> List.fold (fun m label ->
+        reachableLabelIndices
+        |> List.fold (fun m (label, _idx) ->
             if label = entry then
-                Map.add label (Set.singleton label) m
+                Map.add label entryBits m
             else
-                Map.add label (Set.ofList reachableLabels) m  // Initially dominated by all reachable
+                Map.add label (Bitset.clone reachableMask) m  // Initially dominated by all reachable
         ) Map.empty
 
     // Iterate until fixed point (only for reachable blocks)
-    let rec iterate (doms: Map<Label, Set<Label>>) =
+    let rec iterate (doms: Map<Label, Bitset.Bitset>) =
         let (changed, doms') =
-            reachableLabels
-            |> List.fold (fun (changed, m) label ->
+            reachableLabelIndices
+            |> List.fold (fun (changed, m) (label, labelIdx) ->
                 if label = entry then
                     (changed, m)
                 else
@@ -94,14 +126,14 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
                         // Dom(n) = {n} union (intersection of Dom(p) for all predecessors p)
                         let predDoms =
                             predLabels
-                            |> List.map (fun p -> Map.tryFind p m |> Option.defaultValue Set.empty)
+                            |> List.map (fun p -> Map.tryFind p m |> Option.defaultValue (Bitset.empty wordCount))
                         let intersection =
                             match predDoms with
-                            | [] -> Set.empty
-                            | first :: rest -> List.fold Set.intersect first rest
-                        let newDom = Set.add label intersection
-                        let oldDom = Map.tryFind label m |> Option.defaultValue Set.empty
-                        if newDom = oldDom then
+                            | [] -> Bitset.empty wordCount
+                            | first :: rest -> Bitset.intersectMany first rest
+                        let newDom = Bitset.add labelIdx intersection
+                        let oldDom = Map.tryFind label m |> Option.defaultValue (Bitset.empty wordCount)
+                        if Bitset.equal newDom oldDom then
                             (changed, m)
                         else
                             (true, Map.add label newDom m)
@@ -113,30 +145,33 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
     // Extract immediate dominator from dominator sets
     // idom(n) is the dominator of n that is dominated by all other dominators of n (closest one)
     // Only process reachable blocks
-    reachableLabels
-    |> List.fold (fun idoms label ->
+    reachableLabelIndices
+    |> List.fold (fun idoms (label, labelIdx) ->
         if label = entry then
             idoms  // Entry has no immediate dominator
         else
-            let doms = Map.tryFind label allDoms |> Option.defaultValue Set.empty
+            let doms = Map.tryFind label allDoms |> Option.defaultValue (Bitset.empty wordCount)
             // Remove self from dominators
-            let strictDoms = Set.remove label doms
-            if Set.isEmpty strictDoms then
+            let strictDoms = Bitset.diff doms (Bitset.singleton wordCount labelIdx)
+            if Bitset.isEmpty strictDoms then
                 idoms
             else
                 // idom is the unique strict dominator that is dominated by all other strict dominators
                 // In other words, it's the "closest" dominator to the node
-                let idom =
-                    strictDoms
-                    |> Set.toList
-                    |> List.tryFind (fun d ->
-                        let dDoms = Map.tryFind d allDoms |> Option.defaultValue Set.empty
+                let strictIndices = Bitset.indicesToList strictDoms
+                let idomIdx =
+                    strictIndices
+                    |> List.tryFind (fun dIdx ->
+                        let dLabel = labelIndex.Labels.[dIdx]
+                        let dDoms = Map.tryFind dLabel allDoms |> Option.defaultValue (Bitset.empty wordCount)
                         // d is idom if all other strict dominators dominate d
                         // i.e., all other strict dominators are in Dom(d)
-                        Set.forall (fun other -> other = d || Set.contains other dDoms) strictDoms
+                        strictIndices
+                        |> List.forall (fun otherIdx ->
+                            otherIdx = dIdx || Bitset.containsIndex otherIdx dDoms)
                     )
-                match idom with
-                | Some d -> Map.add label d idoms
+                match idomIdx with
+                | Some dIdx -> Map.add label labelIndex.Labels.[dIdx] idoms
                 | None ->
                     Crash.crash $"SSA: Could not find immediate dominator for block {label} (malformed CFG)"
     ) Map.empty
@@ -146,33 +181,50 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
 type DominanceFrontier = Map<Label, Set<Label>>
 
 let computeDominanceFrontier (cfg: CFG) (preds: Predecessors) (idoms: Dominators) : DominanceFrontier =
-    let labels = cfg.Blocks |> Map.keys |> List.ofSeq
+    let labelIndex = buildLabelIndex cfg
+    let labels = labelIndex.Labels
+    let labelCount = labels.Length
+    let wordCount = Bitset.wordCount labelCount
+
+    let idomIndex =
+        Array.init labelCount (fun idx ->
+            let label = labels.[idx]
+            Map.tryFind label idoms
+            |> Option.bind (fun parent -> Map.tryFind parent labelIndex.IndexOf))
+
+    let dfSets = Array.init labelCount (fun _ -> Bitset.empty wordCount)
 
     // For each block b, for each predecessor p of b:
     // Walk up the dominator tree from p until we reach idom(b)
     // All blocks on this path have b in their dominance frontier
     labels
-    |> List.fold (fun df b ->
+    |> Array.iteri (fun bIdx b ->
         let bPreds = Map.tryFind b preds |> Option.defaultValue []
-        let bIdom = Map.tryFind b idoms
-
         bPreds
-        |> List.fold (fun df' p ->
-            // Walk from p up to idom(b) (exclusive)
-            let rec walk current df'' =
-                match bIdom with
-                | Some idom when current = idom -> df''
-                | _ ->
-                    // Add b to DF(current)
-                    let currentDF = Map.tryFind current df'' |> Option.defaultValue Set.empty
-                    let df''' = Map.add current (Set.add b currentDF) df''
-                    // Move up to idom(current)
-                    match Map.tryFind current idoms with
-                    | Some parent when parent <> current -> walk parent df'''
-                    | _ -> df'''
-            walk p df'
-        ) df
-    ) Map.empty
+        |> List.iter (fun p ->
+            match Map.tryFind p labelIndex.IndexOf with
+            | None -> ()
+            | Some pIdx ->
+                let rec walk currentIdx =
+                    match idomIndex.[bIdx] with
+                    | Some idomIdx when currentIdx = idomIdx -> ()
+                    | _ ->
+                        Bitset.addIndexInPlace bIdx dfSets.[currentIdx]
+                        match idomIndex.[currentIdx] with
+                        | Some parentIdx when parentIdx <> currentIdx -> walk parentIdx
+                        | _ -> ()
+                walk pIdx))
+
+    labels
+    |> Array.mapi (fun idx label ->
+        let frontier =
+            dfSets.[idx]
+            |> Bitset.indicesToList
+            |> List.map (fun fIdx -> labels.[fIdx])
+            |> Set.ofList
+        (label, frontier))
+    |> Array.toList
+    |> Map.ofList
 
 /// Get all variable definitions in a basic block
 /// Returns set of VRegs that are defined (written to) in the block
