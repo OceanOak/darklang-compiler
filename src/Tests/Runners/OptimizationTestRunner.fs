@@ -172,7 +172,7 @@ let getOptimizedLIR (stdlib: CompilerLibrary.StdlibResult) (source: string) : Re
                         | Error e -> Error $"LIR conversion error: {e}"
                         | Ok lirProgram ->
                             // LIR optimization
-                            let optimizedLir = LIR_Peephole.optimizeProgram lirProgram None
+                            let optimizedLir = LIR_Peephole.optimizeProgram lirProgram
                             // Pretty-print
                             Ok (formatLIR optimizedLir)
 

@@ -11,7 +11,6 @@
 module LIR_Peephole
 
 open LIR
-open System.Diagnostics
 
 (* Plan:
    1) Mirror MIR's loop discovery in LIR: build predecessor/successor maps and dominators.
@@ -83,21 +82,6 @@ let private bitsetEqual (left: DomBitSet) (right: DomBitSet) : bool =
 let private dominatorSetsEqual (left: DomBitSet array) (right: DomBitSet array) : bool =
     left.Length = right.Length
     && Array.forall2 (fun leftSet rightSet -> bitsetEqual leftSet rightSet) left right
-
-/// Time a phase if a recorder is provided
-let private timePhase
-    (recorder: (string -> float -> unit) option)
-    (phase: string)
-    (f: unit -> 'a)
-    : 'a =
-    match recorder with
-    | None -> f ()
-    | Some record ->
-        let sw = Stopwatch.StartNew()
-        let result = f ()
-        let elapsedMs = sw.Elapsed.TotalMilliseconds
-        record phase elapsedMs
-        result
 
 /// Check if two registers are the same
 let sameReg (r1: Reg) (r2: Reg) : bool =
@@ -190,26 +174,16 @@ let private computeDominators (cfg: CFG) (preds: Map<Label, Label list>) : Domin
 /// Identify natural loops via backedges (header dominates source)
 let private findNaturalLoopsWithCache
     (cfg: CFG)
-    (microTimingRecorder: (string -> float -> unit) option)
     (domCache: DominatorCache option)
     : Map<Label, Set<Label>> * DominatorCache option =
-    let preds =
-        timePhase microTimingRecorder "peephole: preds (loops)" (fun () ->
-            buildPredecessors cfg)
-    let succs =
-        timePhase microTimingRecorder "peephole: succs" (fun () ->
-            buildSuccessors cfg)
+    let preds = buildPredecessors cfg
+    let succs = buildSuccessors cfg
     let (doms, cache') =
         match domCache with
         | Some cache when cache.Succs = succs ->
-            match microTimingRecorder with
-            | None -> ()
-            | Some record -> record "peephole: dominators (cached)" 0.0
             (cache.Dominators, domCache)
         | _ ->
-            let doms =
-                timePhase microTimingRecorder "peephole: dominators" (fun () ->
-                    computeDominators cfg preds)
+            let doms = computeDominators cfg preds
             (doms, Some { Succs = succs; Dominators = doms })
 
     let dominates (dominator: Label) (node: Label) : bool =
@@ -221,47 +195,45 @@ let private findNaturalLoopsWithCache
         | _ -> false
 
     let backedges =
-        timePhase microTimingRecorder "peephole: backedges" (fun () ->
-            succs
-            |> Map.fold (fun acc from successors ->
-                successors
-                |> List.fold (fun acc' succ ->
-                    if dominates succ from then
-                        let existing = Map.tryFind succ acc' |> Option.defaultValue []
-                        Map.add succ (from :: existing) acc'
-                    else
-                        acc'
-                ) acc
-            ) Map.empty)
+        succs
+        |> Map.fold (fun acc from successors ->
+            successors
+            |> List.fold (fun acc' succ ->
+                if dominates succ from then
+                    let existing = Map.tryFind succ acc' |> Option.defaultValue []
+                    Map.add succ (from :: existing) acc'
+                else
+                    acc'
+            ) acc
+        ) Map.empty
 
     let loops =
-        timePhase microTimingRecorder "peephole: loop growth" (fun () ->
-            backedges
-            |> Map.fold (fun loops header sources ->
-                let loopBlocks =
-                    sources
-                    |> List.fold (fun acc source ->
-                        let initial = Set.ofList [header; source]
-                        let rec grow work loopSet =
-                            match work with
-                            | [] -> loopSet
-                            | node :: rest ->
-                                let nodePreds = Map.tryFind node preds |> Option.defaultValue []
-                                let (loopSet', work') =
-                                    nodePreds
-                                    |> List.fold (fun (setAcc, workAcc) pred ->
-                                        if Set.contains pred setAcc then
-                                            (setAcc, workAcc)
-                                        elif dominates header pred then
-                                            (Set.add pred setAcc, pred :: workAcc)
-                                        else
-                                            (setAcc, workAcc)
-                                    ) (loopSet, rest)
-                                grow work' loopSet'
-                        Set.union acc (grow [source] initial)
-                    ) Set.empty
-                if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
-            ) Map.empty)
+        backedges
+        |> Map.fold (fun loops header sources ->
+            let loopBlocks =
+                sources
+                |> List.fold (fun acc source ->
+                    let initial = Set.ofList [header; source]
+                    let rec grow work loopSet =
+                        match work with
+                        | [] -> loopSet
+                        | node :: rest ->
+                            let nodePreds = Map.tryFind node preds |> Option.defaultValue []
+                            let (loopSet', work') =
+                                nodePreds
+                                |> List.fold (fun (setAcc, workAcc) pred ->
+                                    if Set.contains pred setAcc then
+                                        (setAcc, workAcc)
+                                    elif dominates header pred then
+                                        (Set.add pred setAcc, pred :: workAcc)
+                                    else
+                                        (setAcc, workAcc)
+                                ) (loopSet, rest)
+                            grow work' loopSet'
+                    Set.union acc (grow [source] initial)
+                ) Set.empty
+            if Set.isEmpty loopBlocks then loops else Map.add header loopBlocks loops
+        ) Map.empty
 
     (loops, cache')
 
@@ -333,100 +305,96 @@ let isPureLoopInstr (instr: Instr) : bool =
 /// Hoist loop-invariant Mov(Imm ...) into simple preheaders
 let private applyLoopInvariantConstHoist
     (cfg: CFG)
-    (microTimingRecorder: (string -> float -> unit) option)
     (domCache: DominatorCache option)
     : CFG * bool * DominatorCache option =
-    timePhase microTimingRecorder "peephole: licm total" (fun () ->
-        let (loops, cache') = findNaturalLoopsWithCache cfg microTimingRecorder domCache
-        let preds =
-            timePhase microTimingRecorder "peephole: preds (hoist)" (fun () ->
-                buildPredecessors cfg)
-        let labelName (LIR.Label name) = name
+    let (loops, cache') = findNaturalLoopsWithCache cfg domCache
+    let preds = buildPredecessors cfg
+    let labelName (LIR.Label name) = name
 
-        let result =
-            loops
-            |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
-            let outsidePreds =
-                Map.tryFind header preds
-                |> Option.defaultValue []
-                |> List.filter (fun pred -> not (Set.contains pred loopBlocks))
+    let result =
+        loops
+        |> Map.fold (fun (cfgAcc, changedAcc) header loopBlocks ->
+        let outsidePreds =
+            Map.tryFind header preds
+            |> Option.defaultValue []
+            |> List.filter (fun pred -> not (Set.contains pred loopBlocks))
 
-            let tryGetPreheader =
-                match outsidePreds with
-                | [preheader] ->
-                    match Map.tryFind preheader cfgAcc.Blocks with
+        let tryGetPreheader =
+            match outsidePreds with
+            | [preheader] ->
+                match Map.tryFind preheader cfgAcc.Blocks with
+                | Some block ->
+                    match block.Terminator with
+                    | Jump target when target = header -> Some preheader
+                    | _ -> None
+                | None -> None
+            | _ -> None
+
+        match tryGetPreheader with
+        | None -> (cfgAcc, changedAcc)
+        | Some preheader ->
+            let loopHasCall =
+                loopBlocks
+                |> Set.exists (fun label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> false
+                    | Some block -> block.Instrs |> List.exists isCallInstr
+                )
+
+            let loopIsPure =
+                loopBlocks
+                |> Set.forall (fun label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> true
+                    | Some block -> block.Instrs |> List.forall isPureLoopInstr
+                )
+
+            if loopHasCall || not loopIsPure then
+                (cfgAcc, changedAcc)
+            else
+            let blockOrder =
+                header :: (loopBlocks |> Set.remove header |> Set.toList |> List.sortBy labelName)
+
+            let (hoistedRev, hoistedDests) =
+                blockOrder
+                |> List.fold (fun (moves, dests) label ->
+                    match Map.tryFind label cfgAcc.Blocks with
+                    | None -> (moves, dests)
                     | Some block ->
-                        match block.Terminator with
-                        | Jump target when target = header -> Some preheader
-                        | _ -> None
-                    | None -> None
-                | _ -> None
+                        block.Instrs
+                        |> List.fold (fun (movesAcc, destsAcc) instr ->
+                            match isHoistableConstMove instr with
+                            | Some dest when not (Set.contains dest destsAcc) ->
+                                (instr :: movesAcc, Set.add dest destsAcc)
+                            | _ -> (movesAcc, destsAcc)
+                        ) (moves, dests)
+                ) ([], Set.empty)
 
-            match tryGetPreheader with
-            | None -> (cfgAcc, changedAcc)
-            | Some preheader ->
-                let loopHasCall =
-                    loopBlocks
-                    |> Set.exists (fun label ->
-                        match Map.tryFind label cfgAcc.Blocks with
-                        | None -> false
-                        | Some block -> block.Instrs |> List.exists isCallInstr
+            let hoistedMoves = List.rev hoistedRev
+            if List.isEmpty hoistedMoves then
+                (cfgAcc, changedAcc)
+            else
+                let blocks' =
+                    cfgAcc.Blocks
+                    |> Map.map (fun label block ->
+                        if label = preheader then
+                            { block with Instrs = block.Instrs @ hoistedMoves }
+                        elif Set.contains label loopBlocks then
+                            let instrs' =
+                                block.Instrs
+                                |> List.filter (fun instr ->
+                                    match isHoistableConstMove instr with
+                                    | Some dest -> not (Set.contains dest hoistedDests)
+                                    | None -> true
+                                )
+                            { block with Instrs = instrs' }
+                        else
+                            block
                     )
-
-                let loopIsPure =
-                    loopBlocks
-                    |> Set.forall (fun label ->
-                        match Map.tryFind label cfgAcc.Blocks with
-                        | None -> true
-                        | Some block -> block.Instrs |> List.forall isPureLoopInstr
-                    )
-
-                if loopHasCall || not loopIsPure then
-                    (cfgAcc, changedAcc)
-                else
-                let blockOrder =
-                    header :: (loopBlocks |> Set.remove header |> Set.toList |> List.sortBy labelName)
-
-                let (hoistedRev, hoistedDests) =
-                    blockOrder
-                    |> List.fold (fun (moves, dests) label ->
-                        match Map.tryFind label cfgAcc.Blocks with
-                        | None -> (moves, dests)
-                        | Some block ->
-                            block.Instrs
-                            |> List.fold (fun (movesAcc, destsAcc) instr ->
-                                match isHoistableConstMove instr with
-                                | Some dest when not (Set.contains dest destsAcc) ->
-                                    (instr :: movesAcc, Set.add dest destsAcc)
-                                | _ -> (movesAcc, destsAcc)
-                            ) (moves, dests)
-                    ) ([], Set.empty)
-
-                let hoistedMoves = List.rev hoistedRev
-                if List.isEmpty hoistedMoves then
-                    (cfgAcc, changedAcc)
-                else
-                    let blocks' =
-                        cfgAcc.Blocks
-                        |> Map.map (fun label block ->
-                            if label = preheader then
-                                { block with Instrs = block.Instrs @ hoistedMoves }
-                            elif Set.contains label loopBlocks then
-                                let instrs' =
-                                    block.Instrs
-                                    |> List.filter (fun instr ->
-                                        match isHoistableConstMove instr with
-                                        | Some dest -> not (Set.contains dest hoistedDests)
-                                        | None -> true
-                                    )
-                                { block with Instrs = instrs' }
-                            else
-                                block
-                        )
-                    ({ cfgAcc with Blocks = blocks' }, true)
-            ) (cfg, false)
-        let (cfg', changed) = result
-        (cfg', changed, cache'))
+                ({ cfgAcc with Blocks = blocks' }, true)
+        ) (cfg, false)
+    let (cfg', changed) = result
+    (cfg', changed, cache')
 
 /// Optimize a single instruction (returns None to remove, Some to replace)
 let optimizeInstr (instr: Instr) : Instr option =
@@ -696,29 +664,25 @@ let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
 /// Optimize a CFG in a single pass (returns whether anything changed)
 let private optimizeCFGOnce
     (cfg: CFG)
-    (microTimingRecorder: (string -> float -> unit) option)
     (domCache: DominatorCache option)
     : CFG * bool * DominatorCache option =
     let (blocks', changed) =
-        timePhase microTimingRecorder "peephole: blocks" (fun () ->
-            cfg.Blocks
-            |> Map.fold (fun (acc, ch) label block ->
-                let (block', blockChanged) = optimizeBlock block
-                (Map.add label block' acc, ch || blockChanged)
-            ) (Map.empty, false))
+        cfg.Blocks
+        |> Map.fold (fun (acc, ch) label block ->
+            let (block', blockChanged) = optimizeBlock block
+            (Map.add label block' acc, ch || blockChanged)
+        ) (Map.empty, false)
     let cfg' = { cfg with Blocks = blocks' }
-    let (cfg'', hoisted, cache') = applyLoopInvariantConstHoist cfg' microTimingRecorder domCache
+    let (cfg'', hoisted, cache') = applyLoopInvariantConstHoist cfg' domCache
     (cfg'', changed || hoisted, cache')
 
 /// Optimize a CFG until fixed point
-let optimizeCFG (cfg: CFG) (microTimingRecorder: (string -> float -> unit) option) : CFG =
+let optimizeCFG (cfg: CFG) : CFG =
     let rec loop current remaining iteration domCache =
         if remaining <= 0 then
             current
         else
-            let (next, changed, nextCache) =
-                timePhase microTimingRecorder $"peephole: iteration {iteration}" (fun () ->
-                    optimizeCFGOnce current microTimingRecorder domCache)
+            let (next, changed, nextCache) = optimizeCFGOnce current domCache
             if changed then
                 loop next (remaining - 1) (iteration + 1) nextCache
             else
@@ -726,13 +690,11 @@ let optimizeCFG (cfg: CFG) (microTimingRecorder: (string -> float -> unit) optio
     loop cfg 10 1 None
 
 /// Optimize a function
-let optimizeFunction (func: Function) (microTimingRecorder: (string -> float -> unit) option) : Function =
-    { func with CFG = optimizeCFG func.CFG microTimingRecorder }
+let optimizeFunction (func: Function) : Function =
+    { func with CFG = optimizeCFG func.CFG }
 
 /// Optimize a program
-let optimizeProgram (program: Program) (microTimingRecorder: (string -> float -> unit) option) : Program =
+let optimizeProgram (program: Program) : Program =
     let (Program functions) = program
-    let functions' =
-        timePhase microTimingRecorder "peephole: functions" (fun () ->
-            functions |> List.map (fun func -> optimizeFunction func microTimingRecorder))
+    let functions' = functions |> List.map optimizeFunction
     Program functions'

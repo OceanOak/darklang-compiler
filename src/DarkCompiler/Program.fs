@@ -78,7 +78,6 @@ type CliOptions = {
     DisableFunctionTreeShaking: bool
     ProfileANFToMIR: bool
     ProfileARM64Emit: bool
-    ProfileLIRPeephole: bool
     // IR dump flags
     DumpANF: bool
     DumpMIR: bool
@@ -116,7 +115,6 @@ let defaultOptions = {
     DisableFunctionTreeShaking = false
     ProfileANFToMIR = false
     ProfileARM64Emit = false
-    ProfileLIRPeephole = false
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -147,7 +145,6 @@ let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions
     EnableLeakCheck = cliOpts.LeakCheck
     EnableANFToMIRProfiling = cliOpts.ProfileANFToMIR
     EnableARM64EmitProfiling = cliOpts.ProfileARM64Emit
-    EnableLIRPeepholeProfiling = cliOpts.ProfileLIRPeephole
     DumpANF = cliOpts.DumpANF
     DumpMIR = cliOpts.DumpMIR
     DumpLIR = cliOpts.DumpLIR
@@ -227,9 +224,6 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
 
         | "--profile-arm64-emit" :: rest ->
             parseFlags rest { opts with ProfileARM64Emit = true } lastVerbosity
-
-        | "--profile-lir-peephole" :: rest ->
-            parseFlags rest { opts with ProfileLIRPeephole = true } lastVerbosity
 
         | "-h" :: rest | "--help" :: rest ->
             parseFlags rest { opts with Help = true } lastVerbosity
@@ -487,7 +481,6 @@ let printUsage () =
     println "  --leak-check         Enable leak checking (debug builds only)"
     println "  --profile-anf-to-mir Show ANF → MIR micro-timings"
     println "  --profile-arm64-emit Show ARM64 Emit micro-timings"
-    println "  --profile-lir-peephole Show LIR Peephole micro-timings"
     println "  -h, --help           Show this help message"
     println "  --version            Show version information"
     println ""
