@@ -371,7 +371,6 @@ let private lowerToAllocatedLir
         let compiledMap =
             compiledFuncs
             |> List.fold (fun acc func -> Map.add func.Name func acc) Map.empty
-
         functionOrder
         |> List.choose (fun name -> Map.tryFind name compiledMap))
 
@@ -556,6 +555,12 @@ let private buildBaseFuncNames
     registries.FuncParams
     |> Map.fold (fun acc name _ -> Set.add name acc) Set.empty
 
+let private mergeReturnTypes
+    (baseReturnTypes: Map<string, AST.Type>)
+    (overlayReturnTypes: Map<string, AST.Type>)
+    : Map<string, AST.Type> =
+    Map.fold (fun acc k v -> Map.add k v acc) baseReturnTypes overlayReturnTypes
+
 /// Shared compilation context used across pipeline steps
 type PipelineContext = {
     TypeCheckEnv: TypeChecking.TypeCheckEnv
@@ -563,6 +568,7 @@ type PipelineContext = {
     SpecRegistry: AST_to_ANF.SpecRegistry
     Registries: AST_to_ANF.Registries
     BaseFuncNames: Set<string>
+    ReturnTypes: Map<string, AST.Type>
 }
 
 let private buildContext
@@ -570,6 +576,7 @@ let private buildContext
     (genericFuncDefs: AST_to_ANF.GenericFuncDefs)
     (specRegistry: AST_to_ANF.SpecRegistry)
     (registries: AST_to_ANF.Registries)
+    (returnTypes: Map<string, AST.Type>)
     : PipelineContext =
     let baseFuncNames = buildBaseFuncNames registries
     {
@@ -578,6 +585,7 @@ let private buildContext
         SpecRegistry = specRegistry
         Registries = registries
         BaseFuncNames = baseFuncNames
+        ReturnTypes = returnTypes
     }
 
 /// Compiled preamble context - extends stdlib for a test file
@@ -747,12 +755,12 @@ let private buildRegistriesForProgram
     (baseRegistries: AST_to_ANF.Registries)
     (typeDefs: AST.TypeDef list)
     (functions: AST.FunctionDef list)
-    : AST_to_ANF.Registries * AST.FunctionDef list =
+    : AST_to_ANF.Registries * AST_to_ANF.Registries * AST.FunctionDef list =
     let aliasReg = AST_to_ANF.buildAliasRegistry typeDefs
     let resolvedFunctions = AST_to_ANF.resolveAliasesInFunctions aliasReg functions
     let localRegistries = AST_to_ANF.buildRegistries moduleRegistry typeDefs aliasReg resolvedFunctions
     let mergedRegistries = AST_to_ANF.mergeRegistries baseRegistries localRegistries
-    (mergedRegistries, resolvedFunctions)
+    (mergedRegistries, localRegistries, resolvedFunctions)
 
 let private convertTypedProgramToConversionResult
     (moduleRegistry: AST.ModuleRegistry)
@@ -764,7 +772,7 @@ let private convertTypedProgramToConversionResult
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
-            let (registries, resolvedFunctions) =
+            let (registries, _localRegistries, resolvedFunctions) =
                 buildRegistriesForProgram moduleRegistry baseRegistries typeDefs functions
             let varGen = ANF.VarGen 0
             AST_to_ANF.convertFunctions registries varGen resolvedFunctions
@@ -783,8 +791,9 @@ let private convertTypedProgramToUserOnlyWithMode
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
-            let (registries, resolvedFunctions) =
+            let (registries, localRegistries, resolvedFunctions) =
                 buildRegistriesForProgram baseContext.Registries.ModuleRegistry baseContext.Registries typeDefs functions
+            let localReturnTypes = extractReturnTypes localRegistries.FuncReg
             let varGen = ANF.VarGen 0
             AST_to_ANF.convertFunctions registries varGen resolvedFunctions
             |> Result.bind (fun (anfFuncs, varGen1) ->
@@ -796,6 +805,7 @@ let private convertTypedProgramToUserOnlyWithMode
                         TypeReg = registries.TypeReg
                         VariantLookup = registries.VariantLookup
                         FuncReg = registries.FuncReg
+                        LocalReturnTypes = localReturnTypes
                         FuncParams = registries.FuncParams
                         ModuleRegistry = registries.ModuleRegistry
                     }))))
@@ -928,6 +938,7 @@ let buildStdlibWithTrace
             | Error e ->
                 Error e
             | Ok anfResult ->
+                let sw = Stopwatch.StartNew()
                 let registries : AST_to_ANF.Registries = {
                     TypeReg = anfResult.TypeReg
                     VariantLookup = anfResult.VariantLookup
@@ -935,10 +946,10 @@ let buildStdlibWithTrace
                     FuncParams = anfResult.FuncParams
                     ModuleRegistry = anfResult.ModuleRegistry
                 }
-                let context = buildContext typeCheckEnv genericFuncDefs Map.empty registries
+                let returnTypes = extractReturnTypes registries.FuncReg
+                let context = buildContext typeCheckEnv genericFuncDefs Map.empty registries returnTypes
                 let (ANF.Program (stdlibFunctions, _)) = anfResult.Program
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
-                let sw = Stopwatch.StartNew()
                 match buildAnf 0 stdlibOptions sw registries stdlibFunctions passTimingRecorder with
                 | Error e ->
                     Error e
@@ -950,7 +961,7 @@ let buildStdlibWithTrace
                         |> Map.ofList
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
-                    let externalReturnTypes = extractReturnTypes registries.FuncReg
+                    let externalReturnTypes = returnTypes
                     match lowerToAllocatedLir
                         0
                         stdlibOptions
@@ -1017,12 +1028,13 @@ let buildStdlibSpecializations
 
             AST_to_ANF.splitTopLevels stdlib.TypedAST
             |> Result.bind (fun (typeDefs, _functions, _expr) ->
-                let (registries, resolvedFunctions) =
+                let (registries, localRegistries, resolvedFunctions) =
                     buildRegistriesForProgram
                         stdlib.Context.Registries.ModuleRegistry
                         stdlib.Context.Registries
                         typeDefs
                         newSpecializedFuncs
+                let localReturnTypes = extractReturnTypes localRegistries.FuncReg
 
                 let replacedFunctionsResult =
                     resolvedFunctions
@@ -1042,7 +1054,8 @@ let buildStdlibSpecializations
                                 tcoFunctions
                                 |> List.map (fun f -> f.Name, f)
                                 |> Map.ofList
-                            let externalReturnTypes = extractReturnTypes registries.FuncReg
+                            let externalReturnTypes =
+                                mergeReturnTypes stdlib.Context.ReturnTypes localReturnTypes
                             lowerToAllocatedLir
                                 0
                                 stdlibOptions
@@ -1071,6 +1084,7 @@ let buildStdlibSpecializations
                                         Registries = registries
                                         SpecRegistry = combinedSpecRegistry
                                         BaseFuncNames = baseFuncNames
+                                        ReturnTypes = externalReturnTypes
                                 }
                                 Ok {
                                     stdlib with
@@ -1204,7 +1218,8 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     printANFProgram "=== ANF (after Print insertion) ===" printProgram
 
                                 let tcoFunctions = applyTco plan.Verbosity plan.Options sw printedFunctions plan.PassTimingRecorder
-                                let externalReturnTypes = extractReturnTypes userRegistries.FuncReg
+                                let externalReturnTypes =
+                                    mergeReturnTypes plan.BaseContext.ReturnTypes userOnly.LocalReturnTypes
                                 let userLirResult =
                                     lowerToAllocatedLir
                                         plan.Verbosity
@@ -1338,10 +1353,12 @@ let buildPreambleContext
                         FuncParams = preambleUserOnly.FuncParams
                         ModuleRegistry = preambleUserOnly.ModuleRegistry
                     }
-                    let pipelineContext =
-                        buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries
                     let preambleOptions = defaultOptions
                     let sw = Stopwatch.StartNew()
+                    let preambleReturnTypes =
+                        mergeReturnTypes stdlib.Context.ReturnTypes preambleUserOnly.LocalReturnTypes
+                    let pipelineContext =
+                        buildContext preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries preambleReturnTypes
                     match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
                     | Error err ->
                         let rcPrefix = "Reference count insertion error: "
@@ -1354,7 +1371,7 @@ let buildPreambleContext
                         Error msg
                     | Ok (preambleFunctions, typeMap) ->
                         let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
-                        let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
+                        let preambleExternalReturnTypes = preambleReturnTypes
                         match lowerToAllocatedLir
                             0
                             preambleOptions
@@ -1421,10 +1438,12 @@ let buildPreambleContextFromAnalysis
             FuncParams = preambleUserOnly.FuncParams
             ModuleRegistry = preambleUserOnly.ModuleRegistry
         }
-        let pipelineContext =
-            buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries
         let preambleOptions = defaultOptions
         let sw = Stopwatch.StartNew()
+        let preambleReturnTypes =
+            mergeReturnTypes stdlib.Context.ReturnTypes preambleUserOnly.LocalReturnTypes
+        let pipelineContext =
+            buildContext analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries preambleReturnTypes
         match buildAnf 0 preambleOptions sw preambleRegistries preambleUserOnly.UserFunctions passTimingRecorder with
         | Error err ->
             let rcPrefix = "Reference count insertion error: "
@@ -1437,7 +1456,7 @@ let buildPreambleContextFromAnalysis
             Error msg
         | Ok (preambleFunctions, typeMap) ->
             let tcoFunctions = applyTco 0 preambleOptions sw preambleFunctions passTimingRecorder
-            let preambleExternalReturnTypes = extractReturnTypes preambleRegistries.FuncReg
+            let preambleExternalReturnTypes = preambleReturnTypes
             match lowerToAllocatedLir
                 0
                 preambleOptions

@@ -6536,6 +6536,7 @@ type UserOnlyResult = {
     TypeReg: TypeRegistry              // Merged registries (for lookups)
     VariantLookup: VariantLookup
     FuncReg: FunctionRegistry
+    LocalReturnTypes: Map<string, AST.Type>
     FuncParams: Map<string, (string * AST.Type) list>
     ModuleRegistry: AST.ModuleRegistry
 }
