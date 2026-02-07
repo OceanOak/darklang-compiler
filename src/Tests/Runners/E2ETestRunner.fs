@@ -7,7 +7,6 @@ module TestDSL.E2ETestRunner
 open System
 open AST
 open AST_to_ANF
-open Parser
 open TypeChecking
 open TestDSL.E2EFormat
 
@@ -33,6 +32,7 @@ type private PreambleBuildSpec = {
     Preamble: string
     FunctionLineMap: Map<string, int>
     AllowInternal: bool
+    SourceSyntax: CompilerLibrary.SourceSyntax
 }
 
 /// Map of built preamble contexts keyed by source file
@@ -62,12 +62,21 @@ let private buildPreambleBuildSpec (sourceFile: string) (tests: E2ETest list) : 
             |> List.distinct
         match funcLineMaps with
         | [funcLineMap] ->
-            Ok {
-                SourceFile = sourceFile
-                Preamble = preamble
-                FunctionLineMap = funcLineMap
-                AllowInternal = isInternalTestFile sourceFile
-            }
+            let syntaxes =
+                tests
+                |> List.map (fun test -> test.SourceSyntax)
+                |> List.distinct
+            match syntaxes with
+            | [sourceSyntax] ->
+                Ok {
+                    SourceFile = sourceFile
+                    Preamble = preamble
+                    FunctionLineMap = funcLineMap
+                    AllowInternal = isInternalTestFile sourceFile
+                    SourceSyntax = sourceSyntax
+                }
+            | _ ->
+                Error $"Multiple source syntaxes found for {sourceFile}"
         | _ ->
             Error $"Multiple function line maps found for {sourceFile}"
     | _ ->
@@ -87,6 +96,7 @@ let private filterSpecsByDefs (genericDefs: GenericFuncDefs) (specs: Set<SpecKey
 
 let private collectSpecsFromTests
     (allowInternal: bool)
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
     (typeCheckEnv: TypeCheckEnv)
     (tests: E2ETest list)
     : Result<Set<SpecKey>, string> =
@@ -97,7 +107,7 @@ let private collectSpecsFromTests
         match remaining with
         | [] -> Ok acc
         | test :: rest ->
-            parseString allowInternal test.Source
+            CompilerLibrary.parseProgram sourceSyntax allowInternal test.Source
             |> Result.mapError (fun err ->
                 $"Test parse error ({test.SourceFile}: {test.Name}): {err}")
             |> Result.bind (fun testAst ->
@@ -119,7 +129,7 @@ let private buildPreamblePlan
         if preambleIsEmpty then
             Ok None
         else
-            CompilerLibrary.analyzePreamble spec.AllowInternal stdlib spec.Preamble
+            CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble
             |> Result.map Some
 
     analysisResult
@@ -128,7 +138,7 @@ let private buildPreamblePlan
             match analysisOpt with
             | Some analysis -> analysis.TypeCheckEnv
             | None -> stdlib.Context.TypeCheckEnv
-        collectSpecsFromTests spec.AllowInternal typeCheckEnv tests
+        collectSpecsFromTests spec.AllowInternal spec.SourceSyntax typeCheckEnv tests
         |> Result.bind (fun testSpecs ->
             let preambleSpecs =
                 match analysisOpt with
@@ -336,7 +346,7 @@ let runE2ETestWithPreambleContext
     let request : CompilerLibrary.CompileRequest = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
         Mode = CompilerLibrary.CompileMode.TestExpression
-        SourceSyntax = CompilerLibrary.CompilerSyntax
+        SourceSyntax = test.SourceSyntax
         Source = test.Source
         SourceFile = test.SourceFile
         AllowInternal = allowInternal

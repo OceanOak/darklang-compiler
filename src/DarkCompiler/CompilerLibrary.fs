@@ -836,12 +836,15 @@ let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
 
 /// Parse and typecheck a preamble, returning typed AST + preamble typecheck env
 let analyzePreamble
+    (sourceSyntax: SourceSyntax)
     (allowInternal: bool)
     (stdlib: StdlibResult)
     (preamble: string)
     : Result<PreambleAnalysis, string> =
     let preambleSource = preamble + "\n0"
-    Parser.parseString allowInternal preambleSource
+    (match sourceSyntax with
+     | CompilerSyntax -> Parser.parseString allowInternal preambleSource
+     | InterpreterSyntax -> InterpreterParser.parseString allowInternal preambleSource)
     |> Result.mapError (fun err -> $"Preamble parse error: {err}")
     |> Result.bind (fun preambleAst ->
         TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv preambleAst

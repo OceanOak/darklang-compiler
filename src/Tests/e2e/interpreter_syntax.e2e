@@ -1,0 +1,3 @@
+// Interpreter-syntax E2E tests
+
+let inc = fun x -> Stdlib.Int64.add x 1L in inc 5L = exit=0 syntax=interpreter stdout="6"

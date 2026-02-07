@@ -18,6 +18,8 @@ type E2ETest = {
     Name: string
     /// The test expression only (NOT including preamble)
     Source: string
+    /// Source syntax for parsing this test file
+    SourceSyntax: CompilerLibrary.SourceSyntax
     /// Preamble code (function/type definitions shared across tests in file)
     Preamble: string
     ExpectedStdout: string option
@@ -171,7 +173,7 @@ let private isExpectationStart (rest: string) : bool =
     elif Char.IsDigit(trimmed.[0]) || trimmed.[0] = '-' then true
     elif trimmed.[0] = '"' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
     elif Char.IsLower(trimmed.[0]) then true
-    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
+    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") || trimmed.StartsWith("syntax") then true
     else false
 
 let private isExpectationCandidate (rest: string) : bool =
@@ -183,6 +185,7 @@ let private isExpectationCandidate (rest: string) : bool =
          || trimmed.StartsWith("stdout")
          || trimmed.StartsWith("stderr")
          || trimmed.StartsWith("exit")
+         || trimmed.StartsWith("syntax")
          || trimmed.StartsWith("no_free_list")
          || trimmed.StartsWith("disable_leak_check")
          || trimmed.StartsWith("disable_opt_") then
@@ -205,6 +208,7 @@ let private isAttributeKey (key: string) : bool =
     | "exit"
     | "stdout"
     | "stderr"
+    | "syntax"
     | "no_free_list"
     | "disable_leak_check"
     | "disable_opt_freelist"
@@ -340,26 +344,27 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
         let expectationsStr = lineWithoutComment.Substring(equalsIdx + 1).Trim()
 
         // Parse expectations - supports simple stdout, attributes, or compiler errors
-        // Returns: (exitCode, stdout, stderr, optFlags, expectError, errorMessage)
-        let parseExpectations (exp: string) : Result<int * string option * string option * OptFlags * bool * string option, string> =
+        // Returns: (exitCode, stdout, stderr, optFlags, expectError, errorMessage, sourceSyntax)
+        let parseExpectations (exp: string) : Result<int * string option * string option * OptFlags * bool * string option * CompilerLibrary.SourceSyntax, string> =
             let trimmed = exp.Trim()
 
             // Check for "error" keyword (compiler error expected)
             // Supports: error  or  error="message"
             if trimmed.ToLower() = "error" then
                 // Expect compilation to fail with exit code 1, no specific message
-                Ok (1, None, None, defaultOptFlags, true, None)
+                Ok (1, None, None, defaultOptFlags, true, None, CompilerLibrary.CompilerSyntax)
             elif trimmed.ToLower().StartsWith("error=") then
                 // error="message" format
                 let msgPart = trimmed.Substring(6)  // Skip "error="
                 match parseStringLiteral msgPart with
-                | Ok msg -> Ok (1, None, None, defaultOptFlags, true, Some msg)
+                | Ok msg -> Ok (1, None, None, defaultOptFlags, true, Some msg, CompilerLibrary.CompilerSyntax)
                 | Error e -> Error $"Invalid error message: {e}"
             else
                 // New format: parse optional stdout plus attributes
                 let mutable exitCode = 0  // default
                 let mutable stdout = None
                 let mutable stderr = None
+                let mutable sourceSyntax = CompilerLibrary.CompilerSyntax
                 let mutable optFlags = defaultOptFlags
                 let mutable expectError = false
                 let mutable errors = []
@@ -417,6 +422,12 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                                 match parseStringLiteral value with
                                 | Ok s -> stderr <- Some s
                                 | Error e -> errors <- e :: errors
+                            | "syntax" ->
+                                match value.ToLower() with
+                                | "compiler" -> sourceSyntax <- CompilerLibrary.CompilerSyntax
+                                | "interpreter" -> sourceSyntax <- CompilerLibrary.InterpreterSyntax
+                                | _ ->
+                                    errors <- $"Invalid syntax value: {value} (expected compiler/interpreter)" :: errors
                             | "no_free_list" ->
                                 match parseBool value "no_free_list" with
                                 | Some b -> optFlags <- { optFlags with DisableFreeList = b }
@@ -520,15 +531,16 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                         | None, None -> Ok None
 
                     match combinedStdout with
-                    | Ok finalStdout -> Ok (exitCode, finalStdout, stderr, optFlags, expectError, None)
+                    | Ok finalStdout -> Ok (exitCode, finalStdout, stderr, optFlags, expectError, None, sourceSyntax)
                     | Error e -> Error e
 
         match parseExpectations expectationsStr with
-        | Ok (exitCode, stdout, stderr, optFlags, expectError, errorMessage) ->
+        | Ok (exitCode, stdout, stderr, optFlags, expectError, errorMessage, sourceSyntax) ->
             let displayName = comment |> Option.defaultValue source
             Ok {
                 Name = $"L{lineNumber}: {displayName}"
                 Source = source
+                SourceSyntax = sourceSyntax
                 Preamble = preamble
                 ExpectedStdout = stdout
                 ExpectedStderr = stderr
