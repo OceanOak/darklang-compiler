@@ -137,6 +137,35 @@ let testCacheFlagsRejected () : TestResult =
     checkReject [| "--no-cache"; "input.dark" |] "--no-cache"
     |> Result.bind (fun () -> checkReject [| "--cache-key" |] "--cache-key")
 
+/// Test that syntax selection flag accepts interpreter syntax
+let testSyntaxFlagInterpreter () : TestResult =
+    let args = [| "--syntax=interpreter"; "input.dark" |]
+    match parseArgs args with
+    | Error msg -> Error $"Expected interpreter syntax flag to parse, got error: {msg}"
+    | Ok opts ->
+        match opts.SourceSyntax with
+        | CompilerLibrary.InterpreterSyntax -> Ok ()
+        | CompilerLibrary.CompilerSyntax ->
+            Error "Expected SourceSyntax to be InterpreterSyntax"
+
+/// Test that shorthand interpreter syntax flag accepts interpreter syntax
+let testInterpreterSyntaxAliasFlag () : TestResult =
+    let args = [| "--interpreter-syntax"; "input.dark" |]
+    match parseArgs args with
+    | Error msg -> Error $"Expected interpreter syntax alias flag to parse, got error: {msg}"
+    | Ok opts ->
+        match opts.SourceSyntax with
+        | CompilerLibrary.InterpreterSyntax -> Ok ()
+        | CompilerLibrary.CompilerSyntax ->
+            Error "Expected SourceSyntax to be InterpreterSyntax when using --interpreter-syntax"
+
+/// Test that invalid syntax value is rejected
+let testInvalidSyntaxValueRejected () : TestResult =
+    let args = [| "--syntax=banana"; "input.dark" |]
+    match parseArgs args with
+    | Ok _ -> Error "Expected invalid syntax value to be rejected"
+    | Error _ -> Ok ()
+
 
 /// Test compiler option mapping from CLI options
 let testBuildCompilerOptions () : TestResult =
@@ -227,6 +256,9 @@ let tests = [
     ("LIR peephole flag", testLIRPeepholeFlag)
     ("function tree shaking flag", testFunctionTreeShakingFlag)
     ("cache flags rejected", testCacheFlagsRejected)
+    ("syntax flag interpreter", testSyntaxFlagInterpreter)
+    ("interpreter syntax alias flag", testInterpreterSyntaxAliasFlag)
+    ("invalid syntax value rejected", testInvalidSyntaxValueRejected)
     ("build compiler options", testBuildCompilerOptions)
 ]
 

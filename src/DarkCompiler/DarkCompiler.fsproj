@@ -11,10 +11,12 @@
     <Compile Include="Crash.fs" />
     <Compile Include="Output.fs" />
     <Compile Include="AST.fs" />
+    <Compile Include="ASTPrettyPrinter.fs" />
     <Compile Include="Stdlib.fs" />
     <Compile Include="ResultList.fs" />
     <Compile Include="Bitset.fs" />
     <Compile Include="passes/1_Parser.fs" />
+    <Compile Include="passes/1_InterpreterParser.fs" />
     <Compile Include="passes/1.5_TypeChecking.fs" />
     <Compile Include="ANF.fs" />
     <Compile Include="passes/ANFDeadCodeElimination.fs" />

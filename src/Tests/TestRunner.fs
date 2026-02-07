@@ -97,6 +97,7 @@ let main args =
         { Name = "ANF Inlining Tests"; Tests = ANFInliningTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
+        { Name = "Syntax Interop Tests"; Tests = SyntaxInteropTests.tests }
     |]
 
     let enableVerification = verificationEnabled

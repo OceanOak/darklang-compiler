@@ -336,6 +336,7 @@ let runE2ETestWithPreambleContext
     let request : CompilerLibrary.CompileRequest = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
         Mode = CompilerLibrary.CompileMode.TestExpression
+        SourceSyntax = CompilerLibrary.CompilerSyntax
         Source = test.Source
         SourceFile = test.SourceFile
         AllowInternal = allowInternal

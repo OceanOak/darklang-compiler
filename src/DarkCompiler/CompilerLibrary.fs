@@ -36,6 +36,11 @@ type CompileMode =
     | FullProgram
     | TestExpression
 
+/// Source syntax for parsing Dark programs
+type SourceSyntax =
+    | CompilerSyntax
+    | InterpreterSyntax
+
 /// Result of compilation with timing
 type CompileReport = {
     Result: Result<byte array, string>
@@ -637,6 +642,7 @@ type CompileContext =
 type CompileRequest = {
     Context: CompileContext
     Mode: CompileMode
+    SourceSyntax: SourceSyntax
     Source: string
     SourceFile: string
     AllowInternal: bool
@@ -1110,6 +1116,7 @@ type private UserCompileLabels = {
 
 type private UserCompilePlan = {
     AllowInternal: bool
+    SourceSyntax: SourceSyntax
     Verbosity: int
     Options: CompilerOptions
     PassTimingRecorder: PassTimingRecorder option
@@ -1125,6 +1132,16 @@ type private UserCompilePlan = {
     Source: string
 }
 
+/// Parse source text into AST using a selected Darklang syntax
+let parseProgram
+    (sourceSyntax: SourceSyntax)
+    (allowInternal: bool)
+    (source: string)
+    : Result<AST.Program, string> =
+    match sourceSyntax with
+    | CompilerSyntax -> Parser.parseString allowInternal source
+    | InterpreterSyntax -> InterpreterParser.parseString allowInternal source
+
 /// Compile a user/test program against a prebuilt stdlib/preamble context
 let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
     let sw = Stopwatch.StartNew()
@@ -1132,7 +1149,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
         try
             // Pass 1: Parse user code only
             if plan.Verbosity >= 1 then println plan.Labels.Parse
-            let parseResult = Parser.parseString plan.AllowInternal plan.Source
+            let parseResult = parseProgram plan.SourceSyntax plan.AllowInternal plan.Source
             let parseTime = sw.Elapsed.TotalMilliseconds
             recordPassTiming plan.PassTimingRecorder "Parse" parseTime
             if plan.Verbosity >= 2 then
@@ -1531,6 +1548,7 @@ let private buildCompilePlan (request: CompileRequest) : UserCompilePlan =
 
     {
         AllowInternal = request.AllowInternal
+        SourceSyntax = request.SourceSyntax
         Verbosity = request.Verbosity
         Options = request.Options
         PassTimingRecorder = request.PassTimingRecorder

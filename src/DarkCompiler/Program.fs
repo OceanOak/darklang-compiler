@@ -50,6 +50,7 @@ let shouldShowNormal (level: VerbosityLevel) : bool =
 type CliOptions = {
     Run: bool                    // True = run, False = compile (default)
     IsExpression: bool           // True = expression, False = file (default)
+    SourceSyntax: CompilerLibrary.SourceSyntax
     OutputFile: string option
     Verbosity: VerbosityLevel
     Help: bool
@@ -86,6 +87,7 @@ type CliOptions = {
 let defaultOptions = {
     Run = false
     IsExpression = false
+    SourceSyntax = CompilerLibrary.CompilerSyntax
     OutputFile = None
     Verbosity = Normal
     Help = false
@@ -115,6 +117,12 @@ let defaultOptions = {
     DumpMIR = false
     DumpLIR = false
 }
+
+let private parseSourceSyntaxValue (value: string) : Result<CompilerLibrary.SourceSyntax, string> =
+    match value.Trim().ToLowerInvariant() with
+    | "compiler" -> Ok CompilerLibrary.CompilerSyntax
+    | "interpreter" -> Ok CompilerLibrary.InterpreterSyntax
+    | _ -> Error $"Invalid syntax '{value}' (expected 'compiler' or 'interpreter')"
 
 /// Build compiler options from CLI options
 let buildCompilerOptions (cliOpts: CliOptions) : CompilerLibrary.CompilerOptions = {
@@ -163,6 +171,26 @@ let parseArgs (argv: string array) : Result<CliOptions, string> =
                 Error "Expression flag specified multiple times"
             else
                 parseFlags rest { opts with IsExpression = true } lastVerbosity
+
+        | "--syntax" :: value :: rest ->
+            parseSourceSyntaxValue value
+            |> Result.bind (fun sourceSyntax ->
+                parseFlags rest { opts with SourceSyntax = sourceSyntax } lastVerbosity)
+
+        | "--syntax" :: [] ->
+            Error "Missing value for --syntax (expected 'compiler' or 'interpreter')"
+
+        | flag :: rest when flag.StartsWith("--syntax=") ->
+            let value = flag.Substring(9)
+            parseSourceSyntaxValue value
+            |> Result.bind (fun sourceSyntax ->
+                parseFlags rest { opts with SourceSyntax = sourceSyntax } lastVerbosity)
+
+        | "--compiler-syntax" :: rest ->
+            parseFlags rest { opts with SourceSyntax = CompilerLibrary.CompilerSyntax } lastVerbosity
+
+        | "--interpreter-syntax" :: rest ->
+            parseFlags rest { opts with SourceSyntax = CompilerLibrary.InterpreterSyntax } lastVerbosity
 
         | "-o" :: value :: rest | "--output" :: value :: rest ->
             if opts.OutputFile.IsSome then
@@ -355,6 +383,7 @@ let compile (source: string) (outputPath: string) (verbosity: VerbosityLevel) (c
         let request : CompilerLibrary.CompileRequest = {
             Context = CompilerLibrary.StdlibOnly stdlib
             Mode = CompilerLibrary.CompileMode.FullProgram
+            SourceSyntax = cliOpts.SourceSyntax
             Source = source
             SourceFile = sourceFile
             AllowInternal = false
@@ -411,6 +440,7 @@ let run (source: string) (verbosity: VerbosityLevel) (cliOpts: CliOptions) : int
             let request : CompilerLibrary.CompileRequest = {
                 Context = CompilerLibrary.StdlibOnly stdlib
                 Mode = CompilerLibrary.CompileMode.FullProgram
+                SourceSyntax = cliOpts.SourceSyntax
                 Source = source
                 SourceFile = sourceFile
                 AllowInternal = false
@@ -457,6 +487,8 @@ let printUsage () =
     println "Flags:"
     println "  -r, --run            Run instead of compile (shows exit code)"
     println "  -e, --expression     Treat argument as expression (not filename)"
+    println "  --syntax MODE        Source syntax: compiler (default) or interpreter"
+    println "  --interpreter-syntax Alias for --syntax=interpreter"
     println "  -o, --output FILE    Output file (default: dark.out)"
     println "  -q, --quiet          Suppress compilation output"
     println "  -v, --verbose        Show compilation pass names"
@@ -489,6 +521,7 @@ let printUsage () =
     printf "  dark -e \"2 + 3\" -o output          Compile expression to 'output'\n"
     printf "  dark -r -e \"2 + 3\"                 Run and show exit code (5)\n"
     printf "  dark -qr -e \"6 * 7\"                Run quietly (exit code: 42)\n"
+    println "  dark --syntax=interpreter -e \"let x = 5L in x\""
     println "  dark -v prog.dark -o output        Compile with verbose output"
     println "  dark -r -e - < input.txt           Run expression from stdin"
     println ""
