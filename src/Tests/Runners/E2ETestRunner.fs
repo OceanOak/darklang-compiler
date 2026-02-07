@@ -15,6 +15,14 @@ let private isInternalTestFile (sourceFile: string) : bool =
     let normalized = sourceFile.Replace('\\', '/')
     normalized.Contains("/stdlib-internal/")
 
+// Choose parser syntax from the test suite directory.
+let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.SourceSyntax =
+    let normalized = sourceFile.Replace('\\', '/')
+    if normalized.Contains("/interpreter/") then
+        CompilerLibrary.InterpreterSyntax
+    else
+        CompilerLibrary.CompilerSyntax
+
 /// Result of running an E2E test
 type E2ERun =
     | CompileFailed of exitCode:int * error:string * compileTime:TimeSpan
@@ -62,21 +70,14 @@ let private buildPreambleBuildSpec (sourceFile: string) (tests: E2ETest list) : 
             |> List.distinct
         match funcLineMaps with
         | [funcLineMap] ->
-            let syntaxes =
-                tests
-                |> List.map (fun test -> test.SourceSyntax)
-                |> List.distinct
-            match syntaxes with
-            | [sourceSyntax] ->
-                Ok {
-                    SourceFile = sourceFile
-                    Preamble = preamble
-                    FunctionLineMap = funcLineMap
-                    AllowInternal = isInternalTestFile sourceFile
-                    SourceSyntax = sourceSyntax
-                }
-            | _ ->
-                Error $"Multiple source syntaxes found for {sourceFile}"
+            let sourceSyntax = sourceSyntaxForTestFile sourceFile
+            Ok {
+                SourceFile = sourceFile
+                Preamble = preamble
+                FunctionLineMap = funcLineMap
+                AllowInternal = isInternalTestFile sourceFile
+                SourceSyntax = sourceSyntax
+            }
         | _ ->
             Error $"Multiple function line maps found for {sourceFile}"
     | _ ->
@@ -343,10 +344,11 @@ let runE2ETestWithPreambleContext
     : E2ETestResult =
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
+    let sourceSyntax = sourceSyntaxForTestFile test.SourceFile
     let request : CompilerLibrary.CompileRequest = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
         Mode = CompilerLibrary.CompileMode.TestExpression
-        SourceSyntax = test.SourceSyntax
+        SourceSyntax = sourceSyntax
         Source = test.Source
         SourceFile = test.SourceFile
         AllowInternal = allowInternal
