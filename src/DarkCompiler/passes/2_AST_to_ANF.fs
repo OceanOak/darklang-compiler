@@ -1800,30 +1800,38 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
             | AST.FuncRef origFuncName ->
                 // Named function used as value - wrap in a closure for uniform calling convention
                 // Create wrapper: __funcref_wrapper_N(__closure, ...params) = origFunc(...params)
-                // For now, assume single int param and int return (will be generalized later)
-                let wrapperName = $"__funcref_wrapper_{state.Counter}"
-                let closureParam = ("__closure", AST.TTuple [AST.TInt64])
-                let argParam = ("__arg", AST.TInt64)
-                let wrapperBody = AST.Call (origFuncName, [AST.Var "__arg"])
-                let wrapperDef : AST.FunctionDef = {
-                    Name = wrapperName
-                    TypeParams = []
-                    Params = [closureParam; argParam]
-                    ReturnType = AST.TInt64
-                    Body = wrapperBody
-                }
-                let state' = {
-                    Counter = state.Counter + 1
-                    LiftedFunctions = wrapperDef :: state.LiftedFunctions
-                    TypeEnv = state.TypeEnv
-                    FuncParams = state.FuncParams
-                    FuncReturnTypes = state.FuncReturnTypes
-                    GenericFuncDefs = state.GenericFuncDefs
-                    TypeReg = state.TypeReg
-                    VariantLookup = state.VariantLookup
-                }
-                // Create trivial closure with no captures
-                loop rest state' (AST.Closure (wrapperName, []) :: acc)
+                // Look up the actual function signature to generate correct wrapper
+                match Map.tryFind origFuncName state.FuncParams, Map.tryFind origFuncName state.FuncReturnTypes with
+                | Some origParams, Some origReturnType ->
+                    let wrapperName = $"__funcref_wrapper_{state.Counter}"
+                    let closureParam = ("__closure", AST.TTuple [AST.TInt64])
+                    // Generate parameter names for wrapper that match original function's parameters
+                    let wrapperParams = origParams |> List.mapi (fun i (_, t) -> ($"__arg{i}", t))
+                    let wrapperArgs = wrapperParams |> List.map (fun (name, _) -> AST.Var name)
+                    let wrapperBody = AST.Call (origFuncName, wrapperArgs)
+                    let wrapperDef : AST.FunctionDef = {
+                        Name = wrapperName
+                        TypeParams = []
+                        Params = closureParam :: wrapperParams
+                        ReturnType = origReturnType
+                        Body = wrapperBody
+                    }
+                    let state' = {
+                        Counter = state.Counter + 1
+                        LiftedFunctions = wrapperDef :: state.LiftedFunctions
+                        TypeEnv = state.TypeEnv
+                        FuncParams = state.FuncParams
+                        FuncReturnTypes = state.FuncReturnTypes
+                        GenericFuncDefs = state.GenericFuncDefs
+                        TypeReg = state.TypeReg
+                        VariantLookup = state.VariantLookup
+                    }
+                    // Create trivial closure with no captures
+                    loop rest state' (AST.Closure (wrapperName, []) :: acc)
+                | None, _ ->
+                    Error $"FuncRef to unknown function '{origFuncName}': function parameters not found"
+                | _, None ->
+                    Error $"FuncRef to unknown function '{origFuncName}': return type not found"
 
             | AST.Var varName ->
                 // Check if this is a function being passed as value
