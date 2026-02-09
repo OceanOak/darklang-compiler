@@ -20,10 +20,10 @@ You are going to resolve EXACTLY ONE type checking issue.
 
 9. After all this, write a short report to the developer about this issue. Include what assumption was removed along with some context, what test was added (show it!). Explain what the test does before and after the change, and how the was fixed by the compiler changes, and what changes had to be made to the compiler to address the issue. If there is any change to the benchmark result in RESULTS.md, SHOW THE CHANGE!
 
-10. DO NOT COMMIT OR MERGE UNTIL I SAY "approved". After that, commit the code, new tests, and new benchmark results, and include in the commit message a large discussion of the issue and the choices and assumptions made. Use scripts/land-in-main script to land.
+10. Commit the code, new tests, and new benchmark results, and include in the commit message a large discussion of the issue and the choices and assumptions made. Rebase off main branch if neccessary, and rerun tests if so.
 
 ## Policies for handling removed type defaults
 
 - Do not reintroduce a default type for missing type arguments. Preserve unresolved type variables and let later passes surface any problems.
 - If a later pass needs a concrete type (for example, monomorphized intrinsics like `__hash<k>`/`__key_eq<k>`), add explicit `*_unknown` intrinsics that crash at runtime rather than picking an arbitrary type.
-- Avoid semantic changes as a workaround. Optimizations like rewriting `Dict.fromList([])` to `Dict.empty` are allowed only when type arguments are concrete.
+- Do not change the test under any circumstances
