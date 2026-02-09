@@ -464,6 +464,9 @@ let a = [1, 2] in let b = [] in match (a, b) with | ([], _) -> 0 | (_, []) -> 1 
 // Both empty lists
 let a = [] in let b = [] in match (a, b) with | ([], _) -> 0 | (_, []) -> 1 | _ -> 99 = 0
 
+// Record pattern binding should preserve String type (regression for inferType fallback to Int64)
+type PersonEq = { name: String } let p = PersonEq { name = "a" ++ "b" } in let extracted = match p with | PersonEq { name = n } -> n in extracted == ("a" ++ "b") = true
+
 // Full pattern with list cons
 let a = [1, 2] in let b = [3, 4] in match (a, b) with | ([], _) -> 0 | (_, []) -> 1 | ([x, ...xs], [y, ...ys]) -> x + y | _ -> 99 = 4
 

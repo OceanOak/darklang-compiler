@@ -81,6 +81,16 @@ Binds `a` to `scrutinee.0`, `b` to `scrutinee.1`.
 ```
 Checks tag, then extracts payload if present.
 
+### Record Pattern Type Preservation
+
+When `inferType` analyzes a `match` expression, record field bindings must use
+the concrete field types from the record definition. Do not default record
+fields to `Int64`.
+
+If a string field is inferred as `Int64`, later equality lowering will emit
+primitive pointer equality (`==`) instead of `__string_eq`, producing incorrect
+results for equal-but-distinct strings.
+
 ### List Pattern
 ```dark
 | [] -> 0

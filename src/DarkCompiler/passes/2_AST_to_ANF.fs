@@ -2729,8 +2729,33 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     List.zip innerPats elemTypes
                     |> List.fold (fun acc (pat, typ) -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat typ)) Map.empty
                 | _ -> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat AST.TInt64)) Map.empty innerPats
-            | AST.PRecord (_, fieldPats) ->
-                fieldPats |> List.fold (fun acc (_, pat) -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat AST.TInt64)) Map.empty
+            | AST.PRecord (patternRecordName, fieldPats) ->
+                // Preserve concrete field types from the matched record.
+                // Falling back to Int64 here causes downstream mis-lowering (e.g. string == uses pointer eq).
+                let recordFields =
+                    match scrutType with
+                    | AST.TRecord (scrutRecordName, _) ->
+                        if Map.containsKey scrutRecordName typeReg then
+                            Map.find scrutRecordName typeReg
+                        elif Map.containsKey patternRecordName typeReg then
+                            Map.find patternRecordName typeReg
+                        else
+                            Crash.crash $"PRecord pattern could not find record type '{scrutRecordName}' (pattern: '{patternRecordName}')"
+                    | _ ->
+                        Crash.crash $"PRecord pattern expects TRecord scrutinee, got {scrutType}"
+
+                fieldPats
+                |> List.fold (fun acc (fieldName, pat) ->
+                    let fieldType =
+                        match List.tryFind (fun (name, _) -> name = fieldName) recordFields with
+                        | Some (_, typ) -> typ
+                        | None -> Crash.crash $"PRecord pattern field '{fieldName}' not found on record '{patternRecordName}'"
+
+                    Map.fold
+                        (fun m k v -> Map.add k v m)
+                        acc
+                        (extractPatternBindings pat fieldType))
+                    Map.empty
             | AST.PConstructor (variantName, payloadPat) ->
                 match payloadPat with
                 | None -> Map.empty
