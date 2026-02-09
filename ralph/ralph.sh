@@ -19,11 +19,11 @@ prompt=$(cat "$playbook")
 
 for ((i=1; i<=iterations; i++)); do
     if [[ "$dry_run" == true ]]; then
-        echo "=== Would send to Claude ==="
+        echo "=== Would send to Codex ==="
         echo "$prompt"
         exit 0
     fi
 
     echo "=== Iteration $i of $iterations ==="
-    claude --dangerously-skip-permissions -p "$prompt"
+    codex exec --dangerously-bypass-approvals-and-sandbox "$prompt"
 done
