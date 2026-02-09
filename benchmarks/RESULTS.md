@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-01-30 16:07:05
-**Commit:** `5ec92a40` - Inline literal args in ANF inliner
+**Last Updated:** 2026-02-09 08:44:35
+**Commit:** `54e7748b` - Remove duplicate compiler-syntax imported E2E suites
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

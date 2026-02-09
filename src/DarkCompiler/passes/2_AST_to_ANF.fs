@@ -4209,7 +4209,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let elemType =
                         match scrutType with
                         | AST.TList t -> t
-                        | _ -> AST.TInt64
+                        | _ -> Crash.crash $"PListCons pattern expects TList scrutinee in extractAndCompileBody, got {scrutType}"
                     // Extract head elements and bind tail using FingerTree operations
                     // Lists are FingerTrees, use headUnsafe_i64/tail_i64 for extraction
                     let rec collectListConsBindings (pats: AST.Pattern list) (listAtom: ANF.Atom) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen, string> =
