@@ -29,6 +29,8 @@ services:
 
     # Environment variables
     environment:
+      - DOTNET_ROOT=/usr/share/dotnet
+      - DOTNET_MULTILEVEL_LOOKUP=0
       - DOTNET_CLI_TELEMETRY_OPTOUT=1
       - DOTNET_NOLOGO=1
 

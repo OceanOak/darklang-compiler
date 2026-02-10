@@ -80,8 +80,8 @@ echo "Build complete."
 echo ""
 
 # Paths
-TEST_DLL="$SCRIPT_DIR/bin/Tests/Debug/net9.0/Tests.dll"
-TEST_EXE="$SCRIPT_DIR/bin/Tests/Debug/net9.0/Tests"
+TEST_DLL="$SCRIPT_DIR/bin/Tests/Debug/net10.0/Tests.dll"
+TEST_EXE="$SCRIPT_DIR/bin/Tests/Debug/net10.0/Tests"
 COVERAGE_OUTPUT="$SCRIPT_DIR/coverage.xml"
 REPORT_DIR="$SCRIPT_DIR/coverage-report"
 

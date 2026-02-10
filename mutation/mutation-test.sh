@@ -224,7 +224,7 @@ run_mutation_test() {
     fi
 
     # Find test executable (output goes to bin/ at project root, not src/Tests/bin/)
-    local test_exe="${SCRIPT_DIR}/../bin/Tests/Release/net9.0/Tests"
+    local test_exe="${SCRIPT_DIR}/../bin/Tests/Release/net10.0/Tests"
     [[ ! -x "$test_exe" ]] && { echo "BUILD_FAILURE"; return; }
 
     # Run tests

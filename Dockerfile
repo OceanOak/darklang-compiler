@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:9.0-noble
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
 
 # Install development tools, benchmarking dependencies, and curl for Codex CLI installation
 RUN apt-get update && apt-get install -y \
@@ -37,8 +37,12 @@ RUN useradd -m -u 501 -s /bin/bash paulbiggar && \
 # Switch to paulbiggar user
 USER paulbiggar
 
-# Add Rust and local bin to PATH
-ENV PATH="/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
+# Use the image-provided .NET installation as the system runtime/SDK
+ENV DOTNET_ROOT="/usr/share/dotnet"
+ENV DOTNET_MULTILEVEL_LOOKUP="0"
+
+# Add .NET, Rust and local bin to PATH
+ENV PATH="${DOTNET_ROOT}:/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
 
 # Install Rust for benchmarking
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

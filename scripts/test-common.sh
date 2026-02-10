@@ -27,7 +27,7 @@ build_tests() {
 find_test_exe() {
     local script_dir="$1"
     local missing_hint="$2"
-    local test_exe="$script_dir/bin/Tests/Debug/net9.0/Tests"
+    local test_exe="$script_dir/bin/Tests/Debug/net10.0/Tests"
 
     if [ ! -f "$test_exe" ]; then
         echo "Error: Test executable not found at $test_exe"
