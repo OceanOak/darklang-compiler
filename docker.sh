@@ -3,6 +3,18 @@
 
 set -e
 
+fix_nuget_permissions() {
+  echo "Fixing NuGet cache permissions..."
+  docker compose exec --user root -T dev bash -lc '
+    set -e
+    uid=$(id -u paulbiggar)
+    gid=$(id -g paulbiggar)
+    mkdir -p /home/paulbiggar/.nuget/packages
+    chown -R "$uid:$gid" /home/paulbiggar/.nuget
+    chmod -R u+rwX /home/paulbiggar/.nuget
+  '
+}
+
 case "$1" in
   build)
     echo "Building Docker image..."
@@ -12,6 +24,7 @@ case "$1" in
   up)
     echo "Starting container..."
     docker compose up -d
+    fix_nuget_permissions
     echo "Container started. Use './docker.sh shell' to enter."
     ;;
 
@@ -29,6 +42,7 @@ case "$1" in
     echo "Restarting container..."
     docker compose down
     docker compose up -d
+    fix_nuget_permissions
     echo "Container restarted."
     ;;
 
