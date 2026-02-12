@@ -32,7 +32,8 @@ RUN mkdir -p /Users/paulbiggar/projects
 # Create paulbiggar user with same UID as host (501) for file permissions
 RUN useradd -m -u 501 -s /bin/bash paulbiggar && \
     echo "paulbiggar ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    chown -R paulbiggar:paulbiggar /Users/paulbiggar
+    mkdir -p /home/paulbiggar/.nuget/packages && \
+    chown -R paulbiggar:paulbiggar /Users/paulbiggar /home/paulbiggar/.nuget
 
 # Switch to paulbiggar user
 USER paulbiggar
@@ -55,7 +56,7 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
 
 # Install darklang interpreter
 RUN mkdir -p ~/.local/bin && \
-    curl -sSL https://github.com/darklang/dark/releases/download/v0.0.4/darklang-alpha-2c1adf536e-linux-arm64.gz | \
+    curl -sSL  https://github.com/darklang/dark/releases/download/v0.0.2/darklang-alpha-6805337e8b-linux-arm.gz | \
     gunzip > ~/.local/bin/darklang-interpreter && \
     chmod +x ~/.local/bin/darklang-interpreter
 
