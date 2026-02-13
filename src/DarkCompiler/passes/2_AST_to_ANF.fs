@@ -3151,77 +3151,66 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             (exprWithBindings, varGen2))
 
     | AST.BinOp (op, left, right) ->
-        // Convert operands to atoms
-        toAtom left varGen env typeReg variantLookup funcReg moduleRegistry |> Result.bind (fun (leftAtom, leftBindings, varGen1) ->
-            toAtom right varGen1 env typeReg variantLookup funcReg moduleRegistry |> Result.bind (fun (rightAtom, rightBindings, varGen2) ->
-                // Check if this is an equality comparison on compound types
+        toANFBoundAtom left varGen env typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun (leftExpr, leftAtom, varGen1) ->
+            toANFBoundAtom right varGen1 env typeReg variantLookup funcReg moduleRegistry
+            |> Result.bind (fun (rightExpr, rightAtom, varGen2) ->
                 let typeEnv = typeEnvFromVarEnv env
-                match op with
-                | AST.Eq | AST.Neq ->
-                    // Infer type of left operand to check if structural comparison is needed
-                    match inferType left typeEnv typeReg variantLookup funcReg moduleRegistry with
-                    | Ok operandType when isCompoundType operandType ->
-                        // Generate structural equality
-                        let (eqBindings, eqResultAtom, varGen3) =
-                            generateStructuralEquality leftAtom rightAtom operandType varGen2 typeReg variantLookup
-                        // For Neq, negate the result
-                        let (finalAtom, finalBindings, varGen4) =
-                            if op = AST.Neq then
-                                let (negVar, vg) = ANF.freshVar varGen3
-                                let negExpr = ANF.UnaryPrim (ANF.Not, eqResultAtom)
-                                (ANF.Var negVar, eqBindings @ [(negVar, negExpr)], vg)
-                            else
-                                (eqResultAtom, eqBindings, varGen3)
-                        // Build expression with all bindings
-                        let finalExpr = ANF.Return finalAtom
-                        let exprWithEq = wrapBindings finalBindings finalExpr
-                        let exprWithRight = wrapBindings rightBindings exprWithEq
-                        let exprWithLeft = wrapBindings leftBindings exprWithRight
-                        Ok (exprWithLeft, varGen4)
-                    | Ok AST.TString ->
-                        // String equality - call __string_eq
+                let buildCoreExpr () : Result<ANF.AExpr * ANF.VarGen, string> =
+                    match op with
+                    | AST.Eq | AST.Neq ->
+                        // Infer type of left operand to check if structural comparison is needed
+                        match inferType left typeEnv typeReg variantLookup funcReg moduleRegistry with
+                        | Ok operandType when isCompoundType operandType ->
+                            // Generate structural equality
+                            let (eqBindings, eqResultAtom, varGen3) =
+                                generateStructuralEquality leftAtom rightAtom operandType varGen2 typeReg variantLookup
+                            // For Neq, negate the result
+                            let (finalAtom, finalBindings, varGen4) =
+                                if op = AST.Neq then
+                                    let (negVar, vg) = ANF.freshVar varGen3
+                                    let negExpr = ANF.UnaryPrim (ANF.Not, eqResultAtom)
+                                    (ANF.Var negVar, eqBindings @ [(negVar, negExpr)], vg)
+                                else
+                                    (eqResultAtom, eqBindings, varGen3)
+                            Ok (wrapBindings finalBindings (ANF.Return finalAtom), varGen4)
+                        | Ok AST.TString ->
+                            // String equality - call __string_eq
+                            let (tempVar, varGen3) = ANF.freshVar varGen2
+                            let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
+                            // For Neq, negate the result
+                            let (finalAtom, finalBindings, varGen4) =
+                                if op = AST.Neq then
+                                    let (negVar, vg) = ANF.freshVar varGen3
+                                    let negExpr = ANF.UnaryPrim (ANF.Not, ANF.Var tempVar)
+                                    (ANF.Var negVar, [(tempVar, cexpr); (negVar, negExpr)], vg)
+                                else
+                                    (ANF.Var tempVar, [(tempVar, cexpr)], varGen3)
+                            Ok (wrapBindings finalBindings (ANF.Return finalAtom), varGen4)
+                        | _ ->
+                            // Primitive type or type inference failed - use simple comparison
+                            let (tempVar, varGen3) = ANF.freshVar varGen2
+                            let cexpr = ANF.Prim (convertBinOp op, leftAtom, rightAtom)
+                            Ok (ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar)), varGen3)
+                    | AST.StringConcat ->
+                        // String concatenation
                         let (tempVar, varGen3) = ANF.freshVar varGen2
-                        let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
-                        // For Neq, negate the result
-                        let (finalAtom, finalBindings, varGen4) =
-                            if op = AST.Neq then
-                                let (negVar, vg) = ANF.freshVar varGen3
-                                let negExpr = ANF.UnaryPrim (ANF.Not, ANF.Var tempVar)
-                                (ANF.Var negVar, [(tempVar, cexpr); (negVar, negExpr)], vg)
-                            else
-                                (ANF.Var tempVar, [(tempVar, cexpr)], varGen3)
-                        let finalExpr = ANF.Return finalAtom
-                        let exprWithBindings = wrapBindings finalBindings finalExpr
-                        let exprWithRight = wrapBindings rightBindings exprWithBindings
-                        let exprWithLeft = wrapBindings leftBindings exprWithRight
-                        Ok (exprWithLeft, varGen4)
-                    | _ ->
-                        // Primitive type or type inference failed - use simple comparison
+                        let cexpr = ANF.StringConcat (leftAtom, rightAtom)
+                        Ok (ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar)), varGen3)
+                    // Arithmetic, bitwise, and comparison operators - use simple primitive
+                    | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod
+                    | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor
+                    | AST.Lt | AST.Gt | AST.Lte | AST.Gte
+                    | AST.And | AST.Or ->
                         let (tempVar, varGen3) = ANF.freshVar varGen2
                         let cexpr = ANF.Prim (convertBinOp op, leftAtom, rightAtom)
-                        let finalExpr = ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar))
-                        let exprWithRight = wrapBindings rightBindings finalExpr
-                        let exprWithLeft = wrapBindings leftBindings exprWithRight
-                        Ok (exprWithLeft, varGen3)
-                | AST.StringConcat ->
-                    // String concatenation
-                    let (tempVar, varGen3) = ANF.freshVar varGen2
-                    let cexpr = ANF.StringConcat (leftAtom, rightAtom)
-                    let finalExpr = ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar))
-                    let exprWithRight = wrapBindings rightBindings finalExpr
-                    let exprWithLeft = wrapBindings leftBindings exprWithRight
-                    Ok (exprWithLeft, varGen3)
-                // Arithmetic, bitwise, and comparison operators - use simple primitive
-                | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod
-                | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor
-                | AST.Lt | AST.Gt | AST.Lte | AST.Gte
-                | AST.And | AST.Or ->
-                    let (tempVar, varGen3) = ANF.freshVar varGen2
-                    let cexpr = ANF.Prim (convertBinOp op, leftAtom, rightAtom)
-                    let finalExpr = ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar))
-                    let exprWithRight = wrapBindings rightBindings finalExpr
-                    let exprWithLeft = wrapBindings leftBindings exprWithRight
-                    Ok (exprWithLeft, varGen3)))
+                        Ok (ANF.Let (tempVar, cexpr, ANF.Return (ANF.Var tempVar)), varGen3)
+
+                buildCoreExpr ()
+                |> Result.map (fun (coreExpr, varGen3) ->
+                    let withRight = bindReturns rightExpr (fun _ -> coreExpr)
+                    let withLeft = bindReturns leftExpr (fun _ -> withRight)
+                    (withLeft, varGen3))))
 
     | AST.If (cond, thenBranch, elseBranch) ->
         // If expression: convert condition to atom, both branches to ANF
@@ -3374,31 +3363,43 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
     | AST.Call (funcName, args) ->
         // Function call: convert all arguments to atoms
         // If an argument is a function reference, wrap it in a trivial closure for uniform calling convention
-        let wrapFuncRefInClosure (atom: ANF.Atom) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
+        let wrapFuncRefInClosure (argExpr: ANF.AExpr) (atom: ANF.Atom) (vg: ANF.VarGen) : ANF.AExpr * ANF.Atom * ANF.VarGen =
             match atom with
             | ANF.FuncRef fnName ->
-                // Function reference needs to be wrapped in a closure
-                // Create a ClosureAlloc with no captures
+                // Function reference needs to be wrapped in a closure.
                 let (closureId, vg') = ANF.freshVar vg
-                let closureAlloc = ANF.ClosureAlloc (fnName, [])
-                (ANF.Var closureId, bindings @ [(closureId, closureAlloc)], vg')
-            | _ -> (atom, bindings, vg)
+                let closureExpr = ANF.Let (closureId, ANF.ClosureAlloc (fnName, []), ANF.Return (ANF.Var closureId))
+                let wrappedExpr = bindReturns argExpr (fun _ -> closureExpr)
+                (wrappedExpr, ANF.Var closureId, vg')
+            | _ ->
+                (argExpr, atom, vg)
 
-        let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+        let rec convertArgs
+            (argExprs: AST.Expr list)
+            (vg: ANF.VarGen)
+            (accExprs: ANF.AExpr list)
+            (accAtoms: ANF.Atom list)
+            : Result<ANF.AExpr list * ANF.Atom list * ANF.VarGen, string> =
             match argExprs with
-            | [] -> Ok (List.rev accAtoms, accBindings, vg)
+            | [] ->
+                Ok (List.rev accExprs, List.rev accAtoms, vg)
             | arg :: rest ->
-                toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
-                |> Result.bind (fun (argAtom, argBindings, vg') ->
-                    // Wrap function references in closures for uniform calling convention
-                    let (wrappedAtom, allBindings, vg'') = wrapFuncRefInClosure argAtom (accBindings @ argBindings) vg'
-                    convertArgs rest vg'' (wrappedAtom :: accAtoms) allBindings)
+                toANFBoundAtom arg vg env typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun (argExpr, argAtom, vg') ->
+                    // Wrap function references in closures for uniform calling convention.
+                    let (wrappedExpr, wrappedAtom, vg'') = wrapFuncRefInClosure argExpr argAtom vg'
+                    convertArgs rest vg'' (wrappedExpr :: accExprs) (wrappedAtom :: accAtoms))
 
         // Regular function call (including module functions like Stdlib.Int64.add)
         convertArgs args varGen [] []
-        |> Result.bind (fun (argAtoms, argBindings, varGen1) ->
+        |> Result.bind (fun (argSetupExprs, argAtoms, varGen1) ->
             // Bind call result to fresh variable
             let (resultVar, varGen2) = ANF.freshVar varGen1
+            let withArgSetups (finalExpr: ANF.AExpr) =
+                List.foldBack
+                    (fun argExpr acc -> bindReturns argExpr (fun _ -> acc))
+                    argSetupExprs
+                    finalExpr
             // Check if funcName is a variable (indirect call) or a defined function (direct call)
             match Map.tryFind funcName env with
             | Some (tempId, AST.TFunction (_, _)) ->
@@ -3406,8 +3407,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 // All function values are now closures (even non-capturing ones)
                 let callExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
                 let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
-                let exprWithBindings = wrapBindings argBindings finalExpr
-                Ok (exprWithBindings, varGen2)
+                Ok (withArgSetups finalExpr, varGen2)
             | Some (_, varType) ->
                 // Variable exists but is not a function type
                 Error $"Cannot call '{funcName}' - it has type {varType}, not a function type"
@@ -3417,48 +3417,42 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 | Some intrinsicExpr ->
                     // File I/O intrinsic call
                     let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                    let exprWithBindings = wrapBindings argBindings finalExpr
-                    Ok (exprWithBindings, varGen2)
+                    Ok (withArgSetups finalExpr, varGen2)
                 | None ->
                     // Check if it's a raw memory intrinsic
                     match tryRawMemoryIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Raw memory intrinsic call
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                     // Check if it's a Float intrinsic
                     match tryFloatIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Float intrinsic call
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                     // Check if it's a constant-fold intrinsic (Platform, Path)
                     match tryConstantFoldIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Constant-folded intrinsic
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                     // Check if it's a random intrinsic
                     match tryRandomIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Random intrinsic call
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                     // Check if it's a date intrinsic
                     match tryDateIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Date intrinsic call
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                     // Check if it's a defined function
                     match Map.tryFind funcName funcReg with
@@ -3466,15 +3460,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         // Direct call to defined function
                         let callExpr = ANF.Call (funcName, argAtoms)
                         let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2)
+                        Ok (withArgSetups finalExpr, varGen2)
                     | None ->
                         // Unknown function - could be error or forward reference
                         // For now, assume it's a valid function (will fail at link time if not)
                         let callExpr = ANF.Call (funcName, argAtoms)
                         let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
-                        let exprWithBindings = wrapBindings argBindings finalExpr
-                        Ok (exprWithBindings, varGen2))
+                        Ok (withArgSetups finalExpr, varGen2))
 
     | AST.TypeApp (_funcName, _typeArgs, _args) ->
         // Generic function call - not yet implemented
@@ -6089,191 +6081,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
 
     | AST.Call (funcName, args) ->
         if isBuiltinUnwrapName funcName then
-            match args with
-            | [argExpr] ->
-                let typeEnv = typeEnvFromVarEnv env
-                inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
-                |> Result.bind (fun argType ->
-                    let lookupVariantInfo (expectedTypeName: string) (variantName: string) : Result<int * AST.Type option, string> =
-                        match Map.tryFind variantName variantLookup with
-                        | Some (typeName, _, tag, payloadTypeOpt) when typeName = expectedTypeName ->
-                            Ok (tag, payloadTypeOpt)
-                        | Some (typeName, _, _, _) ->
-                            Error $"Builtin.unwrap expected variant {variantName} in {expectedTypeName}, got {typeName}"
-                        | None ->
-                            Error $"Builtin.unwrap could not find variant tag for {expectedTypeName}.{variantName}"
-
-                    match argType with
-                    | AST.TSum ("Stdlib.Option.Option", [valueType]) ->
-                        lookupVariantInfo "Stdlib.Option.Option" "Some"
-                        |> Result.bind (fun (successTag, _) ->
-                            toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
-                            |> Result.map (fun (argAtom, argBindings, vg1) ->
-                                let (tagVar, vg2) = ANF.freshVar vg1
-                                let tagExpr = ANF.TupleGet (argAtom, 0)
-                                let (isSuccessVar, vg3) = ANF.freshVar vg2
-                                let isSuccessExpr =
-                                    ANF.Prim (
-                                        ANF.Eq,
-                                        ANF.Var tagVar,
-                                        ANF.IntLiteral (ANF.Int64 (int64 successTag))
-                                    )
-                                let (safeContainerVar, vg4) = ANF.freshVar vg3
-                                let safeContainerExpr =
-                                    ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
-                                let (rawPayloadVar, vg5) = ANF.freshVar vg4
-                                // If the tag check failed, safeContainerVar is 0 and this deref crashes.
-                                let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
-                                let (typedPayloadVar, vg6) = ANF.freshVar vg5
-                                let typedPayloadExpr =
-                                    ANF.TypedAtom (
-                                        ANF.Var rawPayloadVar,
-                                        if containsTypeVar valueType then AST.TUnit else valueType
-                                    )
-                                let bindings =
-                                    argBindings
-                                    @ [
-                                        (tagVar, tagExpr)
-                                        (isSuccessVar, isSuccessExpr)
-                                        (safeContainerVar, safeContainerExpr)
-                                        (rawPayloadVar, rawPayloadExpr)
-                                        (typedPayloadVar, typedPayloadExpr)
-                                    ]
-                                (ANF.Var typedPayloadVar, bindings, vg6)))
-                    | AST.TSum ("Stdlib.Option.Option", []) ->
-                        lookupVariantInfo "Stdlib.Option.Option" "Some"
-                        |> Result.bind (fun (successTag, payloadTypeOpt) ->
-                            let payloadTypeResult =
-                                match argExpr with
-                                | AST.Constructor (_, "Some", Some payloadExpr) ->
-                                    inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
-                                | _ ->
-                                    match payloadTypeOpt with
-                                    | Some payloadType -> Ok payloadType
-                                    | None ->
-                                        Error "Builtin.unwrap expected payload-bearing variant Some for Stdlib.Option.Option"
-                            payloadTypeResult
-                            |> Result.bind (fun payloadType ->
-                                toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
-                                |> Result.map (fun (argAtom, argBindings, vg1) ->
-                                    let (tagVar, vg2) = ANF.freshVar vg1
-                                    let tagExpr = ANF.TupleGet (argAtom, 0)
-                                    let (isSuccessVar, vg3) = ANF.freshVar vg2
-                                    let isSuccessExpr =
-                                        ANF.Prim (
-                                            ANF.Eq,
-                                            ANF.Var tagVar,
-                                            ANF.IntLiteral (ANF.Int64 (int64 successTag))
-                                        )
-                                    let (safeContainerVar, vg4) = ANF.freshVar vg3
-                                    let safeContainerExpr =
-                                        ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
-                                    let (rawPayloadVar, vg5) = ANF.freshVar vg4
-                                    // If the tag check failed, safeContainerVar is 0 and this deref crashes.
-                                    let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
-                                    let (typedPayloadVar, vg6) = ANF.freshVar vg5
-                                    let typedPayloadExpr =
-                                        ANF.TypedAtom (
-                                            ANF.Var rawPayloadVar,
-                                            if containsTypeVar payloadType then AST.TUnit else payloadType
-                                        )
-                                    let bindings =
-                                        argBindings
-                                        @ [
-                                            (tagVar, tagExpr)
-                                            (isSuccessVar, isSuccessExpr)
-                                            (safeContainerVar, safeContainerExpr)
-                                            (rawPayloadVar, rawPayloadExpr)
-                                            (typedPayloadVar, typedPayloadExpr)
-                                        ]
-                                    (ANF.Var typedPayloadVar, bindings, vg6))))
-                    | AST.TSum ("Stdlib.Result.Result", [okType; _]) ->
-                        lookupVariantInfo "Stdlib.Result.Result" "Ok"
-                        |> Result.bind (fun (successTag, _) ->
-                            toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
-                            |> Result.map (fun (argAtom, argBindings, vg1) ->
-                                let (tagVar, vg2) = ANF.freshVar vg1
-                                let tagExpr = ANF.TupleGet (argAtom, 0)
-                                let (isSuccessVar, vg3) = ANF.freshVar vg2
-                                let isSuccessExpr =
-                                    ANF.Prim (
-                                        ANF.Eq,
-                                        ANF.Var tagVar,
-                                        ANF.IntLiteral (ANF.Int64 (int64 successTag))
-                                    )
-                                let (safeContainerVar, vg4) = ANF.freshVar vg3
-                                let safeContainerExpr =
-                                    ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
-                                let (rawPayloadVar, vg5) = ANF.freshVar vg4
-                                // If the tag check failed, safeContainerVar is 0 and this deref crashes.
-                                let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
-                                let (typedPayloadVar, vg6) = ANF.freshVar vg5
-                                let typedPayloadExpr =
-                                    ANF.TypedAtom (
-                                        ANF.Var rawPayloadVar,
-                                        if containsTypeVar okType then AST.TUnit else okType
-                                    )
-                                let bindings =
-                                    argBindings
-                                    @ [
-                                        (tagVar, tagExpr)
-                                        (isSuccessVar, isSuccessExpr)
-                                        (safeContainerVar, safeContainerExpr)
-                                        (rawPayloadVar, rawPayloadExpr)
-                                        (typedPayloadVar, typedPayloadExpr)
-                                    ]
-                                (ANF.Var typedPayloadVar, bindings, vg6)))
-                    | AST.TSum ("Stdlib.Result.Result", []) ->
-                        lookupVariantInfo "Stdlib.Result.Result" "Ok"
-                        |> Result.bind (fun (successTag, payloadTypeOpt) ->
-                            let payloadTypeResult =
-                                match argExpr with
-                                | AST.Constructor (_, "Ok", Some payloadExpr) ->
-                                    inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
-                                | _ ->
-                                    match payloadTypeOpt with
-                                    | Some payloadType -> Ok payloadType
-                                    | None ->
-                                        Error "Builtin.unwrap expected payload-bearing variant Ok for Stdlib.Result.Result"
-                            payloadTypeResult
-                            |> Result.bind (fun payloadType ->
-                                toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
-                                |> Result.map (fun (argAtom, argBindings, vg1) ->
-                                    let (tagVar, vg2) = ANF.freshVar vg1
-                                    let tagExpr = ANF.TupleGet (argAtom, 0)
-                                    let (isSuccessVar, vg3) = ANF.freshVar vg2
-                                    let isSuccessExpr =
-                                        ANF.Prim (
-                                            ANF.Eq,
-                                            ANF.Var tagVar,
-                                            ANF.IntLiteral (ANF.Int64 (int64 successTag))
-                                        )
-                                    let (safeContainerVar, vg4) = ANF.freshVar vg3
-                                    let safeContainerExpr =
-                                        ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
-                                    let (rawPayloadVar, vg5) = ANF.freshVar vg4
-                                    // If the tag check failed, safeContainerVar is 0 and this deref crashes.
-                                    let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
-                                    let (typedPayloadVar, vg6) = ANF.freshVar vg5
-                                    let typedPayloadExpr =
-                                        ANF.TypedAtom (
-                                            ANF.Var rawPayloadVar,
-                                            if containsTypeVar payloadType then AST.TUnit else payloadType
-                                        )
-                                    let bindings =
-                                        argBindings
-                                        @ [
-                                            (tagVar, tagExpr)
-                                            (isSuccessVar, isSuccessExpr)
-                                            (safeContainerVar, safeContainerExpr)
-                                            (rawPayloadVar, rawPayloadExpr)
-                                            (typedPayloadVar, typedPayloadExpr)
-                                        ]
-                                    (ANF.Var typedPayloadVar, bindings, vg6))))
-                    | _ ->
-                        Error $"Internal error: Builtin.unwrap should have been typechecked as Option/Result, got {typeToString argType}")
-            | _ ->
-                Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length args}"
+            Error "Internal error: Builtin.unwrap should be lowered via toANF, not toAtom"
         else
             // Function call in atom position: convert all arguments to atoms
             let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
@@ -6879,6 +6687,41 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
 
         | _ ->
             Error $"Complex function application in atom position not yet supported: {func}"
+
+/// Replace Return sites in an AExpr with a continuation expression.
+and bindReturns (expr: ANF.AExpr) (k: ANF.Atom -> ANF.AExpr) : ANF.AExpr =
+    match expr with
+    | ANF.Return atom ->
+        k atom
+    | ANF.Let (id, cexpr, rest) ->
+        ANF.Let (id, cexpr, bindReturns rest k)
+    | ANF.If (cond, thenBranch, elseBranch) ->
+        ANF.If (cond, bindReturns thenBranch k, bindReturns elseBranch k)
+
+/// Convert an expression to an ANF expression that returns a stable atom variable.
+/// Falls back to full toANF when the expression cannot be lowered directly to toAtom.
+and toANFBoundAtom
+    (expr: AST.Expr)
+    (varGen: ANF.VarGen)
+    (env: VarEnv)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (funcReg: FunctionRegistry)
+    (moduleRegistry: AST.ModuleRegistry)
+    : Result<ANF.AExpr * ANF.Atom * ANF.VarGen, string> =
+    match toAtom expr varGen env typeReg variantLookup funcReg moduleRegistry with
+    | Ok (atom, bindings, vg1) ->
+        // Keep existing atom lowering behavior unchanged when toAtom succeeds:
+        // do not introduce extra temp ids in the common path.
+        Ok (wrapBindings bindings (ANF.Return atom), atom, vg1)
+    | Error _ ->
+        let (boundVar, vg1) = ANF.freshVar varGen
+        toANF expr vg1 env typeReg variantLookup funcReg moduleRegistry
+        |> Result.map (fun (exprA, vg2) ->
+            let boundExpr =
+                bindReturns exprA (fun atom ->
+                    ANF.Let (boundVar, ANF.Atom atom, ANF.Return (ANF.Var boundVar)))
+            (boundExpr, ANF.Var boundVar, vg2))
 
 /// Wrap let bindings around an expression
 and wrapBindings (bindings: (ANF.TempId * ANF.CExpr) list) (expr: ANF.AExpr) : ANF.AExpr =
