@@ -93,4 +93,8 @@ def Stdlib.Char.toCode(c: String) : Int64 =
 def Stdlib.Char.fromCode(code: Int64) : String =
     Stdlib.String.fromCodepoints([code])
 
+// Convert a Char value to String (identity at runtime representation level)
+def Stdlib.Char.toString(c: String) : String =
+    c
+
 // =============================================================================

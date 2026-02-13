@@ -251,12 +251,20 @@ let lex (input: string) : Result<Token list, string> =
                 match afterInt with
                 | 'L' :: rest ->
                     parseInt64OrError rest
+                | 'Q' :: rest ->
+                    // Upstream interpreter syntax uses Q suffix for Int128 literals.
+                    // Until Int128 is supported, accept Q where value fits Int64.
+                    parseInt64OrError rest
                 | 'y' :: rest ->
                     parseSizedIntOrError "Int8" System.SByte.TryParse TInt8 rest
                 | 's' :: rest ->
                     parseSizedIntOrError "Int16" System.Int16.TryParse TInt16 rest
                 | 'l' :: rest ->
                     parseSizedIntOrError "Int32" System.Int32.TryParse TInt32 rest
+                | 'Z' :: rest ->
+                    // Upstream interpreter syntax uses Z suffix for UInt128 literals.
+                    // Until UInt128 is supported, accept Z where value fits UInt64.
+                    parseSizedIntOrError "UInt64" System.UInt64.TryParse TUInt64 rest
                 | 'u' :: 'y' :: rest ->
                     parseSizedIntOrError "UInt8" System.Byte.TryParse TUInt8 rest
                 | 'u' :: 's' :: rest ->
@@ -460,7 +468,7 @@ let lex (input: string) : Result<Token list, string> =
 
     input |> Seq.toList |> fun cs -> lexHelper cs []
 
-/// Parse function type parameters: type, type, ...) returning list and remaining tokens
+/// Parse function type parameters: type, type, ...) or type * type * ...)
 let rec parseFunctionTypeParams (typeParams: Set<string>) (tokens: Token list) (acc: Type list) : Result<Type list * Token list, string> =
     match tokens with
     | TRParen :: rest ->
@@ -473,7 +481,8 @@ let rec parseFunctionTypeParams (typeParams: Set<string>) (tokens: Token list) (
             match remaining with
             | TRParen :: rest -> Ok (List.rev (ty :: acc), rest)
             | TComma :: rest -> parseFunctionTypeParams typeParams rest (ty :: acc)
-            | _ -> Error "Expected ',' or ')' in function type parameters")
+            | TStar :: rest -> parseFunctionTypeParams typeParams rest (ty :: acc)
+            | _ -> Error "Expected ',', '*', or ')' in function type parameters")
 
 /// Base type parser (no function types - used to parse function type components)
 and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type * Token list, string> =
@@ -566,7 +575,20 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
 
 /// Parse a type annotation with context for type parameters in scope
 and parseTypeWithContext (typeParams: Set<string>) (tokens: Token list) : Result<Type * Token list, string> =
+    let rec parseTupleTail (acc: Type list) (remaining: Token list) : Result<Type * Token list, string> =
+        match remaining with
+        | TStar :: rest ->
+            parseTypeBase typeParams rest
+            |> Result.bind (fun (nextType, afterNext) ->
+                parseTupleTail (nextType :: acc) afterNext)
+        | _ ->
+            let allTypes = List.rev acc
+            match allTypes with
+            | [single] -> Ok (single, remaining)
+            | _ -> Ok (TTuple allTypes, remaining)
     parseTypeBase typeParams tokens
+    |> Result.bind (fun (firstType, remaining) ->
+        parseTupleTail [firstType] remaining)
 
 /// Parse a type annotation (no type parameters in scope)
 let parseType (tokens: Token list) : Result<Type * Token list, string> =
@@ -861,46 +883,60 @@ let parseTypeDef (tokens: Token list) : Result<TypeDef * Token list, string> =
                 parseVariantsWithContext typeParams bodyRest [firstVariant]
                 |> Result.map (fun (variants, remaining) ->
                     (SumTypeDef (typeName, typeParams, variants), remaining))
+            | TEquals :: TBar :: bodyRest ->
+                // Sum type where the first variant starts on the next line:
+                // type Name =
+                //   | Variant1
+                //   | Variant2 of Type
+                parseVariantsWithContext typeParams bodyRest []
+                |> Result.map (fun (variants, remaining) ->
+                    (SumTypeDef (typeName, typeParams, variants), remaining))
             | TEquals :: rest' ->
                 // Could be a type alias or a single-variant sum type
                 // Try to parse as a type first
-                let typeParamSet = Set.ofList typeParams
-                match parseTypeWithContext typeParamSet rest' with
-                | Ok (targetType, remaining) ->
-                    // Decide: type alias or single-variant sum type?
-                    // Rules:
-                    // 1. Primitive types (Int64, String, etc.) → TYPE ALIAS
-                    // 2. Generic types (List<T>, Result<T,E>) → TYPE ALIAS
-                    // 3. Tuple types ((T, U)) → TYPE ALIAS
-                    // 4. Function types ((T) -> U) → TYPE ALIAS
-                    // 5. Simple name (TRecord):
-                    //    - Same name as type being defined → SUM TYPE (recursive variant)
-                    //    - End of input → SUM TYPE (backwards compat for single-variant enums)
-                    //    - Otherwise → TYPE ALIAS (reference to existing type)
-                    match targetType with
-                    | TRecord (potentialVariant, _) when potentialVariant = typeName ->
-                        // Same name as type being defined - this is a recursive variant definition
-                        // e.g., type Unit2 = Unit2 defines a sum type with variant Unit2
-                        let variant = { Name = potentialVariant; Payload = None }
-                        Ok (SumTypeDef (typeName, typeParams, [variant]), remaining)
-                    | TRecord (potentialVariant, _) when
-                        // Not a primitive type and at end of input - treat as sum type for backwards compat
-                        potentialVariant <> "Int64" && potentialVariant <> "Int32" && potentialVariant <> "Int16" && potentialVariant <> "Int8" &&
-                        potentialVariant <> "UInt64" && potentialVariant <> "UInt32" && potentialVariant <> "UInt16" && potentialVariant <> "UInt8" &&
-                        potentialVariant <> "Bool" && potentialVariant <> "String" && potentialVariant <> "Float" &&
-                        (match remaining with [] -> true | _ -> false) ->
-                        let variant = { Name = potentialVariant; Payload = None }
-                        Ok (SumTypeDef (typeName, typeParams, [variant]), remaining)
-                    | _ ->
-                        // Type alias for:
-                        // - Primitive types (parsed as TInt64, TString, etc. directly by parseType)
-                        // - Generic types (TSum with type args, TList)
-                        // - Tuple types (TTuple)
-                        // - Function types (TFunction)
-                        // - User types with remaining tokens (assumed to be alias to existing type)
-                        Ok (TypeAlias (typeName, typeParams, targetType), remaining)
-                | Error _ ->
-                    Error "Expected type expression after '=' in type alias or variant name"
+                match rest' with
+                | TBar :: variantRest ->
+                    parseVariantsWithContext typeParams variantRest []
+                    |> Result.map (fun (variants, remaining) ->
+                        (SumTypeDef (typeName, typeParams, variants), remaining))
+                | _ ->
+                    let typeParamSet = Set.ofList typeParams
+                    match parseTypeWithContext typeParamSet rest' with
+                    | Ok (targetType, remaining) ->
+                        // Decide: type alias or single-variant sum type?
+                        // Rules:
+                        // 1. Primitive types (Int64, String, etc.) → TYPE ALIAS
+                        // 2. Generic types (List<T>, Result<T,E>) → TYPE ALIAS
+                        // 3. Tuple types ((T, U)) → TYPE ALIAS
+                        // 4. Function types ((T) -> U) → TYPE ALIAS
+                        // 5. Simple name (TRecord):
+                        //    - Same name as type being defined → SUM TYPE (recursive variant)
+                        //    - End of input → SUM TYPE (backwards compat for single-variant enums)
+                        //    - Otherwise → TYPE ALIAS (reference to existing type)
+                        match targetType with
+                        | TRecord (potentialVariant, _) when potentialVariant = typeName ->
+                            // Same name as type being defined - this is a recursive variant definition
+                            // e.g., type Unit2 = Unit2 defines a sum type with variant Unit2
+                            let variant = { Name = potentialVariant; Payload = None }
+                            Ok (SumTypeDef (typeName, typeParams, [variant]), remaining)
+                        | TRecord (potentialVariant, _) when
+                            // Not a primitive type and at end of input - treat as sum type for backwards compat
+                            potentialVariant <> "Int64" && potentialVariant <> "Int32" && potentialVariant <> "Int16" && potentialVariant <> "Int8" &&
+                            potentialVariant <> "UInt64" && potentialVariant <> "UInt32" && potentialVariant <> "UInt16" && potentialVariant <> "UInt8" &&
+                            potentialVariant <> "Bool" && potentialVariant <> "String" && potentialVariant <> "Float" &&
+                            (match remaining with [] -> true | _ -> false) ->
+                            let variant = { Name = potentialVariant; Payload = None }
+                            Ok (SumTypeDef (typeName, typeParams, [variant]), remaining)
+                        | _ ->
+                            // Type alias for:
+                            // - Primitive types (parsed as TInt64, TString, etc. directly by parseType)
+                            // - Generic types (TSum with type args, TList)
+                            // - Tuple types (TTuple)
+                            // - Function types (TFunction)
+                            // - User types with remaining tokens (assumed to be alias to existing type)
+                            Ok (TypeAlias (typeName, typeParams, targetType), remaining)
+                    | Error _ ->
+                        Error "Expected type expression after '=' in type alias or variant name"
             | _ -> Error "Expected '=' after type name in type definition"
         match afterName with
         | TLt :: rest' ->
@@ -1085,7 +1121,7 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
             // Unit pattern: ()
             Ok (PUnit, rest)
         | TLParen :: rest ->
-            // Tuple pattern: (a, b, c)
+            // Parenthesized pattern or tuple pattern: (p) / (a, b, c)
             parseTuplePattern rest []
         | TLBrace :: _ ->
             // Anonymous record pattern is no longer supported
@@ -1096,6 +1132,14 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         | TIdent typeName :: TLBrace :: rest when System.Char.IsUpper(typeName.[0]) ->
             // Record pattern with type name: Point { x = a, y = b }
             parseRecordPatternWithTypeName typeName rest []
+        | TIdent name :: TLParen :: rest when System.Char.IsUpper(name.[0]) ->
+            // Constructor with parenthesized payload pattern: Some(x), Ok((a, b))
+            parsePattern rest
+            |> Result.bind (fun (payloadPattern, remaining) ->
+                match remaining with
+                | TRParen :: rest' ->
+                    Ok (PConstructor (name, Some payloadPattern), rest')
+                | _ -> Error "Expected ')' after constructor pattern payload")
         | TIdent name :: rest when System.Char.IsUpper(name.[0]) ->
             // Constructor pattern, optionally with interpreter-style payload: Some x
             if canStartPatternPayload rest then
@@ -1131,9 +1175,11 @@ and parseTuplePattern (tokens: Token list) (acc: Pattern list) : Result<Pattern 
     |> Result.bind (fun (pat, remaining) ->
         match remaining with
         | TRParen :: rest ->
-            // End of tuple pattern
+            // End of parenthesized / tuple pattern
             let patterns = List.rev (pat :: acc)
-            Ok (PTuple patterns, rest)
+            match patterns with
+            | [single] -> Ok (single, rest)
+            | _ -> Ok (PTuple patterns, rest)
         | TComma :: rest ->
             // More elements
             parseTuplePattern rest (pat :: acc)
@@ -1975,6 +2021,20 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TDef :: _ ->
             // Parse function definition
             parseFunctionDef toks parseExpr
+            |> Result.bind (fun (funcDef, remaining) ->
+                parseTopLevels remaining (FunctionDef funcDef :: acc))
+
+        | TLet :: TIdent firstName :: TLParen :: rest ->
+            // Interpreter-style top-level function definition:
+            // let name(args) : ReturnType = body
+            parseFunctionDef (TDef :: TIdent firstName :: TLParen :: rest) parseExpr
+            |> Result.bind (fun (funcDef, remaining) ->
+                parseTopLevels remaining (FunctionDef funcDef :: acc))
+
+        | TLet :: TIdent firstName :: TLt :: rest ->
+            // Interpreter-style generic top-level function definition:
+            // let name<t>(args) : ReturnType = body
+            parseFunctionDef (TDef :: TIdent firstName :: TLt :: rest) parseExpr
             |> Result.bind (fun (funcDef, remaining) ->
                 parseTopLevels remaining (FunctionDef funcDef :: acc))
 

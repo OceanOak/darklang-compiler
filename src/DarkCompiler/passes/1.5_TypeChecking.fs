@@ -523,9 +523,16 @@ let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list,
     | TUInt64 -> matchConcrete TUInt64 actual
     | TBool -> matchConcrete TBool actual
     | TFloat64 -> matchConcrete TFloat64 actual
-    | TString -> matchConcrete TString actual
+    | TString ->
+        // Char and String share runtime representation.
+        match actual with
+        | TChar -> Ok []
+        | _ -> matchConcrete TString actual
     | TBytes -> matchConcrete TBytes actual
-    | TChar -> matchConcrete TChar actual
+    | TChar ->
+        match actual with
+        | TString -> Ok []
+        | _ -> matchConcrete TChar actual
     | TUnit -> matchConcrete TUnit actual
     | TRawPtr -> matchConcrete TRawPtr actual
     | TList patternElem ->
@@ -680,6 +687,10 @@ let reconcileTypes (aliasReg: AliasRegistry option) (t1: Type) (t2: Type) : Type
 
     if t1' = t2' then
         Some t1'
+    elif t1' = TString && t2' = TChar then
+        Some TString
+    elif t1' = TChar && t2' = TString then
+        Some TChar
     elif containsTVar t1' && not (containsTVar t2') then
         // t2 is concrete, check if t1 can unify with it
         match unifyTypes t1' t2' with
@@ -853,7 +864,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | StringExpr e :: rest ->
                 checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
                 |> Result.bind (fun (partType, checkedExpr) ->
-                    if partType = TString then
+                    if partType = TString || partType = TChar then
                         checkParts rest (StringExpr checkedExpr :: checkedParts)
                     else
                         Error (TypeMismatch (TString, partType, "interpolated expression")))
@@ -1002,12 +1013,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         | StringConcat ->
             checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
             |> Result.bind (fun (leftType, left') ->
-                if leftType <> TString then
+                let isStringLike t = t = TString || t = TChar
+                if not (isStringLike leftType) then
                     Error (InvalidOperation ("++", [leftType]))
                 else
                     checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
                     |> Result.bind (fun (rightType, right') ->
-                        if rightType <> TString then
+                        if not (isStringLike rightType) then
                             Error (TypeMismatch (TString, rightType, "right operand of ++"))
                         else
                             match expectedType with

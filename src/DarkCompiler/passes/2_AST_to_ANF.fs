@@ -4738,9 +4738,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.BoolLiteral b)
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PString s ->
-                    // String comparison - for now just compare as atoms
+                    // String patterns must use byte-wise equality, not pointer equality.
                     let (cmpVar, vg1) = ANF.freshVar vg
-                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.StringLiteral s)
+                    let cmpExpr = ANF.Call ("__string_eq", [scrutAtom; ANF.StringLiteral s])
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PFloat f ->
                     let (cmpVar, vg1) = ANF.freshVar vg
