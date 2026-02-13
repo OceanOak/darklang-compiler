@@ -68,7 +68,22 @@ let main args =
         let fulldir = Path.Combine(testDataRoot, dir)
         Directory.GetFiles(fulldir, $"*.{suffix}", SearchOption.AllDirectories)
 
-    let e2eTestFiles = getTestFiles "e2e" "e2e"
+    let upstreamEifDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "eif.dark")
+    if not (File.Exists upstreamEifDarkPath) then
+        Crash.crash $"Missing required upstream dark test file: {upstreamEifDarkPath}"
+
+    let includeUpstreamEifDark =
+        match filter with
+        | None -> false
+        | Some pattern ->
+            let loweredPattern = pattern.Trim().ToLowerInvariant()
+            upstreamEifDarkPath.ToLowerInvariant().Contains(loweredPattern)
+
+    let e2eTestFiles =
+        Array.append
+            (getTestFiles "e2e" "e2e")
+            (if includeUpstreamEifDark then [| upstreamEifDarkPath |] else [||])
     let verificationTestFiles = getTestFiles "verification" "e2e"
     let optTestFiles = getTestFiles "optimization" "opt"
     let typecheckTestFiles = getTestFiles "typecheck" "typecheck"
@@ -98,6 +113,7 @@ let main args =
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
         { Name = "Syntax Interop Tests"; Tests = SyntaxInteropTests.tests }
+        { Name = "E2E Format Tests"; Tests = E2EFormatTests.tests }
     |]
 
     let enableVerification = verificationEnabled
@@ -146,6 +162,10 @@ let main args =
             | Ok parsed -> tests.AddRange(parsed)
             | Error msg -> parseErrors <- (testFile, msg) :: parseErrors
         (tests.ToArray(), List.rev parseErrors)
+
+    let matchesE2EFilter (test: E2ETest) : bool =
+        matchesFilter filter test.Name
+        || matchesFilter filter test.SourceFile
 
     let reportParseErrors (suiteName: string) (parseErrors: (string * string) list) : unit =
         for (filePath, msg) in parseErrors do
@@ -596,7 +616,7 @@ let main args =
                 if allE2ETests.Length > 0 then
                     let testsArray =
                         allE2ETests
-                        |> Array.filter (fun test -> matchesFilter filter test.Name)
+                        |> Array.filter matchesE2EFilter
                     if testsArray.Length > 0 then
                         let timingText = $"(Stdlib compiled in {formatTime elapsed})"
                         println $"  {Colors.gray}{timingText}{Colors.reset}"
@@ -619,7 +639,7 @@ let main args =
                 if allVerifTests.Length > 0 then
                     let testsArray =
                         allVerifTests
-                        |> Array.filter (fun test -> matchesFilter filter test.Name)
+                        |> Array.filter matchesE2EFilter
                     if testsArray.Length > 0 then
                         runE2ESuite baseStdlib "Verification" "Verification" testsArray
 

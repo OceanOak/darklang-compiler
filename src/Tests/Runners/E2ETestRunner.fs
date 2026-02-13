@@ -18,7 +18,8 @@ let private isInternalTestFile (sourceFile: string) : bool =
 // Choose parser syntax from the test suite directory.
 let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.SourceSyntax =
     let normalized = sourceFile.Replace('\\', '/')
-    if normalized.Contains("/interpreter/") then
+    if normalized.Contains("/interpreter/")
+       || normalized.Contains("/e2e/upstream/language/") then
         CompilerLibrary.InterpreterSyntax
     else
         CompilerLibrary.CompilerSyntax

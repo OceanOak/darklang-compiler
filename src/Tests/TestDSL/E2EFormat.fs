@@ -170,7 +170,7 @@ let private isExpectationStart (rest: string) : bool =
     if trimmed.Length = 0 then false
     elif Char.IsDigit(trimmed.[0]) || trimmed.[0] = '-' then true
     elif trimmed.[0] = '"' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
-    elif Char.IsLower(trimmed.[0]) then true
+    elif Char.IsLetter(trimmed.[0]) then true
     elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
     else false
 
@@ -643,9 +643,15 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                     // Accumulating multi-line expression
                     pendingExprLines <- line :: pendingExprLines
 
-                    // Check if this line closes the expression: ) = <expectation>
-                    let lineWithoutComment = stripComment trimmedLine
-                    if hasClosingParenTest lineWithoutComment then
+                    // Check whether the accumulated expression now has a closing
+                    // ') = <expectation>' pattern. This supports expectations that
+                    // appear on the next line after the '=' token.
+                    let accumulatedWithoutComments =
+                        pendingExprLines
+                        |> List.rev
+                        |> List.map stripComment
+                        |> String.concat "\n"
+                    if hasClosingParenTest accumulatedWithoutComments then
                         // Combine all accumulated lines and parse as multi-line test
                         let fullExpr = String.concat "\n" (List.rev pendingExprLines)
                         let preamble = String.concat "\n" (List.rev preambleLines)
