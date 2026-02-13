@@ -127,6 +127,7 @@ type CExpr =
     | RefCountDec of Atom * payloadSize:int    // Decrement ref count, free if zero
     // Output operations (for main expression result)
     | Print of Atom * AST.Type                 // Print value with type-appropriate formatting
+    | RuntimeError of message:string           // Print runtime error to stderr and exit with code 1
     // File I/O intrinsics (generate syscalls)
     | FileReadText of path:Atom               // Read file, returns Result<String, String>
     | FileExists of path:Atom                 // Check if file exists, returns Bool

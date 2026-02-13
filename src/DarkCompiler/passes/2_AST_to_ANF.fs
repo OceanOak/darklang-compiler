@@ -227,6 +227,27 @@ let tryDateIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option
         Some ANF.DateNow
     | _ -> None
 
+let isBuiltinUnwrapName (funcName: string) : bool =
+    funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
+
+let private unwrapErrorPayloadToString (expr: AST.Expr) : string option =
+    match expr with
+    | AST.UnitLiteral -> Some "()"
+    | AST.Int64Literal n -> Some $"{n}"
+    | AST.Int8Literal n -> Some $"{n}"
+    | AST.Int16Literal n -> Some $"{n}"
+    | AST.Int32Literal n -> Some $"{n}"
+    | AST.UInt8Literal n -> Some $"{n}"
+    | AST.UInt16Literal n -> Some $"{n}"
+    | AST.UInt32Literal n -> Some $"{n}"
+    | AST.UInt64Literal n -> Some $"{n}"
+    | AST.BoolLiteral true -> Some "true"
+    | AST.BoolLiteral false -> Some "false"
+    | AST.FloatLiteral f -> Some $"{f}"
+    | AST.StringLiteral s -> Some s
+    | AST.CharLiteral s -> Some s
+    | _ -> None
+
 /// Type registry - maps record type names to their field definitions
 type TypeRegistry = Map<string, (string * AST.Type) list>
 
@@ -2802,71 +2823,100 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             let typeEnv' = Map.fold (fun m k v -> Map.add k v m) typeEnv patBindings
             inferType mc.Body typeEnv' typeReg variantLookup funcReg moduleRegistry
         | [] -> Error "Empty match expression"
-    | AST.Call (funcName, _) ->
-        // Look up function return type from the function registry
-        match Map.tryFind funcName funcReg with
-        | Some (AST.TFunction (_, returnType)) -> Ok returnType
-        | Some _ -> Error $"Expected function type for {funcName} in funcReg"
-        | None ->
-            // Check if it's a function parameter (variable with function type)
-            match Map.tryFind funcName typeEnv with
-            | Some (AST.TFunction (_, returnType)) -> Ok returnType
+    | AST.Call (funcName, args) ->
+        if isBuiltinUnwrapName funcName then
+            match args with
+            | [argExpr] ->
+                inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun argType ->
+                    match argType with
+                    | AST.TSum ("Stdlib.Option.Option", [valueType]) -> Ok valueType
+                    | AST.TSum ("Stdlib.Result.Result", [okType; _]) -> Ok okType
+                    | AST.TSum ("Stdlib.Option.Option", []) ->
+                        match argExpr with
+                        | AST.Constructor (_, "Some", Some payloadExpr) ->
+                            inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                        | _ ->
+                            // Type args may be unavailable in ANF inferType.
+                            // Use Unit to avoid leaking unresolved type variables into later passes.
+                            Ok AST.TUnit
+                    | AST.TSum ("Stdlib.Result.Result", []) ->
+                        match argExpr with
+                        | AST.Constructor (_, "Ok", Some payloadExpr) ->
+                            inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                        | _ ->
+                            // Type args may be unavailable in ANF inferType.
+                            // Use Unit to avoid leaking unresolved type variables into later passes.
+                            Ok AST.TUnit
+                    | _ ->
+                        Error $"Internal error: Builtin.unwrap expects Option/Result argument, got {typeToString argType}")
             | _ ->
-            // Check if it's a module function (e.g., Stdlib.File.exists)
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry funcName with
-            | Some (moduleFunc, _) -> Ok moduleFunc.ReturnType
+                Error $"Internal error: Builtin.unwrap expects 1 argument, got {List.length args}"
+        else
+            // Look up function return type from the function registry
+            match Map.tryFind funcName funcReg with
+            | Some (AST.TFunction (_, returnType)) -> Ok returnType
+            | Some _ -> Error $"Expected function type for {funcName} in funcReg"
             | None ->
-                // Check if it's a monomorphized intrinsic (e.g., __raw_get_i64)
-                // These are raw memory operations that work with 8-byte values
-                if funcName.StartsWith("__raw_get_") then
-                    // __raw_get<T> returns T, but at ANF level it's just Int64 (8 bytes)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__raw_set_") then
-                    // __raw_set<T> returns Unit
-                    Ok AST.TUnit
-                // Key intrinsics for Dict - monomorphized versions
-                elif funcName.StartsWith("__hash_") then
-                    // __hash<k> returns Int64 (hash value)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__key_eq_") then
-                    // __key_eq<k> returns Bool (equality check)
-                    Ok AST.TBool
-                // Dict intrinsics - monomorphized versions
-                elif funcName.StartsWith("__empty_dict_") then
-                    // __empty_dict<k, v> returns Dict<k, v> - but at ANF level it's Int64 (null ptr)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__dict_is_null_") then
-                    // __dict_is_null<k, v> returns Bool
-                    Ok AST.TBool
-                elif funcName.StartsWith("__dict_get_tag_") then
-                    // __dict_get_tag<k, v> returns Int64 (tag bits)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__dict_to_rawptr_") then
-                    // __dict_to_rawptr<k, v> returns RawPtr (as Int64)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__rawptr_to_dict_") then
-                    // __rawptr_to_dict<k, v> returns Dict<k, v> (as Int64)
-                    Ok AST.TInt64
-                // List intrinsics - monomorphized versions for Finger Tree
-                elif funcName.StartsWith("__list_is_null_") then
-                    // __list_is_null<a> returns Bool
-                    Ok AST.TBool
-                elif funcName.StartsWith("__list_get_tag_") then
-                    // __list_get_tag<a> returns Int64 (tag bits)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__list_to_rawptr_") then
-                    // __list_to_rawptr<a> returns RawPtr (as Int64)
-                    Ok AST.TInt64
-                elif funcName.StartsWith("__rawptr_to_list_") then
-                    // __rawptr_to_list<a> returns List<a> - parse element type from mangled name
-                    let suffix = funcName.Substring("__rawptr_to_list_".Length)
-                    tryParseMangledType variantLookup suffix
-                    |> Result.map AST.TList
-                elif funcName.StartsWith("__list_empty_") then
-                    // __list_empty<a> returns List<a> - but at ANF level it's Int64 (null ptr)
-                    Ok AST.TInt64
-                else
-                    Error $"Unknown function: '{funcName}'"
+                // Check if it's a function parameter (variable with function type)
+                match Map.tryFind funcName typeEnv with
+                | Some (AST.TFunction (_, returnType)) -> Ok returnType
+                | _ ->
+                // Check if it's a module function (e.g., Stdlib.File.exists)
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry funcName with
+                | Some (moduleFunc, _) -> Ok moduleFunc.ReturnType
+                | None ->
+                    // Check if it's a monomorphized intrinsic (e.g., __raw_get_i64)
+                    // These are raw memory operations that work with 8-byte values
+                    if funcName.StartsWith("__raw_get_") then
+                        // __raw_get<T> returns T, but at ANF level it's just Int64 (8 bytes)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__raw_set_") then
+                        // __raw_set<T> returns Unit
+                        Ok AST.TUnit
+                    // Key intrinsics for Dict - monomorphized versions
+                    elif funcName.StartsWith("__hash_") then
+                        // __hash<k> returns Int64 (hash value)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__key_eq_") then
+                        // __key_eq<k> returns Bool (equality check)
+                        Ok AST.TBool
+                    // Dict intrinsics - monomorphized versions
+                    elif funcName.StartsWith("__empty_dict_") then
+                        // __empty_dict<k, v> returns Dict<k, v> - but at ANF level it's Int64 (null ptr)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__dict_is_null_") then
+                        // __dict_is_null<k, v> returns Bool
+                        Ok AST.TBool
+                    elif funcName.StartsWith("__dict_get_tag_") then
+                        // __dict_get_tag<k, v> returns Int64 (tag bits)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__dict_to_rawptr_") then
+                        // __dict_to_rawptr<k, v> returns RawPtr (as Int64)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__rawptr_to_dict_") then
+                        // __rawptr_to_dict<k, v> returns Dict<k, v> (as Int64)
+                        Ok AST.TInt64
+                    // List intrinsics - monomorphized versions for Finger Tree
+                    elif funcName.StartsWith("__list_is_null_") then
+                        // __list_is_null<a> returns Bool
+                        Ok AST.TBool
+                    elif funcName.StartsWith("__list_get_tag_") then
+                        // __list_get_tag<a> returns Int64 (tag bits)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__list_to_rawptr_") then
+                        // __list_to_rawptr<a> returns RawPtr (as Int64)
+                        Ok AST.TInt64
+                    elif funcName.StartsWith("__rawptr_to_list_") then
+                        // __rawptr_to_list<a> returns List<a> - parse element type from mangled name
+                        let suffix = funcName.Substring("__rawptr_to_list_".Length)
+                        tryParseMangledType variantLookup suffix
+                        |> Result.map AST.TList
+                    elif funcName.StartsWith("__list_empty_") then
+                        // __list_empty<a> returns List<a> - but at ANF level it's Int64 (null ptr)
+                        Ok AST.TInt64
+                    else
+                        Error $"Unknown function: '{funcName}'"
     | AST.TypeApp (_funcName, _typeArgs, _args) ->
         // Generic function call - not yet implemented
         Error "Generic function calls not yet implemented"
@@ -3202,6 +3252,124 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | ANF.Let (id, cexpr, rest) -> ANF.Let (id, cexpr, transformReturns rest)
                             | ANF.If (c, t, e) -> ANF.If (c, transformReturns t, transformReturns e)
                         (transformReturns condExpr, varGen4))))
+
+    | AST.Call (funcName, args) when isBuiltinUnwrapName funcName ->
+        match args with
+        | [argExpr] ->
+            let typeEnv = typeEnvFromVarEnv env
+            inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+            |> Result.bind (fun argType ->
+                let lookupVariantInfo (expectedTypeName: string) (variantName: string) : Result<int * AST.Type option, string> =
+                    match Map.tryFind variantName variantLookup with
+                    | Some (typeName, _, tag, payloadTypeOpt) when typeName = expectedTypeName ->
+                        Ok (tag, payloadTypeOpt)
+                    | Some (typeName, _, _, _) ->
+                        Error $"Builtin.unwrap expected variant {variantName} in {expectedTypeName}, got {typeName}"
+                    | None ->
+                        Error $"Builtin.unwrap could not find variant tag for {expectedTypeName}.{variantName}"
+
+                let buildUnwrapExpr (successTag: int) (payloadType: AST.Type) (failureMessage: string) : Result<ANF.AExpr * ANF.VarGen, string> =
+                    toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                    |> Result.map (fun (argAtom0, argBindings0, vg1) ->
+                        let (argAtom, argBindings, vg2) =
+                            match argAtom0 with
+                            | ANF.Var _ -> (argAtom0, argBindings0, vg1)
+                            | _ ->
+                                let (argVar, vg') = ANF.freshVar vg1
+                                (ANF.Var argVar, argBindings0 @ [(argVar, ANF.Atom argAtom0)], vg')
+
+                        let (tagVar, vg3) = ANF.freshVar vg2
+                        let (isSuccessVar, vg4) = ANF.freshVar vg3
+                        let tagBindings = [
+                            (tagVar, ANF.TupleGet (argAtom, 0))
+                            (isSuccessVar, ANF.Prim (ANF.Eq, ANF.Var tagVar, ANF.IntLiteral (ANF.Int64 (int64 successTag))))
+                        ]
+
+                        let normalizedPayloadType =
+                            if containsTypeVar payloadType then AST.TUnit else payloadType
+
+                        let (payloadVar, vg5) = ANF.freshVar vg4
+                        let (typedPayloadVar, vg6) = ANF.freshVar vg5
+                        let thenBranch =
+                            ANF.Let (
+                                payloadVar,
+                                ANF.TupleGet (argAtom, 1),
+                                ANF.Let (
+                                    typedPayloadVar,
+                                    ANF.TypedAtom (ANF.Var payloadVar, normalizedPayloadType),
+                                    ANF.Return (ANF.Var typedPayloadVar)
+                                )
+                            )
+
+                        let (printVar, vg7) = ANF.freshVar vg6
+                        let elseBranch =
+                            ANF.Let (
+                                printVar,
+                                ANF.RuntimeError failureMessage,
+                                ANF.Return ANF.UnitLiteral
+                            )
+
+                        let ifExpr = ANF.If (ANF.Var isSuccessVar, thenBranch, elseBranch)
+                        let finalExpr = wrapBindings (argBindings @ tagBindings) ifExpr
+                        (finalExpr, vg7))
+
+                match argType with
+                | AST.TSum ("Stdlib.Option.Option", [valueType]) ->
+                    lookupVariantInfo "Stdlib.Option.Option" "Some"
+                    |> Result.bind (fun (successTag, _) ->
+                        buildUnwrapExpr successTag valueType "Cannot unwrap None")
+                | AST.TSum ("Stdlib.Option.Option", []) ->
+                    lookupVariantInfo "Stdlib.Option.Option" "Some"
+                    |> Result.bind (fun (successTag, payloadTypeOpt) ->
+                        let payloadTypeResult =
+                            match argExpr with
+                            | AST.Constructor (_, "Some", Some payloadExpr) ->
+                                inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                            | _ ->
+                                match payloadTypeOpt with
+                                | Some payloadType -> Ok payloadType
+                                | None -> Ok AST.TUnit
+                        payloadTypeResult
+                        |> Result.bind (fun payloadType ->
+                            buildUnwrapExpr successTag payloadType "Cannot unwrap None"))
+                | AST.TSum ("Stdlib.Result.Result", [okType; _]) ->
+                    lookupVariantInfo "Stdlib.Result.Result" "Ok"
+                    |> Result.bind (fun (successTag, _) ->
+                        let failureMessage =
+                            match argExpr with
+                            | AST.Constructor (_, "Error", Some payloadExpr) ->
+                                match unwrapErrorPayloadToString payloadExpr with
+                                | Some payloadText -> $"Cannot unwrap Error: {payloadText}"
+                                | None -> "Cannot unwrap Error"
+                            | _ ->
+                                "Cannot unwrap Error"
+                        buildUnwrapExpr successTag okType failureMessage)
+                | AST.TSum ("Stdlib.Result.Result", []) ->
+                    lookupVariantInfo "Stdlib.Result.Result" "Ok"
+                    |> Result.bind (fun (successTag, payloadTypeOpt) ->
+                        let payloadTypeResult =
+                            match argExpr with
+                            | AST.Constructor (_, "Ok", Some payloadExpr) ->
+                                inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                            | _ ->
+                                match payloadTypeOpt with
+                                | Some payloadType -> Ok payloadType
+                                | None -> Ok AST.TUnit
+                        let failureMessage =
+                            match argExpr with
+                            | AST.Constructor (_, "Error", Some payloadExpr) ->
+                                match unwrapErrorPayloadToString payloadExpr with
+                                | Some payloadText -> $"Cannot unwrap Error: {payloadText}"
+                                | None -> "Cannot unwrap Error"
+                            | _ ->
+                                "Cannot unwrap Error"
+                        payloadTypeResult
+                        |> Result.bind (fun payloadType ->
+                            buildUnwrapExpr successTag payloadType failureMessage))
+                | _ ->
+                    Error $"Internal error: Builtin.unwrap should have been typechecked as Option/Result, got {typeToString argType}")
+        | _ ->
+            Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length args}"
 
     | AST.Call (funcName, args) ->
         // Function call: convert all arguments to atoms
@@ -5920,77 +6088,264 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     Ok (ANF.Var tempVar, allBindings, varGen4))))
 
     | AST.Call (funcName, args) ->
-        // Function call in atom position: convert all arguments to atoms
-        let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-            match argExprs with
-            | [] -> Ok (List.rev accAtoms, accBindings, vg)
-            | arg :: rest ->
-                toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
-                |> Result.bind (fun (argAtom, argBindings, vg') ->
-                    convertArgs rest vg' (argAtom :: accAtoms) (accBindings @ argBindings))
+        if isBuiltinUnwrapName funcName then
+            match args with
+            | [argExpr] ->
+                let typeEnv = typeEnvFromVarEnv env
+                inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun argType ->
+                    let lookupVariantInfo (expectedTypeName: string) (variantName: string) : Result<int * AST.Type option, string> =
+                        match Map.tryFind variantName variantLookup with
+                        | Some (typeName, _, tag, payloadTypeOpt) when typeName = expectedTypeName ->
+                            Ok (tag, payloadTypeOpt)
+                        | Some (typeName, _, _, _) ->
+                            Error $"Builtin.unwrap expected variant {variantName} in {expectedTypeName}, got {typeName}"
+                        | None ->
+                            Error $"Builtin.unwrap could not find variant tag for {expectedTypeName}.{variantName}"
 
-        convertArgs args varGen [] []
-        |> Result.bind (fun (argAtoms, argBindings, varGen1) ->
-            // Create a temporary for the call result
-            let (tempVar, varGen2) = ANF.freshVar varGen1
-            // Check if funcName is a variable (indirect call) or a defined function (direct call)
-            match Map.tryFind funcName env with
-            | Some (tempId, AST.TFunction (_, _)) ->
-                // Variable with function type - use closure call
-                // All function values are now closures (even non-capturing ones)
-                let callCExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
-                let allBindings = argBindings @ [(tempVar, callCExpr)]
-                Ok (ANF.Var tempVar, allBindings, varGen2)
-            | Some (_, varType) ->
-                // Variable exists but is not a function type
-                Error $"Cannot call '{funcName}' - it has type {varType}, not a function type"
-            | None ->
-                // Not a variable - check if it's a file intrinsic first
-                match tryFileIntrinsic funcName argAtoms with
-                | Some intrinsicExpr ->
-                    // File I/O intrinsic call
-                    let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
+                    match argType with
+                    | AST.TSum ("Stdlib.Option.Option", [valueType]) ->
+                        lookupVariantInfo "Stdlib.Option.Option" "Some"
+                        |> Result.bind (fun (successTag, _) ->
+                            toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                            |> Result.map (fun (argAtom, argBindings, vg1) ->
+                                let (tagVar, vg2) = ANF.freshVar vg1
+                                let tagExpr = ANF.TupleGet (argAtom, 0)
+                                let (isSuccessVar, vg3) = ANF.freshVar vg2
+                                let isSuccessExpr =
+                                    ANF.Prim (
+                                        ANF.Eq,
+                                        ANF.Var tagVar,
+                                        ANF.IntLiteral (ANF.Int64 (int64 successTag))
+                                    )
+                                let (safeContainerVar, vg4) = ANF.freshVar vg3
+                                let safeContainerExpr =
+                                    ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
+                                let (rawPayloadVar, vg5) = ANF.freshVar vg4
+                                // If the tag check failed, safeContainerVar is 0 and this deref crashes.
+                                let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
+                                let (typedPayloadVar, vg6) = ANF.freshVar vg5
+                                let typedPayloadExpr =
+                                    ANF.TypedAtom (
+                                        ANF.Var rawPayloadVar,
+                                        if containsTypeVar valueType then AST.TUnit else valueType
+                                    )
+                                let bindings =
+                                    argBindings
+                                    @ [
+                                        (tagVar, tagExpr)
+                                        (isSuccessVar, isSuccessExpr)
+                                        (safeContainerVar, safeContainerExpr)
+                                        (rawPayloadVar, rawPayloadExpr)
+                                        (typedPayloadVar, typedPayloadExpr)
+                                    ]
+                                (ANF.Var typedPayloadVar, bindings, vg6)))
+                    | AST.TSum ("Stdlib.Option.Option", []) ->
+                        lookupVariantInfo "Stdlib.Option.Option" "Some"
+                        |> Result.bind (fun (successTag, payloadTypeOpt) ->
+                            let payloadTypeResult =
+                                match argExpr with
+                                | AST.Constructor (_, "Some", Some payloadExpr) ->
+                                    inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                                | _ ->
+                                    match payloadTypeOpt with
+                                    | Some payloadType -> Ok payloadType
+                                    | None ->
+                                        Error "Builtin.unwrap expected payload-bearing variant Some for Stdlib.Option.Option"
+                            payloadTypeResult
+                            |> Result.bind (fun payloadType ->
+                                toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                                |> Result.map (fun (argAtom, argBindings, vg1) ->
+                                    let (tagVar, vg2) = ANF.freshVar vg1
+                                    let tagExpr = ANF.TupleGet (argAtom, 0)
+                                    let (isSuccessVar, vg3) = ANF.freshVar vg2
+                                    let isSuccessExpr =
+                                        ANF.Prim (
+                                            ANF.Eq,
+                                            ANF.Var tagVar,
+                                            ANF.IntLiteral (ANF.Int64 (int64 successTag))
+                                        )
+                                    let (safeContainerVar, vg4) = ANF.freshVar vg3
+                                    let safeContainerExpr =
+                                        ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
+                                    let (rawPayloadVar, vg5) = ANF.freshVar vg4
+                                    // If the tag check failed, safeContainerVar is 0 and this deref crashes.
+                                    let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
+                                    let (typedPayloadVar, vg6) = ANF.freshVar vg5
+                                    let typedPayloadExpr =
+                                        ANF.TypedAtom (
+                                            ANF.Var rawPayloadVar,
+                                            if containsTypeVar payloadType then AST.TUnit else payloadType
+                                        )
+                                    let bindings =
+                                        argBindings
+                                        @ [
+                                            (tagVar, tagExpr)
+                                            (isSuccessVar, isSuccessExpr)
+                                            (safeContainerVar, safeContainerExpr)
+                                            (rawPayloadVar, rawPayloadExpr)
+                                            (typedPayloadVar, typedPayloadExpr)
+                                        ]
+                                    (ANF.Var typedPayloadVar, bindings, vg6))))
+                    | AST.TSum ("Stdlib.Result.Result", [okType; _]) ->
+                        lookupVariantInfo "Stdlib.Result.Result" "Ok"
+                        |> Result.bind (fun (successTag, _) ->
+                            toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                            |> Result.map (fun (argAtom, argBindings, vg1) ->
+                                let (tagVar, vg2) = ANF.freshVar vg1
+                                let tagExpr = ANF.TupleGet (argAtom, 0)
+                                let (isSuccessVar, vg3) = ANF.freshVar vg2
+                                let isSuccessExpr =
+                                    ANF.Prim (
+                                        ANF.Eq,
+                                        ANF.Var tagVar,
+                                        ANF.IntLiteral (ANF.Int64 (int64 successTag))
+                                    )
+                                let (safeContainerVar, vg4) = ANF.freshVar vg3
+                                let safeContainerExpr =
+                                    ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
+                                let (rawPayloadVar, vg5) = ANF.freshVar vg4
+                                // If the tag check failed, safeContainerVar is 0 and this deref crashes.
+                                let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
+                                let (typedPayloadVar, vg6) = ANF.freshVar vg5
+                                let typedPayloadExpr =
+                                    ANF.TypedAtom (
+                                        ANF.Var rawPayloadVar,
+                                        if containsTypeVar okType then AST.TUnit else okType
+                                    )
+                                let bindings =
+                                    argBindings
+                                    @ [
+                                        (tagVar, tagExpr)
+                                        (isSuccessVar, isSuccessExpr)
+                                        (safeContainerVar, safeContainerExpr)
+                                        (rawPayloadVar, rawPayloadExpr)
+                                        (typedPayloadVar, typedPayloadExpr)
+                                    ]
+                                (ANF.Var typedPayloadVar, bindings, vg6)))
+                    | AST.TSum ("Stdlib.Result.Result", []) ->
+                        lookupVariantInfo "Stdlib.Result.Result" "Ok"
+                        |> Result.bind (fun (successTag, payloadTypeOpt) ->
+                            let payloadTypeResult =
+                                match argExpr with
+                                | AST.Constructor (_, "Ok", Some payloadExpr) ->
+                                    inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                                | _ ->
+                                    match payloadTypeOpt with
+                                    | Some payloadType -> Ok payloadType
+                                    | None ->
+                                        Error "Builtin.unwrap expected payload-bearing variant Ok for Stdlib.Result.Result"
+                            payloadTypeResult
+                            |> Result.bind (fun payloadType ->
+                                toAtom argExpr varGen env typeReg variantLookup funcReg moduleRegistry
+                                |> Result.map (fun (argAtom, argBindings, vg1) ->
+                                    let (tagVar, vg2) = ANF.freshVar vg1
+                                    let tagExpr = ANF.TupleGet (argAtom, 0)
+                                    let (isSuccessVar, vg3) = ANF.freshVar vg2
+                                    let isSuccessExpr =
+                                        ANF.Prim (
+                                            ANF.Eq,
+                                            ANF.Var tagVar,
+                                            ANF.IntLiteral (ANF.Int64 (int64 successTag))
+                                        )
+                                    let (safeContainerVar, vg4) = ANF.freshVar vg3
+                                    let safeContainerExpr =
+                                        ANF.Prim (ANF.Mul, argAtom, ANF.Var isSuccessVar)
+                                    let (rawPayloadVar, vg5) = ANF.freshVar vg4
+                                    // If the tag check failed, safeContainerVar is 0 and this deref crashes.
+                                    let rawPayloadExpr = ANF.TupleGet (ANF.Var safeContainerVar, 1)
+                                    let (typedPayloadVar, vg6) = ANF.freshVar vg5
+                                    let typedPayloadExpr =
+                                        ANF.TypedAtom (
+                                            ANF.Var rawPayloadVar,
+                                            if containsTypeVar payloadType then AST.TUnit else payloadType
+                                        )
+                                    let bindings =
+                                        argBindings
+                                        @ [
+                                            (tagVar, tagExpr)
+                                            (isSuccessVar, isSuccessExpr)
+                                            (safeContainerVar, safeContainerExpr)
+                                            (rawPayloadVar, rawPayloadExpr)
+                                            (typedPayloadVar, typedPayloadExpr)
+                                        ]
+                                    (ANF.Var typedPayloadVar, bindings, vg6))))
+                    | _ ->
+                        Error $"Internal error: Builtin.unwrap should have been typechecked as Option/Result, got {typeToString argType}")
+            | _ ->
+                Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length args}"
+        else
+            // Function call in atom position: convert all arguments to atoms
+            let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+                match argExprs with
+                | [] -> Ok (List.rev accAtoms, accBindings, vg)
+                | arg :: rest ->
+                    toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
+                    |> Result.bind (fun (argAtom, argBindings, vg') ->
+                        convertArgs rest vg' (argAtom :: accAtoms) (accBindings @ argBindings))
+
+            convertArgs args varGen [] []
+            |> Result.bind (fun (argAtoms, argBindings, varGen1) ->
+                // Create a temporary for the call result
+                let (tempVar, varGen2) = ANF.freshVar varGen1
+                // Check if funcName is a variable (indirect call) or a defined function (direct call)
+                match Map.tryFind funcName env with
+                | Some (tempId, AST.TFunction (_, _)) ->
+                    // Variable with function type - use closure call
+                    // All function values are now closures (even non-capturing ones)
+                    let callCExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
+                    let allBindings = argBindings @ [(tempVar, callCExpr)]
                     Ok (ANF.Var tempVar, allBindings, varGen2)
+                | Some (_, varType) ->
+                    // Variable exists but is not a function type
+                    Error $"Cannot call '{funcName}' - it has type {varType}, not a function type"
                 | None ->
-                    // Check if it's a raw memory intrinsic
-                    match tryRawMemoryIntrinsic funcName argAtoms with
+                    // Not a variable - check if it's a file intrinsic first
+                    match tryFileIntrinsic funcName argAtoms with
                     | Some intrinsicExpr ->
-                        // Raw memory intrinsic call
+                        // File I/O intrinsic call
                         let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                         Ok (ANF.Var tempVar, allBindings, varGen2)
                     | None ->
-                        // Check if it's a Float intrinsic
-                        match tryFloatIntrinsic funcName argAtoms with
+                        // Check if it's a raw memory intrinsic
+                        match tryRawMemoryIntrinsic funcName argAtoms with
                         | Some intrinsicExpr ->
-                            // Float intrinsic call
+                            // Raw memory intrinsic call
                             let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                             Ok (ANF.Var tempVar, allBindings, varGen2)
                         | None ->
-                            // Check if it's a constant-fold intrinsic (Platform, Path)
-                            match tryConstantFoldIntrinsic funcName argAtoms with
+                            // Check if it's a Float intrinsic
+                            match tryFloatIntrinsic funcName argAtoms with
                             | Some intrinsicExpr ->
-                                // Constant-folded intrinsic
+                                // Float intrinsic call
                                 let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                                 Ok (ANF.Var tempVar, allBindings, varGen2)
                             | None ->
-                                // Check if it's a random intrinsic
-                                match tryRandomIntrinsic funcName argAtoms with
+                                // Check if it's a constant-fold intrinsic (Platform, Path)
+                                match tryConstantFoldIntrinsic funcName argAtoms with
                                 | Some intrinsicExpr ->
-                                    // Random intrinsic call
+                                    // Constant-folded intrinsic
                                     let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                                     Ok (ANF.Var tempVar, allBindings, varGen2)
                                 | None ->
-                                    // Check if it's a date intrinsic
-                                    match tryDateIntrinsic funcName argAtoms with
+                                    // Check if it's a random intrinsic
+                                    match tryRandomIntrinsic funcName argAtoms with
                                     | Some intrinsicExpr ->
-                                        // Date intrinsic call
+                                        // Random intrinsic call
                                         let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
                                         Ok (ANF.Var tempVar, allBindings, varGen2)
                                     | None ->
-                                        // Assume it's a defined function (direct call)
-                                        let callCExpr = ANF.Call (funcName, argAtoms)
-                                        let allBindings = argBindings @ [(tempVar, callCExpr)]
-                                        Ok (ANF.Var tempVar, allBindings, varGen2))
+                                        // Check if it's a date intrinsic
+                                        match tryDateIntrinsic funcName argAtoms with
+                                        | Some intrinsicExpr ->
+                                            // Date intrinsic call
+                                            let allBindings = argBindings @ [(tempVar, intrinsicExpr)]
+                                            Ok (ANF.Var tempVar, allBindings, varGen2)
+                                        | None ->
+                                            // Assume it's a defined function (direct call)
+                                            let callCExpr = ANF.Call (funcName, argAtoms)
+                                            let allBindings = argBindings @ [(tempVar, callCExpr)]
+                                            Ok (ANF.Var tempVar, allBindings, varGen2))
 
     | AST.TypeApp (_, _, _) ->
         // Placeholder: Generic instantiation not yet implemented

@@ -80,6 +80,7 @@ let hasSideEffects (instr: Instr) : bool =
     | RandomInt64 _ -> true  // Syscall
     | DateNow _ -> true      // Syscall
     | FloatToString _ -> false  // Pure conversion (allocates but no visible side effect)
+    | RuntimeError _ -> true
     | CoverageHit _ -> true  // Must not be eliminated (tracking side effect)
 
 /// Get the destination VReg of an instruction (if any)
@@ -127,6 +128,7 @@ let getInstrDest (instr: Instr) : VReg option =
     | RandomInt64 dest -> Some dest
     | DateNow dest -> Some dest
     | FloatToString (dest, _) -> Some dest
+    | RuntimeError _ -> None
     | CoverageHit _ -> None
 
 /// Get all VRegs used by an instruction
@@ -179,6 +181,7 @@ let getInstrUses (instr: Instr) : Set<VReg> =
     | RandomInt64 _ -> Set.empty  // No operand uses
     | DateNow _ -> Set.empty      // No operand uses
     | FloatToString (_, value) -> fromOperand value
+    | RuntimeError _ -> Set.empty
     | CoverageHit _ -> Set.empty  // No operand uses
 
 /// Get VRegs used by terminator
@@ -691,6 +694,7 @@ let propagateCopyInstr (copies: CopyMap) (instr: Instr) : Instr =
     | RandomInt64 dest -> RandomInt64 dest
     | DateNow dest -> DateNow dest
     | FloatToString (dest, value) -> FloatToString (dest, p value)
+    | RuntimeError message -> RuntimeError message
     | CoverageHit exprId -> CoverageHit exprId
 
 /// Apply copy propagation to terminator

@@ -1097,6 +1097,9 @@ let selectInstr
             // Type variables should be monomorphized away before reaching LIR
             Error "Internal error: Type variable reached MIR_to_LIR (should be monomorphized)"
 
+    | MIR.RuntimeError message ->
+        Ok ([LIR.RuntimeError message], state)
+
     | MIR.StringConcat (dest, left, right) ->
         let lirDest = vregToLIRReg dest
         let lirLeft = convertOperand left
@@ -1421,6 +1424,7 @@ let vregIdsFromInstr (instr: MIR.Instr) : int list =
     | MIR.RefCountInc (addr, _) -> [vregId addr]
     | MIR.RefCountDec (addr, _) -> [vregId addr]
     | MIR.Print (src, _) -> vregIdsFromOperand src
+    | MIR.RuntimeError _ -> []
     | MIR.FileReadText (dest, path) -> vregId dest :: vregIdsFromOperand path
     | MIR.FileExists (dest, path) -> vregId dest :: vregIdsFromOperand path
     | MIR.FileWriteText (dest, path, content) -> vregId dest :: (vregIdsFromOperand path @ vregIdsFromOperand content)

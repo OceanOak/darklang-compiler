@@ -2551,6 +2551,7 @@ let applyToInstr (mapping: AllocationResult) (instr: LIR.Instr) : LIR.Instr list
 
     | LIR.PrintFloat freg -> [LIR.PrintFloat freg]
     | LIR.PrintString value -> [LIR.PrintString value]
+    | LIR.RuntimeError message -> [LIR.RuntimeError message]
     | LIR.PrintChars chars -> [LIR.PrintChars chars]
     | LIR.PrintBytes reg ->
         let (regFinal, regLoads) = loadSpilled mapping reg LIR.X12

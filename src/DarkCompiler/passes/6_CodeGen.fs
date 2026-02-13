@@ -1809,6 +1809,24 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
             ARM64Symbolic.ADD_label (ARM64Symbolic.X0, ARM64Symbolic.X0, labelRef)  // Add page offset
         ] @ runtimeInstrs (Runtime.generatePrintString len))
 
+    | LIR.RuntimeError message ->
+        let os =
+            match Platform.detectOS () with
+            | Ok platform -> platform
+            | Error msg -> Crash.crash $"Platform detection failed: {msg}"
+        let syscalls = Platform.getSyscallNumbers os
+        let messageBytes =
+            System.Text.Encoding.UTF8.GetBytes(message)
+            |> Array.toList
+        Ok (
+            runtimeInstrs (Runtime.generatePrintCharsToStderr messageBytes)
+            @ [
+                ARM64Symbolic.MOVZ (ARM64Symbolic.X0, 1us, 0)  // exit code = 1
+                ARM64Symbolic.MOVZ (syscalls.SyscallRegister, syscalls.Exit, 0)
+                ARM64Symbolic.SVC syscalls.SvcImmediate
+            ]
+        )
+
     // Floating-point instructions
     | LIR.FMov (dest, src) ->
         lirFRegToARM64FReg dest

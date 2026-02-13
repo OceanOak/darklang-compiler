@@ -186,6 +186,7 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.RefCountInc (atom, _) -> maxTempIdInAtom atom
     | ANF.RefCountDec (atom, _) -> maxTempIdInAtom atom
     | ANF.Print (atom, _) -> maxTempIdInAtom atom
+    | ANF.RuntimeError _ -> -1
     | ANF.ClosureAlloc (_, captures) ->
         captures |> List.map maxTempIdInAtom |> List.fold max -1
     | ANF.ClosureCall (closure, args) ->
@@ -572,6 +573,7 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.RefCountInc _ -> "RefCountInc"
     | ANF.RefCountDec _ -> "RefCountDec"
     | ANF.Print _ -> "Print"
+    | ANF.RuntimeError _ -> "RuntimeError"
     | ANF.FileReadText _ -> "FileReadText"
     | ANF.FileExists _ -> "FileExists"
     | ANF.FileWriteText _ -> "FileWriteText"
@@ -978,6 +980,8 @@ let rec convertExpr
                 | ANF.Print (atom, valueType) ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.Print (op, valueType)])
+                | ANF.RuntimeError message ->
+                    Ok [MIR.RuntimeError message]
                 | ANF.StringConcat (leftAtom, rightAtom) ->
                     atomToOperand builder leftAtom
                     |> Result.bind (fun leftOp ->
@@ -1590,6 +1594,8 @@ and convertExprToOperand
                 | ANF.Print (atom, valueType) ->
                     atomToOperand builder atom
                     |> Result.map (fun op -> [MIR.Print (op, valueType)])
+                | ANF.RuntimeError message ->
+                    Ok [MIR.RuntimeError message]
                 | ANF.StringConcat (leftAtom, rightAtom) ->
                     atomToOperand builder leftAtom
                     |> Result.bind (fun leftOp ->

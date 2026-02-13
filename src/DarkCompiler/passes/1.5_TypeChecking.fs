@@ -120,6 +120,9 @@ let private ifConditionTypeMismatchMessage (expr: Expr) (actualType: Type) : str
     let actual = describeIfConditionActual expr actualType
     $"Encountered a condition that must be a Bool, but got {withIndefiniteArticle actual}"
 
+let private isBuiltinUnwrapName (funcName: string) : bool =
+    funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
+
 /// Freshen type parameters - generate new unique names for each type param
 /// Returns (fresh type params, substitution map from old to fresh names)
 /// Uses index-based naming for deterministic compilation (no global state)
@@ -1086,8 +1089,50 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
     | Call (funcName, args) ->
         // Function call: look up function signature, check arguments match
         // Use fallback to resolve short names like Option.isSome to Stdlib.Option.isSome
-        match tryLookupWithFallback funcName env with
-        | Some (TFunction (origParamTypes, origReturnType), resolvedFuncName) ->
+        if isBuiltinUnwrapName funcName then
+            match args with
+            | [argExpr] ->
+                checkExpr argExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                |> Result.bind (fun (argType, argExpr') ->
+                    let unwrapTypeResult =
+                        match resolveType aliasReg argType with
+                        | TSum ("Stdlib.Option.Option", [valueType]) -> Ok valueType
+                        | TSum ("Stdlib.Result.Result", [okType; _]) -> Ok okType
+                        | actualType ->
+                            Error (GenericError $"Can only unwrap Options and Results, yet got {typeToString actualType}")
+
+                    unwrapTypeResult
+                    |> Result.bind (fun outputType ->
+                        let isKnownFailureConstructor (expr: Expr) : bool =
+                            match expr with
+                            | Constructor (_, "None", None) -> true
+                            | Constructor (_, "Error", Some _) -> true
+                            | _ -> false
+
+                        // `Option.None |> Builtin.unwrap` and `Result.Error(_) |> Builtin.unwrap`
+                        // are guaranteed runtime failures. When unconstrained, their payload type
+                        // remains a type variable; normalize to Unit to keep IR monomorphic.
+                        let normalizedOutputType =
+                            if isKnownFailureConstructor argExpr' && containsTVar outputType then
+                                TUnit
+                            else
+                                outputType
+
+                        match expectedType with
+                        | Some expected ->
+                            match reconcileTypes (Some aliasReg) expected normalizedOutputType with
+                            | Some reconciledType ->
+                                Ok (reconciledType, Call ("Builtin.unwrap", [argExpr']))
+                            | None ->
+                                Error (TypeMismatch (expected, normalizedOutputType, $"result of call to {funcName}"))
+                        | None ->
+                            Ok (normalizedOutputType, Call ("Builtin.unwrap", [argExpr']))))
+            | _ ->
+                Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
+        else
+            match tryLookupWithFallback funcName env with
+            | Some (TFunction (origParamTypes, origReturnType), resolvedFuncName) ->
+                (
             // Check if this is a generic function - if so, infer type arguments
             match tryLookupWithFallback resolvedFuncName genericFuncReg with
             | Some (origTypeParams, _) ->
@@ -1241,17 +1286,19 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
                     checkArgsWithTypes args origParamTypes []
                     |> Result.bind (fun args' ->
-                        match expectedType with
-                        | Some expected when not (typesCompatibleWithAliases aliasReg expected origReturnType) ->
-                            Error (TypeMismatch (expected, origReturnType, $"result of call to {funcName}"))
-                        | _ -> Ok (origReturnType, Call (resolvedFuncName, args')))
-        | Some (other, _) ->
-            Error (GenericError $"{funcName} is not a function (has type {typeToString other})")
-        | None ->
-            // Check if it's a module function (e.g., Stdlib.Int64.add, __raw_get)
-            let moduleRegistry = Stdlib.buildModuleRegistry ()
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry funcName with
-            | Some (moduleFunc, resolvedFuncName) ->
+                                match expectedType with
+                                | Some expected when not (typesCompatibleWithAliases aliasReg expected origReturnType) ->
+                                    Error (TypeMismatch (expected, origReturnType, $"result of call to {funcName}"))
+                                | _ -> Ok (origReturnType, Call (resolvedFuncName, args')))
+                )
+            | Some (other, _) ->
+                Error (GenericError $"{funcName} is not a function (has type {typeToString other})")
+            | None ->
+                // Check if it's a module function (e.g., Stdlib.Int64.add, __raw_get)
+                let moduleRegistry = Stdlib.buildModuleRegistry ()
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry funcName with
+                | Some (moduleFunc, resolvedFuncName) ->
+                    (
                 // Freshen type params to avoid name clashes with caller's scope
                 let (freshTypeParams, renaming) = freshenTypeParams moduleFunc.TypeParams
                 let paramTypes = moduleFunc.ParamTypes |> List.map (applyTypeVarRenaming renaming)
@@ -1409,8 +1456,9 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | Some expected when not (typesCompatibleWithAliases aliasReg expected returnType) ->
                             Error (TypeMismatch (expected, returnType, $"result of call to {funcName}"))
                         | _ -> Ok (returnType, Call (resolvedFuncName, args')))
-            | None ->
-                Error (UndefinedVariable funcName)
+                    )
+                | None ->
+                    Error (UndefinedVariable funcName)
 
     | TypeApp (funcName, typeArgs, args) ->
         // Generic function call with explicit type arguments: func<Type1, Type2>(args)

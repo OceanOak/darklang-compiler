@@ -103,6 +103,7 @@ type Instr =
     | PrintFloat of FReg
     | PrintFloatNoNewline of FReg
     | PrintString of string
+    | RuntimeError of string
     | PrintHeapStringNoNewline of Reg
     | PrintChars of byte list
     | PrintBytes of Reg

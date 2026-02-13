@@ -86,6 +86,8 @@ let private prettyPrintANFCExpr = function
         $"{prettyPrintANFAtom left} ++ {prettyPrintANFAtom right}"
     | ANF.Print (atom, valueType) ->
         $"print({prettyPrintANFAtom atom}, type={valueType})"
+    | ANF.RuntimeError message ->
+        $"runtime_error(\"{message}\")"
     | ANF.FileReadText path ->
         $"FileReadText({prettyPrintANFAtom path})"
     | ANF.FileExists path ->
@@ -271,6 +273,8 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         $"RefCountDec({prettyPrintMIRVReg addr}, size={payloadSize})"
     | MIR.Print (src, valueType) ->
         $"Print({prettyPrintMIROperand src}, type={valueType})"
+    | MIR.RuntimeError message ->
+        $"RuntimeError(\"{message}\")"
     | MIR.FileReadText (dest, path) ->
         $"{prettyPrintMIRVReg dest} <- FileReadText({prettyPrintMIROperand path})"
     | MIR.FileExists (dest, path) ->
@@ -519,6 +523,8 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"PrintFloat({prettyPrintLIRFReg freg})"
     | LIR.PrintString value ->
         $"PrintString(str[{value}], len={value.Length})"
+    | LIR.RuntimeError message ->
+        $"RuntimeError(\"{message}\")"
     | LIR.PrintChars chars ->
         let s = chars |> List.map (fun b -> char b) |> System.String.Concat
         $"PrintChars(\"{s}\")"

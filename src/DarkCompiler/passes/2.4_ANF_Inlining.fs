@@ -272,6 +272,7 @@ let renameCExpr (mapping: Map<TempId, TempId>) (cexpr: CExpr) : CExpr =
     | RandomInt64 -> RandomInt64
     | DateNow -> DateNow
     | FloatToString a -> FloatToString (r a)
+    | RuntimeError message -> RuntimeError message
 
 /// Rename all TempIds in an expression, allocating fresh TempIds
 let rec renameExpr (mapping: Map<TempId, TempId>) (varGen: VarGen) (expr: AExpr)

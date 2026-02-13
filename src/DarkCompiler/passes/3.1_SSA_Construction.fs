@@ -274,6 +274,7 @@ let getBlockDefs (block: BasicBlock) : Set<VReg> =
         | RandomInt64 dest -> Set.add dest defs
         | DateNow dest -> Set.add dest defs
         | FloatToString (dest, _) -> Set.add dest defs
+        | RuntimeError _ -> defs
         | CoverageHit _ -> defs  // No destination register
     ) Set.empty
 
@@ -370,6 +371,7 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
             | RandomInt64 _ -> uses  // No operand uses
             | DateNow _ -> uses      // No operand uses
             | FloatToString (_, value) -> Set.union uses (getOperandUses value)
+            | RuntimeError _ -> uses
             | CoverageHit _ -> uses  // No operand uses
         ) Set.empty
 
@@ -837,6 +839,9 @@ let renameInstr (state: RenamingState) (instr: Instr) : Instr * RenamingState =
         let value' = renameOperand state value
         let (_, newDest, state') = newVersion state dest
         (FloatToString (newDest, value'), state')
+
+    | RuntimeError message ->
+        (RuntimeError message, state)
 
     | CoverageHit exprId ->
         (CoverageHit exprId, state)  // No registers to rename

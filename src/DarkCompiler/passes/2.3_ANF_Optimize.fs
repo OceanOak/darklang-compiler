@@ -214,6 +214,7 @@ let hasSideEffects (cexpr: CExpr) : bool =
     | RandomInt64 -> true   // Reads from OS random source
     | DateNow -> true       // Reads current time (syscall)
     | FloatToString _ -> false  // Pure conversion (but allocates - maybe should be true?)
+    | RuntimeError _ -> true
 
 /// Collect all TempIds used in an atom
 let collectAtomUses (atom: Atom) : Set<TempId> =
@@ -271,6 +272,7 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | RandomInt64 -> Set.empty  // No atoms
     | DateNow -> Set.empty      // No atoms
     | FloatToString atom -> collectAtomUses atom
+    | RuntimeError _ -> Set.empty
 
 /// Substitute atom in another atom
 let substAtom (env: Map<TempId, Atom>) (atom: Atom) : Atom =
@@ -324,6 +326,7 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | RandomInt64 -> RandomInt64
     | DateNow -> DateNow
     | FloatToString atom -> FloatToString (s atom)
+    | RuntimeError message -> RuntimeError message
 
 /// Optimize a CExpr with constant folding
 let optimizeCExpr (options: OptimizeOptions) (env: ConstEnv) (cexpr: CExpr) : CExpr * bool =
