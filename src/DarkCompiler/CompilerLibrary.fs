@@ -841,7 +841,11 @@ let analyzePreamble
     (stdlib: StdlibResult)
     (preamble: string)
     : Result<PreambleAnalysis, string> =
-    let preambleSource = preamble + "\n0"
+    let preambleTerminator =
+        match sourceSyntax with
+        | CompilerSyntax -> "0"
+        | InterpreterSyntax -> "0L"
+    let preambleSource = preamble + $"\n{preambleTerminator}"
     (match sourceSyntax with
      | CompilerSyntax -> Parser.parseString allowInternal preambleSource
      | InterpreterSyntax -> InterpreterParser.parseString allowInternal preambleSource)
