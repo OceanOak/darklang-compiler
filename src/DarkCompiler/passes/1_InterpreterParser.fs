@@ -53,6 +53,7 @@ and Token =
     | TElse        // else
     | TDef         // def (function definition)
     | TType        // type (type definition)
+    | TCons        // :: (list cons pattern)
     | TColon       // : (type annotation)
     | TComma       // , (parameter separator)
     | TSemicolon   // ; (interpreter-style list separator)
@@ -122,6 +123,7 @@ let lex (input: string) : Result<Token list, string> =
         | '}' :: rest -> lexHelper rest (TRBrace :: acc)
         | '[' :: rest -> lexHelper rest (TLBracket :: acc)
         | ']' :: rest -> lexHelper rest (TRBracket :: acc)
+        | ':' :: ':' :: rest -> lexHelper rest (TCons :: acc)
         | ':' :: rest -> lexHelper rest (TColon :: acc)
         | ',' :: rest -> lexHelper rest (TComma :: acc)
         | ';' :: rest -> lexHelper rest (TSemicolon :: acc)
@@ -241,10 +243,28 @@ let lex (input: string) : Result<Token list, string> =
                             lexHelper remaining (TInt64 System.Int64.MinValue :: acc)
                         else
                             Error $"Integer literal too large: {numStr}"
+                let parseSizedIntOrError typeName tryParse mkToken remaining : Result<Token list, string> =
+                    match tryParse numStr with
+                    | (true, value) -> lexHelper remaining (mkToken value :: acc)
+                    | (false, _) -> Error $"Integer literal out of range for {typeName}: {numStr}"
 
                 match afterInt with
                 | 'L' :: rest ->
                     parseInt64OrError rest
+                | 'y' :: rest ->
+                    parseSizedIntOrError "Int8" System.SByte.TryParse TInt8 rest
+                | 's' :: rest ->
+                    parseSizedIntOrError "Int16" System.Int16.TryParse TInt16 rest
+                | 'l' :: rest ->
+                    parseSizedIntOrError "Int32" System.Int32.TryParse TInt32 rest
+                | 'u' :: 'y' :: rest ->
+                    parseSizedIntOrError "UInt8" System.Byte.TryParse TUInt8 rest
+                | 'u' :: 's' :: rest ->
+                    parseSizedIntOrError "UInt16" System.UInt16.TryParse TUInt16 rest
+                | 'u' :: 'l' :: rest ->
+                    parseSizedIntOrError "UInt32" System.UInt32.TryParse TUInt32 rest
+                | 'U' :: 'L' :: rest ->
+                    parseSizedIntOrError "UInt64" System.UInt64.TryParse TUInt64 rest
                 | _ ->
                     match acc with
                     | TDot :: _ ->
@@ -1002,84 +1022,109 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         | TMinus :: TInt8 _ :: _
         | TMinus :: TInt16 _ :: _
         | TMinus :: TInt32 _ :: _
+        | TMinus :: TFloat _ :: _
         | TTrue :: _
         | TFalse :: _
         | TStringLit _ :: _
+        | TCharLit _ :: _
         | TFloat _ :: _
         | TLParen :: _
         | TLBracket :: _
         | TIdent _ :: _ -> true
         | _ -> false
 
-    match tokens with
-    | TUnderscore :: rest ->
-        // Wildcard pattern: _
-        Ok (PWildcard, rest)
-    | TInt64 n :: rest ->
-        // Integer literal pattern (Int64)
-        Ok (PInt64 n, rest)
-    | TInt8 n :: rest ->
-        Ok (PInt8Literal n, rest)
-    | TInt16 n :: rest ->
-        Ok (PInt16Literal n, rest)
-    | TInt32 n :: rest ->
-        Ok (PInt32Literal n, rest)
-    | TUInt8 n :: rest ->
-        Ok (PUInt8Literal n, rest)
-    | TUInt16 n :: rest ->
-        Ok (PUInt16Literal n, rest)
-    | TUInt32 n :: rest ->
-        Ok (PUInt32Literal n, rest)
-    | TUInt64 n :: rest ->
-        Ok (PUInt64Literal n, rest)
-    | TMinus :: TInt64 n :: rest ->
-        // Negative integer literal pattern
-        Ok (PInt64 (-n), rest)
-    | TMinus :: TInt8 n :: rest ->
-        Ok (PInt8Literal (sbyte (-int n)), rest)
-    | TMinus :: TInt16 n :: rest ->
-        Ok (PInt16Literal (int16 (-int n)), rest)
-    | TMinus :: TInt32 n :: rest ->
-        Ok (PInt32Literal (-n), rest)
-    | TTrue :: rest ->
-        // Boolean true pattern
-        Ok (PBool true, rest)
-    | TFalse :: rest ->
-        // Boolean false pattern
-        Ok (PBool false, rest)
-    | TStringLit s :: rest ->
-        // String literal pattern
-        Ok (PString s, rest)
-    | TFloat f :: rest ->
-        // Float literal pattern
-        Ok (PFloat f, rest)
-    | TLParen :: TRParen :: rest ->
-        // Unit pattern: ()
-        Ok (PUnit, rest)
-    | TLParen :: rest ->
-        // Tuple pattern: (a, b, c)
-        parseTuplePattern rest []
-    | TLBrace :: _ ->
-        // Anonymous record pattern is no longer supported
-        Error "Record pattern requires type name: use 'TypeName { field = pattern, ... }'"
-    | TLBracket :: rest ->
-        // List pattern: [a, b, c] or []
-        parseListPattern rest []
-    | TIdent typeName :: TLBrace :: rest when System.Char.IsUpper(typeName.[0]) ->
-        // Record pattern with type name: Point { x = a, y = b }
-        parseRecordPatternWithTypeName typeName rest []
-    | TIdent name :: rest when System.Char.IsUpper(name.[0]) ->
-        // Constructor pattern, optionally with interpreter-style payload: Some x
-        if canStartPatternPayload rest then
+    let rec parsePatternBase (toks: Token list) : Result<Pattern * Token list, string> =
+        match toks with
+        | TUnderscore :: rest ->
+            // Wildcard pattern: _
+            Ok (PWildcard, rest)
+        | TInt64 n :: rest ->
+            // Integer literal pattern (Int64)
+            Ok (PInt64 n, rest)
+        | TInt8 n :: rest ->
+            Ok (PInt8Literal n, rest)
+        | TInt16 n :: rest ->
+            Ok (PInt16Literal n, rest)
+        | TInt32 n :: rest ->
+            Ok (PInt32Literal n, rest)
+        | TUInt8 n :: rest ->
+            Ok (PUInt8Literal n, rest)
+        | TUInt16 n :: rest ->
+            Ok (PUInt16Literal n, rest)
+        | TUInt32 n :: rest ->
+            Ok (PUInt32Literal n, rest)
+        | TUInt64 n :: rest ->
+            Ok (PUInt64Literal n, rest)
+        | TMinus :: TInt64 n :: rest ->
+            // Negative integer literal pattern
+            Ok (PInt64 (-n), rest)
+        | TMinus :: TInt8 n :: rest ->
+            Ok (PInt8Literal (sbyte (-int n)), rest)
+        | TMinus :: TInt16 n :: rest ->
+            Ok (PInt16Literal (int16 (-int n)), rest)
+        | TMinus :: TInt32 n :: rest ->
+            Ok (PInt32Literal (-n), rest)
+        | TMinus :: TFloat f :: rest ->
+            Ok (PFloat (-f), rest)
+        | TTrue :: rest ->
+            // Boolean true pattern
+            Ok (PBool true, rest)
+        | TFalse :: rest ->
+            // Boolean false pattern
+            Ok (PBool false, rest)
+        | TStringLit s :: rest ->
+            // String literal pattern
+            Ok (PString s, rest)
+        | TCharLit s :: rest ->
+            // Char patterns share the same runtime representation as string literals.
+            Ok (PString s, rest)
+        | TFloat f :: rest ->
+            // Float literal pattern
+            Ok (PFloat f, rest)
+        | TLParen :: TRParen :: rest ->
+            // Unit pattern: ()
+            Ok (PUnit, rest)
+        | TLParen :: rest ->
+            // Tuple pattern: (a, b, c)
+            parseTuplePattern rest []
+        | TLBrace :: _ ->
+            // Anonymous record pattern is no longer supported
+            Error "Record pattern requires type name: use 'TypeName { field = pattern, ... }'"
+        | TLBracket :: rest ->
+            // List pattern: [a, b, c] or []
+            parseListPattern rest []
+        | TIdent typeName :: TLBrace :: rest when System.Char.IsUpper(typeName.[0]) ->
+            // Record pattern with type name: Point { x = a, y = b }
+            parseRecordPatternWithTypeName typeName rest []
+        | TIdent name :: rest when System.Char.IsUpper(name.[0]) ->
+            // Constructor pattern, optionally with interpreter-style payload: Some x
+            if canStartPatternPayload rest then
+                parsePattern rest
+                |> Result.map (fun (payloadPattern, remaining) ->
+                    (PConstructor (name, Some payloadPattern), remaining))
+            else
+                Ok (PConstructor (name, None), rest)
+        | TIdent name :: rest ->
+            // Variable pattern: x (binds the value)
+            Ok (PVar name, rest)
+        | _ -> Error "Expected pattern (_, variable, literal, or constructor)"
+
+    let rec parseConsTail (headPattern: Pattern) (remaining: Token list) : Result<Pattern * Token list, string> =
+        match remaining with
+        | TCons :: rest ->
             parsePattern rest
-            |> Result.map (fun (payloadPattern, remaining) ->
-                (PConstructor (name, Some payloadPattern), remaining))
-        else
-            Ok (PConstructor (name, None), rest)
-    | TIdent name :: rest ->
-        // Variable pattern: x (binds the value)
-        Ok (PVar name, rest)
-    | _ -> Error "Expected pattern (_, variable, literal, or constructor)"
+            |> Result.map (fun (tailPattern, rest') ->
+                match tailPattern with
+                | PListCons (tailHead, tailRest) ->
+                    (PListCons (headPattern :: tailHead, tailRest), rest')
+                | _ ->
+                    (PListCons ([headPattern], tailPattern), rest'))
+        | _ ->
+            Ok (headPattern, remaining)
+
+    parsePatternBase tokens
+    |> Result.bind (fun (headPattern, remaining) ->
+        parseConsTail headPattern remaining)
 
 and parseTuplePattern (tokens: Token list) (acc: Pattern list) : Result<Pattern * Token list, string> =
     parsePattern tokens
@@ -1252,6 +1297,10 @@ let parse (tokens: Token list) : Result<Program, string> =
             // Supports simple let (let x = ...) and pattern matching (let (a, b) = ...)
             parsePattern rest
             |> Result.bind (fun (pattern, remaining) ->
+                let buildLetExpression (value: Expr) (body: Expr) (remaining'': Token list) =
+                    match pattern with
+                    | PVar name -> (Let (name, value, body), remaining'')
+                    | _ -> (Match (value, [{ Patterns = NonEmptyList.singleton pattern; Guard = None; Body = body }]), remaining'')
                 match remaining with
                 | TEquals :: rest' ->
                     parseExpr rest'
@@ -1260,11 +1309,13 @@ let parse (tokens: Token list) : Result<Program, string> =
                         | TIn :: rest'' ->
                             parseExpr rest''
                             |> Result.map (fun (body, remaining'') ->
-                                // If pattern is just PVar, use Let; otherwise desugar to Match
-                                match pattern with
-                                | PVar name -> (Let (name, value, body), remaining'')
-                                | _ -> (Match (value, [{ Patterns = NonEmptyList.singleton pattern; Guard = None; Body = body }]), remaining''))
-                        | _ -> Error "Expected 'in' after let binding value")
+                                buildLetExpression value body remaining'')
+                        | _ ->
+                            // Upstream interpreter tests allow newline-separated `let` bodies
+                            // without an explicit `in` token.
+                            parseExpr remaining'
+                            |> Result.map (fun (body, remaining'') ->
+                                buildLetExpression value body remaining''))
                 | _ -> Error "Expected '=' after let binding pattern")
         | TIf :: rest ->
             // Parse: if cond then thenBranch [else elseBranch]

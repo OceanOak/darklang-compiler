@@ -68,22 +68,26 @@ let main args =
         let fulldir = Path.Combine(testDataRoot, dir)
         Directory.GetFiles(fulldir, $"*.{suffix}", SearchOption.AllDirectories)
 
-    let upstreamEifDarkPath =
+    let upstreamDarkPaths = [|
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "eif.dark")
-    if not (File.Exists upstreamEifDarkPath) then
-        Crash.crash $"Missing required upstream dark test file: {upstreamEifDarkPath}"
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "ematch.dark")
+    |]
+    for path in upstreamDarkPaths do
+        if not (File.Exists path) then
+            Crash.crash $"Missing required upstream dark test file: {path}"
 
-    let includeUpstreamEifDark =
+    let includeUpstreamDarkPaths =
         match filter with
-        | None -> false
+        | None -> [||]
         | Some pattern ->
             let loweredPattern = pattern.Trim().ToLowerInvariant()
-            upstreamEifDarkPath.ToLowerInvariant().Contains(loweredPattern)
+            upstreamDarkPaths
+            |> Array.filter (fun path -> path.ToLowerInvariant().Contains(loweredPattern))
 
     let e2eTestFiles =
         Array.append
             (getTestFiles "e2e" "e2e")
-            (if includeUpstreamEifDark then [| upstreamEifDarkPath |] else [||])
+            includeUpstreamDarkPaths
     let verificationTestFiles = getTestFiles "verification" "e2e"
     let optTestFiles = getTestFiles "optimization" "opt"
     let typecheckTestFiles = getTestFiles "typecheck" "typecheck"

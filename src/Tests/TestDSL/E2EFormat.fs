@@ -176,6 +176,31 @@ let private isExpectationStart (rest: string) : bool =
     elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("skip") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
     else false
 
+let private stripQuotedContent (s: string) : string =
+    let sb = System.Text.StringBuilder()
+    let mutable i = 0
+    let mutable inQuotes = false
+    while i < s.Length do
+        let c = s.[i]
+        if c = '\\' && i + 1 < s.Length then
+            if inQuotes then
+                // Ignore escaped characters inside quoted sections.
+                i <- i + 2
+            else
+                sb.Append(c) |> ignore
+                sb.Append(s.[i + 1]) |> ignore
+                i <- i + 2
+        elif c = '"' then
+            inQuotes <- not inQuotes
+            sb.Append(' ') |> ignore
+            i <- i + 1
+        elif inQuotes then
+            i <- i + 1
+        else
+            sb.Append(c) |> ignore
+            i <- i + 1
+    sb.ToString()
+
 let private isExpectationCandidate (rest: string) : bool =
     let trimmed = rest.TrimStart()
     if not (isExpectationStart trimmed) then
@@ -191,7 +216,7 @@ let private isExpectationCandidate (rest: string) : bool =
          || trimmed.StartsWith("disable_opt_") then
         true
     else
-        let lowered = trimmed.ToLower()
+        let lowered = stripQuotedContent trimmed |> fun s -> s.ToLowerInvariant()
         let hasKeyword =
             lowered.StartsWith("let ") || lowered.Contains(" let ")
             || lowered.StartsWith("if ") || lowered.Contains(" if ")
@@ -246,13 +271,27 @@ let private parseSimpleStdout (valueText: string) : Result<string, string> =
 
 /// Check if line has ) followed by = <expectation> (for multi-line expression closing)
 let private hasClosingParenTest (s: string) : bool =
+    let isIncompleteExpectationHead (afterEq: string) : bool =
+        let trimmed = afterEq.Trim()
+        if trimmed.Length = 0 then
+            true
+        else
+            let looksLikeBareIdentifierPath =
+                trimmed
+                |> Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '_' || c = '.')
+            looksLikeBareIdentifierPath
+            && trimmed.Contains(".")
+
     let rec findPattern (i: int) =
         if i >= s.Length then false
         elif s.[i] = ')' then
             let rest = s.Substring(i + 1).TrimStart()
             if rest.StartsWith("=") then
                 let afterEq = rest.Substring(1)
-                isExpectationCandidate afterEq
+                if isExpectationCandidate afterEq && not (isIncompleteExpectationHead afterEq) then
+                    true
+                else
+                    findPattern (i + 1)
             else
                 findPattern (i + 1)
         else
@@ -262,12 +301,38 @@ let private hasClosingParenTest (s: string) : bool =
 /// Find the = that separates source from expectations
 /// Returns Some index if this looks like a test line, along with how many matches were seen
 let private findSeparatorIndexAndCount (s: string) : int option * int =
-    let rec findLast (i: int) (inQuotes: bool) (lastEqualsIdx: int option) (count: int) : int option * int =
+    let rec findLast
+        (i: int)
+        (inQuotes: bool)
+        (parenDepth: int)
+        (bracketDepth: int)
+        (braceDepth: int)
+        (lastEqualsIdx: int option)
+        (count: int)
+        : int option * int =
         if i >= s.Length then
             (lastEqualsIdx, count)
+        elif inQuotes && s.[i] = '\\' && i + 1 < s.Length then
+            findLast (i + 2) inQuotes parenDepth bracketDepth braceDepth lastEqualsIdx count
         elif s.[i] = '"' then
-            findLast (i + 1) (not inQuotes) lastEqualsIdx count
-        elif s.[i] = '=' && not inQuotes then
+            findLast (i + 1) (not inQuotes) parenDepth bracketDepth braceDepth lastEqualsIdx count
+        elif not inQuotes && s.[i] = '(' then
+            findLast (i + 1) inQuotes (parenDepth + 1) bracketDepth braceDepth lastEqualsIdx count
+        elif not inQuotes && s.[i] = ')' then
+            findLast (i + 1) inQuotes (max 0 (parenDepth - 1)) bracketDepth braceDepth lastEqualsIdx count
+        elif not inQuotes && s.[i] = '[' then
+            findLast (i + 1) inQuotes parenDepth (bracketDepth + 1) braceDepth lastEqualsIdx count
+        elif not inQuotes && s.[i] = ']' then
+            findLast (i + 1) inQuotes parenDepth (max 0 (bracketDepth - 1)) braceDepth lastEqualsIdx count
+        elif not inQuotes && s.[i] = '{' then
+            findLast (i + 1) inQuotes parenDepth bracketDepth (braceDepth + 1) lastEqualsIdx count
+        elif not inQuotes && s.[i] = '}' then
+            findLast (i + 1) inQuotes parenDepth bracketDepth (max 0 (braceDepth - 1)) lastEqualsIdx count
+        elif s.[i] = '='
+             && not inQuotes
+             && parenDepth = 0
+             && bracketDepth = 0
+             && braceDepth = 0 then
             // Only consider this = as a separator if preceded by whitespace or )
             // This distinguishes "source = expectations" from "exit=139"
             let hasPrecedingSpace = i > 0 && (Char.IsWhiteSpace(s.[i - 1]) || s.[i - 1] = ')')
@@ -275,33 +340,58 @@ let private findSeparatorIndexAndCount (s: string) : int option * int =
                 // Check if this = is followed by an expectation
                 let rest = s.Substring(i + 1)
                 if isExpectationCandidate rest then
-                    findLast (i + 1) inQuotes (Some i) (count + 1)
+                    findLast (i + 1) inQuotes parenDepth bracketDepth braceDepth (Some i) (count + 1)
                 else
-                    findLast (i + 1) inQuotes lastEqualsIdx count
+                    findLast (i + 1) inQuotes parenDepth bracketDepth braceDepth lastEqualsIdx count
             else
-                findLast (i + 1) inQuotes lastEqualsIdx count
+                findLast (i + 1) inQuotes parenDepth bracketDepth braceDepth lastEqualsIdx count
         else
-            findLast (i + 1) inQuotes lastEqualsIdx count
-    findLast 0 false None 0
+            findLast (i + 1) inQuotes parenDepth bracketDepth braceDepth lastEqualsIdx count
+    findLast 0 false 0 0 0 None 0
 
 let private countPotentialSeparators (s: string) : int =
-    let rec countSeparators (i: int) (inQuotes: bool) (count: int) : int =
+    let rec countSeparators
+        (i: int)
+        (inQuotes: bool)
+        (parenDepth: int)
+        (bracketDepth: int)
+        (braceDepth: int)
+        (count: int)
+        : int =
         if i >= s.Length then
             count
+        elif inQuotes && s.[i] = '\\' && i + 1 < s.Length then
+            countSeparators (i + 2) inQuotes parenDepth bracketDepth braceDepth count
         elif s.[i] = '"' then
-            countSeparators (i + 1) (not inQuotes) count
-        elif s.[i] = '=' && not inQuotes then
+            countSeparators (i + 1) (not inQuotes) parenDepth bracketDepth braceDepth count
+        elif not inQuotes && s.[i] = '(' then
+            countSeparators (i + 1) inQuotes (parenDepth + 1) bracketDepth braceDepth count
+        elif not inQuotes && s.[i] = ')' then
+            countSeparators (i + 1) inQuotes (max 0 (parenDepth - 1)) bracketDepth braceDepth count
+        elif not inQuotes && s.[i] = '[' then
+            countSeparators (i + 1) inQuotes parenDepth (bracketDepth + 1) braceDepth count
+        elif not inQuotes && s.[i] = ']' then
+            countSeparators (i + 1) inQuotes parenDepth (max 0 (bracketDepth - 1)) braceDepth count
+        elif not inQuotes && s.[i] = '{' then
+            countSeparators (i + 1) inQuotes parenDepth bracketDepth (braceDepth + 1) count
+        elif not inQuotes && s.[i] = '}' then
+            countSeparators (i + 1) inQuotes parenDepth bracketDepth (max 0 (braceDepth - 1)) count
+        elif s.[i] = '='
+             && not inQuotes
+             && parenDepth = 0
+             && bracketDepth = 0
+             && braceDepth = 0 then
             let hasPrecedingSpace = i > 0 && (Char.IsWhiteSpace(s.[i - 1]) || s.[i - 1] = ')')
             let isDoubleEq =
                 (i + 1 < s.Length && s.[i + 1] = '=')
                 || (i > 0 && s.[i - 1] = '=')
             if hasPrecedingSpace && not isDoubleEq then
-                countSeparators (i + 1) inQuotes (count + 1)
+                countSeparators (i + 1) inQuotes parenDepth bracketDepth braceDepth (count + 1)
             else
-                countSeparators (i + 1) inQuotes count
+                countSeparators (i + 1) inQuotes parenDepth bracketDepth braceDepth count
         else
-            countSeparators (i + 1) inQuotes count
-    countSeparators 0 false 0
+            countSeparators (i + 1) inQuotes parenDepth bracketDepth braceDepth count
+    countSeparators 0 false 0 0 0 0
 
 let private findSeparatorIndex (s: string) : int option =
     let (idx, _) = findSeparatorIndexAndCount s
@@ -638,6 +728,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
         Error $"Test file not found: {path}"
     else
         let lines = System.IO.File.ReadAllLines(path)
+        let allowIndentedTests = path.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
 
         let mutable tests = []
         let mutable errors = []
@@ -648,6 +739,24 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
         let mutable pendingExprLines : string list = []
         let mutable pendingStartLine = 0
         let mutable inMultilineExpr = false
+        let mutable moduleIndentStack : int list = []
+
+        let countLeadingSpaces (lineText: string) : int =
+            let mutable idx = 0
+            while idx < lineText.Length && lineText.[idx] = ' ' do
+                idx <- idx + 1
+            idx
+
+        let trimLeadingSpaces (n: int) (lineText: string) : string =
+            if n <= 0 then
+                lineText
+            else
+                let mutable idx = 0
+                let mutable remaining = n
+                while idx < lineText.Length && remaining > 0 && lineText.[idx] = ' ' do
+                    idx <- idx + 1
+                    remaining <- remaining - 1
+                lineText.Substring(idx)
 
         for i in 0 .. lines.Length - 1 do
             let line = lines.[i]
@@ -683,28 +792,45 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                     let lineWithoutComment = stripComment trimmedLine
 
                     // Check if this starts a multi-line expression: starts with ( but isn't a complete test
-                    // IMPORTANT: Only treat as multi-line start if at column 0 (no indentation)
-                    // Otherwise it's likely a continuation of a function body
                     let isTopLevel = line.Length > 0 && not (Char.IsWhiteSpace(line.[0]))
-                    if isTopLevel && trimmedLine.StartsWith("(") && not (isTestLine lineWithoutComment) then
+                    let mayStartOrBeTest = isTopLevel || allowIndentedTests
+                    if mayStartOrBeTest && trimmedLine.StartsWith("(") && not (isTestLine lineWithoutComment) then
                         // Start accumulating multi-line expression
                         pendingExprLines <- [line]
                         pendingStartLine <- lineNumber
                         inMultilineExpr <- true
-                    elif isTopLevel && isTestLine lineWithoutComment then
+                    elif mayStartOrBeTest && isTestLine lineWithoutComment then
                         // This is a single-line test - parse it with accumulated preamble
                         let preamble = String.concat "\n" (List.rev preambleLines)
                         match parseTestLineWithPreamble trimmedLine lineNumber path preamble functionLineMap with
                         | Ok test -> tests <- test :: tests
                         | Error err -> errors <- err :: errors
                     else
+                        let isDarkModuleDecl =
+                            allowIndentedTests
+                            && (trimmedLine.StartsWith("module ") || trimmedLine.StartsWith("module\t"))
+
+                        if isDarkModuleDecl then
+                            let moduleIndent = countLeadingSpaces line
+                            let rec popToParent (stack: int list) : int list =
+                                match stack with
+                                | top :: rest when moduleIndent <= top -> popToParent rest
+                                | _ -> stack
+                            moduleIndentStack <- moduleIndent :: popToParent moduleIndentStack
+                        else
                         // This is a definition line - add to preamble
                         // Preserve original indentation for multi-line definitions
-                        preambleLines <- line :: preambleLines
-                        // Track function definitions for caching
-                        match extractFuncName line with
-                        | Some funcName -> functionLineMap <- Map.add funcName lineNumber functionLineMap
-                        | None -> ()
+                            let normalizedLine =
+                                if allowIndentedTests then
+                                    let moduleShift = moduleIndentStack.Length * 2
+                                    trimLeadingSpaces moduleShift line
+                                else
+                                    line
+                            preambleLines <- normalizedLine :: preambleLines
+                            // Track function definitions for caching
+                            match extractFuncName normalizedLine with
+                            | Some funcName -> functionLineMap <- Map.add funcName lineNumber functionLineMap
+                            | None -> ()
 
         // Check for unclosed multi-line expression
         if inMultilineExpr then
