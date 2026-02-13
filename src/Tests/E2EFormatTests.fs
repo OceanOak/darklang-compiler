@@ -43,6 +43,28 @@ let testParsesMultilineExpectationOnNextLine () : TestResult =
             | _ ->
                 Error $"Expected exactly 1 parsed test, got {tests.Length}")
 
+let testParsesSkipAttribute () : TestResult =
+    let testSource = "(if true then 1L else 2L) = skip=\"temporarily unsupported\"\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected skip attribute test to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                match test.SkipReason with
+                | Some reason when reason = "temporarily unsupported" ->
+                    Ok ()
+                | Some reason ->
+                    Error $"Expected skip reason 'temporarily unsupported', got '{reason}'"
+                | None ->
+                    Error "Expected skip reason to be parsed"
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}"
+    )
+
 let tests = [
     ("parses multiline expectation on next line", testParsesMultilineExpectationOnNextLine)
+    ("parses skip attribute", testParsesSkipAttribute)
 ]

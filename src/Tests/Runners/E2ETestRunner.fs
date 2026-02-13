@@ -104,7 +104,7 @@ let private collectSpecsFromTests
     : Result<Set<SpecKey>, string> =
     let testsToAnalyze =
         tests
-        |> List.filter (fun test -> not test.ExpectCompileError)
+        |> List.filter (fun test -> not test.ExpectCompileError && Option.isNone test.SkipReason)
     let rec loop remaining acc =
         match remaining with
         | [] -> Ok acc

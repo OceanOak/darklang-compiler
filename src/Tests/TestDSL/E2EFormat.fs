@@ -27,6 +27,8 @@ type E2ETest = {
     ExpectCompileError: bool
     /// Expected error message (substring match) when ExpectCompileError is true
     ExpectedErrorMessage: string option
+    /// If set, test is skipped with this reason
+    SkipReason: string option
     /// Compiler options for disabling optimizations
     DisableFreeList: bool
     DisableANFOpt: bool
@@ -171,7 +173,7 @@ let private isExpectationStart (rest: string) : bool =
     elif Char.IsDigit(trimmed.[0]) || trimmed.[0] = '-' then true
     elif trimmed.[0] = '"' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
     elif Char.IsLetter(trimmed.[0]) then true
-    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
+    elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("skip") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
     else false
 
 let private isExpectationCandidate (rest: string) : bool =
@@ -182,6 +184,7 @@ let private isExpectationCandidate (rest: string) : bool =
          || trimmed.StartsWith("error")
          || trimmed.StartsWith("stdout")
          || trimmed.StartsWith("stderr")
+         || trimmed.StartsWith("skip")
          || trimmed.StartsWith("exit")
          || trimmed.StartsWith("no_free_list")
          || trimmed.StartsWith("disable_leak_check")
@@ -205,6 +208,7 @@ let private isAttributeKey (key: string) : bool =
     | "exit"
     | "stdout"
     | "stderr"
+    | "skip"
     | "no_free_list"
     | "disable_leak_check"
     | "disable_opt_freelist"
@@ -339,22 +343,29 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
         let source = testExpr
         let expectationsStr = lineWithoutComment.Substring(equalsIdx + 1).Trim()
 
-        // Parse expectations - supports simple stdout, attributes, or compiler errors
-        // Returns: (exitCode, stdout, stderr, optFlags, expectError, errorMessage)
-        let parseExpectations (exp: string) : Result<int * string option * string option * OptFlags * bool * string option, string> =
+        // Parse expectations - supports simple stdout, attributes, compiler errors, and skip
+        // Returns: (exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason)
+        let parseExpectations (exp: string) : Result<int * string option * string option * OptFlags * bool * string option * string option, string> =
             let trimmed = exp.Trim()
 
             // Check for "error" keyword (compiler error expected)
             // Supports: error  or  error="message"
             if trimmed.ToLower() = "error" then
                 // Expect compilation to fail with exit code 1, no specific message
-                Ok (1, None, None, defaultOptFlags, true, None)
+                Ok (1, None, None, defaultOptFlags, true, None, None)
             elif trimmed.ToLower().StartsWith("error=") then
                 // error="message" format
                 let msgPart = trimmed.Substring(6)  // Skip "error="
                 match parseStringLiteral msgPart with
-                | Ok msg -> Ok (1, None, None, defaultOptFlags, true, Some msg)
+                | Ok msg -> Ok (1, None, None, defaultOptFlags, true, Some msg, None)
                 | Error e -> Error $"Invalid error message: {e}"
+            elif trimmed.ToLower() = "skip" then
+                Ok (0, None, None, defaultOptFlags, false, None, Some "Skipped by test")
+            elif trimmed.ToLower().StartsWith("skip=") then
+                let reasonPart = trimmed.Substring(5)
+                match parseStringLiteral reasonPart with
+                | Ok reason -> Ok (0, None, None, defaultOptFlags, false, None, Some reason)
+                | Error e -> Error $"Invalid skip reason: {e}"
             else
                 // New format: parse optional stdout plus attributes
                 let mutable exitCode = 0  // default
@@ -362,6 +373,7 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                 let mutable stderr = None
                 let mutable optFlags = defaultOptFlags
                 let mutable expectError = false
+                let mutable skipReason = None
                 let mutable errors = []
 
                 // Helper to parse boolean attribute value
@@ -417,6 +429,10 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                                 match parseStringLiteral value with
                                 | Ok s -> stderr <- Some s
                                 | Error e -> errors <- e :: errors
+                            | "skip" ->
+                                match parseStringLiteral value with
+                                | Ok reason -> skipReason <- Some reason
+                                | Error e -> errors <- $"Invalid skip reason: {e}" :: errors
                             | "no_free_list" ->
                                 match parseBool value "no_free_list" with
                                 | Some b -> optFlags <- { optFlags with DisableFreeList = b }
@@ -520,11 +536,11 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                         | None, None -> Ok None
 
                     match combinedStdout with
-                    | Ok finalStdout -> Ok (exitCode, finalStdout, stderr, optFlags, expectError, None)
+                    | Ok finalStdout -> Ok (exitCode, finalStdout, stderr, optFlags, expectError, None, skipReason)
                     | Error e -> Error e
 
         match parseExpectations expectationsStr with
-        | Ok (exitCode, stdout, stderr, optFlags, expectError, errorMessage) ->
+        | Ok (exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason) ->
             let displayName = comment |> Option.defaultValue source
             Ok {
                 Name = $"L{lineNumber}: {displayName}"
@@ -535,6 +551,7 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                 ExpectedExitCode = exitCode
                 ExpectCompileError = expectError
                 ExpectedErrorMessage = errorMessage
+                SkipReason = skipReason
                 DisableFreeList = optFlags.DisableFreeList
                 DisableANFOpt = optFlags.DisableANFOpt
                 DisableANFConstFolding = optFlags.DisableANFConstFolding
@@ -608,82 +625,6 @@ let private stripComment (line: string) : string =
     let commentIdx = line.IndexOf("//")
     if commentIdx >= 0 then line.Substring(0, commentIdx).Trim()
     else line.Trim()
-
-let private parseTestLineNumber (name: string) : int option =
-    if not (name.StartsWith("L")) then
-        None
-    else
-        let colonIdx = name.IndexOf(':')
-        if colonIdx <= 1 then
-            None
-        else
-            let numberText = name.Substring(1, colonIdx - 1)
-            match Int32.TryParse(numberText) with
-            | true, lineNo -> Some lineNo
-            | false, _ -> None
-
-let private extractDerrorMessage (stdout: string option) : string option =
-    let parseMessage (text: string) : string option =
-        let trimmed = text.Trim()
-        let withoutOuterParens =
-            if trimmed.StartsWith("(") && trimmed.EndsWith(")") then
-                trimmed.Substring(1, trimmed.Length - 2).Trim()
-            else
-                trimmed
-
-        let prefix = "Builtin.testDerrorMessage"
-        if withoutOuterParens.StartsWith(prefix) then
-            let argText = withoutOuterParens.Substring(prefix.Length).Trim()
-            match parseStringLiteral argText with
-            | Ok msg -> Some msg
-            | Error _ -> None
-        else
-            None
-
-    stdout |> Option.bind parseMessage
-
-let private isIfWithoutElse (source: string) : bool =
-    source.Contains("if ")
-    && source.Contains(" then ")
-    && not (source.Contains(" else "))
-
-let private thenBranchIsUnitLiteral (source: string) : bool =
-    source.Contains(" then ()")
-
-let private asCompileErrorExpectation (message: string option) (test: E2ETest) : E2ETest =
-    { test with
-        ExpectedStdout = None
-        ExpectedStderr = None
-        ExpectedExitCode = 1
-        ExpectCompileError = true
-        ExpectedErrorMessage = message }
-
-let private isUpstreamEifFile (path: string) : bool =
-    let normalized = path.Replace('\\', '/')
-    normalized.EndsWith("/src/Tests/e2e/upstream/language/flow-control/eif.dark", StringComparison.OrdinalIgnoreCase)
-
-let private normalizeUpstreamEifTest (test: E2ETest) : E2ETest option =
-    // Keep only the subset we currently support from upstream eif.dark.
-    if test.Source.Contains("Builtin.testRuntimeError") then
-        None
-    else
-        let lineNo = parseTestLineNumber test.Name
-        let derrorMessage = extractDerrorMessage test.ExpectedStdout
-
-        if isIfWithoutElse test.Source && not (thenBranchIsUnitLiteral test.Source) then
-            Some (asCompileErrorExpectation None test)
-        else
-            match lineNo with
-            | Some 1 ->
-                Some (
-                    asCompileErrorExpectation
-                        (Some "Type mismatch in if branches must have same type: expected String, got Int64")
-                        test
-                )
-            | _ ->
-                match derrorMessage with
-                | Some msg -> Some (asCompileErrorExpectation (Some msg) test)
-                | None -> Some test
 
 /// Parse all E2E tests from a single file
 /// Supports preamble definitions that are prepended to all tests.
@@ -781,12 +722,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                     { test with
                         Preamble = fullPreamble
                         FunctionLineMap = fullFunctionLineMap })
-            let finalTests =
-                if isUpstreamEifFile path then
-                    normalizedTests |> List.choose normalizeUpstreamEifTest
-                else
-                    normalizedTests
-            Ok finalTests
+            Ok normalizedTests
 
 /// Parse E2E test from old-format file (for backward compatibility during transition)
 let parseE2ETest (path: string) : Result<E2ETest, string> =

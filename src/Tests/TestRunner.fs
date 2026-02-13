@@ -614,9 +614,18 @@ let main args =
                 reportParseErrors "E2E" parseErrors
 
                 if allE2ETests.Length > 0 then
-                    let testsArray =
+                    let filteredTests =
                         allE2ETests
                         |> Array.filter matchesE2EFilter
+                    let skippedCount =
+                        filteredTests
+                        |> Array.filter (fun test -> Option.isSome test.SkipReason)
+                        |> Array.length
+                    let testsArray =
+                        filteredTests
+                        |> Array.filter (fun test -> Option.isNone test.SkipReason)
+                    if skippedCount > 0 then
+                        println $"  {Colors.gray}Skipping {skippedCount} test(s) marked with skip=\"...\"{Colors.reset}"
                     if testsArray.Length > 0 then
                         let timingText = $"(Stdlib compiled in {formatTime elapsed})"
                         println $"  {Colors.gray}{timingText}{Colors.reset}"
@@ -637,9 +646,18 @@ let main args =
                 reportParseErrors "Verification" parseErrors
 
                 if allVerifTests.Length > 0 then
-                    let testsArray =
+                    let filteredTests =
                         allVerifTests
                         |> Array.filter matchesE2EFilter
+                    let skippedCount =
+                        filteredTests
+                        |> Array.filter (fun test -> Option.isSome test.SkipReason)
+                        |> Array.length
+                    let testsArray =
+                        filteredTests
+                        |> Array.filter (fun test -> Option.isNone test.SkipReason)
+                    if skippedCount > 0 then
+                        println $"  {Colors.gray}Skipping {skippedCount} test(s) marked with skip=\"...\"{Colors.reset}"
                     if testsArray.Length > 0 then
                         runE2ESuite baseStdlib "Verification" "Verification" testsArray
 
@@ -663,12 +681,13 @@ let main args =
                     | Error _ -> ()
                     | Ok tests ->
                         for test in tests do
-                            match CompilerLibrary.getReachableStdlibFunctionsFromStdlib stdlib test.Source with
-                            | Error _ -> ()
-                            | Ok reachable ->
-                                for func in reachable do
-                                    if Set.contains func allStdlibFuncs then
-                                        coveredFuncs.Add(func) |> ignore
+                            if Option.isNone test.SkipReason then
+                                match CompilerLibrary.getReachableStdlibFunctionsFromStdlib stdlib test.Source with
+                                | Error _ -> ()
+                                | Ok reachable ->
+                                    for func in reachable do
+                                        if Set.contains func allStdlibFuncs then
+                                            coveredFuncs.Add(func) |> ignore
                 let totalFuncs = Set.count allStdlibFuncs
                 let coveredCount = coveredFuncs.Count
                 if totalFuncs > 0 then Some (float coveredCount / float totalFuncs * 100.0) else None
