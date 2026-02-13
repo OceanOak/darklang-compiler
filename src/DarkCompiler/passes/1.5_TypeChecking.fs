@@ -86,6 +86,40 @@ let typeErrorToString (err: TypeError) : string =
     | GenericError msg ->
         msg
 
+let private withIndefiniteArticle (s: string) : string =
+    if s.Length = 0 then
+        s
+    else
+        match System.Char.ToLowerInvariant(s.[0]) with
+        | 'a'
+        | 'e'
+        | 'i'
+        | 'o'
+        | 'u' -> $"an {s}"
+        | _ -> $"a {s}"
+
+let private describeIfConditionActual (expr: Expr) (actualType: Type) : string =
+    match expr with
+    | UnitLiteral -> "Unit (())"
+    | Int64Literal i -> $"Int64 ({i})"
+    | Int8Literal i -> $"Int8 ({i})"
+    | Int16Literal i -> $"Int16 ({i})"
+    | Int32Literal i -> $"Int32 ({i})"
+    | UInt8Literal i -> $"UInt8 ({i})"
+    | UInt16Literal i -> $"UInt16 ({i})"
+    | UInt32Literal i -> $"UInt32 ({i})"
+    | UInt64Literal i -> $"UInt64 ({i})"
+    | StringLiteral s -> $"String (\"{s}\")"
+    | CharLiteral s -> $"Char (\"{s}\")"
+    | FloatLiteral f -> $"Float ({f})"
+    | BoolLiteral true -> "Bool (true)"
+    | BoolLiteral false -> "Bool (false)"
+    | _ -> typeToString actualType
+
+let private ifConditionTypeMismatchMessage (expr: Expr) (actualType: Type) : string =
+    let actual = describeIfConditionActual expr actualType
+    $"Encountered a condition that must be a Bool, but got {withIndefiniteArticle actual}"
+
 /// Freshen type parameters - generate new unique names for each type param
 /// Returns (fresh type params, substitution map from old to fresh names)
 /// Uses index-based naming for deterministic compilation (no global state)
@@ -1027,10 +1061,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
     | If (cond, thenBranch, elseBranch) ->
         // If expression: condition must be bool, branches must have same type
-        checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+        checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (condType, cond') ->
             if condType <> TBool then
-                Error (TypeMismatch (TBool, condType, "if condition"))
+                Error (GenericError (ifConditionTypeMismatchMessage cond' condType))
             else
                 checkExpr thenBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
                 |> Result.bind (fun (thenType, then') ->

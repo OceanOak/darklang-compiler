@@ -1276,7 +1276,8 @@ let parse (tokens: Token list) : Result<Program, string> =
                         | _ -> Error "Expected 'in' after let binding value")
                 | _ -> Error "Expected '=' after let binding pattern")
         | TIf :: rest ->
-            // Parse: if cond then thenBranch else elseBranch
+            // Parse: if cond then thenBranch [else elseBranch]
+            // When else is omitted, synthesize unit: if cond then expr  ==>  if cond then expr else ()
             parseExpr rest
             |> Result.bind (fun (cond, remaining) ->
                 match remaining with
@@ -1288,7 +1289,8 @@ let parse (tokens: Token list) : Result<Program, string> =
                             parseExpr rest''
                             |> Result.map (fun (elseBranch, remaining'') ->
                                 (If (cond, thenBranch, elseBranch), remaining''))
-                        | _ -> Error "Expected 'else' after then branch")
+                        | _ ->
+                            Ok (If (cond, thenBranch, UnitLiteral), remaining'))
                 | _ -> Error "Expected 'then' after if condition")
         | TMatch :: rest ->
             // Parse: match scrutinee with | p1 -> e1 | p2 -> e2
