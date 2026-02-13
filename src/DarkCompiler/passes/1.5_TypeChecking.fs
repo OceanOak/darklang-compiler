@@ -123,6 +123,41 @@ let private ifConditionTypeMismatchMessage (expr: Expr) (actualType: Type) : str
 let private isBuiltinUnwrapName (funcName: string) : bool =
     funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
 
+let private variantNameEndsWith (suffix: string) (variantName: string) : bool =
+    variantName = suffix || variantName.EndsWith($".{suffix}")
+
+let private isKnownFailureConstructorExpr (expr: Expr) : bool =
+    match expr with
+    | Constructor (_, variantName, None) when variantNameEndsWith "None" variantName ->
+        true
+    | Constructor (_, variantName, Some _) when variantNameEndsWith "Error" variantName ->
+        true
+    | _ ->
+        false
+
+/// Detect runtime-failing unwrap expressions, including piped/desugared shapes:
+/// let x = Option.None in Builtin.unwrap(x)
+let rec private isKnownUnwrapFailureExpr (boundExprs: Map<string, Expr>) (expr: Expr) : bool =
+    let rec argIsKnownFailure (argExpr: Expr) : bool =
+        if isKnownFailureConstructorExpr argExpr then
+            true
+        else
+            match argExpr with
+            | Var varName ->
+                boundExprs
+                |> Map.tryFind varName
+                |> Option.exists argIsKnownFailure
+            | _ ->
+                false
+
+    match expr with
+    | Call (funcName, [argExpr]) when isBuiltinUnwrapName funcName ->
+        argIsKnownFailure argExpr
+    | Let (name, valueExpr, bodyExpr) ->
+        isKnownUnwrapFailureExpr (Map.add name valueExpr boundExprs) bodyExpr
+    | _ ->
+        false
+
 /// Freshen type parameters - generate new unique names for each type param
 /// Returns (fresh type params, substitution map from old to fresh names)
 /// Uses index-based naming for deterministic compilation (no global state)
@@ -1071,11 +1106,38 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             else
                 checkExpr thenBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
                 |> Result.bind (fun (thenType, then') ->
-                    // Pass expectedType (not thenType) to else branch - reconcileTypes will unify them
-                    // This allows e.g. if true then Some(42) else None to work even when None has unbound TVars
-                    checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
+                    let elseExpectedType =
+                        // If an outer context already provides an expected type, keep using it.
+                        // Otherwise, use the then-branch type to type-check the else-branch.
+                        // This lets bottom-like runtime-failing expressions (e.g. unwrap None)
+                        // inhabit the enclosing branch type.
+                        match expectedType with
+                        | Some outerExpected -> Some outerExpected
+                        | None -> Some thenType
+
+                    checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg elseExpectedType
                     |> Result.bind (fun (elseType, else') ->
-                        match reconcileTypes (Some aliasReg) thenType elseType with
+                        let reconciledBranchType =
+                            match reconcileTypes (Some aliasReg) thenType elseType with
+                            | Some reconciledType ->
+                                Some reconciledType
+                            | None ->
+                                let thenIsKnownFailure =
+                                    isKnownUnwrapFailureExpr Map.empty thenBranch
+                                    || isKnownUnwrapFailureExpr Map.empty then'
+
+                                let elseIsKnownFailure =
+                                    isKnownUnwrapFailureExpr Map.empty elseBranch
+                                    || isKnownUnwrapFailureExpr Map.empty else'
+
+                                if thenIsKnownFailure && not elseIsKnownFailure then
+                                    Some elseType
+                                elif elseIsKnownFailure && not thenIsKnownFailure then
+                                    Some thenType
+                                else
+                                    None
+
+                        match reconciledBranchType with
                         | None ->
                             Error (TypeMismatch (thenType, elseType, "if branches must have same type"))
                         | Some reconciledType ->
@@ -1103,18 +1165,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
                     unwrapTypeResult
                     |> Result.bind (fun outputType ->
-                        let isKnownFailureConstructor (expr: Expr) : bool =
-                            match expr with
-                            | Constructor (_, "None", None) -> true
-                            | Constructor (_, "Error", Some _) -> true
-                            | _ -> false
-
                         // `Option.None |> Builtin.unwrap` and `Result.Error(_) |> Builtin.unwrap`
                         // are guaranteed runtime failures. When unconstrained, their payload type
                         // remains a type variable; normalize to Unit to keep IR monomorphic.
                         let normalizedOutputType =
-                            if isKnownFailureConstructor argExpr' && containsTVar outputType then
-                                TUnit
+                            if isKnownFailureConstructorExpr argExpr' then
+                                match expectedType with
+                                // Bottom-like behavior: if context expects a type, use it.
+                                | Some expected -> expected
+                                // Unconstrained top-level failures still need a concrete type.
+                                | None when containsTVar outputType -> TUnit
+                                | None -> outputType
                             else
                                 outputType
 
