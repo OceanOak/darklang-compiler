@@ -207,18 +207,18 @@ Stdlib.String.endsWith("", "a") = false
 // =============================================================================
 
 // Basic indexOf
-Stdlib.String.indexOf("hello world", "hello") = stdout="Some(0)\n"
-Stdlib.String.indexOf("hello world", "world") = stdout="Some(6)\n"
-Stdlib.String.indexOf("hello world", "o") = stdout="Some(4)\n"
-Stdlib.String.indexOf("hello world", "o w") = stdout="Some(4)\n"
+Stdlib.String.indexOf("hello world", "hello") = Option.Some(0)
+Stdlib.String.indexOf("hello world", "world") = Option.Some(6)
+Stdlib.String.indexOf("hello world", "o") = Option.Some(4)
+Stdlib.String.indexOf("hello world", "o w") = Option.Some(4)
 
 // Not found
-Stdlib.String.indexOf("hello world", "xyz") = stdout="None\n"
-Stdlib.String.indexOf("abc", "d") = stdout="None\n"
+Stdlib.String.indexOf("hello world", "xyz") = Option.None
+Stdlib.String.indexOf("abc", "d") = Option.None
 
 // Empty string search
-Stdlib.String.indexOf("hello", "") = stdout="Some(0)\n"
-Stdlib.String.indexOf("", "") = stdout="Some(0)\n"
+Stdlib.String.indexOf("hello", "") = Option.Some(0)
+Stdlib.String.indexOf("", "") = Option.Some(0)
 
 // =============================================================================
 // Stdlib.String.contains Tests

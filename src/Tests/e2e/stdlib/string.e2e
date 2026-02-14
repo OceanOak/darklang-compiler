@@ -192,14 +192,14 @@ String.endsWith("👨‍❤️‍💋‍👨👩‍👩‍👧‍👦🏳️‍�
 // String.indexOf - Find index of substring (byte-based)
 // ===================================================================
 
-String.indexOf("hello", "l") = stdout="Some(2)\n"
-String.indexOf("hello", "ll") = stdout="Some(2)\n"
-String.indexOf("hello", "o") = stdout="Some(4)\n"
-String.indexOf("hello", "x") = stdout="None\n"
-String.indexOf("hello", "") = stdout="Some(0)\n"
-String.indexOf("", "") = stdout="Some(0)\n"
-String.indexOf("abcabc", "bc") = stdout="Some(1)\n"
-String.indexOf("", "a") = stdout="None\n"
+String.indexOf("hello", "l") = Option.Some(2)
+String.indexOf("hello", "ll") = Option.Some(2)
+String.indexOf("hello", "o") = Option.Some(4)
+String.indexOf("hello", "x") = Option.None
+String.indexOf("hello", "") = Option.Some(0)
+String.indexOf("", "") = Option.Some(0)
+String.indexOf("abcabc", "bc") = Option.Some(1)
+String.indexOf("", "a") = Option.None
 
 // ===================================================================
 // String.slice - Extract substring by start and end index (byte-based, end exclusive)
@@ -416,27 +416,27 @@ String.split("x666666y", "6") = stdout="[\"x\", \"\", \"\", \"\", \"\", \"\", \"
 // String.equals - String equality
 // ===================================================================
 
-String.equals("hello", "hello") = stdout="true"
-String.equals("hello", "world") = stdout="false"
-String.equals("", "") = stdout="true"
-String.equals("Hello", "hello") = stdout="false"
+String.equals("hello", "hello") = true
+String.equals("hello", "world") = false
+String.equals("", "") = true
+String.equals("Hello", "hello") = false
 
 // ===================================================================
 // String.codepointLength - Count Unicode codepoints
 // ===================================================================
 
-String.codepointLength("hello") = stdout="5"
-String.codepointLength("") = stdout="0"
-String.codepointLength("żółw") = stdout="4"
-String.codepointLength("😄") = stdout="1"
+String.codepointLength("hello") = 5
+String.codepointLength("") = 0
+String.codepointLength("żółw") = 4
+String.codepointLength("😄") = 1
 
 // ===================================================================
 // String.graphemeLength - Count grapheme clusters
 // ===================================================================
 
-String.graphemeLength("hello") = stdout="5"
-String.graphemeLength("") = stdout="0"
-String.graphemeLength("😄") = stdout="1"
+String.graphemeLength("hello") = 5
+String.graphemeLength("") = 0
+String.graphemeLength("😄") = 1
 // NOTE: graphemeLength issue with ASCII strings
 // String.graphemeLength("abcdef") = stdout="6\n"
 
@@ -444,7 +444,7 @@ String.graphemeLength("😄") = stdout="1"
 // Our simplified grapheme segmentation doesn't fully handle these
 // String.graphemeLength("🧑🏽‍🦰🧑🏼‍💻🧑🏻‍🍼✋✋🏻✋🏿") = stdout="6\n"
 // String.graphemeLength("Z̤͔ͧ̑̓ä͖̭̈̇lͮ̒ͫǧ̗͚̚o̙̔ͮ̇͐̇") = stdout="5\n"
-String.graphemeLength("﷽﷽﷽﷽﷽") = stdout="5"
+String.graphemeLength("﷽﷽﷽﷽﷽") = 5
 // String.graphemeLength("👱👱🏻👱🏼👱🏽👱🏾👱🏿") = stdout="6\n"
 // String.graphemeLength("🧟‍♀️🧟‍♂️") = stdout="2\n"
 // String.graphemeLength("👨‍❤️‍💋‍👨👩‍👩‍👧‍👦🏳️‍⚧️‍️🇵🇷") = stdout="4\n"
@@ -515,7 +515,7 @@ String.dropLast("abcdef", 3) = "abc"
 // ===================================================================
 
 Option.withDefault<String>(String.head("hello"), "") = "h"
-Option.isNone<String>(String.head("")) = stdout="true"
+Option.isNone<String>(String.head("")) = true
 
 // ===================================================================
 // String.padStart - Pad on the left
