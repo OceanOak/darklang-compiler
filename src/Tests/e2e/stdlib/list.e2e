@@ -107,7 +107,7 @@ Option.isNone<Int64>(List.head<Int64>([])) = true
 List.length(Option.withDefault<List<Int64>>(List.tail([1, 2, 3]), [])) = 2
 Option.isNone<List<Int64>>(List.tail<Int64>([])) = true
 match List.tail([1, 2, 3]) with | Some(t) -> List.length(t) | None -> 0 = 2
-match List.tail([1, 2, 3]) with | Some([a, b]) -> a == 2 && b == 3 | _ -> false = true
+List.tail([1, 2, 3]) = stdout="Some([2, 3])"
 
 // ===================================================================
 // List.getAt - Get element at index
