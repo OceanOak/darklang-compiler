@@ -656,7 +656,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                     ARM64Symbolic.ADD_imm (ARM64Symbolic.SP, ARM64Symbolic.SP, 16us)
                 ]
 
-        printOpenBracket @ setup @ loopCode @ printCloseBracket
+        setup @ printOpenBracket @ loopCode @ printCloseBracket
 
     match instr with
     | LIR.Phi _ ->

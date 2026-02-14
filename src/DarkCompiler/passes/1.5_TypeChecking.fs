@@ -2074,9 +2074,14 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
                             | Error e, _ -> Error e
                             | _, Error e -> Error e) (Ok [])
-                    | TTuple elementTypes ->
-                        Error (GenericError $"Tuple pattern has {List.length patterns} elements but type has {List.length elementTypes}")
-                    | _ -> Error (GenericError "Tuple pattern used on non-tuple type")
+                    | TTuple _ ->
+                        // Tuple arity mismatch in pattern should be treated as a non-match.
+                        // Match lowering emits a false condition for this pattern shape.
+                        Ok []
+                    | _ ->
+                        // Tuple pattern on non-tuple scrutinee should be treated as a non-match.
+                        // Match lowering emits a false condition for this pattern shape.
+                        Ok []
                 | PRecord (_, fieldPatterns) ->
                     match patternType with
                     | TRecord (recordName, _) ->

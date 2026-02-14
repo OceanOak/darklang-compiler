@@ -992,6 +992,11 @@ let selectInstr
                             // Float is in X0 as raw bits, move to D0 for printing
                             [LIR.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
                              LIR.PrintFloatNoNewline (LIR.FPhysical LIR.D0)]
+                        | AST.TString | AST.TChar ->
+                            [LIR.PrintHeapStringNoNewline (LIR.Physical LIR.X0)]
+                        | AST.TList _ ->
+                            // Fallback: print list address in tuple contexts for now.
+                            [LIR.PrintInt64NoNewline (LIR.Physical LIR.X0)]
                         | t ->
                             Crash.crash $"Unsupported tuple element type for printing: {t}"
                     sepInstrs @ [loadInstr] @ printInstrs)

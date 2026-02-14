@@ -5900,10 +5900,28 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
             // Build OR of multiple pattern conditions for pattern grouping
             // Returns: combined condition atom, all bindings, updated vargen
+            let patternStaticallyCannotMatchScrutinee (pattern: AST.Pattern) : bool =
+                match pattern with
+                | AST.PTuple tuplePatterns ->
+                    match scrutType with
+                    | AST.TTuple elemTypes -> List.length tuplePatterns <> List.length elemTypes
+                    | _ -> true
+                | _ -> false
+
+            let makeFalseCondition (vg: ANF.VarGen) : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
+                let (cmpVar, vg1) = ANF.freshVar vg
+                let cmpExpr = ANF.Atom (ANF.BoolLiteral false)
+                (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1)
+
             let buildPatternGroupComparison (patterns: AST.Pattern list) (scrutAtom: ANF.Atom) (vg: ANF.VarGen) : Result<(ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) option, string> =
                 match patterns with
                 | [] -> Ok None
-                | [single] -> buildPatternComparison single scrutAtom vg
+                | [single] ->
+                    if patternStaticallyCannotMatchScrutinee single then
+                        let (condAtom, bindings, vg1) = makeFalseCondition vg
+                        Ok (Some (condAtom, bindings, vg1))
+                    else
+                        buildPatternComparison single scrutAtom vg
                 | multiple ->
                     // Build comparison for each pattern, then OR them together
                     let rec buildOr (pats: AST.Pattern list) (accCondOpt: ANF.Atom option) (accBindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<(ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) option, string> =
@@ -5913,7 +5931,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | None -> Ok None
                             | Some cond -> Ok (Some (cond, accBindings, vg))
                         | pat :: rest ->
-                            buildPatternComparison pat scrutAtom vg
+                            let cmpResult =
+                                if patternStaticallyCannotMatchScrutinee pat then
+                                    let (condAtom, bindings, vg1) = makeFalseCondition vg
+                                    Ok (Some (condAtom, bindings, vg1))
+                                else
+                                    buildPatternComparison pat scrutAtom vg
+                            cmpResult
                             |> Result.bind (fun cmpOpt ->
                                 match cmpOpt with
                                 | None ->
@@ -5978,7 +6002,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 let valueText =
                     formatMatchValueForError scrutinee
                     |> Option.defaultValue "<unknown>"
-                let message = $"No matching case found for value {valueText} in match expression"
+                let message = $"Non-exhaustive match: No matching case found for value {valueText} in match expression"
                 let (errorVar, vg1) = ANF.freshVar vg
                 let errorExpr = ANF.RuntimeError message
                 (ANF.Let (errorVar, errorExpr, ANF.Return (ANF.Var errorVar)), vg1)
