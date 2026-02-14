@@ -36,8 +36,12 @@ let testParsesMultilineExpectationOnNextLine () : TestResult =
             | [ test ] ->
                 if not (test.Source.Contains("Builtin.testRuntimeError")) then
                     Error $"Expected parsed source to contain runtime error expression, got: {test.Source}"
-                elif test.ExpectedStdout <> Some "Builtin.testDerrorMessage \"Uncaught exception: a\"\n" then
-                    Error "Expected parser to treat next-line expectation as stdout"
+                elif test.ExpectedValueExpr <> None then
+                    Error "Expected Builtin.testDerrorMessage expectation to be parsed as error expectation"
+                elif test.ExpectedExitCode <> 1 then
+                    Error $"Expected exit code 1, got {test.ExpectedExitCode}"
+                elif test.ExpectedStderr <> Some "Uncaught exception: a" then
+                    Error $"Expected stderr message parse, got: {test.ExpectedStderr}"
                 else
                     Ok ()
             | _ ->
@@ -80,6 +84,8 @@ let testParsesIndentedMultilineDarkTestsInsideModule () : TestResult =
             | [ test ] ->
                 if test.Source <> "match 6L with\n   | 6L -> \"pass\"\n   | _ -> \"fail\"" then
                     Error $"Unexpected parsed source: {test.Source}"
+                elif test.ExpectedValueExpr <> Some "\"pass\"" then
+                    Error $"Expected value-expression RHS '\"pass\"', got: {test.ExpectedValueExpr}"
                 elif test.Preamble.Trim().Length <> 0 then
                     Error $"Expected .dark module declarations to be excluded from preamble, got: {test.Preamble}"
                 else
@@ -101,6 +107,8 @@ let testParsesMultilineWithInnerDoubleEquals () : TestResult =
         | Ok tests ->
             if tests.Length <> 1 then
                 Error $"Expected exactly 1 parsed test, got {tests.Length}"
+            elif tests.[0].ExpectedValueExpr <> Some "true" then
+                Error $"Expected value-expression RHS 'true', got: {tests.[0].ExpectedValueExpr}"
             else
                 Ok ())
 
@@ -120,6 +128,8 @@ let testParsesMultilineWithInnerLetBinding () : TestResult =
             | [ test ] ->
                 if not (test.Source.StartsWith("let x = 4L")) then
                     Error $"Unexpected parsed source: {test.Source}"
+                elif test.ExpectedValueExpr <> Some "\"pass\"" then
+                    Error $"Expected value-expression RHS '\"pass\"', got: {test.ExpectedValueExpr}"
                 elif test.Preamble.Trim().Length <> 0 then
                     Error $"Expected empty preamble, got: {test.Preamble}"
                 else
@@ -140,8 +150,10 @@ let testParsesExpectationWithKeywordInsideQuotedMessage () : TestResult =
         | Ok tests ->
             match tests with
             | [ test ] ->
-                if test.ExpectedStdout <> Some "Builtin.testDerrorMessage \"No matching case found for value \\\"nothing matches\\\" in match expression\"\n" then
-                    Error $"Unexpected expectation parse: {test.ExpectedStdout}"
+                if test.ExpectedExitCode <> 1 then
+                    Error $"Expected exit code 1, got {test.ExpectedExitCode}"
+                elif test.ExpectedStderr <> Some "No matching case found for value \"nothing matches\" in match expression" then
+                    Error $"Unexpected stderr parse: {test.ExpectedStderr}"
                 else
                     Ok ()
             | _ ->
@@ -160,14 +172,10 @@ let testParsesMultilineExpectationWithFunctionHeadAndNextLineArg () : TestResult
         | Ok tests ->
             match tests with
             | [ test ] ->
-                let expectationLooksRight =
-                    match test.ExpectedStdout with
-                    | Some stdout ->
-                        stdout.StartsWith("Builtin.testDerrorMessage\n")
-                        && stdout.Contains("No matching case found")
-                    | None -> false
-                if not expectationLooksRight then
-                    Error $"Unexpected expectation parse: {test.ExpectedStdout}"
+                if test.ExpectedExitCode <> 1 then
+                    Error $"Expected exit code 1, got {test.ExpectedExitCode}"
+                elif test.ExpectedStderr <> Some "No matching case found" then
+                    Error $"Unexpected stderr parse: {test.ExpectedStderr}"
                 elif test.Preamble.Trim().Length <> 0 then
                     Error $"Expected empty preamble, got: {test.Preamble}"
                 else

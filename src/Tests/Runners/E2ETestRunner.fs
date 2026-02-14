@@ -24,6 +24,15 @@ let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.Sourc
     else
         CompilerLibrary.CompilerSyntax
 
+// Build the source expression to execute for a test.
+// For `lhs = rhs` value tests, run a synthesized equality assertion.
+let private sourceToExecute (test: E2ETest) : string =
+    match test.ExpectedValueExpr with
+    | Some rhsExpr ->
+        $"if (({test.Source}) == ({rhsExpr})) then 0L else Builtin.testRuntimeError \"E2E assertion failed\""
+    | None ->
+        test.Source
+
 /// Result of running an E2E test
 type E2ERun =
     | CompileFailed of exitCode:int * error:string * compileTime:TimeSpan
@@ -109,8 +118,9 @@ let private collectSpecsFromTests
         match remaining with
         | [] -> Ok acc
         | test :: rest ->
+            let source = sourceToExecute test
             let specsResult =
-                CompilerLibrary.parseProgram sourceSyntax allowInternal test.Source
+                CompilerLibrary.parseProgram sourceSyntax allowInternal source
                 |> Result.bind (fun testAst ->
                     checkProgramWithBaseEnv typeCheckEnv testAst
                     |> Result.mapError typeErrorToString
@@ -350,11 +360,12 @@ let runE2ETestWithPreambleContext
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
     let sourceSyntax = sourceSyntaxForTestFile test.SourceFile
+    let source = sourceToExecute test
     let request : CompilerLibrary.CompileRequest = {
         Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
         Mode = CompilerLibrary.CompileMode.TestExpression
         SourceSyntax = sourceSyntax
-        Source = test.Source
+        Source = source
         SourceFile = test.SourceFile
         AllowInternal = allowInternal
         Verbosity = 0

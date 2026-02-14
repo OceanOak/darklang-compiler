@@ -18,6 +18,9 @@ type E2ETest = {
     Name: string
     /// The test expression only (NOT including preamble)
     Source: string
+    /// Expected value expression on the right-hand side of `=`.
+    /// When set, the runner compares Source and ExpectedValueExpr for value equality.
+    ExpectedValueExpr: string option
     /// Preamble code (function/type definitions shared across tests in file)
     Preamble: string
     ExpectedStdout: string option
@@ -127,6 +130,65 @@ let private parseStringLiteral (s: string) : Result<string, string> =
                 .Replace("\\\\", "\\")
                 .Replace("\\\"", "\"")
         Ok result
+
+/// Parse triple-quoted string literal """..."""
+let private parseTripleQuotedStringLiteral (s: string) : Result<string, string> =
+    if not (s.StartsWith("\"\"\"") && s.EndsWith("\"\"\"")) then
+        Error $"Triple-quoted string literal must be wrapped in \"\"\": {s}"
+    elif s.Length < 6 then
+        Error $"Invalid triple-quoted string literal: {s}"
+    else
+        Ok (s.Substring(3, s.Length - 6))
+
+/// Parse either a regular quoted string or a triple-quoted string
+let private parseAnyStringLiteral (s: string) : Result<string, string> =
+    let trimmed = s.Trim()
+    if trimmed.StartsWith("\"\"\"") then
+        parseTripleQuotedStringLiteral trimmed
+    else
+        parseStringLiteral trimmed
+
+/// Remove simple outer wrapping parens repeatedly: ((x)) -> x
+let private stripOuterParens (s: string) : string =
+    let rec loop (current: string) =
+        let trimmed = current.Trim()
+        if trimmed.Length >= 2 && trimmed.StartsWith("(") && trimmed.EndsWith(")") then
+            loop (trimmed.Substring(1, trimmed.Length - 2))
+        else
+            trimmed
+    loop s
+
+/// Parse Builtin.testDerrorMessage / Builtin.testDerrorSqlMessage expectation helpers.
+/// Returns Some result when expression matches either helper name.
+let private tryParseBuiltinErrorExpectation (exp: string) : Result<string option, string> option =
+    let normalized = stripOuterParens exp
+    let helperPrefixes = [
+        "Builtin.testDerrorMessage"
+        "Stdlib.Builtin.testDerrorMessage"
+        "Builtin.testDerrorSqlMessage"
+        "Stdlib.Builtin.testDerrorSqlMessage"
+    ]
+    let matchingPrefix =
+        helperPrefixes
+        |> List.tryFind (fun prefix -> normalized.StartsWith(prefix))
+
+    match matchingPrefix with
+    | None -> None
+    | Some prefix ->
+        let argText = normalized.Substring(prefix.Length).Trim()
+        if argText.Length = 0 then
+            Some (Ok None)
+        else
+            let argNormalized =
+                let trimmedArg = argText.Trim()
+                if trimmedArg.StartsWith("(") && trimmedArg.EndsWith(")") then
+                    trimmedArg.Substring(1, trimmedArg.Length - 2).Trim()
+                else
+                    trimmedArg
+            Some (
+                parseAnyStringLiteral argNormalized
+                |> Result.map Some
+            )
 
 /// Parse key=value attribute
 let private parseAttribute (attr: string) : Result<string * string, string> =
@@ -432,209 +494,235 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
         // Source is just the test expression - preamble is stored separately
         let source = testExpr
         let expectationsStr = lineWithoutComment.Substring(equalsIdx + 1).Trim()
+        let isDarkFile = filePath.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
 
-        // Parse expectations - supports simple stdout, attributes, compiler errors, and skip
-        // Returns: (exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason)
-        let parseExpectations (exp: string) : Result<int * string option * string option * OptFlags * bool * string option * string option, string> =
+        // Parse expectations:
+        // - error / error="..."
+        // - skip / skip="..."
+        // - Builtin.testDerrorMessage / Builtin.testDerrorSqlMessage
+        // - explicit attributes (exit=, stdout=, stderr=, optimization flags)
+        // - otherwise: RHS is an expression to compare with Source by value
+        //
+        // Returns:
+        // (expectedValueExpr, exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason)
+        let parseExpectations (exp: string) : Result<string option * int * string option * string option * OptFlags * bool * string option * string option, string> =
             let trimmed = exp.Trim()
 
             // Check for "error" keyword (compiler error expected)
             // Supports: error  or  error="message"
             if trimmed.ToLower() = "error" then
                 // Expect compilation to fail with exit code 1, no specific message
-                Ok (1, None, None, defaultOptFlags, true, None, None)
+                Ok (None, 1, None, None, defaultOptFlags, true, None, None)
             elif trimmed.ToLower().StartsWith("error=") then
                 // error="message" format
                 let msgPart = trimmed.Substring(6)  // Skip "error="
                 match parseStringLiteral msgPart with
-                | Ok msg -> Ok (1, None, None, defaultOptFlags, true, Some msg, None)
+                | Ok msg -> Ok (None, 1, None, None, defaultOptFlags, true, Some msg, None)
                 | Error e -> Error $"Invalid error message: {e}"
             elif trimmed.ToLower() = "skip" then
-                Ok (0, None, None, defaultOptFlags, false, None, Some "Skipped by test")
+                Ok (None, 0, None, None, defaultOptFlags, false, None, Some "Skipped by test")
             elif trimmed.ToLower().StartsWith("skip=") then
                 let reasonPart = trimmed.Substring(5)
                 match parseStringLiteral reasonPart with
-                | Ok reason -> Ok (0, None, None, defaultOptFlags, false, None, Some reason)
+                | Ok reason -> Ok (None, 0, None, None, defaultOptFlags, false, None, Some reason)
                 | Error e -> Error $"Invalid skip reason: {e}"
             else
-                // New format: parse optional stdout plus attributes
-                let mutable exitCode = 0  // default
-                let mutable stdout = None
-                let mutable stderr = None
-                let mutable optFlags = defaultOptFlags
-                let mutable expectError = false
-                let mutable skipReason = None
-                let mutable errors = []
+                match tryParseBuiltinErrorExpectation trimmed with
+                | Some (Ok expectedErr) ->
+                    Ok (None, 1, Some "", expectedErr, defaultOptFlags, false, None, None)
+                | Some (Error e) ->
+                    Error $"Invalid Builtin.testDerrorMessage expectation: {e}"
+                | None ->
+                    // Explicit-attribute format (exit/stdout/stderr/optimization flags),
+                    // with optional leading bare stdout for backward compatibility.
+                    // If no attributes are present, treat RHS as a value expression.
+                    let mutable exitCode = 0  // default
+                    let mutable stdout = None
+                    let mutable stderr = None
+                    let mutable optFlags = defaultOptFlags
+                    let mutable skipReason = None
+                    let mutable errors = []
 
-                // Helper to parse boolean attribute value
-                let parseBool (value: string) (attrName: string) : bool option =
-                    match value.ToLower() with
-                    | "true" | "1" -> Some true
-                    | "false" | "0" -> Some false
-                    | _ ->
-                        errors <- $"Invalid {attrName} value: {value} (expected true/false)" :: errors
-                        None
+                    // Helper to parse boolean attribute value
+                    let parseBool (value: string) (attrName: string) : bool option =
+                        match value.ToLower() with
+                        | "true" | "1" -> Some true
+                        | "false" | "0" -> Some false
+                        | _ ->
+                            errors <- $"Invalid {attrName} value: {value} (expected true/false)" :: errors
+                            None
 
-                // Split by spaces, respecting quoted strings with escape sequences
-                let tokens = splitBySpacesRespectingQuotes trimmed
-                let attrStartIndex =
-                    tokens
-                    |> List.tryFindIndex (fun token ->
-                        match parseAttribute token with
-                        | Ok (key, _) -> isAttributeKey key
-                        | Error _ -> false)
+                    // Split by spaces, respecting quoted strings with escape sequences
+                    let tokens = splitBySpacesRespectingQuotes trimmed
+                    let attrStartIndex =
+                        tokens
+                        |> List.tryFindIndex (fun token ->
+                            match parseAttribute token with
+                            | Ok (key, _) -> isAttributeKey key
+                            | Error _ -> false)
 
-                let leadingTokens, attrTokens =
                     match attrStartIndex with
-                    | None -> (tokens, [])
-                    | Some idx -> (tokens |> List.take idx, tokens |> List.skip idx)
+                    | None ->
+                        if isDarkFile then
+                            // Upstream .dark tests use `lhs = rhs` value semantics.
+                            Ok (Some trimmed, 0, None, None, defaultOptFlags, false, None, None)
+                        else
+                            // Legacy .e2e format treats bare RHS as expected stdout text.
+                            parseSimpleStdout trimmed
+                            |> Result.map (fun stdoutValue ->
+                                (None, 0, Some stdoutValue, None, defaultOptFlags, false, None, None))
+                    | Some idx ->
+                        let leadingTokens = tokens |> List.take idx
+                        let attrTokens = tokens |> List.skip idx
 
-                let leadingStdoutResult =
-                    if leadingTokens.Length = 0 then
-                        Ok None
-                    else
-                        let leadingText = String.concat " " leadingTokens
-                        parseSimpleStdout leadingText |> Result.map Some
+                        let leadingStdoutResult =
+                            if leadingTokens.Length = 0 then
+                                Ok None
+                            else
+                                let leadingText = String.concat " " leadingTokens
+                                parseSimpleStdout leadingText |> Result.map Some
 
-                let mutable leadingStdout = None
-                match leadingStdoutResult with
-                | Ok value -> leadingStdout <- value
-                | Error e -> errors <- e :: errors
-
-                for token in attrTokens do
-                    let attrTrimmed = token.Trim()
-                    if attrTrimmed.Length > 0 then
-                        match parseAttribute attrTrimmed with
-                        | Ok (key, value) ->
-                            match key with
-                            | "exit" ->
-                                match Int32.TryParse(value) with
-                                | true, code -> exitCode <- code
-                                | false, _ -> errors <- $"Invalid exit code: {value}" :: errors
-                            | "stdout" ->
-                                match parseStringLiteral value with
-                                | Ok s -> stdout <- Some s
-                                | Error e -> errors <- e :: errors
-                            | "stderr" ->
-                                match parseStringLiteral value with
-                                | Ok s -> stderr <- Some s
-                                | Error e -> errors <- e :: errors
-                            | "skip" ->
-                                match parseStringLiteral value with
-                                | Ok reason -> skipReason <- Some reason
-                                | Error e -> errors <- $"Invalid skip reason: {e}" :: errors
-                            | "no_free_list" ->
-                                match parseBool value "no_free_list" with
-                                | Some b -> optFlags <- { optFlags with DisableFreeList = b }
-                                | None -> ()
-                            | "disable_opt_freelist" ->
-                                match parseBool value "disable_opt_freelist" with
-                                | Some b -> optFlags <- { optFlags with DisableFreeList = b }
-                                | None -> ()
-                            | "disable_opt_anf" ->
-                                match parseBool value "disable_opt_anf" with
-                                | Some b -> optFlags <- { optFlags with DisableANFOpt = b }
-                                | None -> ()
-                            | "disable_opt_anf_const_folding" ->
-                                match parseBool value "disable_opt_anf_const_folding" with
-                                | Some b -> optFlags <- { optFlags with DisableANFConstFolding = b }
-                                | None -> ()
-                            | "disable_opt_anf_const_prop" ->
-                                match parseBool value "disable_opt_anf_const_prop" with
-                                | Some b -> optFlags <- { optFlags with DisableANFConstProp = b }
-                                | None -> ()
-                            | "disable_opt_anf_copy_prop" ->
-                                match parseBool value "disable_opt_anf_copy_prop" with
-                                | Some b -> optFlags <- { optFlags with DisableANFCopyProp = b }
-                                | None -> ()
-                            | "disable_opt_anf_dce" ->
-                                match parseBool value "disable_opt_anf_dce" with
-                                | Some b -> optFlags <- { optFlags with DisableANFDCE = b }
-                                | None -> ()
-                            | "disable_opt_anf_strength_reduction" ->
-                                match parseBool value "disable_opt_anf_strength_reduction" with
-                                | Some b -> optFlags <- { optFlags with DisableANFStrengthReduction = b }
-                                | None -> ()
-                            | "disable_opt_inline" ->
-                                match parseBool value "disable_opt_inline" with
-                                | Some b -> optFlags <- { optFlags with DisableInlining = b }
-                                | None -> ()
-                            | "disable_opt_tco" ->
-                                match parseBool value "disable_opt_tco" with
-                                | Some b -> optFlags <- { optFlags with DisableTCO = b }
-                                | None -> ()
-                            | "disable_opt_mir" ->
-                                match parseBool value "disable_opt_mir" with
-                                | Some b -> optFlags <- { optFlags with DisableMIROpt = b }
-                                | None -> ()
-                            | "disable_opt_mir_const_folding" ->
-                                match parseBool value "disable_opt_mir_const_folding" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRConstFolding = b }
-                                | None -> ()
-                            | "disable_opt_mir_cse" ->
-                                match parseBool value "disable_opt_mir_cse" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRCSE = b }
-                                | None -> ()
-                            | "disable_opt_mir_copy_prop" ->
-                                match parseBool value "disable_opt_mir_copy_prop" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRCopyProp = b }
-                                | None -> ()
-                            | "disable_opt_mir_dce" ->
-                                match parseBool value "disable_opt_mir_dce" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRDCE = b }
-                                | None -> ()
-                            | "disable_opt_mir_cfg_simplify" ->
-                                match parseBool value "disable_opt_mir_cfg_simplify" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRCFGSimplify = b }
-                                | None -> ()
-                            | "disable_opt_mir_licm" ->
-                                match parseBool value "disable_opt_mir_licm" with
-                                | Some b -> optFlags <- { optFlags with DisableMIRLICM = b }
-                                | None -> ()
-                            | "disable_opt_lir" ->
-                                match parseBool value "disable_opt_lir" with
-                                | Some b -> optFlags <- { optFlags with DisableLIROpt = b }
-                                | None -> ()
-                            | "disable_opt_lir_peephole" ->
-                                match parseBool value "disable_opt_lir_peephole" with
-                                | Some b -> optFlags <- { optFlags with DisableLIRPeephole = b }
-                                | None -> ()
-                            | "disable_opt_dce" ->
-                                match parseBool value "disable_opt_dce" with
-                                | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
-                                | None -> ()
-                            | "disable_opt_function_tree_shaking" ->
-                                match parseBool value "disable_opt_function_tree_shaking" with
-                                | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
-                                | None -> ()
-                            | "disable_leak_check" ->
-                                match parseBool value "disable_leak_check" with
-                                | Some b -> optFlags <- { optFlags with DisableLeakCheck = b }
-                                | None -> ()
-                            | _ -> errors <- $"Unknown attribute: {key}" :: errors
+                        let mutable leadingStdout = None
+                        match leadingStdoutResult with
+                        | Ok value -> leadingStdout <- value
                         | Error e -> errors <- e :: errors
 
-                if errors.Length > 0 then
-                    Error (String.concat "; " (List.rev errors))
-                else
-                    let combinedStdout =
-                        match leadingStdout, stdout with
-                        | Some _, Some _ ->
-                            Error "Cannot combine bare stdout with stdout= attribute. Use one or the other."
-                        | Some value, None -> Ok (Some value)
-                        | None, Some value -> Ok (Some value)
-                        | None, None -> Ok None
+                        for token in attrTokens do
+                            let attrTrimmed = token.Trim()
+                            if attrTrimmed.Length > 0 then
+                                match parseAttribute attrTrimmed with
+                                | Ok (key, value) ->
+                                    match key with
+                                    | "exit" ->
+                                        match Int32.TryParse(value) with
+                                        | true, code -> exitCode <- code
+                                        | false, _ -> errors <- $"Invalid exit code: {value}" :: errors
+                                    | "stdout" ->
+                                        match parseStringLiteral value with
+                                        | Ok s -> stdout <- Some s
+                                        | Error e -> errors <- e :: errors
+                                    | "stderr" ->
+                                        match parseStringLiteral value with
+                                        | Ok s -> stderr <- Some s
+                                        | Error e -> errors <- e :: errors
+                                    | "skip" ->
+                                        match parseStringLiteral value with
+                                        | Ok reason -> skipReason <- Some reason
+                                        | Error e -> errors <- $"Invalid skip reason: {e}" :: errors
+                                    | "no_free_list" ->
+                                        match parseBool value "no_free_list" with
+                                        | Some b -> optFlags <- { optFlags with DisableFreeList = b }
+                                        | None -> ()
+                                    | "disable_opt_freelist" ->
+                                        match parseBool value "disable_opt_freelist" with
+                                        | Some b -> optFlags <- { optFlags with DisableFreeList = b }
+                                        | None -> ()
+                                    | "disable_opt_anf" ->
+                                        match parseBool value "disable_opt_anf" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFOpt = b }
+                                        | None -> ()
+                                    | "disable_opt_anf_const_folding" ->
+                                        match parseBool value "disable_opt_anf_const_folding" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFConstFolding = b }
+                                        | None -> ()
+                                    | "disable_opt_anf_const_prop" ->
+                                        match parseBool value "disable_opt_anf_const_prop" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFConstProp = b }
+                                        | None -> ()
+                                    | "disable_opt_anf_copy_prop" ->
+                                        match parseBool value "disable_opt_anf_copy_prop" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFCopyProp = b }
+                                        | None -> ()
+                                    | "disable_opt_anf_dce" ->
+                                        match parseBool value "disable_opt_anf_dce" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFDCE = b }
+                                        | None -> ()
+                                    | "disable_opt_anf_strength_reduction" ->
+                                        match parseBool value "disable_opt_anf_strength_reduction" with
+                                        | Some b -> optFlags <- { optFlags with DisableANFStrengthReduction = b }
+                                        | None -> ()
+                                    | "disable_opt_inline" ->
+                                        match parseBool value "disable_opt_inline" with
+                                        | Some b -> optFlags <- { optFlags with DisableInlining = b }
+                                        | None -> ()
+                                    | "disable_opt_tco" ->
+                                        match parseBool value "disable_opt_tco" with
+                                        | Some b -> optFlags <- { optFlags with DisableTCO = b }
+                                        | None -> ()
+                                    | "disable_opt_mir" ->
+                                        match parseBool value "disable_opt_mir" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIROpt = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_const_folding" ->
+                                        match parseBool value "disable_opt_mir_const_folding" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRConstFolding = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_cse" ->
+                                        match parseBool value "disable_opt_mir_cse" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRCSE = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_copy_prop" ->
+                                        match parseBool value "disable_opt_mir_copy_prop" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRCopyProp = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_dce" ->
+                                        match parseBool value "disable_opt_mir_dce" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRDCE = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_cfg_simplify" ->
+                                        match parseBool value "disable_opt_mir_cfg_simplify" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRCFGSimplify = b }
+                                        | None -> ()
+                                    | "disable_opt_mir_licm" ->
+                                        match parseBool value "disable_opt_mir_licm" with
+                                        | Some b -> optFlags <- { optFlags with DisableMIRLICM = b }
+                                        | None -> ()
+                                    | "disable_opt_lir" ->
+                                        match parseBool value "disable_opt_lir" with
+                                        | Some b -> optFlags <- { optFlags with DisableLIROpt = b }
+                                        | None -> ()
+                                    | "disable_opt_lir_peephole" ->
+                                        match parseBool value "disable_opt_lir_peephole" with
+                                        | Some b -> optFlags <- { optFlags with DisableLIRPeephole = b }
+                                        | None -> ()
+                                    | "disable_opt_dce" ->
+                                        match parseBool value "disable_opt_dce" with
+                                        | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
+                                        | None -> ()
+                                    | "disable_opt_function_tree_shaking" ->
+                                        match parseBool value "disable_opt_function_tree_shaking" with
+                                        | Some b -> optFlags <- { optFlags with DisableFunctionTreeShaking = b }
+                                        | None -> ()
+                                    | "disable_leak_check" ->
+                                        match parseBool value "disable_leak_check" with
+                                        | Some b -> optFlags <- { optFlags with DisableLeakCheck = b }
+                                        | None -> ()
+                                    | _ -> errors <- $"Unknown attribute: {key}" :: errors
+                                | Error e -> errors <- e :: errors
 
-                    match combinedStdout with
-                    | Ok finalStdout -> Ok (exitCode, finalStdout, stderr, optFlags, expectError, None, skipReason)
-                    | Error e -> Error e
+                        if errors.Length > 0 then
+                            Error (String.concat "; " (List.rev errors))
+                        else
+                            let combinedStdout =
+                                match leadingStdout, stdout with
+                                | Some _, Some _ ->
+                                    Error "Cannot combine bare stdout with stdout= attribute. Use one or the other."
+                                | Some value, None -> Ok (Some value)
+                                | None, Some value -> Ok (Some value)
+                                | None, None -> Ok None
+
+                            match combinedStdout with
+                            | Ok finalStdout ->
+                                Ok (None, exitCode, finalStdout, stderr, optFlags, false, None, skipReason)
+                            | Error e -> Error e
 
         match parseExpectations expectationsStr with
-        | Ok (exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason) ->
+        | Ok (expectedValueExpr, exitCode, stdout, stderr, optFlags, expectError, errorMessage, skipReason) ->
             let displayName = comment |> Option.defaultValue source
             Ok {
                 Name = $"L{lineNumber}: {displayName}"
                 Source = source
+                ExpectedValueExpr = expectedValueExpr
                 Preamble = preamble
                 ExpectedStdout = stdout
                 ExpectedStderr = stderr
