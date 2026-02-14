@@ -130,71 +130,51 @@ let private buildPreamblePlan
     (spec: PreambleBuildSpec)
     (tests: E2ETest list)
     : Result<PreamblePlan * Set<SpecKey>, string> =
-    let preambleUnsupportedForSyntax =
-        spec.SourceSyntax = CompilerLibrary.InterpreterSyntax
-    if preambleUnsupportedForSyntax then
-        // Interpreter syntax currently skips preamble compilation, but tests still
-        // need stdlib specializations for generic calls in TestExpression mode.
-        let typeCheckEnv = stdlib.Context.TypeCheckEnv
+    let preambleIsEmpty = String.IsNullOrWhiteSpace spec.Preamble
+    let analysisResult =
+        if preambleIsEmpty then
+            Ok None
+        else
+            CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble
+            |> Result.map Some
+
+    analysisResult
+    |> Result.bind (fun analysisOpt ->
+        let typeCheckEnv =
+            match analysisOpt with
+            | Some analysis -> analysis.TypeCheckEnv
+            | None -> stdlib.Context.TypeCheckEnv
         collectSpecsFromTests spec.AllowInternal spec.SourceSyntax typeCheckEnv tests
-        |> Result.map (fun testSpecs ->
-            let stdlibSpecs = filterSpecsByDefs stdlib.Context.GenericFuncDefs testSpecs
+        |> Result.bind (fun testSpecs ->
+            let preambleSpecs =
+                match analysisOpt with
+                | None -> Set.empty
+                | Some analysis -> collectTypeAppsFromProgram analysis.TypedAST
+            let combinedSpecs = Set.union testSpecs preambleSpecs
+            let preambleGenericDefs =
+                match analysisOpt with
+                | None -> Map.empty
+                | Some analysis -> analysis.GenericFuncDefs
+            let preambleSpecsForDefs = filterSpecsByDefs preambleGenericDefs combinedSpecs
+            let stdlibSpecsFromCombined = filterSpecsByDefs stdlib.Context.GenericFuncDefs combinedSpecs
+            let specialization =
+                if Map.isEmpty preambleGenericDefs then
+                    {
+                        SpecializedFuncs = []
+                        SpecRegistry = Map.empty
+                        ExternalSpecs = Set.empty
+                    }
+                else
+                    specializeFromSpecs preambleGenericDefs preambleSpecsForDefs
+            let stdlibSpecsFromSpecialization =
+                filterSpecsByDefs stdlib.Context.GenericFuncDefs specialization.ExternalSpecs
+            let stdlibSpecs = Set.union stdlibSpecsFromCombined stdlibSpecsFromSpecialization
             let plan = {
                 Spec = spec
-                Analysis = None
-                Specialization = {
-                    SpecializedFuncs = []
-                    SpecRegistry = Map.empty
-                    ExternalSpecs = Set.empty
-                }
+                Analysis = analysisOpt
+                Specialization = specialization
             }
-            (plan, stdlibSpecs))
-    else
-        let preambleIsEmpty = String.IsNullOrWhiteSpace spec.Preamble
-        let analysisResult =
-            if preambleIsEmpty then
-                Ok None
-            else
-                CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble
-                |> Result.map Some
-
-        analysisResult
-        |> Result.bind (fun analysisOpt ->
-            let typeCheckEnv =
-                match analysisOpt with
-                | Some analysis -> analysis.TypeCheckEnv
-                | None -> stdlib.Context.TypeCheckEnv
-            collectSpecsFromTests spec.AllowInternal spec.SourceSyntax typeCheckEnv tests
-            |> Result.bind (fun testSpecs ->
-                let preambleSpecs =
-                    match analysisOpt with
-                    | None -> Set.empty
-                    | Some analysis -> collectTypeAppsFromProgram analysis.TypedAST
-                let combinedSpecs = Set.union testSpecs preambleSpecs
-                let preambleGenericDefs =
-                    match analysisOpt with
-                    | None -> Map.empty
-                    | Some analysis -> analysis.GenericFuncDefs
-                let preambleSpecsForDefs = filterSpecsByDefs preambleGenericDefs combinedSpecs
-                let stdlibSpecsFromCombined = filterSpecsByDefs stdlib.Context.GenericFuncDefs combinedSpecs
-                let specialization =
-                    if Map.isEmpty preambleGenericDefs then
-                        {
-                            SpecializedFuncs = []
-                            SpecRegistry = Map.empty
-                            ExternalSpecs = Set.empty
-                        }
-                    else
-                        specializeFromSpecs preambleGenericDefs preambleSpecsForDefs
-                let stdlibSpecsFromSpecialization =
-                    filterSpecsByDefs stdlib.Context.GenericFuncDefs specialization.ExternalSpecs
-                let stdlibSpecs = Set.union stdlibSpecsFromCombined stdlibSpecsFromSpecialization
-                let plan = {
-                    Spec = spec
-                    Analysis = analysisOpt
-                    Specialization = specialization
-                }
-                Ok (plan, stdlibSpecs)))
+            Ok (plan, stdlibSpecs)))
 
 /// Build suite stdlib specializations and per-file preamble contexts
 let buildSuiteContexts

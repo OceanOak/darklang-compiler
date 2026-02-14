@@ -2049,13 +2049,19 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             else
                                 Map.empty
                         match payloadPattern, payloadType with
-                        | None, _ -> Ok []
+                        | None, None -> Ok []
+                        | None, Some _ ->
+                            // Pattern omitted payload for a payload-carrying variant.
+                            // Treat as a non-binding pattern; match lowering will make it non-matching.
+                            Ok []
                         | Some innerPattern, Some pType ->
                             // Apply substitution to get concrete payload type
                             let concretePayloadType = applySubst subst pType
                             extractPatternBindings innerPattern concretePayloadType
                         | Some _, None ->
-                            Error (GenericError $"Variant {variantName} has no payload but pattern expects one")
+                            // Pattern supplied payload for a nullary variant.
+                            // Treat as a non-binding pattern; match lowering will make it non-matching.
+                            Ok []
                 | PTuple patterns ->
                     // Resolve type alias before matching (e.g., Pair<Int64> -> (Int64, Int64))
                     let resolvedPatternType = resolveType aliasReg patternType
