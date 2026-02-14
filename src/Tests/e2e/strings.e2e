@@ -207,18 +207,18 @@ Stdlib.String.endsWith("", "a") = false
 // =============================================================================
 
 // Basic indexOf
-Stdlib.String.indexOf("hello world", "hello") = stdout="Some(0)\n"
-Stdlib.String.indexOf("hello world", "world") = stdout="Some(6)\n"
-Stdlib.String.indexOf("hello world", "o") = stdout="Some(4)\n"
-Stdlib.String.indexOf("hello world", "o w") = stdout="Some(4)\n"
+Option.withDefault(Stdlib.String.indexOf("hello world", "hello"), -1) = 0
+Option.withDefault(Stdlib.String.indexOf("hello world", "world"), -1) = 6
+Option.withDefault(Stdlib.String.indexOf("hello world", "o"), -1) = 4
+Option.withDefault(Stdlib.String.indexOf("hello world", "o w"), -1) = 4
 
 // Not found
-Stdlib.String.indexOf("hello world", "xyz") = stdout="None\n"
-Stdlib.String.indexOf("abc", "d") = stdout="None\n"
+Option.isNone<Int64>(Stdlib.String.indexOf("hello world", "xyz")) = true
+Option.isNone<Int64>(Stdlib.String.indexOf("abc", "d")) = true
 
 // Empty string search
-Stdlib.String.indexOf("hello", "") = stdout="Some(0)\n"
-Stdlib.String.indexOf("", "") = stdout="Some(0)\n"
+Option.withDefault(Stdlib.String.indexOf("hello", ""), -1) = 0
+Option.withDefault(Stdlib.String.indexOf("", ""), -1) = 0
 
 // =============================================================================
 // Stdlib.String.contains Tests
