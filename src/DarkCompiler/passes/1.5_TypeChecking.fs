@@ -123,6 +123,9 @@ let private ifConditionTypeMismatchMessage (expr: Expr) (actualType: Type) : str
 let private isBuiltinUnwrapName (funcName: string) : bool =
     funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
 
+let private isBuiltinTestRuntimeErrorName (funcName: string) : bool =
+    funcName = "Builtin.testRuntimeError" || funcName = "Stdlib.Builtin.testRuntimeError"
+
 let private variantNameEndsWith (suffix: string) (variantName: string) : bool =
     variantName = suffix || variantName.EndsWith($".{suffix}")
 
@@ -1200,6 +1203,18 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 Error (TypeMismatch (expected, normalizedOutputType, $"result of call to {funcName}"))
                         | None ->
                             Ok (normalizedOutputType, Call ("Builtin.unwrap", [argExpr']))))
+            | _ ->
+                Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
+        elif isBuiltinTestRuntimeErrorName funcName then
+            match args with
+            | [argExpr] ->
+                checkExpr argExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
+                |> Result.bind (fun (_argType, argExpr') ->
+                    let outputType =
+                        match expectedType with
+                        | Some expected -> expected
+                        | None -> TVar "__runtime_error"
+                    Ok (outputType, Call ("Builtin.testRuntimeError", [argExpr'])))
             | _ ->
                 Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
         else

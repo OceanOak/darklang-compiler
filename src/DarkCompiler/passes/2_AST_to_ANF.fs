@@ -230,6 +230,9 @@ let tryDateIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option
 let isBuiltinUnwrapName (funcName: string) : bool =
     funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
 
+let isBuiltinTestRuntimeErrorName (funcName: string) : bool =
+    funcName = "Builtin.testRuntimeError" || funcName = "Stdlib.Builtin.testRuntimeError"
+
 let private unwrapErrorPayloadToString (expr: AST.Expr) : string option =
     match expr with
     | AST.UnitLiteral -> Some "()"
@@ -2852,6 +2855,11 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                         Error $"Internal error: Builtin.unwrap expects Option/Result argument, got {typeToString argType}")
             | _ ->
                 Error $"Internal error: Builtin.unwrap expects 1 argument, got {List.length args}"
+        elif isBuiltinTestRuntimeErrorName funcName then
+            match args with
+            | [_] -> Ok (AST.TVar "__runtime_error")
+            | _ ->
+                Error $"Internal error: Builtin.testRuntimeError expects 1 argument, got {List.length args}"
         else
             // Look up function return type from the function registry
             match Map.tryFind funcName funcReg with
@@ -3359,6 +3367,20 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     Error $"Internal error: Builtin.unwrap should have been typechecked as Option/Result, got {typeToString argType}")
         | _ ->
             Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length args}"
+
+    | AST.Call (funcName, args) when isBuiltinTestRuntimeErrorName funcName ->
+        match args with
+        | [messageExpr] ->
+            let messageText =
+                match unwrapErrorPayloadToString messageExpr with
+                | Some text -> text
+                | None -> "<runtime error>"
+            let fullMessage = $"Uncaught exception: {messageText}"
+            let (runtimeErrorVar, varGen1) = ANF.freshVar varGen
+            let runtimeErrorExpr = ANF.RuntimeError fullMessage
+            Ok (ANF.Let (runtimeErrorVar, runtimeErrorExpr, ANF.Return ANF.UnitLiteral), varGen1)
+        | _ ->
+            Error $"Internal error: Builtin.testRuntimeError should have exactly 1 argument, got {List.length args}"
 
     | AST.Call (funcName, args) ->
         // Function call: convert all arguments to atoms
@@ -3886,9 +3908,10 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         | Error msg -> Error $"Match scrutinee type inference failed: {msg}"
         | Ok scrutType ->
         // Compile match to if-else chain
-        // First convert scrutinee to atom
-        toAtom scrutinee varGen env typeReg variantLookup funcReg moduleRegistry
-        |> Result.bind (fun (scrutineeAtom, scrutineeBindings, varGen1) ->
+        // First convert scrutinee to a bound atom. This supports effectful/complex
+        // scrutinees such as Builtin.testRuntimeError(...) that cannot be lowered via toAtom.
+        toANFBoundAtom scrutinee varGen env typeReg variantLookup funcReg moduleRegistry
+        |> Result.bind (fun (scrutineeExpr, scrutineeAtom, varGen1) ->
             // Check if any pattern needs to access list structure
             // If so, we must ensure scrutinee is a variable (can't TupleGet on literal)
             let hasNonEmptyListPattern =
@@ -3900,13 +3923,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | _ -> false))
 
             // If there are non-empty list patterns, bind the scrutinee to a variable
-            let (scrutineeAtom', scrutineeBindings', varGen1') =
+            let (scrutineeAtom', scrutineePostBindings, varGen1') =
                 match scrutineeAtom with
-                | ANF.Var _ -> (scrutineeAtom, scrutineeBindings, varGen1)
+                | ANF.Var _ -> (scrutineeAtom, [], varGen1)
                 | _ when hasNonEmptyListPattern ->
                     let (tempVar, vg) = ANF.freshVar varGen1
-                    (ANF.Var tempVar, scrutineeBindings @ [(tempVar, ANF.Atom scrutineeAtom)], vg)
-                | _ -> (scrutineeAtom, scrutineeBindings, varGen1)
+                    (ANF.Var tempVar, [(tempVar, ANF.Atom scrutineeAtom)], vg)
+                | _ -> (scrutineeAtom, [], varGen1)
 
             // Check if the TYPE that a variant belongs to has any variant with a payload
             // This determines if values are heap-allocated or simple integers
@@ -5081,10 +5104,17 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let vg6 = vg3  // Keep consistent naming for the rest of the code
 
                     // Extract elements using getAt (handles varying prefix/suffix layouts)
-                    // Returns: (env, bindings, literalChecks, vg) where literalChecks are (valueVar, expectedLit) pairs
-                    let rec extractElements (pats: AST.Pattern list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (litChecks: (ANF.TempId * ANF.SizedInt) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * (ANF.TempId * ANF.SizedInt) list * ANF.VarGen, string> =
+                    // Returns: (env, bindings, conditionAtoms, vg)
+                    let rec extractElements
+                        (pats: AST.Pattern list)
+                        (idx: int)
+                        (env: VarEnv)
+                        (bindings: (ANF.TempId * ANF.CExpr) list)
+                        (condAtoms: ANF.Atom list)
+                        (vg: ANF.VarGen)
+                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.Atom list * ANF.VarGen, string> =
                         match pats with
-                        | [] -> Ok (env, bindings, litChecks, vg)
+                        | [] -> Ok (env, bindings, condAtoms, vg)
                         | pat :: rest ->
                             // Use getAt to retrieve element at this index
                             // getAt returns Option, but we know length == patternLen so it's always Some
@@ -5112,13 +5142,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             match pat with
                             | AST.PVar name ->
                                 let newEnv = Map.add name (valueVar, elemType) env  // Use element type
-                                extractElements rest (idx + 1) newEnv newBindings litChecks vg2'
+                                extractElements rest (idx + 1) newEnv newBindings condAtoms vg2'
                             | AST.PWildcard ->
-                                extractElements rest (idx + 1) env newBindings litChecks vg2'
+                                extractElements rest (idx + 1) env newBindings condAtoms vg2'
                             | AST.PTuple innerPatterns ->
                                 extractTupleBindings innerPatterns (ANF.Var valueVar) elemType 0 env newBindings vg2'  // Pass tuple type
                                 |> Result.bind (fun (tupEnv, tupBindings, vg3) ->
-                                    extractElements rest (idx + 1) tupEnv tupBindings litChecks vg3)
+                                    extractElements rest (idx + 1) tupEnv tupBindings condAtoms vg3)
                             | (AST.PInt64 _ as pat)
                             | (AST.PInt8Literal _ as pat)
                             | (AST.PInt16Literal _ as pat)
@@ -5127,48 +5157,61 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | (AST.PUInt16Literal _ as pat)
                             | (AST.PUInt32Literal _ as pat)
                             | (AST.PUInt64Literal _ as pat) ->
-                                // Track this literal check for later
                                 let literal =
                                     match patternLiteralToSizedInt pat with
                                     | Some value -> value
                                     | None -> Crash.crash $"Expected integer literal pattern, got {pat}"
-                                extractElements rest (idx + 1) env newBindings ((valueVar, literal) :: litChecks) vg2'
+                                let (litCheckVar, vg3) = ANF.freshVar vg2'
+                                let litCheckExpr = ANF.Prim (ANF.Eq, ANF.Var valueVar, ANF.IntLiteral literal)
+                                let bindingsWithLiteral = newBindings @ [(litCheckVar, litCheckExpr)]
+                                extractElements rest (idx + 1) env bindingsWithLiteral (condAtoms @ [ANF.Var litCheckVar]) vg3
+                            | AST.PList _ | AST.PListCons _ | AST.PConstructor _ ->
+                                buildPatternComparison pat (ANF.Var valueVar) vg2'
+                                |> Result.bind (fun cmpOpt ->
+                                    match cmpOpt with
+                                    | None ->
+                                        extractElements rest (idx + 1) env newBindings condAtoms vg2'
+                                    | Some (condAtom, cmpBindings, vg3) ->
+                                        let newBindingsWithCmp = newBindings @ cmpBindings
+                                        extractElements rest (idx + 1) env newBindingsWithCmp (condAtoms @ [condAtom]) vg3)
                             | _ ->
                                 Error $"Unsupported pattern in list element: {pat}"
 
                     extractElements patterns 0 currentEnv [] [] vg6
-                    |> Result.bind (fun (newEnv, elemBindings, litChecks, vg7) ->
+                    |> Result.bind (fun (newEnv, elemBindings, condAtoms, vg7) ->
                         toANF body vg7 newEnv typeReg variantLookup funcReg moduleRegistry
                         |> Result.map (fun (bodyExpr, vg8) ->
-                            // Build the inner expression based on whether we have literal checks
+                            // Build the inner expression based on whether we have extra conditions
                             let (innerExpr, vg9) =
-                                match litChecks with
+                                match condAtoms with
                                 | [] ->
-                                    // No literals - just return body
+                                    // No extra conditions - just return body
                                     (bodyExpr, vg8)
                                 | checks ->
-                                    // Build literal checks - AND them all together
-                                    // Note: We don't AND with checkVar since we already checked length
-                                    let rec buildLitOnlyChecks (remaining: (ANF.TempId * ANF.SizedInt) list) (accBindings: (ANF.TempId * ANF.CExpr) list) (prevCondVar: ANF.TempId option) (vg: ANF.VarGen) : (ANF.TempId * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) =
+                                    // AND condition atoms together (length check is handled separately by checkVar)
+                                    let rec buildCombinedChecks
+                                        (remaining: ANF.Atom list)
+                                        (accBindings: (ANF.TempId * ANF.CExpr) list)
+                                        (prevCond: ANF.Atom option)
+                                        (vg: ANF.VarGen)
+                                        : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
                                         match remaining with
                                         | [] ->
-                                            (Option.get prevCondVar, accBindings, vg)
-                                        | (valueVar, litVal) :: rest ->
-                                            let (litCheckVar, vg1) = ANF.freshVar vg
-                                            let litCheckExpr = ANF.Prim (ANF.Eq, ANF.Var valueVar, ANF.IntLiteral litVal)
-                                            match prevCondVar with
+                                            match prevCond with
+                                            | Some cond -> (cond, accBindings, vg)
+                                            | None -> (ANF.BoolLiteral true, accBindings, vg)
+                                        | condAtom :: rest ->
+                                            match prevCond with
                                             | None ->
-                                                // First check - use directly
-                                                buildLitOnlyChecks rest (accBindings @ [(litCheckVar, litCheckExpr)]) (Some litCheckVar) vg1
-                                            | Some prevVar ->
-                                                // AND with previous check
-                                                let (combinedVar, vg2) = ANF.freshVar vg1
-                                                let combinedExpr = ANF.Prim (ANF.And, ANF.Var prevVar, ANF.Var litCheckVar)
-                                                buildLitOnlyChecks rest (accBindings @ [(litCheckVar, litCheckExpr); (combinedVar, combinedExpr)]) (Some combinedVar) vg2
-                                    let (litCondVar, litBindings, vg9') = buildLitOnlyChecks (List.rev checks) [] None vg8
-                                    let litCheckedBody = ANF.If (ANF.Var litCondVar, bodyExpr, elseExpr)
-                                    let withLitBindings = wrapBindings litBindings litCheckedBody
-                                    (withLitBindings, vg9')
+                                                buildCombinedChecks rest accBindings (Some condAtom) vg
+                                            | Some prevCondAtom ->
+                                                let (combinedVar, vg1) = ANF.freshVar vg
+                                                let combinedExpr = ANF.Prim (ANF.And, prevCondAtom, condAtom)
+                                                buildCombinedChecks rest (accBindings @ [(combinedVar, combinedExpr)]) (Some (ANF.Var combinedVar)) vg1
+                                    let (combinedCondAtom, condBindings, vg9') = buildCombinedChecks checks [] None vg8
+                                    let checkedBody = ANF.If (combinedCondAtom, bodyExpr, elseExpr)
+                                    let withCondBindings = wrapBindings condBindings checkedBody
+                                    (withCondBindings, vg9')
                             // Wrap with element bindings (inside length check)
                             let withElemBindings = wrapBindings elemBindings innerExpr
                             // Wrap with length check
@@ -5468,11 +5511,18 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // Extract head elements and final tail using head/tail calls
                     // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
                     // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
-                    let rec extractElements (pats: AST.Pattern list) (currentListVar: ANF.TempId) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.TempId * ANF.VarGen, string> =
+                    let rec extractElements
+                        (pats: AST.Pattern list)
+                        (currentListVar: ANF.TempId)
+                        (env: VarEnv)
+                        (bindings: (ANF.TempId * ANF.CExpr) list)
+                        (condAtoms: ANF.Atom list)
+                        (vg: ANF.VarGen)
+                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.TempId * ANF.Atom list * ANF.VarGen, string> =
                         match pats with
                         | [] ->
                             // No more head patterns, currentListVar is the tail
-                            Ok (env, bindings, currentListVar, vg)
+                            Ok (env, bindings, currentListVar, condAtoms, vg)
                         | pat :: rest ->
                             // Call head to get current element
                             let (headResultVar, vg1) = ANF.freshVar vg
@@ -5485,20 +5535,34 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             match pat with
                             | AST.PVar name ->
                                 let newEnv = Map.add name (headResultVar, elemType) env  // Use element type
-                                extractElements rest tailResultVar newEnv newBindings vg2
+                                extractElements rest tailResultVar newEnv newBindings condAtoms vg2
                             | AST.PWildcard ->
-                                extractElements rest tailResultVar env newBindings vg2
-                            | AST.PInt64 _
-                            | AST.PInt8Literal _
-                            | AST.PInt16Literal _
-                            | AST.PInt32Literal _
-                            | AST.PUInt8Literal _
-                            | AST.PUInt16Literal _
-                            | AST.PUInt32Literal _
-                            | AST.PUInt64Literal _ ->
-                                Error "Nested pattern in list cons element not yet supported"
-                            | AST.PConstructor _ ->
-                                Error "Nested pattern in list cons element not yet supported"
+                                extractElements rest tailResultVar env newBindings condAtoms vg2
+                            | (AST.PInt64 _ as litPat)
+                            | (AST.PInt8Literal _ as litPat)
+                            | (AST.PInt16Literal _ as litPat)
+                            | (AST.PInt32Literal _ as litPat)
+                            | (AST.PUInt8Literal _ as litPat)
+                            | (AST.PUInt16Literal _ as litPat)
+                            | (AST.PUInt32Literal _ as litPat)
+                            | (AST.PUInt64Literal _ as litPat) ->
+                                let literal =
+                                    match patternLiteralToSizedInt litPat with
+                                    | Some value -> value
+                                    | None -> Crash.crash $"Expected integer literal pattern, got {litPat}"
+                                let (litCheckVar, vg3) = ANF.freshVar vg2
+                                let litCheckExpr = ANF.Prim (ANF.Eq, ANF.Var headResultVar, ANF.IntLiteral literal)
+                                let bindingsWithCheck = newBindings @ [(litCheckVar, litCheckExpr)]
+                                extractElements rest tailResultVar env bindingsWithCheck (condAtoms @ [ANF.Var litCheckVar]) vg3
+                            | AST.PConstructor _ | AST.PList _ | AST.PListCons _ ->
+                                buildPatternComparison pat (ANF.Var headResultVar) vg2
+                                |> Result.bind (fun cmpOpt ->
+                                    match cmpOpt with
+                                    | None ->
+                                        extractElements rest tailResultVar env newBindings condAtoms vg2
+                                    | Some (condAtom, cmpBindings, vg3) ->
+                                        let bindingsWithCmp = newBindings @ cmpBindings
+                                        extractElements rest tailResultVar env bindingsWithCmp (condAtoms @ [condAtom]) vg3)
                             | _ ->
                                 Error $"Unsupported head pattern in multi-element list cons: {pat}"
 
@@ -5506,26 +5570,65 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let (initialListVar, vg3) = ANF.freshVar vg2
                     let initialListExpr = ANF.Atom listAtom
 
-                    extractElements headPatterns initialListVar currentEnv [(initialListVar, initialListExpr)] vg3
-                    |> Result.bind (fun (envAfterHeads, headBindings, finalTailVar, vg4) ->
-                        // Bind tail pattern
-                        let tailEnvResult =
+                    extractElements headPatterns initialListVar currentEnv [(initialListVar, initialListExpr)] [] vg3
+                    |> Result.bind (fun (envAfterHeads, headBindings, finalTailVar, headCondAtoms, vg4) ->
+                        // Bind/check tail pattern
+                        let tailResult : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.Atom list * ANF.VarGen, string> =
                             match tailPattern with
-                            | AST.PVar name -> Ok (Map.add name (finalTailVar, listType) envAfterHeads, vg4)  // Use actual list type
-                            | AST.PWildcard -> Ok (envAfterHeads, vg4)
-                            | _ -> Error "Tail pattern must be variable or wildcard"
+                            | AST.PVar name ->
+                                Ok (Map.add name (finalTailVar, listType) envAfterHeads, [], [], vg4)
+                            | AST.PWildcard ->
+                                Ok (envAfterHeads, [], [], vg4)
+                            | _ ->
+                                buildPatternComparison tailPattern (ANF.Var finalTailVar) vg4
+                                |> Result.map (fun cmpOpt ->
+                                    match cmpOpt with
+                                    | None -> (envAfterHeads, [], [], vg4)
+                                    | Some (condAtom, cmpBindings, vg5) ->
+                                        (envAfterHeads, cmpBindings, [condAtom], vg5))
 
-                        tailEnvResult
-                        |> Result.bind (fun (finalEnv, vg5) ->
+                        tailResult
+                        |> Result.bind (fun (finalEnv, tailBindings, tailCondAtoms, vg5) ->
+                            let allCondAtoms = headCondAtoms @ tailCondAtoms
                             toANF body vg5 finalEnv typeReg variantLookup funcReg moduleRegistry
                             |> Result.map (fun (bodyExpr, vg6) ->
-                                // Wrap bindings around body
-                                let withHeadBindings = wrapBindings headBindings bodyExpr
-                                // Check length condition
-                                let ifExpr = ANF.If (ANF.Var lengthCheckVar, withHeadBindings, elseExpr)
+                                // Apply tail/head extraction bindings
+                                let withExtractBindings = wrapBindings (headBindings @ tailBindings) bodyExpr
+
+                                // Apply additional pattern conditions if needed
+                                let (withPatternChecks, vg7) =
+                                    match allCondAtoms with
+                                    | [] ->
+                                        (withExtractBindings, vg6)
+                                    | checks ->
+                                        let rec buildCombinedChecks
+                                            (remaining: ANF.Atom list)
+                                            (accBindings: (ANF.TempId * ANF.CExpr) list)
+                                            (prevCond: ANF.Atom option)
+                                            (vg: ANF.VarGen)
+                                            : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
+                                            match remaining with
+                                            | [] ->
+                                                match prevCond with
+                                                | Some cond -> (cond, accBindings, vg)
+                                                | None -> (ANF.BoolLiteral true, accBindings, vg)
+                                            | condAtom :: rest ->
+                                                match prevCond with
+                                                | None ->
+                                                    buildCombinedChecks rest accBindings (Some condAtom) vg
+                                                | Some prevCondAtom ->
+                                                    let (combinedVar, vg1) = ANF.freshVar vg
+                                                    let combinedExpr = ANF.Prim (ANF.And, prevCondAtom, condAtom)
+                                                    buildCombinedChecks rest (accBindings @ [(combinedVar, combinedExpr)]) (Some (ANF.Var combinedVar)) vg1
+                                        let (combinedCondAtom, condBindings, vg7') = buildCombinedChecks checks [] None vg6
+                                        let checkedBody = ANF.If (combinedCondAtom, withExtractBindings, elseExpr)
+                                        (wrapBindings condBindings checkedBody, vg7')
+
+                                // Check length condition first
+                                let ifExpr = ANF.If (ANF.Var lengthCheckVar, withPatternChecks, elseExpr)
                                 let withLengthCheck = ANF.Let (lengthCheckVar, lengthCheckExpr, ifExpr)
                                 let finalExpr = ANF.Let (lengthVar, lengthExpr, withLengthCheck)
-                                (finalExpr, vg6))))
+                                (finalExpr, vg7))))
 
             // Build OR of multiple pattern conditions for pattern grouping
             // Returns: combined condition atom, all bindings, updated vargen
@@ -5564,6 +5667,54 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     buildOr rest newCondOpt newBindings vg2)
                     buildOr multiple None [] vg
 
+            let escapeForRuntimeError (text: string) : string =
+                text
+                |> String.collect (fun ch ->
+                    match ch with
+                    | '\\' -> "\\\\"
+                    | '"' -> "\\\""
+                    | '\n' -> "\\n"
+                    | '\r' -> "\\r"
+                    | '\t' -> "\\t"
+                    | _ -> string ch)
+
+            let rec formatMatchValueForError (expr: AST.Expr) : string option =
+                match expr with
+                | AST.Int64Literal n -> Some $"{n}"
+                | AST.Int8Literal n -> Some $"{n}"
+                | AST.Int16Literal n -> Some $"{n}"
+                | AST.Int32Literal n -> Some $"{n}"
+                | AST.UInt8Literal n -> Some $"{n}"
+                | AST.UInt16Literal n -> Some $"{n}"
+                | AST.UInt32Literal n -> Some $"{n}"
+                | AST.UInt64Literal n -> Some $"{n}"
+                | AST.BoolLiteral b -> Some (if b then "true" else "false")
+                | AST.FloatLiteral f -> Some $"{f}"
+                | AST.UnitLiteral -> Some "()"
+                | AST.StringLiteral s -> Some $"\"{escapeForRuntimeError s}\""
+                | AST.CharLiteral c -> Some $"'{escapeForRuntimeError c}'"
+                | AST.Constructor (typeName, variantName, payload) ->
+                    let fullName =
+                        if typeName = "" then
+                            variantName
+                        else
+                            $"{typeName}.{variantName}"
+                    match payload with
+                    | None -> Some fullName
+                    | Some payloadExpr ->
+                        formatMatchValueForError payloadExpr
+                        |> Option.map (fun payloadText -> $"{fullName}({payloadText})")
+                | _ -> None
+
+            let makeNoMatchingCaseFallback (vg: ANF.VarGen) : ANF.AExpr * ANF.VarGen =
+                let valueText =
+                    formatMatchValueForError scrutinee
+                    |> Option.defaultValue "<unknown>"
+                let message = $"No matching case found for value {valueText} in match expression"
+                let (errorVar, vg1) = ANF.freshVar vg
+                let errorExpr = ANF.RuntimeError message
+                (ANF.Let (errorVar, errorExpr, ANF.Return (ANF.Var errorVar)), vg1)
+
             // Build the if-else chain from cases
             let rec buildChain (remaining: AST.MatchCase list) (vg: ANF.VarGen) : Result<ANF.AExpr * ANF.VarGen, string> =
                 match remaining with
@@ -5571,38 +5722,27 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // No cases left - shouldn't happen if we have wildcard/var
                     Error "Non-exhaustive pattern match"
                 | [mc] ->
-                    // Last case - for most patterns just compile the body
-                    // For now, use first pattern (pattern grouping not yet fully supported)
                     let pattern = AST.NonEmptyList.head mc.Patterns
                     let body = mc.Body
-                    // For non-empty list patterns, we still need proper length checking
-                    match pattern with
-                    | AST.PList (_ :: _ as listPatterns) ->
-                        // Explicit list pattern like [a, b] as the only/last case with no wildcard
-                        // This is non-exhaustive - reject at compile time
-                        Error "Non-exhaustive pattern match: list pattern requires a catch-all case"
-                    | AST.PListCons (headPatterns, tailPattern) ->
-                        // List cons pattern as last case
-                        // Fallback should crash at runtime since it's unreachable code
-                        // Dereference null pointer (address 0) to trigger SIGSEGV
-                        let (crashVar, vg') = ANF.freshVar vg
-                        let crashExpr = ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None)
-                        let fallbackExpr = ANF.Let (crashVar, crashExpr, ANF.Return (ANF.Var crashVar))
-                        compileListConsPatternWithChecks headPatterns tailPattern scrutineeAtom' scrutType env body fallbackExpr vg'
-                    | _ ->
-                        // Other patterns - original behavior
-                        // Handle guard if present
-                        match mc.Guard with
+                    let (fallbackExpr, vg1) = makeNoMatchingCaseFallback vg
+                    buildPatternGroupComparison (AST.NonEmptyList.toList mc.Patterns) scrutineeAtom' vg1
+                    |> Result.bind (fun cmpOpt ->
+                        let compileBodyWithGuard (vgBody: ANF.VarGen) : Result<ANF.AExpr * ANF.VarGen, string> =
+                            match mc.Guard with
+                            | None -> extractAndCompileBody pattern body scrutineeAtom' scrutType env vgBody
+                            | Some guardExpr ->
+                                extractAndCompileBodyWithGuard pattern guardExpr body scrutineeAtom' scrutType env vgBody fallbackExpr
+
+                        match cmpOpt with
                         | None ->
-                            extractAndCompileBody pattern body scrutineeAtom' scrutType env vg
-                        | Some guardExpr ->
-                            // With guard: compile pattern match with guard check
-                            // Fallback should crash at runtime since it's unreachable code
-                            // Dereference null pointer (address 0) to trigger SIGSEGV
-                            let (crashVar, vg') = ANF.freshVar vg
-                            let crashExpr = ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None)
-                            let fallbackExpr = ANF.Let (crashVar, crashExpr, ANF.Return (ANF.Var crashVar))
-                            extractAndCompileBodyWithGuard pattern guardExpr body scrutineeAtom' scrutType env vg' fallbackExpr
+                            // Pattern always matches; guard (if any) decides between body/fallback.
+                            compileBodyWithGuard vg1
+                        | Some (condAtom, bindings, vg2) ->
+                            compileBodyWithGuard vg2
+                            |> Result.map (fun (thenExpr, vg3) ->
+                                let ifExpr = ANF.If (condAtom, thenExpr, fallbackExpr)
+                                let finalExpr = wrapBindings bindings ifExpr
+                                (finalExpr, vg3)))
                 | mc :: rest ->
                     // For pattern grouping, use first pattern for bindings but OR all patterns for comparison
                     let firstPattern = AST.NonEmptyList.head mc.Patterns
@@ -5667,8 +5807,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
             buildChain cases varGen1'
             |> Result.map (fun (chainExpr, varGen2) ->
-                let exprWithBindings = wrapBindings scrutineeBindings' chainExpr
-                (exprWithBindings, varGen2)))
+                let chainWithPostBindings = wrapBindings scrutineePostBindings chainExpr
+                let exprWithScrutinee = bindReturns scrutineeExpr (fun _ -> chainWithPostBindings)
+                (exprWithScrutinee, varGen2)))
 
     | AST.InterpolatedString parts ->
         // Desugar interpolated string to StringConcat chain
@@ -6082,6 +6223,8 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
     | AST.Call (funcName, args) ->
         if isBuiltinUnwrapName funcName then
             Error "Internal error: Builtin.unwrap should be lowered via toANF, not toAtom"
+        elif isBuiltinTestRuntimeErrorName funcName then
+            Error "Internal error: Builtin.testRuntimeError should be lowered via toANF, not toAtom"
         else
             // Function call in atom position: convert all arguments to atoms
             let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
