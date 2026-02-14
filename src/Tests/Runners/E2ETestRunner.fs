@@ -109,16 +109,20 @@ let private collectSpecsFromTests
         match remaining with
         | [] -> Ok acc
         | test :: rest ->
-            CompilerLibrary.parseProgram sourceSyntax allowInternal test.Source
-            |> Result.mapError (fun err ->
-                $"Test parse error ({test.SourceFile}: {test.Name}): {err}")
-            |> Result.bind (fun testAst ->
-                checkProgramWithBaseEnv typeCheckEnv testAst
-                |> Result.mapError (fun err ->
-                    $"Test type error ({test.SourceFile}: {test.Name}): {typeErrorToString err}")
-                |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
-            |> Result.bind (fun specs ->
-                loop rest (Set.union acc specs))
+            let specsResult =
+                CompilerLibrary.parseProgram sourceSyntax allowInternal test.Source
+                |> Result.bind (fun testAst ->
+                    checkProgramWithBaseEnv typeCheckEnv testAst
+                    |> Result.mapError typeErrorToString
+                    |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
+
+            match specsResult with
+            | Ok specs ->
+                loop rest (Set.union acc specs)
+            | Error _ ->
+                // Best effort: a test may intentionally fail to parse/typecheck,
+                // and that should not prevent building suite-level specializations.
+                loop rest acc
     loop testsToAnalyze Set.empty
 
 let private buildPreamblePlan
@@ -129,16 +133,22 @@ let private buildPreamblePlan
     let preambleUnsupportedForSyntax =
         spec.SourceSyntax = CompilerLibrary.InterpreterSyntax
     if preambleUnsupportedForSyntax then
-        let plan = {
-            Spec = spec
-            Analysis = None
-            Specialization = {
-                SpecializedFuncs = []
-                SpecRegistry = Map.empty
-                ExternalSpecs = Set.empty
+        // Interpreter syntax currently skips preamble compilation, but tests still
+        // need stdlib specializations for generic calls in TestExpression mode.
+        let typeCheckEnv = stdlib.Context.TypeCheckEnv
+        collectSpecsFromTests spec.AllowInternal spec.SourceSyntax typeCheckEnv tests
+        |> Result.map (fun testSpecs ->
+            let stdlibSpecs = filterSpecsByDefs stdlib.Context.GenericFuncDefs testSpecs
+            let plan = {
+                Spec = spec
+                Analysis = None
+                Specialization = {
+                    SpecializedFuncs = []
+                    SpecRegistry = Map.empty
+                    ExternalSpecs = Set.empty
+                }
             }
-        }
-        Ok (plan, Set.empty)
+            (plan, stdlibSpecs))
     else
         let preambleIsEmpty = String.IsNullOrWhiteSpace spec.Preamble
         let analysisResult =

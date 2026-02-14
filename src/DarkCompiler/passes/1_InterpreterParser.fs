@@ -1154,15 +1154,26 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         | _ -> Error "Expected pattern (_, variable, literal, or constructor)"
 
     let rec parseConsTail (headPattern: Pattern) (remaining: Token list) : Result<Pattern * Token list, string> =
+        let rec normalizeConsPattern (headPatterns: Pattern list) (tailPattern: Pattern) : Pattern =
+            match tailPattern with
+            | PList listTail ->
+                // a :: b :: [c; d]  ==>  [a; b; c; d]
+                PList (headPatterns @ listTail)
+            | PListCons (moreHeads, tail) ->
+                // Flatten chained cons heads while preserving order.
+                normalizeConsPattern (headPatterns @ moreHeads) tail
+            | _ ->
+                PListCons (headPatterns, tailPattern)
+
         match remaining with
         | TCons :: rest ->
             parsePattern rest
             |> Result.map (fun (tailPattern, rest') ->
                 match tailPattern with
                 | PListCons (tailHead, tailRest) ->
-                    (PListCons (headPattern :: tailHead, tailRest), rest')
+                    (normalizeConsPattern (headPattern :: tailHead) tailRest, rest')
                 | _ ->
-                    (PListCons ([headPattern], tailPattern), rest'))
+                    (normalizeConsPattern [headPattern] tailPattern, rest'))
         | _ ->
             Ok (headPattern, remaining)
 
@@ -1302,7 +1313,6 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TFloat _ :: _
         | TStringLit _ :: _
         | TCharLit _ :: _
-        | TInterpString _ :: _
         | TTrue :: _
         | TFalse :: _
         | TIdent _ :: _

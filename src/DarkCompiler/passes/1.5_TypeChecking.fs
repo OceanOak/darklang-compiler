@@ -1990,9 +1990,14 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
                 let ensureLiteralType (expectedType: Type) : Result<(string * Type) list, TypeError> =
                     let resolvedPatternType = resolveType aliasReg patternType
-                    if resolvedPatternType = expectedType then
+                    match resolvedPatternType with
+                    | t when t = expectedType ->
                         Ok []
-                    else
+                    | TVar _ ->
+                        // Leave unresolved pattern literals flexible until concrete type information arrives.
+                        // This is important for patterns like `match [] with | [1L] -> ...`.
+                        Ok []
+                    | _ ->
                         Error (GenericError $"Integer literal pattern used on non-{typeToString expectedType} type")
 
                 match pattern with
