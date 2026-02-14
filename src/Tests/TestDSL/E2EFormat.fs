@@ -233,7 +233,7 @@ let private isExpectationStart (rest: string) : bool =
     let trimmed = rest.TrimStart()
     if trimmed.Length = 0 then false
     elif Char.IsDigit(trimmed.[0]) || trimmed.[0] = '-' then true
-    elif trimmed.[0] = '"' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
+    elif trimmed.[0] = '"' || trimmed.[0] = '\'' || trimmed.[0] = '(' || trimmed.[0] = '[' then true
     elif Char.IsLetter(trimmed.[0]) then true
     elif trimmed.StartsWith("exit") || trimmed.StartsWith("stdout") || trimmed.StartsWith("stderr") || trimmed.StartsWith("skip") || trimmed.StartsWith("no_free_list") || trimmed.StartsWith("disable_leak_check") || trimmed.StartsWith("error") || trimmed.StartsWith("disable_opt_") then true
     else false
@@ -268,6 +268,7 @@ let private isExpectationCandidate (rest: string) : bool =
     if not (isExpectationStart trimmed) then
         false
     elif trimmed.StartsWith("\"")
+         || trimmed.StartsWith("'")
          || trimmed.StartsWith("error")
          || trimmed.StartsWith("stdout")
          || trimmed.StartsWith("stderr")

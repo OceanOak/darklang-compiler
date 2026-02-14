@@ -156,6 +156,7 @@ let private buildPreamblePlan
             Ok None
         else
             CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble
+            |> Result.mapError (fun err -> $"Preamble parse error in {spec.SourceFile}: {err}")
             |> Result.map Some
 
     analysisResult

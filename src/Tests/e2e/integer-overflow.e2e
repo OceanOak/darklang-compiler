@@ -9,17 +9,17 @@
 // ===================================================================
 
 // Int8: range -128 to 127
-127y + 1y = -128y// MAX + 1 wraps to MIN
+127y + 1y = -127y - 1y // MAX + 1 wraps to MIN
 -127y - 2y = 127y// MIN - 1 wraps to MAX (use -127-2 instead of -128-1)
 100y + 100y = -56y// 200 wraps to -56 (200 - 256)
 
 // Int16: range -32768 to 32767
-32767s + 1s = -32768s// MAX + 1 wraps to MIN
+32767s + 1s = -32767s - 1s // MAX + 1 wraps to MIN
 -32767s - 2s = 32767s// MIN - 1 wraps to MAX (use -32767-2 instead of -32768-1)
 20000s + 20000s = -25536s// 40000 wraps to -25536 (40000 - 65536)
 
 // Int32: range -2147483648 to 2147483647
-2147483647l + 1l = -2147483648l// MAX + 1 wraps to MIN
+2147483647l + 1l = -2147483647l - 1l // MAX + 1 wraps to MIN
 -2147483647l - 2l = 2147483647l// MIN - 1 wraps to MAX
 
 

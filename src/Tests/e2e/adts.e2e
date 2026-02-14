@@ -30,12 +30,12 @@ type Three = A | B of Int64 | C match B(77) with | A -> 0 | B(x) -> x | C -> 0 =
 
 // Sum type with string payload
 type Message = NoMessage | Text of String
-match Text("hello") with | Text(s) -> s | NoMessage -> "none" = hello
-match NoMessage with | Text(s) -> s | NoMessage -> "none" = none
+match Text("hello") with | Text(s) -> s | NoMessage -> "none" = "hello"
+match NoMessage with | Text(s) -> s | NoMessage -> "none" = "none"
 
 // String payload in let binding
 type Msg = NoMsg | Msg of String
-let m = Msg("world") in match m with | Msg(s) -> s | NoMsg -> "" = world
+let m = Msg("world") in match m with | Msg(s) -> s | NoMsg -> "" = "world"
 
 // ===================================================================
 // Sum Types with Float Payloads
@@ -100,8 +100,8 @@ match IntOk(42) with | IntOk(n) -> n | IntErr(s) -> 0 = 42
 
 // Result with both string payloads
 type StrResult = StrOk of String | StrErr of String
-match StrOk("success") with | StrOk(s) -> s | StrErr(e) -> e = success
-match StrErr("failed") with | StrOk(s) -> s | StrErr(e) -> e = failed
+match StrOk("success") with | StrOk(s) -> s | StrErr(e) -> e = "success"
+match StrErr("failed") with | StrOk(s) -> s | StrErr(e) -> e = "failed"
 
 // ===================================================================
 // Type Aliases to Primitive Types (must NOT be parsed as sum types)
@@ -119,7 +119,7 @@ useInt64(41) = 42
 // Test that String is recognized as a primitive type, not a variant name
 type StrAlias = String
 def useString(s: String): String = s
-useString("hello") = hello
+useString("hello") = "hello"
 
 // Test that Bool is recognized as a primitive type, not a variant name
 type BoolAlias = Bool

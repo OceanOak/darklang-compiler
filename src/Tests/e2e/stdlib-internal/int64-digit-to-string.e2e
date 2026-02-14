@@ -2,6 +2,6 @@
 //
 // Internal identifiers are only allowed in stdlib-internal test files.
 
-Stdlib.Int64.__digitToString(0) = 0
-Stdlib.Int64.__digitToString(5) = 5
-Stdlib.Int64.__digitToString(9) = 9
+Stdlib.Int64.__digitToString(0) = "0"
+Stdlib.Int64.__digitToString(5) = "5"
+Stdlib.Int64.__digitToString(9) = "9"

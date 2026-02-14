@@ -72,10 +72,10 @@ let x = Option.None in Option.withDefault(x, "hello") = "hello"
 let x = Option.None in Option.withDefault(x, true) = true
 
 // Float64
-let x = Option.None in Option.withDefault(x, 3.14) = "3.14"
+let x = Option.None in Option.withDefault(x, 3.14) = 3.14
 
 // Char
-let x = Option.None in Option.withDefault(x, 'a') = "a"
+let x = Option.None in Option.withDefault(x, 'a') = stdout="a"
 
 // Unit
 let x = Option.None in Option.withDefault(x, ()) = ()

@@ -293,13 +293,13 @@ let paddedMsg = Bytes.fromList([97, 32, 108, 111, 110, 103, 101, 114, 32, 115, 1
 Crypto.debugMd5PaddedLen(Bytes.fromList([97, 32, 108, 111, 110, 103, 101, 114, 32, 115, 116, 114, 105, 110, 103, 32, 116, 104, 97, 116, 39, 115, 32, 109, 111, 114, 101, 32, 105, 110, 116, 101, 114, 101, 115, 116, 105, 110, 103, 32, 116, 111, 32, 104, 97, 115, 104])) = 64
 
 // Test copying bytes from Bytes to List - first 4 bytes should be [97, 32, 108, 111]
-Crypto.debugCopyFirst4(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = [97uy, 32uy, 108uy, 111uy]
+Crypto.debugCopyFirst4(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = stdout="[97, 32, 108, 111]"
 
 // Test using List.append instead of flatten
-Crypto.debugAppendFirst4(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = [97uy, 32uy, 108uy, 111uy]
+Crypto.debugAppendFirst4(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = stdout="[97, 32, 108, 111]"
 
 // Test just assigning to a variable
-Crypto.debugJustAssign(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = [97uy, 32uy, 108uy, 111uy]
+Crypto.debugJustAssign(Bytes.fromList([97, 32, 108, 111, 110, 73, 101, 114])) = stdout="[97, 32, 108, 111]"
 
 // Test the actual padded message from md5 function matches manual padding
 let paddedFromMd5 = Crypto.debugMd5Padded(Bytes.fromList([97, 32, 108, 111, 110, 103, 101, 114, 32, 115, 116, 114, 105, 110, 103, 32, 116, 104, 97, 116, 39, 115, 32, 109, 111, 114, 101, 32, 105, 110, 116, 101, 114, 101, 115, 116, 105, 110, 103, 32, 116, 111, 32, 104, 97, 115, 104])) in Crypto.debugMd5Words(paddedFromMd5) = (1869357153, 1919248238, 1920234272, 543649385)
@@ -448,4 +448,3 @@ let padded = Bytes.fromList([128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 // From Python: after round 54, state = (1444808329, 959107280, 877720619, 1445306644)
 // After round 64, state = (1917254355, 350508294, 4283343851, 1846584438)
 let padded = Bytes.fromList([128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) in Crypto.debugMd5Round55to64(padded) = (1917254355, 350508294, 4283343851, 1846584438)
-
