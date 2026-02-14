@@ -2135,6 +2135,70 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | _, Error e -> Error e
                     | _ -> Error (GenericError "List cons pattern used on non-list type")
 
+            let rec patternBindingNames (pattern: Pattern) : string list =
+                match pattern with
+                | PUnit
+                | PWildcard
+                | PInt64 _
+                | PInt8Literal _
+                | PInt16Literal _
+                | PInt32Literal _
+                | PUInt8Literal _
+                | PUInt16Literal _
+                | PUInt32Literal _
+                | PUInt64Literal _
+                | PBool _
+                | PString _
+                | PFloat _ -> []
+                | PVar name -> [ name ]
+                | PConstructor (_, payloadOpt) ->
+                    match payloadOpt with
+                    | Some payloadPattern -> patternBindingNames payloadPattern
+                    | None -> []
+                | PTuple patterns
+                | PList patterns ->
+                    patterns |> List.collect patternBindingNames
+                | PRecord (_, fieldPatterns) ->
+                    fieldPatterns |> List.collect (fun (_, fieldPattern) -> patternBindingNames fieldPattern)
+                | PListCons (headPatterns, tailPattern) ->
+                    (headPatterns |> List.collect patternBindingNames) @ patternBindingNames tailPattern
+
+            let duplicatePatternBindings (pattern: Pattern) : string list =
+                patternBindingNames pattern
+                |> List.countBy id
+                |> List.choose (fun (name, count) -> if count > 1 then Some name else None)
+                |> List.sort
+
+            let formatBindingSet (bindingSet: Set<string>) : string =
+                bindingSet
+                |> Set.toList
+                |> List.sort
+                |> String.concat ", "
+
+            let validatePatternGroupBindings (patterns: NonEmptyList<Pattern>) : Result<unit, TypeError> =
+                let allPatterns = NonEmptyList.toList patterns
+
+                let rec loop (remaining: Pattern list) (expectedBindings: Set<string> option) : Result<unit, TypeError> =
+                    match remaining with
+                    | [] -> Ok ()
+                    | pattern :: rest ->
+                        let duplicates = duplicatePatternBindings pattern
+                        if not (List.isEmpty duplicates) then
+                            let duplicateNames = String.concat ", " duplicates
+                            Error (GenericError $"Duplicate pattern bindings are not allowed: {duplicateNames}")
+                        else
+                            let bindings = collectPatternBindings pattern
+                            match expectedBindings with
+                            | None -> loop rest (Some bindings)
+                            | Some expected when expected = bindings ->
+                                loop rest expectedBindings
+                            | Some expected ->
+                                let expectedText = formatBindingSet expected
+                                let actualText = formatBindingSet bindings
+                                Error (GenericError $"Pattern grouping requires complete bindings in every alternative: expected [{expectedText}], got [{actualText}]")
+
+                loop allPatterns None
+
             // Type check each case and ensure they all return the same type
             // Returns (resultType, transformedCases)
             let rec checkCases (remaining: MatchCase list) (resultType: Type option) (accCases: MatchCase list) : Result<Type * MatchCase list, TypeError> =
@@ -2144,38 +2208,39 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | Some t -> Ok (t, List.rev accCases)
                     | None -> Error (GenericError "Match expression must have at least one case")
                 | matchCase :: rest ->
-                    // Extract bindings from first pattern (all patterns in group bind same vars)
-                    // For pattern grouping, we check the first pattern's bindings
-                    let firstPattern = NonEmptyList.head matchCase.Patterns
-                    extractPatternBindings firstPattern scrutineeType
-                    |> Result.bind (fun bindings ->
-                        let caseEnv = List.fold (fun e (name, ty) -> Map.add name ty e) env bindings
-                        // Type check guard if present (must be Bool)
-                        let guardResult =
-                            match matchCase.Guard with
-                            | None -> Ok None
-                            | Some guardExpr ->
-                                checkExpr guardExpr caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
-                                |> Result.bind (fun (guardType, guard') ->
-                                    if guardType = TBool then
-                                        Ok (Some guard')
-                                    else
-                                        Error (TypeMismatch (TBool, guardType, "guard clause")))
-                        guardResult
-                        |> Result.bind (fun guard' ->
-                            checkExpr matchCase.Body caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg resultType
-                            |> Result.bind (fun (bodyType, body') ->
-                                let newCase = { Patterns = matchCase.Patterns; Guard = guard'; Body = body' }
-                                match resultType with
-                                | None -> checkCases rest (Some bodyType) (newCase :: accCases)
-                                | Some expected ->
-                                    // Use reconcileTypes to handle type variables and type aliases
-                                    match reconcileTypes (Some aliasReg) expected bodyType with
-                                    | Some reconciledType ->
-                                        // Update resultType to the reconciled (concrete) type
-                                        checkCases rest (Some reconciledType) (newCase :: accCases)
-                                    | None ->
-                                        Error (TypeMismatch (expected, bodyType, "match case")))))
+                    validatePatternGroupBindings matchCase.Patterns
+                    |> Result.bind (fun () ->
+                        // Extract bindings from first pattern after validation.
+                        let firstPattern = NonEmptyList.head matchCase.Patterns
+                        extractPatternBindings firstPattern scrutineeType
+                        |> Result.bind (fun bindings ->
+                            let caseEnv = List.fold (fun e (name, ty) -> Map.add name ty e) env bindings
+                            // Type check guard if present (must be Bool)
+                            let guardResult =
+                                match matchCase.Guard with
+                                | None -> Ok None
+                                | Some guardExpr ->
+                                    checkExpr guardExpr caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+                                    |> Result.bind (fun (guardType, guard') ->
+                                        if guardType = TBool then
+                                            Ok (Some guard')
+                                        else
+                                            Error (TypeMismatch (TBool, guardType, "guard clause")))
+                            guardResult
+                            |> Result.bind (fun guard' ->
+                                checkExpr matchCase.Body caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg resultType
+                                |> Result.bind (fun (bodyType, body') ->
+                                    let newCase = { Patterns = matchCase.Patterns; Guard = guard'; Body = body' }
+                                    match resultType with
+                                    | None -> checkCases rest (Some bodyType) (newCase :: accCases)
+                                    | Some expected ->
+                                        // Use reconcileTypes to handle type variables and type aliases
+                                        match reconcileTypes (Some aliasReg) expected bodyType with
+                                        | Some reconciledType ->
+                                            // Update resultType to the reconciled (concrete) type
+                                            checkCases rest (Some reconciledType) (newCase :: accCases)
+                                        | None ->
+                                            Error (TypeMismatch (expected, bodyType, "match case"))))))
 
             // Pass expectedType to first case so empty lists, None, etc. get the right type
             checkCases cases expectedType []
