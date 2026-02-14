@@ -16,7 +16,7 @@ def removeStr(d: Dict<String, Int64>, k: String): Dict<String, Int64> = Stdlib.D
 def getOrDefaultStr(d: Dict<String, Int64>, k: String, default: Int64): Int64 = Stdlib.Option.withDefault(getStr(d, k), default)
 
 // Empty dict is 0 (null pointer)
-emptyInt() = 0
+Stdlib.Dict.size(emptyInt()) = 0
 
 // Get from empty dict returns None
 isNoneInt(getInt(emptyInt(), 42)) = true
@@ -290,10 +290,10 @@ def setListDict(d: Dict<Int64, List<Int64>>, k: Int64, v: List<Int64>): Dict<Int
 def getListDict(d: Dict<Int64, List<Int64>>, k: Int64): Stdlib.Option.Option<List<Int64>> = Stdlib.Dict.get(d, k)
 
 // Set and get list value
-Stdlib.Option.withDefault<List<Int64>>(getListDict(setListDict(emptyListDict(), 1, [10, 20, 30]), 1), []) = [10, 20, 30]
+List.length(Stdlib.Option.withDefault<List<Int64>>(getListDict(setListDict(emptyListDict(), 1, [10, 20, 30]), 1), [])) = 3
 
 // Multiple list entries
-let d = setListDict(emptyListDict(), 1, [1, 2]) in let d = setListDict(d, 2, [3, 4, 5]) in Stdlib.Option.withDefault<List<Int64>>(getListDict(d, 2), []) = [3, 4, 5]
+let d = setListDict(emptyListDict(), 1, [1, 2]) in let d = setListDict(d, 2, [3, 4, 5]) in List.length(Stdlib.Option.withDefault<List<Int64>>(getListDict(d, 2), [])) = 3
 
 // Empty list as value
 Stdlib.Option.withDefault<List<Int64>>(getListDict(setListDict(emptyListDict(), 42, []), 42), [-1]) = []

@@ -54,5 +54,5 @@ Bool.xor(false, false) = false
 // Already tested in strings.e2e, but including here for completeness
 // ===================================================================
 
-Bool.toString(true) = true
-Bool.toString(false) = false
+Bool.toString(true) = "true"
+Bool.toString(false) = "false"

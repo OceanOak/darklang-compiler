@@ -66,40 +66,40 @@ Option.Some(10) |> Option.map((x: Int64) => x * 2) |> Option.withDefault(0) = 20
 let x = Option.None in Option.withDefault(x, 42) = 42
 
 // String
-let x = Option.None in Option.withDefault(x, "hello") = hello
+let x = Option.None in Option.withDefault(x, "hello") = "hello"
 
 // Bool
 let x = Option.None in Option.withDefault(x, true) = true
 
 // Float64
-let x = Option.None in Option.withDefault(x, 3.14) = 3.14
+let x = Option.None in Option.withDefault(x, 3.14) = "3.14"
 
 // Char
-let x = Option.None in Option.withDefault(x, 'a') = a
+let x = Option.None in Option.withDefault(x, 'a') = "a"
 
 // Unit
 let x = Option.None in Option.withDefault(x, ()) = ()
 
 // Int8
-let x = Option.None in Option.withDefault(x, 42y) = 42
+let x = Option.None in Option.withDefault(x, 42y) = 42y
 
 // Int16
-let x = Option.None in Option.withDefault(x, 42s) = 42
+let x = Option.None in Option.withDefault(x, 42s) = 42s
 
 // Int32
-let x = Option.None in Option.withDefault(x, 42l) = 42
+let x = Option.None in Option.withDefault(x, 42l) = 42l
 
 // UInt8
-let x = Option.None in Option.withDefault(x, 42uy) = 42
+let x = Option.None in Option.withDefault(x, 42uy) = 42uy
 
 // UInt16
-let x = Option.None in Option.withDefault(x, 42us) = 42
+let x = Option.None in Option.withDefault(x, 42us) = 42us
 
 // UInt32
-let x = Option.None in Option.withDefault(x, 42ul) = 42
+let x = Option.None in Option.withDefault(x, 42ul) = 42ul
 
 // UInt64
-let x = Option.None in Option.withDefault(x, 42UL) = 42
+let x = Option.None in Option.withDefault(x, 42UL) = 42UL
 
 // Tuple
 let x = Option.None in Option.withDefault(x, (1, 2)) = (1, 2)

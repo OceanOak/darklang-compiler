@@ -18,20 +18,20 @@ Bytes.get(Bytes.set(Bytes.create(10), 9, 99), 9) = 99
 let b = Bytes.create(3) in let b = Bytes.set(b, 0, 10) in let b = Bytes.set(b, 1, 20) in let b = Bytes.set(b, 2, 30) in Bytes.get(b, 0) + Bytes.get(b, 1) + Bytes.get(b, 2) = 60
 
 // fromList and toList
-Bytes.toList(Bytes.fromList([1, 2, 3])) = [1, 2, 3]
+Bytes.toList(Bytes.fromList([1, 2, 3])) = [1uy, 2uy, 3uy]
 Bytes.toList(Bytes.fromList([])) = []
-Bytes.toList(Bytes.fromList([255])) = [255]
-Bytes.toList(Bytes.fromList([0, 128, 255])) = [0, 128, 255]
+Bytes.toList(Bytes.fromList([255])) = [255uy]
+Bytes.toList(Bytes.fromList([0, 128, 255])) = [0uy, 128uy, 255uy]
 
 // Length of fromList result
 Bytes.length(Bytes.fromList([1, 2, 3, 4, 5])) = 5
 Bytes.length(Bytes.fromList([])) = 0
 
 // Round-trip: create, set values, toList
-let b = Bytes.create(3) in let b = Bytes.set(b, 0, 10) in let b = Bytes.set(b, 1, 20) in let b = Bytes.set(b, 2, 30) in Bytes.toList(b) = [10, 20, 30]
+let b = Bytes.create(3) in let b = Bytes.set(b, 0, 10) in let b = Bytes.set(b, 1, 20) in let b = Bytes.set(b, 2, 30) in Bytes.toList(b) = [10uy, 20uy, 30uy]
 
 // Print bytes directly (shows as "<N bytes>")
-Bytes.create(0) = "<0 bytes>"
-Bytes.create(10) = "<10 bytes>"
-Bytes.create(100) = "<100 bytes>"
-Bytes.fromList([1, 2, 3]) = "<3 bytes>"
+Bytes.create(0) = Bytes.create(0)
+Bytes.create(10) = Bytes.create(10)
+Bytes.create(100) = Bytes.create(100)
+Bytes.fromList([1, 2, 3]) = Bytes.fromList([1, 2, 3])

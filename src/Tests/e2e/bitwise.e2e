@@ -34,7 +34,7 @@
 10 << 4 = 160
 
 // Int32 shifts
-1l << 1l = 2
+1l << 1l = 2l
 
 // Shifting by 0
 42 << 0 = 42
@@ -150,15 +150,15 @@
 // ===================================================================
 
 // Basic NOT - inverts all bits
-~~~0 = -1                     // 0 -> all 1s (signed -1)
-~~~1 = -2                     // 0b...0001 -> 0b...1110 (signed -2)
-~~~2 = -3                     // 0b...0010 -> 0b...1101 (signed -3)
-~~~(-1) = 0                   // all 1s -> 0
+~~~0 = -1// 0 -> all 1s (signed -1)
+~~~1 = -2// 0b...0001 -> 0b...1110 (signed -2)
+~~~2 = -3// 0b...0010 -> 0b...1101 (signed -3)
+~~~(-1) = 0// all 1s -> 0
 
 // Bit patterns
-~~~255 = -256                 // 0x00FF -> 0xFF00 (sign-extended)
-~~~256 = -257                 // 0x0100 -> 0xFEFF
-~~~127 = -128                 // 0x7F -> 0x80
+~~~255 = -256// 0x00FF -> 0xFF00 (sign-extended)
+~~~256 = -257// 0x0100 -> 0xFEFF
+~~~127 = -128// 0x7F -> 0x80
 
 // Double negation is identity
 ~~~(~~~0) = 0
@@ -186,16 +186,16 @@ Int64.bitwiseOr(42, ~~~42) = -1
 Int64.bitwiseOr(255, ~~~255) = -1
 
 // Combined with shifts
-~~~(1 << 0) = -2              // Clear bit 0 (inverted)
-~~~(1 << 3) = -9              // Clear bit 3 (inverted)
-~~~(1 << 7) = -129            // Clear bit 7 (inverted)
-~~~(1 << 63) = 9223372036854775807   // Min int -> Max int
+~~~(1 << 0) = -2// Clear bit 0 (inverted)
+~~~(1 << 3) = -9// Clear bit 3 (inverted)
+~~~(1 << 7) = -129// Clear bit 7 (inverted)
+~~~(1 << 63) = 9223372036854775807// Min int -> Max int
 
 // Masking patterns with NOT
-(~~~255) & 65535 = 65280      // Mask out low byte: 0xFF00
+(~~~255) & 65535 = 65280// Mask out low byte: 0xFF00
 
 // De Morgan's Law: ~~~(a & b) = (~~~a) | (~~~b)
-~~~(12 & 10) = -9             // ~~~8 = -9
+~~~(12 & 10) = -9// ~~~8 = -9
 Int64.bitwiseOr(~~~12, ~~~10) = -9
 
 // Constant folding verification (in variables)
@@ -208,11 +208,11 @@ let z = 0 in ~~~z = -1
 // Sized Integer Bitwise Ops
 // ===================================================================
 
-1y & 3y = 1
-1y ^ 3y = 2
-5y << 1y = 10
-5y >> 1y = 2
-~~~1y = -2
+1y & 3y = 1y
+1y ^ 3y = 2y
+5y << 1y = 10y
+5y >> 1y = 2y
+~~~1y = -2y
 
 
 // ===================================================================
@@ -220,24 +220,24 @@ let z = 0 in ~~~z = -1
 // ===================================================================
 
 // Basic wrapping negation (two's complement)
-0 - 1 = -1                       // Wrapping subtraction
-0 - 12 = -12                     // Same as unary negation
+0 - 1 = -1// Wrapping subtraction
+0 - 12 = -12// Same as unary negation
 
 // Lowest set bit pattern: x & -x (used in nqueen)
-let x = 12 in x & (0 - x) = 4    // 12 = 0b1100, lowest bit at position 2 = 4
-let x = 8 in x & (0 - x) = 8     // 8 = 0b1000, power of 2, result = 8
-let x = 7 in x & (0 - x) = 1     // 7 = 0b0111, lowest bit = 1
-let x = 1 in x & (0 - x) = 1     // 1 = 0b0001, lowest bit = 1
+let x = 12 in x & (0 - x) = 4// 12 = 0b1100, lowest bit at position 2 = 4
+let x = 8 in x & (0 - x) = 8// 8 = 0b1000, power of 2, result = 8
+let x = 7 in x & (0 - x) = 1// 7 = 0b0111, lowest bit = 1
+let x = 1 in x & (0 - x) = 1// 1 = 0b0001, lowest bit = 1
 
 // Clear lowest set bit: x & (x - 1)
-let x = 12 in x & (x - 1) = 8    // 12 = 0b1100 -> 0b1000 = 8
-let x = 8 in x & (x - 1) = 0     // 8 = 0b1000 -> 0b0000 = 0
-let x = 7 in x & (x - 1) = 6     // 7 = 0b0111 -> 0b0110 = 6
+let x = 12 in x & (x - 1) = 8// 12 = 0b1100 -> 0b1000 = 8
+let x = 8 in x & (x - 1) = 0// 8 = 0b1000 -> 0b0000 = 0
+let x = 7 in x & (x - 1) = 6// 7 = 0b0111 -> 0b0110 = 6
 
 // nqueen availability check pattern
-let avail = 23 in let pos = avail & (0 - avail) in pos = 1     // 23 = 0b10111, lowest = 1
-let avail = 22 in let pos = avail & (0 - avail) in pos = 2     // 22 = 0b10110, lowest = 2
-let avail = 20 in let pos = avail & (0 - avail) in pos = 4     // 20 = 0b10100, lowest = 4
+let avail = 23 in let pos = avail & (0 - avail) in pos = 1// 23 = 0b10111, lowest = 1
+let avail = 22 in let pos = avail & (0 - avail) in pos = 2// 22 = 0b10110, lowest = 2
+let avail = 20 in let pos = avail & (0 - avail) in pos = 4// 20 = 0b10100, lowest = 4
 
 
 // ===================================================================

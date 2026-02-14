@@ -286,15 +286,15 @@ Stdlib.Option.withDefault(Stdlib.List.getAt([true, false, true, false, true, fal
 Stdlib.List.length([true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false]) = 16
 
 // String lists (6+)
-match ["a", "b", "c", "d", "e", "f"] with | [a, b, c, d, e, f] -> a ++ f | _ -> "" = af
+match ["a", "b", "c", "d", "e", "f"] with | [a, b, c, d, e, f] -> a ++ f | _ -> "" = "af"
 Stdlib.Option.withDefault(Stdlib.List.getAt(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"], 9), "") = "s10"
 Stdlib.Option.withDefault(Stdlib.List.getAt(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12"], 11), "") = "s12"
 Stdlib.Option.withDefault(Stdlib.List.getAt(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18", "t19", "t20"], 15), "") = "t16"
 
 // Record lists (6+)
-type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }] with | [a, b, c, d, e, f] -> f.name | _ -> "" = six
+type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }] with | [a, b, c, d, e, f] -> f.name | _ -> "" = "six"
 type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }] with | [a, b, c, d, e, f, g, h] -> a.id + h.id | _ -> 0 = 9
-type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }, Item { id = 9, name = "nine" }, Item { id = 10, name = "ten" }] with | [a, b, c, d, e, f, g, h, i, j] -> j.name | _ -> "" = ten
+type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }, Item { id = 9, name = "nine" }, Item { id = 10, name = "ten" }] with | [a, b, c, d, e, f, g, h, i, j] -> j.name | _ -> "" = "ten"
 
 // =====================================================
 // List Spread Construction Tests [a, b, ...rest]
@@ -371,7 +371,7 @@ match [(10, 3)] with | [(a, b)] -> a - b | _ -> 0 = 7
 match [(100, 40, 7)] with | [(a, b, c)] -> a - b - c | _ -> 0 = 53
 
 // List of float tuples
-match [(1.0, 2.5), (3.5, 4.0)] with | [t1, t2] -> t1.0 + t1.1 + t2.0 + t2.1 | _ -> 0.0 = 11.0
+match [(1.0, 2.5), (3.5, 4.0)] with | [t1, t2] -> t1.0 + t1.1 + t2.0 + t2.1 | _ -> 0.0 = "11.0"
 
 // Float tuple comparison inside list
 match [("a", 0.5)] with | [t] -> if t.1 < 0.6 then 1 else 0 | _ -> 0 = 1
@@ -384,13 +384,13 @@ def makeCumulative(table: List<(Int64, Float)>, running: Float) : List<(Int64, F
 // =====================================================
 
 // List of strings - basic
-match ["hello", "world"] with | [a, b] -> a ++ " " ++ b | _ -> "" = hello world
+match ["hello", "world"] with | [a, b] -> a ++ " " ++ b | _ -> "" = "hello world"
 
 // Single string in list
-match ["test"] with | [s] -> s | _ -> "" = test
+match ["test"] with | [s] -> s | _ -> "" = "test"
 
 // Three strings
-match ["a", "b", "c"] with | [x, y, z] -> x ++ y ++ z | _ -> "" = abc
+match ["a", "b", "c"] with | [x, y, z] -> x ++ y ++ z | _ -> "" = "abc"
 
 // =====================================================
 // Lists of Bools
@@ -411,8 +411,8 @@ match [true, false] with | [a, b] -> if a && b then 1 else 0 | _ -> -1 = 0
 // DISABLED: sumFloats([1.0, 2.0, 3.0, 4.0]) = stdout="10.00\n"
 
 // Concatenate list of strings
-def concatStrings(xs: List<String>) : String = match xs with | [] -> "" | [h, ...t] -> h ++ concatStrings(t)
-concatStrings(["a", "b", "c"]) = abc
+def concatStrings(xs: List<String>) : String = "match xs with | [] -> \"\" | [h, ...t] -> h ++ concatStrings(t)"
+concatStrings(["a", "b", "c"]) = "abc"
 
 // =====================================================
 // Middle Spine Access Tests (6+ element lists)
@@ -581,7 +581,7 @@ Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60, 70, 80, 90]
 // compute suffix slot offsets: 64 + (idx-1)*8 for s0, s1, s2, s3.
 // If idx - 1 were changed to idx + 1, the second element onwards would
 // be extracted from wrong offsets (e.g., idx=1 would read s2 instead of s0).
-type WrappedList = NoList | WrapList of List<Int64>
+type WrappedList = "NoList | WrapList of List<Int64>"
 match WrapList([100, 200, 300, 400]) with | WrapList([a, b, c, d]) -> c - d | NoList -> 999 = -100
 
 // =====================================================
@@ -599,7 +599,7 @@ match WrapList([100, 200, 300, 400]) with | WrapList([a, b, c, d]) -> c - d | No
 // - idx=4: offset 64 + (3 * 8) = 88 (s3) -- with / this becomes 64 + 0 = 64
 // Sum of c+d+e with correct offsets: 30+40+50 = 120
 // Sum of c+d+e with / mutation: 20+20+20 = 60 (all read from s0)
-type WrappedList5 = NoList5 | WrapList5 of List<Int64>
+type WrappedList5 = "NoList5 | WrapList5 of List<Int64>"
 match WrapList5([10, 20, 30, 40, 50]) with | WrapList5([a, b, c, d, e]) -> c + d + e | NoList5 -> 999 = 120
 
 // =====================================================

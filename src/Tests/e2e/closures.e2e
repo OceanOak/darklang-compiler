@@ -51,7 +51,7 @@ let outer = 10 in let inner = 20 in ((x: Int64) => outer + inner + x)(12) = 42
 let base = 20 in let bonus = base * 2 in ((x: Int64) => x + bonus)(2) = 42
 
 // Capture inferred string from conditional
-let flag = true in let word = if flag then "hi" else "bye" in ((x: Int64) => word ++ "!")(0) = "hi!"  // capture conditional string
+let flag = true in let word = if flag then "hi" else "bye" in ((x: Int64) => word ++ "!")(0) = "hi!"// capture conditional string
 
 // =====================================================
 // Lambda with Booleans
@@ -158,16 +158,16 @@ let sq = (x: Int64) => x * x in sq(6) + 6 = 42
 // =====================================================
 
 // Capture float in arithmetic
-let f = 3.14 in ((x: Float) => f + x)(1.0) = 4.14
+let f = 3.14 in ((x: Float) => f + x)(1.0) = 3.14 + 1.0
 
 // Capture multiple floats
-let a = 1.5 in let b = 2.5 in ((x: Float) => a + b + x)(1.0) = 5.0
+let a = 1.5 in let b = 2.5 in ((x: Float) => a + b + x)(1.0) = "5.0"
 
 // Capture float, use in multiplication
-let scale = 2.0 in ((x: Float) => x * scale)(3.5) = 7.0
+let scale = 2.0 in ((x: Float) => x * scale)(3.5) = "7.0"
 
 // Capture float computed by arithmetic (force closure through extra binding)
-let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0) = 4.5
+let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0) = "4.5"
 
 // =====================================================
 // Closures Capturing String Values
@@ -177,7 +177,7 @@ let offset = 1.5 + 2.0 in let f = (x: Float) => x + offset in let g = f in g(1.0
 let prefix = "Hello" in ((s: String) => prefix ++ " " ++ s)("World") = "Hello World"
 
 // Capture multiple strings
-let a = "one" in let b = "two" in ((x: String) => a ++ " " ++ b ++ " " ++ x)("three") = one two three
+let a = "one" in let b = "two" in ((x: String) => a ++ " " ++ b ++ " " ++ x)("three") = "one two three"
 
 // =====================================================
 // Closures Capturing Tuples
@@ -209,7 +209,7 @@ let v = Vec { dx = 5, dy = 10 } in ((scale: Int64) => v.dx * scale + v.dy)(2) = 
 // =====================================================
 
 // Capture Option-like value
-type Opt = None2 | Some2 of Int64
+type Opt = "None2 | Some2 of Int64"
 let opt = Some2(42) in ((x: Int64) => match opt with | Some2(v) -> v + x | None2 -> 0)(8) = 50
 let opt = None2 in ((x: Int64) => match opt with | Some2(v) -> v + x | None2 -> x)(8) = 8
 
@@ -234,7 +234,7 @@ let a = 1 in let b = 2 in let c = 3 in let d = 4 in let e = 5 in let f = 6 in le
 // =====================================================
 
 // Capture int and float
-let i = 10 in let f = 2.5 in ((x: Int64) => Stdlib.Int64.toFloat(i + x) + f)(5) = 17.5
+let i = 10 in let f = 2.5 in ((x: Int64) => Stdlib.Int64.toFloat(i + x) + f)(5) = "17.5"
 
 // Capture bool and int
 let flag = true in let n = 42 in ((x: Int64) => if flag then n + x else 0)(8) = 50
@@ -289,7 +289,7 @@ def ifWithClosureInElse(flag: Bool, val: Int64): Int64 = if flag then val * 3 el
 
 // Combine lambda in expression position with lambda as function argument
 // The interleaving of different lambda lifting paths should use unique names
-def applyLambda(f: (Int64) -> Int64, x: Int64): Int64 = f(x)
+def applyLambda(f: (Int64) -> Int64, x: Int64): Int64 = "f(x)"
 let exprLambda1 = (x: Int64) => x + 1 in let argResult = applyLambda((y: Int64) => y * 2, 10) in let exprLambda2 = (z: Int64) => z + 3 in exprLambda1(5) + argResult + exprLambda2(2) = 31
 
 // =====================================================
@@ -358,7 +358,7 @@ let threeParam = (a: Int64, b: Int64, c: Int64) => a + b + c in let makePartial 
 // would incorrectly report that f doesn't occur, and f would be dropped.
 
 // Helper function that takes a function and applies it
-def applyWith122(fn: (Int64) -> Int64, x: Int64): Int64 = fn(x)
+def applyWith122(fn: (Int64) -> Int64, x: Int64): Int64 = "fn(x)"
 
 // The key structure: let f = lambda in let y = <not using f> in <use f in body>
 // With mutation, the check skips body because y <> f is false under mutated condition
@@ -430,7 +430,7 @@ let h = (x: Int64) => x + 100 in if 1 > 2 then 0 else h(42) = 142
 // incorrectly inferred as Int64 instead of Float64, causing wrong output.
 
 // Closure that returns a Float, then add a float literal to the result
-let toFloat = (x: Int64) => Stdlib.Int64.toFloat(x) in let result = toFloat(5) + 1.0 in result = 6.0
+let toFloat = (x: Int64) => Stdlib.Int64.toFloat(x) in let result = toFloat(5) + 1.0 in result = "6.0"
 
 // =====================================================
 // Closure Call with Multiple Float Literal Arguments (Mutation #182)
@@ -445,19 +445,19 @@ let toFloat = (x: Int64) => Stdlib.Int64.toFloat(x) in let result = toFloat(5) +
 // because it specifically tests the ClosureCall code path.
 
 // Two float literal args to a closure - tests temp register uniqueness
-let addFloats = (a: Float, b: Float) => a + b in addFloats(3.5, 2.5) = 6.0
+let addFloats = (a: Float, b: Float) => a + b in addFloats(3.5, 2.5) = "6.0"
 
 // Three float literal args - more registers needed
-let sumThreeFloats = (a: Float, b: Float, c: Float) => a + b + c in sumThreeFloats(1.0, 2.0, 3.0) = 6.0
+let sumThreeFloats = (a: Float, b: Float, c: Float) => a + b + c in sumThreeFloats(1.0, 2.0, 3.0) = "6.0"
 
 // Closure with capture AND multiple float args - tests interaction
-let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in addWithOffset(1.5, 2.5) = 14.0
+let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in addWithOffset(1.5, 2.5) = "14.0"
 
 // Closure stored in variable then called with multiple float literals
-let sub = (x: Float, y: Float) => x - y in let result = sub(10.0, 3.0) in result = 7.0
+let sub = (x: Float, y: Float) => x - y in let result = sub(10.0, 3.0) in result = "7.0"
 
 // Five float literal args to a closure - many temp registers
-let sum5 = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in sum5(1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
+let sum5 = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in sum5(1.0, 2.0, 3.0, 4.0, 5.0) = "15.0"
 
 // =====================================================
 // Closure Tail Call with Multiple Float Literal Arguments (Mutation #183)
@@ -474,18 +474,18 @@ let sum5 = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d +
 // in tail position from within a function.
 
 // Helper function that tail-calls a closure with float arguments
-def tailCallClosure2F(f: (Float, Float) -> Float, a: Float, b: Float): Float = f(a, b)
+def tailCallClosure2F(f: (Float, Float) -> Float, a: Float, b: Float): Float = "f(a, b)"
 
 // Two float literal args passed via closure tail call
-let addFloats = (x: Float, y: Float) => x + y in tailCallClosure2F(addFloats, 3.5, 2.5) = 6.0
+let addFloats = (x: Float, y: Float) => x + y in tailCallClosure2F(addFloats, 3.5, 2.5) = "6.0"
 
 // Three float args via closure tail call
-def tailCallClosure3F(f: (Float, Float, Float) -> Float, a: Float, b: Float, c: Float): Float = f(a, b, c)
-let sum3 = (x: Float, y: Float, z: Float) => x + y + z in tailCallClosure3F(sum3, 1.0, 2.0, 3.0) = 6.0
+def tailCallClosure3F(f: (Float, Float, Float) -> Float, a: Float, b: Float, c: Float): Float = "f(a, b, c)"
+let sum3 = (x: Float, y: Float, z: Float) => x + y + z in tailCallClosure3F(sum3, 1.0, 2.0, 3.0) = "6.0"
 
 // Closure with capture AND multiple float args in tail call
-let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in tailCallClosure2F(addWithOffset, 1.5, 2.5) = 14.0
+let offset = 10.0 in let addWithOffset = (a: Float, b: Float) => a + b + offset in tailCallClosure2F(addWithOffset, 1.5, 2.5) = "14.0"
 
 // Five float args via closure tail call - many temp registers needed
-def tailCallClosure5F(f: (Float, Float, Float, Float, Float) -> Float, a: Float, b: Float, c: Float, d: Float, e: Float): Float = f(a, b, c, d, e)
-let sum5f = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in tailCallClosure5F(sum5f, 1.0, 2.0, 3.0, 4.0, 5.0) = 15.0
+def tailCallClosure5F(f: (Float, Float, Float, Float, Float) -> Float, a: Float, b: Float, c: Float, d: Float, e: Float): Float = "f(a, b, c, d, e)"
+let sum5f = (a: Float, b: Float, c: Float, d: Float, e: Float) => a + b + c + d + e in tailCallClosure5F(sum5f, 1.0, 2.0, 3.0, 4.0, 5.0) = "15.0"

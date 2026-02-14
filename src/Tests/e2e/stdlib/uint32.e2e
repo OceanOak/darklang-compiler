@@ -7,103 +7,103 @@
 // UInt32.add - Add two integers
 // ===================================================================
 
-UInt32.add(10ul, 9ul) = 19
-UInt32.add(0ul, 0ul) = 0
-UInt32.add(5ul, 5ul) = 10
-UInt32.add(100ul, 200ul) = 300
+UInt32.add(10ul, 9ul) = 19ul
+UInt32.add(0ul, 0ul) = 0ul
+UInt32.add(5ul, 5ul) = 10ul
+UInt32.add(100ul, 200ul) = 300ul
 
 // ===================================================================
 // UInt32.sub - Subtract two integers
 // ===================================================================
 
-UInt32.sub(10ul, 9ul) = 1
-UInt32.sub(10ul, 0ul) = 10
-UInt32.sub(100ul, 50ul) = 50
-UInt32.sub(5ul, 0ul) = 5
+UInt32.sub(10ul, 9ul) = 1ul
+UInt32.sub(10ul, 0ul) = 10ul
+UInt32.sub(100ul, 50ul) = 50ul
+UInt32.sub(5ul, 0ul) = 5ul
 
 // ===================================================================
 // UInt32.mul - Multiply two integers
 // ===================================================================
 
-UInt32.mul(8ul, 8ul) = 64
-UInt32.mul(0ul, 100ul) = 0
-UInt32.mul(5ul, 5ul) = 25
-UInt32.mul(100ul, 100ul) = 10000
+UInt32.mul(8ul, 8ul) = 64ul
+UInt32.mul(0ul, 100ul) = 0ul
+UInt32.mul(5ul, 5ul) = 25ul
+UInt32.mul(100ul, 100ul) = 10000ul
 
 // ===================================================================
 // UInt32.div - Divide two integers
 // ===================================================================
 
-UInt32.div(10ul, 5ul) = 2
-UInt32.div(10ul, 3ul) = 3
-UInt32.div(100ul, 10ul) = 10
-UInt32.div(10ul, 2ul) = 5
+UInt32.div(10ul, 5ul) = 2ul
+UInt32.div(10ul, 3ul) = 3ul
+UInt32.div(100ul, 10ul) = 10ul
+UInt32.div(10ul, 2ul) = 5ul
 
 // ===================================================================
 // UInt32.mod - Modulo operation
 // ===================================================================
 
-UInt32.mod(15ul, 6ul) = 3
-UInt32.mod(10ul, 3ul) = 1
-UInt32.mod(100ul, 7ul) = 2
-UInt32.mod(20ul, 3ul) = 2
+UInt32.mod(15ul, 6ul) = 3ul
+UInt32.mod(10ul, 3ul) = 1ul
+UInt32.mod(100ul, 7ul) = 2ul
+UInt32.mod(20ul, 3ul) = 2ul
 
 // ===================================================================
 // UInt32.max - Maximum of two integers
 // ===================================================================
 
-UInt32.max(5ul, 6ul) = 6
-UInt32.max(6ul, 5ul) = 6
-UInt32.max(10ul, 20ul) = 20
-UInt32.max(0ul, 0ul) = 0
+UInt32.max(5ul, 6ul) = 6ul
+UInt32.max(6ul, 5ul) = 6ul
+UInt32.max(10ul, 20ul) = 20ul
+UInt32.max(0ul, 0ul) = 0ul
 
 // ===================================================================
 // UInt32.min - Minimum of two integers
 // ===================================================================
 
-UInt32.min(5ul, 6ul) = 5
-UInt32.min(6ul, 5ul) = 5
-UInt32.min(10ul, 20ul) = 10
-UInt32.min(0ul, 0ul) = 0
+UInt32.min(5ul, 6ul) = 5ul
+UInt32.min(6ul, 5ul) = 5ul
+UInt32.min(10ul, 20ul) = 10ul
+UInt32.min(0ul, 0ul) = 0ul
 
 // ===================================================================
 // UInt32.absoluteValue - Absolute value
 // ===================================================================
 
-UInt32.absoluteValue(5ul) = 5
-UInt32.absoluteValue(0ul) = 0
-UInt32.absoluteValue(100ul) = 100
-UInt32.absoluteValue(1ul) = 1
+UInt32.absoluteValue(5ul) = 5ul
+UInt32.absoluteValue(0ul) = 0ul
+UInt32.absoluteValue(100ul) = 100ul
+UInt32.absoluteValue(1ul) = 1ul
 
 // ===================================================================
 // UInt32.negate - Negate an integer
 // ===================================================================
 
-UInt32.negate(0ul) = 0
-UInt32.negate(1ul) = 4294967295
-UInt32.negate(5ul) = 4294967291
-UInt32.negate(100ul) = 4294967196
+UInt32.negate(0ul) = 0ul
+UInt32.negate(1ul) = 4294967295ul
+UInt32.negate(5ul) = 4294967291ul
+UInt32.negate(100ul) = 4294967196ul
 
 // ===================================================================
 // UInt32.power - Raise to a power
 // ===================================================================
 
-UInt32.power(8ul, 5ul) = 32768
-UInt32.power(2ul, 10ul) = 1024
-UInt32.power(0ul, 0ul) = 1
-UInt32.power(5ul, 0ul) = 1
-UInt32.power(5ul, 1ul) = 5
-UInt32.power(2ul, 8ul) = 256
+UInt32.power(8ul, 5ul) = 32768ul
+UInt32.power(2ul, 10ul) = 1024ul
+UInt32.power(0ul, 0ul) = 1ul
+UInt32.power(5ul, 0ul) = 1ul
+UInt32.power(5ul, 1ul) = 5ul
+UInt32.power(2ul, 8ul) = 256ul
 
 // ===================================================================
 // UInt32.clamp - Clamp value between limits
 // ===================================================================
 
-UInt32.clamp(5ul, 0ul, 5ul) = 5
-UInt32.clamp(3ul, 0ul, 2ul) = 2
-UInt32.clamp(1ul, 0ul, 5ul) = 1
-UInt32.clamp(10ul, 5ul, 15ul) = 10
-UInt32.clamp(2ul, 5ul, 10ul) = 5
+UInt32.clamp(5ul, 0ul, 5ul) = 5ul
+UInt32.clamp(3ul, 0ul, 2ul) = 2ul
+UInt32.clamp(1ul, 0ul, 5ul) = 1ul
+UInt32.clamp(10ul, 5ul, 15ul) = 10ul
+UInt32.clamp(2ul, 5ul, 10ul) = 5ul
 
 // ===================================================================
 // UInt32.greaterThan - Greater than comparison
@@ -141,10 +141,10 @@ UInt32.lessThanOrEqualTo(5ul, 5ul) = true
 // UInt32.toString - Convert integer to string
 // ===================================================================
 
-UInt32.toString(0ul) = 0
-UInt32.toString(42ul) = 42
-UInt32.toString(5ul) = 5
-UInt32.toString(1234567890ul) = 1234567890
+UInt32.toString(0ul) = "0"
+UInt32.toString(42ul) = "42"
+UInt32.toString(5ul) = "5"
+UInt32.toString(1234567890ul) = "1234567890"
 
 // ===================================================================
 // UInt32.isEven - Check if integer is even
@@ -174,11 +174,11 @@ UInt32.isOdd(6ul) = false
 // UInt32.sum - Sum all integers in a list
 // ===================================================================
 
-UInt32.sum([1ul, 2ul, 3ul, 4ul, 5ul]) = 15
-UInt32.sum([]) = 0
-UInt32.sum([100ul]) = 100
-UInt32.sum([1ul, 1ul, 2ul, 2ul]) = 6
-UInt32.sum([10ul, 20ul, 30ul]) = 60
+UInt32.sum([1ul, 2ul, 3ul, 4ul, 5ul]) = 15ul
+UInt32.sum([]) = 0ul
+UInt32.sum([100ul]) = 100ul
+UInt32.sum([1ul, 1ul, 2ul, 2ul]) = 6ul
+UInt32.sum([10ul, 20ul, 30ul]) = 60ul
 
 // ===================================================================
 // NOTE: Functions not yet implemented due to missing types or features

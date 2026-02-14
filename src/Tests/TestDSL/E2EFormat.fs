@@ -2,12 +2,12 @@
 //
 // Parses E2E test files in a simple line-based format.
 //
-// Format: source = expected_exit_code  // optional comment
+// Format: source = expectation  // optional comment
 //
 // Example:
 //   // Addition tests
 //   2 + 3 = 5
-//   1 + 2 + 3 = 10  // left associativity
+//   1 + 2 + 3 = 10  // left and right sides must evaluate to equal values
 
 module TestDSL.E2EFormat
 
@@ -474,8 +474,8 @@ let private isTestLine (lineWithoutComment: string) : bool =
 
 /// Parse a single test line with optional preamble to prepend
 /// Supports two formats:
-///   Old: source = exit_code  // comment
-///   New: source = [exit=N] [stdout="..."] [stderr="..."]  // comment
+///   Value equality: source = expectedValueExpr
+///   Explicit attributes: source = [exit=N] [stdout="..."] [stderr="..."]
 let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<E2ETest, string> =
     // First, remove any comment
     let lineWithoutComment, comment =
@@ -494,8 +494,6 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
         // Source is just the test expression - preamble is stored separately
         let source = testExpr
         let expectationsStr = lineWithoutComment.Substring(equalsIdx + 1).Trim()
-        let isDarkFile = filePath.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
-
         // Parse expectations:
         // - error / error="..."
         // - skip / skip="..."
@@ -563,14 +561,8 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
 
                     match attrStartIndex with
                     | None ->
-                        if isDarkFile then
-                            // Upstream .dark tests use `lhs = rhs` value semantics.
-                            Ok (Some trimmed, 0, None, None, defaultOptFlags, false, None, None)
-                        else
-                            // Legacy .e2e format treats bare RHS as expected stdout text.
-                            parseSimpleStdout trimmed
-                            |> Result.map (fun stdoutValue ->
-                                (None, 0, Some stdoutValue, None, defaultOptFlags, false, None, None))
+                        // Bare RHS is always treated as a value expression.
+                        Ok (Some trimmed, 0, None, None, defaultOptFlags, false, None, None)
                     | Some idx ->
                         let leadingTokens = tokens |> List.take idx
                         let attrTokens = tokens |> List.skip idx

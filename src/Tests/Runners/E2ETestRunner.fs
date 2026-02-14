@@ -27,9 +27,19 @@ let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.Sourc
 // Build the source expression to execute for a test.
 // For `lhs = rhs` value tests, run a synthesized equality assertion.
 let private sourceToExecute (test: E2ETest) : string =
+    let sourceTrimmed = test.Source.TrimStart()
+    let sourceHasTopLevelDefinition =
+        sourceTrimmed.StartsWith("def ")
+        || sourceTrimmed.StartsWith("type ")
+
     match test.ExpectedValueExpr with
     | Some rhsExpr ->
-        $"if (({test.Source}) == ({rhsExpr})) then 0L else Builtin.testRuntimeError \"E2E assertion failed\""
+        if sourceHasTopLevelDefinition then
+            // Full programs like "def ... <expr>" are not valid in parenthesized expression
+            // position, so run them as-is and validate stdout against RHS text.
+            test.Source
+        else
+            $"({test.Source}) == ({rhsExpr})"
     | None ->
         test.Source
 
@@ -269,6 +279,26 @@ let private stderrFromRun (run: E2ERun) : string =
 let private failRun (run: E2ERun) (message: string) : E2ETestResult =
     Error { Run = run; Message = message }
 
+let private didValueEqualityPass (run: E2ERun) : bool =
+    if exitCodeFromRun run <> 0 then
+        false
+    else
+        let lastStdoutLine =
+            (stdoutFromRun run).Split([| '\n' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.tryLast
+        lastStdoutLine = Some "true"
+
+let private sourceHasTopLevelDefinition (source: string) : bool =
+    let trimmed = source.TrimStart()
+    trimmed.StartsWith("def ")
+    || trimmed.StartsWith("type ")
+
+let private didProgramValueFallbackPass (expectedValueExpr: string) (run: E2ERun) : bool =
+    if exitCodeFromRun run <> 0 then
+        false
+    else
+        stdoutFromRun run |> fun s -> s.Trim() = expectedValueExpr.Trim()
+
 let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
     if test.ExpectCompileError then
         let gotError = exitCodeFromRun run <> 0
@@ -284,6 +314,18 @@ let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
                     failRun run $"Expected error message '{expectedMsg}' not found in stderr"
             | None ->
                 Ok run
+    elif Option.isSome test.ExpectedValueExpr then
+        match test.ExpectedValueExpr with
+        | Some rhsExpr when sourceHasTopLevelDefinition test.Source ->
+            if didProgramValueFallbackPass rhsExpr run then
+                Ok run
+            else
+                failRun run "Value mismatch"
+        | _ ->
+            if didValueEqualityPass run then
+                Ok run
+            else
+                failRun run "Value mismatch"
     else
         let stdoutMatches =
             match test.ExpectedStdout with

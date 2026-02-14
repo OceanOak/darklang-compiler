@@ -33,7 +33,7 @@ Base64.encode(Bytes.fromList([65, 66, 67])) = "QUJD"
 
 // Test that + and / are replaced with - and _
 // Bytes that would produce + in standard encoding
-Base64.urlEncode(Bytes.fromList([251])) = -w==
+Base64.urlEncode(Bytes.fromList([251])) = "-w=="
 
 // ===================================================================
 // Base64.decode - Decode base64 to bytes

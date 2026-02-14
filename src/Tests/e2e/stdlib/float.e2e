@@ -3,7 +3,7 @@
 // sqrt - now with full precision
 Float.sqrt(4.0) = 2.0
 Float.sqrt(9.0) = 3.0
-Float.sqrt(2.0) = 1.41421356237
+Float.sqrt(2.0) = 1.4142135623730951
 Float.sqrt(0.0) = 0.0
 Float.sqrt(1.0) = 1.0
 Float.sqrt(100.0) = 10.0
@@ -47,9 +47,9 @@ Float.abs(-5.0) > 4.0 = true
 
 // Float.toBits - IEEE 754 bit representation
 // Note: UInt64 values with high bit set are printed as signed (compiler limitation)
-Float.toBits(1.0) = 4607182418800017408
-Float.toBits(-1.0) = -4616189618054758400
-Float.toBits(0.0) = 0
+Float.toBits(1.0) = 4607182418800017408UL
+Float.toBits(-1.0) = 13830554455654793216UL
+Float.toBits(0.0) = 0UL
 
 // Float.toString - special cases
 // -0.0 correctly displays as "-0.0" (IEEE 754 signed zero)

@@ -141,10 +141,10 @@ Int64.lessThanOrEqualTo(5, 5) = true
 // Int64.toString - Convert integer to string
 // ===================================================================
 
-Int64.toString(0) = 0
-Int64.toString(42) = 42
-Int64.toString(-5) = -5
-Int64.toString(1234567890) = 1234567890
+Int64.toString(0) = "0"
+Int64.toString(42) = "42"
+Int64.toString(-5) = "-5"
+Int64.toString(1234567890) = "1234567890"
 
 // ===================================================================
 // Int64.isEven - Check if integer is even

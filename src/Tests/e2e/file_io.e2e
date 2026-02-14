@@ -66,10 +66,10 @@ match Stdlib.File.readText("/nonexistent") with | Ok(_) -> 42 | Error(_) -> 0 = 
 // Writing file contents using Stdlib.File.writeText
 
 // Write to a new file and verify success
-match Stdlib.File.writeText("/tmp/dark_test_write1.txt", "hello") with | Ok(_) -> "ok" | Error(e) -> e = ok
+match Stdlib.File.writeText("/tmp/dark_test_write1.txt", "hello") with | Ok(_) -> "ok" | Error(e) -> e = "ok"
 
 // Write to a file and read it back
-let _ = Stdlib.File.writeText("/tmp/dark_test_write2.txt", "test content") in match Stdlib.File.readText("/tmp/dark_test_write2.txt") with | Ok(s) -> s | Error(_) -> "error" = test content
+let _ = Stdlib.File.writeText("/tmp/dark_test_write2.txt", "test content") in match Stdlib.File.readText("/tmp/dark_test_write2.txt") with | Ok(s) -> s | Error(_) -> "error" = "test content"
 
 // Write creates file - verify it exists
 let _ = Stdlib.File.writeText("/tmp/dark_test_write3.txt", "content") in Stdlib.File.exists("/tmp/dark_test_write3.txt") = true
@@ -87,13 +87,13 @@ let _ = Stdlib.File.writeText("/tmp/dark_test_empty.txt", "") in Stdlib.File.exi
 // Appending to files using Stdlib.File.appendText
 
 // Append to a file creates it if it doesn't exist
-match Stdlib.File.appendText("/tmp/dark_test_append1.txt", "hello") with | Ok(_) -> "ok" | Error(e) -> e = ok
+match Stdlib.File.appendText("/tmp/dark_test_append1.txt", "hello") with | Ok(_) -> "ok" | Error(e) -> e = "ok"
 
 // Append to existing file - verify append returns Ok
-let _ = Stdlib.File.writeText("/tmp/dark_test_append2.txt", "first") in match Stdlib.File.appendText("/tmp/dark_test_append2.txt", "second") with | Ok(_) -> "ok" | Error(_) -> "error" = ok
+let _ = Stdlib.File.writeText("/tmp/dark_test_append2.txt", "first") in match Stdlib.File.appendText("/tmp/dark_test_append2.txt", "second") with | Ok(_) -> "ok" | Error(_) -> "error" = "ok"
 
 // Multiple appends accumulate - verify the operations succeed
-let _ = Stdlib.File.writeText("/tmp/dark_test_append3.txt", "a") in match Stdlib.File.appendText("/tmp/dark_test_append3.txt", "b") with | Ok(_) -> "ok" | Error(_) -> "error" = ok
+let _ = Stdlib.File.writeText("/tmp/dark_test_append3.txt", "a") in match Stdlib.File.appendText("/tmp/dark_test_append3.txt", "b") with | Ok(_) -> "ok" | Error(_) -> "error" = "ok"
 
 // Append to invalid path returns Error
 match Stdlib.File.appendText("/nonexistent/directory/file.txt", "test") with | Ok(_) -> "ok" | Error(_) -> "error" = "error"
@@ -104,7 +104,7 @@ match Stdlib.File.appendText("/nonexistent/directory/file.txt", "test") with | O
 // ===================================================================
 
 // Path.combine joins paths with /
-Path.combine("foo", "bar") = foo/bar
+Path.combine("foo", "bar") = "foo/bar"
 Path.combine("/usr", "bin") = "/usr/bin"
 Path.combine("", "file.txt") = "/file.txt"
 Path.combine("/tmp", "test.txt") = "/tmp/test.txt"

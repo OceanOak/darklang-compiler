@@ -3,9 +3,9 @@
 // Format: source = expectations  // optional comment
 //
 // Expectations:
-//   Simple format: output (e.g., "42 = 42", "\"hi\" = \"hi\"")
-//     - Interprets as: stdout="<output>\n", exit=0
-//     - Verifies the printed output (binaries exit with 0 on success)
+//   Simple format: value expression (e.g., "42 = 42", "\"hi\" = \"hi\"")
+//     - Interprets as: assert(source == expectation)
+//     - Uses value equality (binaries exit with 0 when equal)
 //   Explicit format: [exit=N] [stdout="..."] [stderr="..."]
 //     - For error cases or when you need non-zero exit codes
 //
@@ -16,9 +16,9 @@
 //   disable_leak_check=true - Disable leak checking for this test (default: false)
 //
 // Examples:
-//   42 = 42                           // stdout="42\n", exit=0 (simple format)
-//   2 + 3 = 5                         // stdout="5\n", exit=0 (simple format)
-//   "hi" = "hi"                       // stdout="hi\n", exit=0 (simple format)
+//   42 = 42                           // value equality (simple format)
+//   2 + 3 = 5                         // value equality (simple format)
+//   "hi" = "hi"                       // value equality (simple format)
 //   42 = stdout="42\n"                // explicit stdout (exit defaults to 0)
 //   1/0 = exit=1 stderr="error\n"     // error case with non-zero exit
 //

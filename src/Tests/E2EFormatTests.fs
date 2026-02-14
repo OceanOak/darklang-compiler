@@ -10,9 +10,9 @@ open TestDSL.E2EFormat
 
 type TestResult = Result<unit, string>
 
-let private withTempFile (contents: string) (f: string -> TestResult) : TestResult =
+let private withTempFileNamed (fileName: string) (contents: string) (f: string -> TestResult) : TestResult =
     let tempDir = Path.Combine(Path.GetTempPath(), $"dark-e2eformat-{Guid.NewGuid():N}")
-    let tempPath = Path.Combine(tempDir, "test.dark")
+    let tempPath = Path.Combine(tempDir, fileName)
 
     try
         Directory.CreateDirectory(tempDir) |> ignore
@@ -21,6 +21,9 @@ let private withTempFile (contents: string) (f: string -> TestResult) : TestResu
     finally
         if Directory.Exists(tempDir) then
             Directory.Delete(tempDir, true)
+
+let private withTempFile (contents: string) (f: string -> TestResult) : TestResult =
+    withTempFileNamed "test.dark" contents f
 
 let testParsesMultilineExpectationOnNextLine () : TestResult =
     let testSource =
@@ -183,6 +186,25 @@ let testParsesMultilineExpectationWithFunctionHeadAndNextLineArg () : TestResult
             | _ ->
                 Error $"Expected exactly 1 parsed test, got {tests.Length}")
 
+let testParsesBareE2ERightHandSideAsValueExpression () : TestResult =
+    let testSource = "2 + 3 = 5\n"
+
+    withTempFileNamed "test.e2e" testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected bare .e2e RHS to parse as value expression, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                if test.ExpectedValueExpr <> Some "5" then
+                    Error $"Expected value-expression RHS '5', got: {test.ExpectedValueExpr}"
+                elif test.ExpectedStdout <> None then
+                    Error $"Expected no stdout expectation for bare RHS, got: {test.ExpectedStdout}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}")
+
 let tests = [
     ("parses multiline expectation on next line", testParsesMultilineExpectationOnNextLine)
     ("parses skip attribute", testParsesSkipAttribute)
@@ -191,4 +213,5 @@ let tests = [
     ("parses multiline with inner let binding", testParsesMultilineWithInnerLetBinding)
     ("parses expectation with keyword inside quoted message", testParsesExpectationWithKeywordInsideQuotedMessage)
     ("parses multiline function-head expectation with next-line arg", testParsesMultilineExpectationWithFunctionHeadAndNextLineArg)
+    ("parses bare .e2e rhs as value expression", testParsesBareE2ERightHandSideAsValueExpression)
 ]

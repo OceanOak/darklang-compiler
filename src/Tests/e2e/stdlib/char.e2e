@@ -76,17 +76,17 @@ Char.isAlphanumeric("") = false
 Char.toUppercase("a") = "A"
 Char.toUppercase("z") = "Z"
 Char.toUppercase("A") = "A"
-Char.toUppercase("5") = 5
+Char.toUppercase("5") = "5"
 Char.toUppercase("") = ""
 
 // ===================================================================
 // Char.toLowercase - Convert to lowercase
 // ===================================================================
 
-Char.toLowercase("A") = a
-Char.toLowercase("Z") = z
-Char.toLowercase("a") = a
-Char.toLowercase("5") = 5
+Char.toLowercase("A") = "a"
+Char.toLowercase("Z") = "z"
+Char.toLowercase("a") = "a"
+Char.toLowercase("5") = "5"
 Char.toLowercase("") = ""
 
 // ===================================================================
@@ -104,6 +104,6 @@ Char.toCode("") = 0
 // ===================================================================
 
 Char.fromCode(65) = "A"
-Char.fromCode(97) = a
-Char.fromCode(48) = 0
+Char.fromCode(97) = "a"
+Char.fromCode(48) = "0"
 Char.fromCode(32) = " "
