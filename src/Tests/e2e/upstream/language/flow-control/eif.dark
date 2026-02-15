@@ -22,4 +22,4 @@
 
 (if true then Builtin.testRuntimeError "a") = exit=1 stderr="Uncaught exception: a"
 
-(if Builtin.testRuntimeError "msg" then "") = skip="Builtin.testRuntimeError is not supported yet"
+(if Builtin.testRuntimeError "msg" then "") = error="Type mismatch in if branches must have same type: expected String, got Unit"
