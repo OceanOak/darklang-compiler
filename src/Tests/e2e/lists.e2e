@@ -292,9 +292,9 @@ Stdlib.Option.withDefault(Stdlib.List.getAt(["s1", "s2", "s3", "s4", "s5", "s6",
 Stdlib.Option.withDefault(Stdlib.List.getAt(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18", "t19", "t20"], 15), "") = "t16"
 
 // Record lists (6+)
-type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }] with | [a, b, c, d, e, f] -> f.name | _ -> "" = six
+type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }] with | [a, b, c, d, e, f] -> f.name | _ -> "" = "six"
 type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }] with | [a, b, c, d, e, f, g, h] -> a.id + h.id | _ -> 0 = 9
-type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }, Item { id = 9, name = "nine" }, Item { id = 10, name = "ten" }] with | [a, b, c, d, e, f, g, h, i, j] -> j.name | _ -> "" = ten
+type Item = { id: Int64, name: String } match [Item { id = 1, name = "one" }, Item { id = 2, name = "two" }, Item { id = 3, name = "three" }, Item { id = 4, name = "four" }, Item { id = 5, name = "five" }, Item { id = 6, name = "six" }, Item { id = 7, name = "seven" }, Item { id = 8, name = "eight" }, Item { id = 9, name = "nine" }, Item { id = 10, name = "ten" }] with | [a, b, c, d, e, f, g, h, i, j] -> j.name | _ -> "" = "ten"
 
 // =====================================================
 // List Spread Construction Tests [a, b, ...rest]
@@ -737,7 +737,7 @@ match makeIntList167() with | [h, ...t] -> h + 100 | [] -> 999 = 142
 // This test creates a function that returns List<Int64>, stores it as a
 // first-class function value, calls it, and accesses the head. This exercises
 // the TFunction path in TypeMap lookup.
-def makeList168(n: Int64) : List<Int64> = [55 + n, 110, 165] let f = makeList168 in match f(0) with | [h, ...t] -> h + 200 | [] -> 999 = 255
+def makeList168(n: Int64) : List<Int64> = [55 + n, 110, 165] let f = makeList168 in match f(0) with | [h, ...t] -> h + 200 | [] -> 999 = stdout="255\n"
 
 // =====================================================
 // List head type tracking in convertExprToOperand (kills mutation #169)

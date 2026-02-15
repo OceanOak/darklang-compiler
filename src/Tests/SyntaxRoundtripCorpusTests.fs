@@ -59,11 +59,6 @@ let private syntaxName (sourceSyntax: CompilerLibrary.SourceSyntax) : string =
     | CompilerLibrary.InterpreterSyntax -> "InterpreterSyntax"
 
 let private snippetsForTest (test: E2ETest) : Snippet list =
-    let sourceHasTopLevelDefinition =
-        let trimmed = test.Source.TrimStart()
-        trimmed.StartsWith("def ")
-        || trimmed.StartsWith("type ")
-
     let preambleSnippet =
         if String.IsNullOrWhiteSpace test.Preamble then
             []
@@ -75,11 +70,9 @@ let private snippetsForTest (test: E2ETest) : Snippet list =
 
     let expectedSnippet =
         match test.ExpectedValueExpr with
-        | Some rhs when not sourceHasTopLevelDefinition ->
+        | Some rhs ->
             [ { Label = "expected-value"; Source = rhs } ]
         | None -> []
-        | Some _ ->
-            []
 
     preambleSnippet @ sourceSnippet @ expectedSnippet
 
@@ -147,6 +140,8 @@ let private roundtripSnippet
         | Ok ast1 ->
             let printed1 = ASTPrettyPrinter.formatProgram mode.PrettySyntax ast1
             if ast0 <> ast1 then
+                let ast0Repr = sprintf "%A" ast0
+                let ast1Repr = sprintf "%A" ast1
                 let header =
                     failureHeader
                         "AstChangedAfterRoundtrip"
@@ -163,6 +158,10 @@ let private roundtripSnippet
                     + printed0
                     + "\n\nPretty-printed source (second pass):\n"
                     + printed1
+                    + "\n\nParsed AST (first parse):\n"
+                    + ast0Repr
+                    + "\n\nParsed AST (second parse):\n"
+                    + ast1Repr
                 )
             elif printed0 <> printed1 then
                 let header =

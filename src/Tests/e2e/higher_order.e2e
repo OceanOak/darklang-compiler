@@ -109,7 +109,7 @@ def applyFloat(f: (Float) -> Float, x: Float): Float = f(x) def doubleFloat(n: F
 def apply2Floats(f: (Float, Float) -> Float, a: Float, b: Float): Float = f(a, b) def addFloats(x: Float, y: Float): Float = x + y apply2Floats(addFloats, 3.5, 4.5) = 8.0
 
 // FuncRef with String parameter and return type
-def applyStr(f: (String) -> String, s: String): String = f(s) def addBang(s: String): String = s ++ "!" applyStr(addBang, "hello") = hello!
+def applyStr(f: (String) -> String, s: String): String = f(s) def addBang(s: String): String = s ++ "!" applyStr(addBang, "hello") = "hello!"
 
 // FuncRef with mixed types (Int64 param, Bool return)
 def checkPositive(f: (Int64) -> Bool, n: Int64): Bool = f(n) def isPositive(x: Int64): Bool = x > 0 checkPositive(isPositive, 5) = true

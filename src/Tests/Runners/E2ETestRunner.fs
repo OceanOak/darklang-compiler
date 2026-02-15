@@ -26,22 +26,82 @@ let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.Sourc
 
 // Build the source expression to execute for a test.
 // For `lhs = rhs` value tests, run a synthesized equality assertion.
-let private sourceToExecute (test: E2ETest) : string =
-    let sourceTrimmed = test.Source.TrimStart()
-    let sourceHasTopLevelDefinition =
-        sourceTrimmed.StartsWith("def ")
-        || sourceTrimmed.StartsWith("type ")
 
+let private prettySyntaxForSourceSyntax (sourceSyntax: CompilerLibrary.SourceSyntax) : ASTPrettyPrinter.Syntax =
+    match sourceSyntax with
+    | CompilerLibrary.CompilerSyntax -> ASTPrettyPrinter.CompilerSyntax
+    | CompilerLibrary.InterpreterSyntax -> ASTPrettyPrinter.InterpreterSyntax
+
+let private asSingleExpression (program: Program) : Expr option =
+    let (Program topLevels) = program
+    match topLevels with
+    | [Expression expr] -> Some expr
+    | _ -> None
+
+let private tryFormatProgramIfStable
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (allowInternal: bool)
+    (program: Program)
+    : string option =
+    let prettySyntax = prettySyntaxForSourceSyntax sourceSyntax
+    let formatted = ASTPrettyPrinter.formatProgram prettySyntax program
+    match CompilerLibrary.parseProgram sourceSyntax allowInternal formatted with
+    | Ok reparsed ->
+        match sourceSyntax with
+        | CompilerLibrary.CompilerSyntax ->
+            if reparsed = program then Some formatted else None
+        | CompilerLibrary.InterpreterSyntax ->
+            // Interpreter syntax intentionally normalizes some AST details
+            // (for example around lambda forms), so parse-success is enough.
+            Some formatted
+    | Error _ -> None
+
+let private trySynthesizeValueEqualitySource
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (allowInternal: bool)
+    (source: string)
+    (rhsExpr: string)
+    : string option =
+    let sourceProgramResult = CompilerLibrary.parseProgram sourceSyntax allowInternal source
+    let rhsProgramResult = CompilerLibrary.parseProgram sourceSyntax allowInternal rhsExpr
+
+    match sourceProgramResult, rhsProgramResult with
+    | Ok (Program sourceTopLevels), Ok rhsProgram ->
+        match List.rev sourceTopLevels, asSingleExpression rhsProgram with
+        | Expression lhsExpr :: sourceRestRev, Some rhsAst ->
+            let directEqProgram =
+                Program (List.rev (Expression (BinOp (Eq, lhsExpr, rhsAst)) :: sourceRestRev))
+
+            let actualBindingName = "e2eValueActual"
+            let letEqExpr =
+                Let (actualBindingName, lhsExpr, BinOp (Eq, Var actualBindingName, rhsAst))
+            let letEqProgram =
+                Program (List.rev (Expression letEqExpr :: sourceRestRev))
+
+            match tryFormatProgramIfStable sourceSyntax allowInternal directEqProgram with
+            | Some rewritten -> Some rewritten
+            | None -> tryFormatProgramIfStable sourceSyntax allowInternal letEqProgram
+        | _ ->
+            None
+    | _ ->
+        None
+
+let private sourceToExecute
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (allowInternal: bool)
+    (test: E2ETest)
+    : Result<string, string> =
     match test.ExpectedValueExpr with
     | Some rhsExpr ->
-        if sourceHasTopLevelDefinition then
-            // Full programs like "def ... <expr>" are not valid in parenthesized expression
-            // position, so run them as-is and validate stdout against RHS text.
-            test.Source
-        else
-            $"({test.Source}) == ({rhsExpr})"
-    | None ->
-        test.Source
+        match trySynthesizeValueEqualitySource sourceSyntax allowInternal test.Source rhsExpr with
+        | Some rewritten -> Ok rewritten
+        | None ->
+            Error (
+                $"Failed to synthesize expected-value source for test '{test.Name}' in {test.SourceFile}.\n"
+                + "Expected-value tests must parse as a program whose last top-level is an expression,\n"
+                + "and RHS must parse as a single expression."
+            )
+    | None -> Ok test.Source
 
 /// Result of running an E2E test
 type E2ERun =
@@ -128,21 +188,26 @@ let private collectSpecsFromTests
         match remaining with
         | [] -> Ok acc
         | test :: rest ->
-            let source = sourceToExecute test
-            let specsResult =
-                CompilerLibrary.parseProgram sourceSyntax allowInternal source
-                |> Result.bind (fun testAst ->
-                    checkProgramWithBaseEnv typeCheckEnv testAst
-                    |> Result.mapError typeErrorToString
-                    |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
-
-            match specsResult with
-            | Ok specs ->
-                loop rest (Set.union acc specs)
+            match sourceToExecute sourceSyntax allowInternal test with
             | Error _ ->
-                // Best effort: a test may intentionally fail to parse/typecheck,
-                // and that should not prevent building suite-level specializations.
+                // Best effort: source synthesis may fail for malformed tests and
+                // should not block suite-level specialization discovery.
                 loop rest acc
+            | Ok source ->
+                let specsResult =
+                    CompilerLibrary.parseProgram sourceSyntax allowInternal source
+                    |> Result.bind (fun testAst ->
+                        checkProgramWithBaseEnv typeCheckEnv testAst
+                        |> Result.mapError typeErrorToString
+                        |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
+
+                match specsResult with
+                | Ok specs ->
+                    loop rest (Set.union acc specs)
+                | Error _ ->
+                    // Best effort: a test may intentionally fail to parse/typecheck,
+                    // and that should not prevent building suite-level specializations.
+                    loop rest acc
     loop testsToAnalyze Set.empty
 
 let private buildPreamblePlan
@@ -289,17 +354,6 @@ let private didValueEqualityPass (run: E2ERun) : bool =
             |> Array.tryLast
         lastStdoutLine = Some "true"
 
-let private sourceHasTopLevelDefinition (source: string) : bool =
-    let trimmed = source.TrimStart()
-    trimmed.StartsWith("def ")
-    || trimmed.StartsWith("type ")
-
-let private didProgramValueFallbackPass (expectedValueExpr: string) (run: E2ERun) : bool =
-    if exitCodeFromRun run <> 0 then
-        false
-    else
-        stdoutFromRun run |> fun s -> s.Trim() = expectedValueExpr.Trim()
-
 let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
     if test.ExpectCompileError then
         let gotError = exitCodeFromRun run <> 0
@@ -316,17 +370,10 @@ let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
             | None ->
                 Ok run
     elif Option.isSome test.ExpectedValueExpr then
-        match test.ExpectedValueExpr with
-        | Some rhsExpr when sourceHasTopLevelDefinition test.Source ->
-            if didProgramValueFallbackPass rhsExpr run then
-                Ok run
-            else
-                failRun run "Value mismatch"
-        | _ ->
-            if didValueEqualityPass run then
-                Ok run
-            else
-                failRun run "Value mismatch"
+        if didValueEqualityPass run then
+            Ok run
+        else
+            failRun run "Value mismatch"
     else
         let stdoutMatches =
             match test.ExpectedStdout with
@@ -403,17 +450,21 @@ let runE2ETestWithPreambleContext
     let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
     let sourceSyntax = sourceSyntaxForTestFile test.SourceFile
-    let source = sourceToExecute test
-    let request : CompilerLibrary.CompileRequest = {
-        Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
-        Mode = CompilerLibrary.CompileMode.TestExpression
-        SourceSyntax = sourceSyntax
-        Source = source
-        SourceFile = test.SourceFile
-        AllowInternal = allowInternal
-        Verbosity = 0
-        Options = options
-        PassTimingRecorder = passTimingRecorder
-    }
-    let run = compileAndRun request
-    evaluateExpectations test run
+    match sourceToExecute sourceSyntax allowInternal test with
+    | Error msg ->
+        let run = CompileFailed (1, msg, TimeSpan.Zero)
+        failRun run msg
+    | Ok source ->
+        let request : CompilerLibrary.CompileRequest = {
+            Context = CompilerLibrary.StdlibWithPreamble (stdlib, preambleCtx)
+            Mode = CompilerLibrary.CompileMode.TestExpression
+            SourceSyntax = sourceSyntax
+            Source = source
+            SourceFile = test.SourceFile
+            AllowInternal = allowInternal
+            Verbosity = 0
+            Options = options
+            PassTimingRecorder = passTimingRecorder
+        }
+        let run = compileAndRun request
+        evaluateExpectations test run
