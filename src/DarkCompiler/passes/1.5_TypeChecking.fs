@@ -161,6 +161,20 @@ let rec private isKnownUnwrapFailureExpr (boundExprs: Map<string, Expr>) (expr: 
     | _ ->
         false
 
+/// Detect known runtime-failing testRuntimeError expressions, including let-bound forms.
+let rec private isKnownTestRuntimeErrorExpr (boundExprs: Map<string, Expr>) (expr: Expr) : bool =
+    match expr with
+    | Call (funcName, [_]) when isBuiltinTestRuntimeErrorName funcName ->
+        true
+    | Let (name, valueExpr, bodyExpr) ->
+        isKnownTestRuntimeErrorExpr (Map.add name valueExpr boundExprs) bodyExpr
+    | Var varName ->
+        boundExprs
+        |> Map.tryFind varName
+        |> Option.exists (fun boundExpr -> isKnownTestRuntimeErrorExpr boundExprs boundExpr)
+    | _ ->
+        false
+
 /// Freshen type parameters - generate new unique names for each type param
 /// Returns (fresh type params, substitution map from old to fresh names)
 /// Uses index-based naming for deterministic compilation (no global state)
@@ -1315,9 +1329,28 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         // If expression: condition must be bool, branches must have same type
         checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (condType, cond') ->
-            if condType <> TBool then
-                Error (GenericError (ifConditionTypeMismatchMessage cond' condType))
-            else
+            let normalizedConditionResult : Result<Expr, TypeError> =
+                if condType = TBool then
+                    Ok cond'
+                else
+                    let conditionIsKnownFailure =
+                        isKnownUnwrapFailureExpr Map.empty cond
+                        || isKnownUnwrapFailureExpr Map.empty cond'
+                        || isKnownTestRuntimeErrorExpr Map.empty cond
+                        || isKnownTestRuntimeErrorExpr Map.empty cond'
+
+                    if conditionIsKnownFailure then
+                        checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+                        |> Result.bind (fun (resolvedCondType, resolvedCondExpr) ->
+                            if resolvedCondType = TBool then
+                                Ok resolvedCondExpr
+                            else
+                                Error (GenericError (ifConditionTypeMismatchMessage resolvedCondExpr resolvedCondType)))
+                    else
+                        Error (GenericError (ifConditionTypeMismatchMessage cond' condType))
+
+            normalizedConditionResult
+            |> Result.bind (fun normalizedCond ->
                 checkExpr thenBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
                 |> Result.bind (fun (thenType, then') ->
                     let elseExpectedType =
@@ -1372,9 +1405,9 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             match expectedType with
                             | Some expected ->
                                 match reconcileTypes (Some aliasReg) expected reconciledType with
-                                | Some reconciledExpected -> Ok (reconciledExpected, If (cond', then', else'))
+                                | Some reconciledExpected -> Ok (reconciledExpected, If (normalizedCond, then', else'))
                                 | None -> Error (TypeMismatch (expected, reconciledType, "if expression"))
-                            | _ -> Ok (reconciledType, If (cond', then', else')))))
+                            | _ -> Ok (reconciledType, If (normalizedCond, then', else'))))))
 
     | Call (funcName, args) ->
         // Function call: look up function signature, check arguments match

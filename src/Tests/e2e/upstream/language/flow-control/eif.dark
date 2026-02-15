@@ -9,7 +9,7 @@
 (if false then "" else "correct") = "correct"
 (if () then "" else "") = error="Encountered a condition that must be a Bool, but got an Unit (())"
 
-(if Builtin.testRuntimeError "msg" then "" else "") = skip="Builtin.testRuntimeError is not supported yet"
+(if Builtin.testRuntimeError "msg" then "" else "") = exit=1 stderr="Uncaught exception: msg"
 
 (if 5L then "" else "") = error="Encountered a condition that must be a Bool, but got an Int64 (5)"
 
