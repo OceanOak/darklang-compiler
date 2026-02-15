@@ -2704,7 +2704,9 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             match op with
             | AST.Neg ->
                 match innerType with
-                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64 | AST.TFloat64 -> Ok innerType
+                | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+                | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
+                | AST.TFloat64 -> Ok innerType
                 | _ -> Error $"Negation requires numeric operand, got {innerType}"
             | AST.Not ->
                 match innerType with
@@ -3128,6 +3130,18 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | AST.TInt8 ->
                 let zeroExpr = AST.Int8Literal 0y
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt64 ->
+                let zeroExpr = AST.UInt64Literal 0UL
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt32 ->
+                let zeroExpr = AST.UInt32Literal 0ul
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt16 ->
+                let zeroExpr = AST.UInt16Literal 0us
+                toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt8 ->
+                let zeroExpr = AST.UInt8Literal 0uy
                 toANF (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | _ ->
                 Error $"Negation requires numeric operand, got {innerType}")
@@ -6428,6 +6442,18 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                 toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | AST.TInt8 ->
                 let zeroExpr = AST.Int8Literal 0y
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt64 ->
+                let zeroExpr = AST.UInt64Literal 0UL
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt32 ->
+                let zeroExpr = AST.UInt32Literal 0ul
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt16 ->
+                let zeroExpr = AST.UInt16Literal 0us
+                toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
+            | AST.TUInt8 ->
+                let zeroExpr = AST.UInt8Literal 0uy
                 toAtom (AST.BinOp (AST.Sub, zeroExpr, innerExpr)) varGen env typeReg variantLookup funcReg moduleRegistry
             | _ ->
                 Error $"Negation requires numeric operand, got {innerType}")

@@ -1032,11 +1032,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
     | UnaryOp (op, inner) ->
         match op with
         | Neg ->
-            // Negation works on signed integers and floats
+            // Negation works on integer and float numeric types
             checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
             |> Result.bind (fun (innerType, inner') ->
                 match innerType with
-                | TInt8 | TInt16 | TInt32 | TInt64 | TFloat64 ->
+                | TInt8 | TInt16 | TInt32 | TInt64
+                | TUInt8 | TUInt16 | TUInt32 | TUInt64
+                | TFloat64 ->
                     match expectedType with
                     | Some expected when expected <> innerType ->
                         Error (TypeMismatch (expected, innerType, "result of negation"))
