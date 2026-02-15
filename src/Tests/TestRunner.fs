@@ -24,6 +24,7 @@ let printHelp () =
     println "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
+    println "  --parser-pretty-roundtrip  Enable parser/pretty-printer roundtrip corpus test"
     println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
@@ -33,6 +34,7 @@ let printHelp () =
     println "  Tests --filter=string      Run tests with 'string' in the name"
     println "  Tests --coverage           Run tests and show coverage percentage"
     println "  Tests --verification       Run verification/stress tests"
+    println "  Tests --parser-pretty-roundtrip  Run parser/pretty-printer corpus roundtrip"
 
 [<EntryPoint>]
 let main args =
@@ -53,6 +55,9 @@ let main args =
     // Check for --verification flag (enable verification/stress tests)
     let verificationEnabled = hasVerificationArg args
 
+    // Check for --parser-pretty-roundtrip flag (enable parser/pretty corpus roundtrip)
+    let parserPrettyRoundtripEnabled = hasParserPrettyRoundtripArg args
+
     // Check for --verbose flag (print failing tests immediately)
     let verbose = hasVerboseArg args
 
@@ -60,6 +65,8 @@ let main args =
     match filter with
     | Some pattern -> println $"{Colors.gray}  Filter: {pattern}{Colors.reset}"
     | None -> ()
+    if parserPrettyRoundtripEnabled then
+        println $"{Colors.gray}  Parser/pretty corpus roundtrip: enabled{Colors.reset}"
     println ""
 
     // Use the source tree for test data to avoid copying files into the build output.
@@ -98,6 +105,7 @@ let main args =
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let buildUnitTests (_stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
+        { Name = "Test Runner Args Tests"; Tests = TestRunnerArgsTests.tests }
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
@@ -156,7 +164,18 @@ let main args =
     let elapsed = timer.Elapsed
     let stdlibPassTimingEnd = passTimingTotal ()
     recordPhaseOverhead "Stdlib Build Overhead" elapsed stdlibPassTimingStart stdlibPassTimingEnd
-    let allUnitTests = buildUnitTests stdlib
+    let optionalRoundtripSuites : UnitTestSuite array =
+        if parserPrettyRoundtripEnabled then
+            [|
+                {
+                    Name = "Syntax Roundtrip Corpus Tests"
+                    Tests = SyntaxRoundtripCorpusTests.tests e2eTestFiles
+                }
+            |]
+        else
+            [||]
+
+    let allUnitTests = Array.append (buildUnitTests stdlib) optionalRoundtripSuites
 
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
         let tests = ResizeArray<E2ETest>()

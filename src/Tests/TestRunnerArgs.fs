@@ -22,6 +22,10 @@ let hasVerificationArg (args: string array) : bool =
 let hasVerboseArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--verbose" || arg = "-v")
 
+// Check if --parser-pretty-roundtrip is present (enable parser/pretty-printer corpus roundtrip)
+let hasParserPrettyRoundtripArg (args: string array) : bool =
+    args |> Array.exists (fun arg -> arg = "--parser-pretty-roundtrip")
+
 // Check if a test name matches the filter (case-insensitive substring match)
 let matchesFilter (filter: string option) (testName: string) : bool =
     match filter with

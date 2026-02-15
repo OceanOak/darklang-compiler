@@ -31,6 +31,7 @@
 
     <!-- Unit tests -->
     <Compile Include="TestRunnerArgs.fs" />
+    <Compile Include="TestRunnerArgsTests.fs" />
     <Compile Include="CliFlagTests.fs" />
     <Compile Include="IRSymbolTests.fs" />
     <Compile Include="IRPrinterTests.fs" />
@@ -50,6 +51,7 @@
     <Compile Include="MonomorphizationTests.fs" />
     <Compile Include="LambdaLiftingTests.fs" />
     <Compile Include="SyntaxInteropTests.fs" />
+    <Compile Include="SyntaxRoundtripCorpusTests.fs" />
     <Compile Include="E2EFormatTests.fs" />
 
     <!-- Test Runner (must be last) -->

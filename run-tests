@@ -6,6 +6,7 @@
 # Options:
 #   --filter=PATTERN   Run only tests matching PATTERN (case-insensitive)
 #   --verification     Enable verification/stress tests
+#   --parser-pretty-roundtrip  Enable parser/pretty-printer roundtrip corpus test
 #   --build-only       Only build, don't run tests
 #   --quiet            Quiet mode: print "success" or list failed tests
 #   --verbose          Print failing tests as soon as they occur
@@ -35,6 +36,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --verification)
             TEST_ARGS+=("--verification")
+            shift
+            ;;
+        --parser-pretty-roundtrip)
+            TEST_ARGS+=("--parser-pretty-roundtrip")
             shift
             ;;
         --build-only)
@@ -70,6 +75,7 @@ if [ "$HELP" = true ]; then
     echo "Options:"
     echo "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     echo "  --verification     Enable verification/stress tests"
+    echo "  --parser-pretty-roundtrip  Enable parser/pretty-printer roundtrip corpus test"
     echo "  --build-only       Only build, don't run tests"
     echo "  --quiet            Quiet mode: print 'success' or list failed tests"
     echo "  --verbose          Print failing tests as soon as they occur"
