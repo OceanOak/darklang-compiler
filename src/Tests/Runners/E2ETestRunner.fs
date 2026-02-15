@@ -96,11 +96,18 @@ let private sourceToExecute
         match trySynthesizeValueEqualitySource sourceSyntax allowInternal test.Source rhsExpr with
         | Some rewritten -> Ok rewritten
         | None ->
-            Error (
-                $"Failed to synthesize expected-value source for test '{test.Name}' in {test.SourceFile}.\n"
-                + "Expected-value tests must parse as a program whose last top-level is an expression,\n"
-                + "and RHS must parse as a single expression."
-            )
+            // Some interpreter-specific forms (for example operator sections) can fail
+            // AST pretty-print roundtrips even though the direct source is valid.
+            // Fall back to textual wrapping and parse-validate before execution.
+            let fallbackSource = $"({test.Source}) == ({rhsExpr})"
+            match CompilerLibrary.parseProgram sourceSyntax allowInternal fallbackSource with
+            | Ok _ -> Ok fallbackSource
+            | Error _ ->
+                Error (
+                    $"Failed to synthesize expected-value source for test '{test.Name}' in {test.SourceFile}.\n"
+                    + "Expected-value tests must parse as a program whose last top-level is an expression,\n"
+                    + "and RHS must parse as a single expression."
+                )
     | None -> Ok test.Source
 
 /// Result of running an E2E test

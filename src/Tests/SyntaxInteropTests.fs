@@ -70,6 +70,18 @@ let testPrettyPrintInterpreterSyntax () : TestResult =
         else
             Error $"Interpreter pretty-printer mismatch. Expected '{expected}', got '{printed}'"
 
+let testPrettyPrintInterpreterSyntaxParenthesizesNestedCallArg () : TestResult =
+    let source = "Builtin.unwrap(Stdlib.List.head(xs))"
+    match Parser.parseString false source with
+    | Error err -> Error $"Compiler parser failed: {err}"
+    | Ok ast ->
+        let printed = ASTPrettyPrinter.formatProgram InterpreterSyntax ast
+        let expected = "Builtin.unwrap (Stdlib.List.head xs)"
+        if printed = expected then
+            Ok ()
+        else
+            Error $"Interpreter nested-call argument pretty-print mismatch. Expected '{expected}', got '{printed}'"
+
 let testPrettyPrintCompilerSyntax () : TestResult =
     let source = "let x = 5L in Stdlib.Int64.add x 1L"
     match InterpreterParser.parseString false source with
@@ -106,6 +118,7 @@ let tests = [
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)
+    ("pretty-print interpreter nested call arg", testPrettyPrintInterpreterSyntaxParenthesizesNestedCallArg)
     ("pretty-print compiler syntax", testPrettyPrintCompilerSyntax)
     ("reject bare int literal", testInterpreterParserRejectsBareIntLiteral)
     ("reject compiler lambda syntax", testInterpreterParserRejectsCompilerLambdaSyntax)

@@ -207,31 +207,31 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
     | PInt8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}y"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int8 literals"
+        | InterpreterSyntax -> $"{n}y"
     | PInt16Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}s"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int16 literals"
+        | InterpreterSyntax -> $"{n}s"
     | PInt32Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}l"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int32 literals"
+        | InterpreterSyntax -> $"{n}l"
     | PUInt8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}uy"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt8 literals"
+        | InterpreterSyntax -> $"{n}uy"
     | PUInt16Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}us"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt16 literals"
+        | InterpreterSyntax -> $"{n}us"
     | PUInt32Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}ul"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt32 literals"
+        | InterpreterSyntax -> $"{n}ul"
     | PUInt64Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}UL"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt64 literals"
+        | InterpreterSyntax -> $"{n}UL"
     | PBool b -> if b then "true" else "false"
     | PString s -> $"\"{escapeStringContent s}\""
     | PFloat f -> formatFloatLiteral f
@@ -263,9 +263,20 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
             $"[{headText}{separator}...{formatPattern syntax tail}]"
 
 let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
+    let needsInterpreterAppArgParens (arg: Expr) : bool =
+        match arg with
+        | Call _
+        | TypeApp _
+        | Apply _ -> true
+        | _ -> false
+
     let formatAppArg (arg: Expr) : string =
         let argText = formatExpr syntax arg
-        parenthesizeIfNeeded arg argText
+        match syntax with
+        | InterpreterSyntax when needsInterpreterAppArgParens arg ->
+            $"({argText})"
+        | _ ->
+            parenthesizeIfNeeded arg argText
 
     match expr with
     | UnitLiteral -> "()"
@@ -276,39 +287,39 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | Int8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}y"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int8 literals"
+        | InterpreterSyntax -> $"{n}y"
     | Int16Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}s"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int16 literals"
+        | InterpreterSyntax -> $"{n}s"
     | Int32Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}l"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support Int32 literals"
+        | InterpreterSyntax -> $"{n}l"
     | UInt8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}uy"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt8 literals"
+        | InterpreterSyntax -> $"{n}uy"
     | UInt16Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}us"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt16 literals"
+        | InterpreterSyntax -> $"{n}us"
     | UInt32Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}ul"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt32 literals"
+        | InterpreterSyntax -> $"{n}ul"
     | UInt64Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}UL"
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt64 literals"
+        | InterpreterSyntax -> $"{n}UL"
     | BoolLiteral b -> if b then "true" else "false"
     | StringLiteral s -> $"\"{escapeStringContent s}\""
     | CharLiteral c -> $"'{escapeCharContent c}'"
     | FloatLiteral f -> formatFloatLiteral f
     | InterpolatedString parts ->
         match syntax with
-        | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support interpolated strings"
-        | CompilerSyntax ->
+        | CompilerSyntax
+        | InterpreterSyntax ->
             let partsText =
                 parts
                 |> List.map (function
