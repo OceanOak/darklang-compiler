@@ -942,8 +942,15 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         if rightType <> leftType then
                             Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
                         else
+                            let comparisonExpr =
+                                match leftType with
+                                | TList elemType ->
+                                    let equalsCall = TypeApp ("Stdlib.List.equals", [elemType], [left'; right'])
+                                    if op = Neq then UnaryOp (Not, equalsCall) else equalsCall
+                                | _ ->
+                                    BinOp (op, left', right')
                             match expectedType with
-                            | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
+                            | Some TBool | None -> Ok (TBool, comparisonExpr)
                             | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
                 | Lt | Gt | Lte | Gte ->
                     // Ordering only works on numeric types

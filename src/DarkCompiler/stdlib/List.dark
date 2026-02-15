@@ -13,6 +13,25 @@ def Stdlib.List.isEmpty<t>(list: List<t>) : Bool =
 def Stdlib.List.length<t>(list: List<t>) : Int64 =
     Stdlib.__FingerTree.length<t>(list)
 
+// Compare two lists for structural equality - O(n)
+def Stdlib.List.equals<a>(left: List<a>, right: List<a>) : Bool =
+    if Stdlib.__FingerTree.isEmpty<a>(left) then
+        Stdlib.__FingerTree.isEmpty<a>(right)
+    else if Stdlib.__FingerTree.isEmpty<a>(right) then
+        false
+    else
+        match Stdlib.__FingerTree.head<a>(left) with
+        | None -> false
+        | Some(leftHead) ->
+            match Stdlib.__FingerTree.head<a>(right) with
+            | None -> false
+            | Some(rightHead) ->
+                if leftHead == rightHead then
+                    let leftTail = Stdlib.__FingerTree.tail<a>(left) in
+                    let rightTail = Stdlib.__FingerTree.tail<a>(right) in
+                    Stdlib.List.equals<a>(leftTail, rightTail)
+                else false
+
 // Create a single-element list - O(1)
 def Stdlib.List.singleton<t>(value: t) : List<t> =
     Stdlib.__FingerTree.singleton<t>(value)
@@ -282,4 +301,3 @@ def Stdlib.List.__boolsToStrings(list: List<Bool>, acc: List<String>) : List<Str
 def Stdlib.List.toDisplayString_bool(list: List<Bool>) : String =
     let strs = Stdlib.List.__boolsToStrings(list, Stdlib.__FingerTree.empty<String>()) in
     "[" ++ Stdlib.String.join(strs, ", ") ++ "]"
-
