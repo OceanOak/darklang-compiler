@@ -38,6 +38,23 @@ let private asSingleExpression (program: Program) : Expr option =
     | [Expression expr] -> Some expr
     | _ -> None
 
+let private valueFloatEpsilon : float = 0.00000000001
+
+let private isFloatExpectedExpr (expr: Expr) : bool =
+    match expr with
+    | FloatLiteral _ -> true
+    | UnaryOp (Neg, FloatLiteral _) -> true
+    | _ -> false
+
+let private buildValueComparisonExpr (lhsExpr: Expr) (rhsExpr: Expr) : Expr =
+    if isFloatExpectedExpr rhsExpr then
+        // For float value tests, compare with epsilon tolerance.
+        let absDiff =
+            Call ("Stdlib.Float.abs", [BinOp (Sub, lhsExpr, rhsExpr)])
+        BinOp (Lt, absDiff, FloatLiteral valueFloatEpsilon)
+    else
+        BinOp (Eq, lhsExpr, rhsExpr)
+
 let private tryFormatProgramIfStable
     (sourceSyntax: CompilerLibrary.SourceSyntax)
     (allowInternal: bool)
@@ -56,6 +73,25 @@ let private tryFormatProgramIfStable
             Some formatted
     | Error _ -> None
 
+let private pickValueCheckFuncName (topLevels: TopLevel list) : string =
+    let existingNames =
+        topLevels
+        |> List.choose (function
+            | FunctionDef fn -> Some fn.Name
+            | _ -> None)
+        |> Set.ofList
+    let rec loop idx =
+        let candidate =
+            if idx = 0 then
+                "e2eValueCheck"
+            else
+                $"e2eValueCheck{idx}"
+        if Set.contains candidate existingNames then
+            loop (idx + 1)
+        else
+            candidate
+    loop 0
+
 let private trySynthesizeValueEqualitySource
     (sourceSyntax: CompilerLibrary.SourceSyntax)
     (allowInternal: bool)
@@ -69,18 +105,32 @@ let private trySynthesizeValueEqualitySource
     | Ok (Program sourceTopLevels), Ok rhsProgram ->
         match List.rev sourceTopLevels, asSingleExpression rhsProgram with
         | Expression lhsExpr :: sourceRestRev, Some rhsAst ->
+            let comparisonExpr = buildValueComparisonExpr lhsExpr rhsAst
             let directEqProgram =
-                Program (List.rev (Expression (BinOp (Eq, lhsExpr, rhsAst)) :: sourceRestRev))
+                match sourceSyntax with
+                | CompilerLibrary.CompilerSyntax ->
+                    // Keep the value check isolated in its own top-level def so
+                    // the parser cannot attach the synthesized expression to the
+                    // previous definition body.
+                    let valueCheckFuncName = pickValueCheckFuncName sourceTopLevels
+                    let valueCheckFuncDef : AST.FunctionDef = {
+                        Name = valueCheckFuncName
+                        TypeParams = []
+                        Params = []
+                        ReturnType = TBool
+                        Body = comparisonExpr
+                    }
+                    Program (
+                        List.rev (
+                            Expression (Call (valueCheckFuncName, []))
+                            :: FunctionDef valueCheckFuncDef
+                            :: sourceRestRev
+                        )
+                    )
+                | CompilerLibrary.InterpreterSyntax ->
+                    Program (List.rev (Expression comparisonExpr :: sourceRestRev))
 
-            let actualBindingName = "e2eValueActual"
-            let letEqExpr =
-                Let (actualBindingName, lhsExpr, BinOp (Eq, Var actualBindingName, rhsAst))
-            let letEqProgram =
-                Program (List.rev (Expression letEqExpr :: sourceRestRev))
-
-            match tryFormatProgramIfStable sourceSyntax allowInternal directEqProgram with
-            | Some rewritten -> Some rewritten
-            | None -> tryFormatProgramIfStable sourceSyntax allowInternal letEqProgram
+            tryFormatProgramIfStable sourceSyntax allowInternal directEqProgram
         | _ ->
             None
     | _ ->

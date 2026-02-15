@@ -67,7 +67,7 @@ def useLocalFloat(c: Float) : Float = let x = 4.0 in c + x useLocalFloat(3.0) = 
 def addFloats(a: Float, b: Float) : Float = a + b addFloats(1.5, 2.5) = 4.0
 
 // Two float parameters - division
-def divFloats(a: Float, b: Float) : Float = a / b Float.abs(divFloats(1.0, 3.0) - 0.33333333333) < 0.00000000001 = true
+def divFloats(a: Float, b: Float) : Float = a / b divFloats(1.0, 3.0) = 0.33333333333
 
 // Two float parameters - subtraction
 def subFloats(a: Float, b: Float) : Float = a - b subFloats(5.0, 3.0) = 2.0
@@ -85,7 +85,7 @@ let l = [1.5, 2.5] in match l with | [x, y] -> x + y | _ -> 0.0 = 4.0
 def sum4Floats(a: Float, b: Float, c: Float, d: Float) : Float = a + b + c + d sum4Floats(1.0, 2.0, 3.0, 4.0) = 10.0
 
 // Mixed float and int parameters
-def mixedParams(sign: Float, i: Int64) : Float = let divisor = Stdlib.Int64.toFloat(2 * i + 1) in sign / divisor Float.abs(mixedParams(1.0, 1) - 0.33333333333) < 0.00000000001 = true
+def mixedParams(sign: Float, i: Int64) : Float = let divisor = Stdlib.Int64.toFloat(2 * i + 1) in sign / divisor mixedParams(1.0, 1) = 0.33333333333
 
 // Float param with stdlib call
 def floatWithStdlib(c: Float) : Int64 = Stdlib.Float.toInt(c) floatWithStdlib(3.7) = 3
@@ -121,7 +121,7 @@ def floatIfElse(a: Int64, b: Int64, c: Float) : Float = if a >= b then c else 0.
 def floatSumLoop(i: Int64, n: Int64, acc: Float) : Float = if i >= n then acc else floatSumLoop(i + 1, n, acc + 1.0) floatSumLoop(0, 5, 0.0) = 5.0
 
 // Leibniz pi approximation (uses float in recursive control flow)
-def leibnizLoop(i: Int64, n: Int64, sum: Float, sign: Float) : Float = if i >= n then sum * 4.0 else let term = sign / Stdlib.Int64.toFloat(2 * i + 1) in leibnizLoop(i + 1, n, sum + term, Stdlib.Float.negate(sign)) def leibnizPi(n: Int64) : Float = leibnizLoop(0, n, 0.0, 1.0) Float.abs(leibnizPi(10) - 3.04183961892) < 0.00000000001 = true
+def leibnizLoop(i: Int64, n: Int64, sum: Float, sign: Float) : Float = if i >= n then sum * 4.0 else let term = sign / Stdlib.Int64.toFloat(2 * i + 1) in leibnizLoop(i + 1, n, sum + term, Stdlib.Float.negate(sign)) def leibnizPi(n: Int64) : Float = leibnizLoop(0, n, 0.0, 1.0) leibnizPi(10) = 3.04183961892
 
 // =====================================================
 // Return type inference via temporary variables
