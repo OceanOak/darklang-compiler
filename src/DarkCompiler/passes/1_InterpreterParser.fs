@@ -1189,14 +1189,6 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         | TIdent typeName :: TLBrace :: rest when System.Char.IsUpper(typeName.[0]) ->
             // Record pattern with type name: Point { x = a, y = b }
             parseRecordPatternWithTypeName typeName rest []
-        | TIdent name :: TLParen :: rest when System.Char.IsUpper(name.[0]) ->
-            // Constructor with parenthesized payload pattern: Some(x), Ok((a, b))
-            parsePattern rest
-            |> Result.bind (fun (payloadPattern, remaining) ->
-                match remaining with
-                | TRParen :: rest' ->
-                    Ok (PConstructor (name, Some payloadPattern), rest')
-                | _ -> Error "Expected ')' after constructor pattern payload")
         | TIdent name :: rest when System.Char.IsUpper(name.[0]) ->
             // Constructor pattern, optionally with interpreter-style payload: Some x
             if canStartPatternPayload rest then
@@ -1406,7 +1398,14 @@ let parse (tokens: Token list) : Result<Program, string> =
         | Call (funcName, args) -> Call (funcName, args @ [argExpr])
         | TypeApp (funcName, typeArgs, args) -> TypeApp (funcName, typeArgs, args @ [argExpr])
         | Constructor (typeName, variantName, None) -> Constructor (typeName, variantName, Some argExpr)
-        | Apply (funcExpr, args) -> Apply (funcExpr, args @ [argExpr])
+        | Apply (funcExpr, existingArgs) ->
+            match funcExpr with
+            // Preserve uncurried lambda applications as a single Apply node
+            // while still allowing curried chains to remain left-associated.
+            | Lambda (parameters, _) when List.length existingArgs < List.length parameters ->
+                Apply (funcExpr, existingArgs @ [argExpr])
+            | _ ->
+                Apply (callee, [argExpr])
         | _ -> Apply (callee, [argExpr])
 
     /// Parse multiple cases for pattern matching: | p1 -> e1 | p2 -> e2 ...
@@ -1817,61 +1816,16 @@ let parse (tokens: Token list) : Result<Program, string> =
                 else
                     // Qualified constructor without payload: Stdlib.Color.Red
                     Ok (Constructor (typeName, variantName, None), afterQualified)
+            | TLParen :: TRParen :: rest ->
+                // Qualified zero-arg call: Stdlib.Module.fn()
+                Ok (Call (fullName, []), rest)
             | TLt :: typeArgsStart ->
                 // Qualified generic function call: Stdlib.List.length<t>(args)
-                // Check if this looks like type arguments (ident followed by > or ,)
-                let rec looksLikeTypeArgs tokens =
-                    match tokens with
-                    | TIdent _ :: TGt :: TLParen :: _ -> true
-                    | TIdent _ :: TComma :: rest -> looksLikeTypeArgs rest
-                    | TIdent "List" :: TLt :: rest ->  // Nested List<...>
-                        let rec skipNested toks depth =
-                            match toks with
-                            | TGt :: remaining when depth = 1 -> Some remaining
-                            | TGt :: remaining -> skipNested remaining (depth - 1)
-                            | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                            | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                            | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                            | TLt :: remaining -> skipNested remaining (depth + 1)
-                            | _ :: remaining -> skipNested remaining depth
-                            | [] -> None
-                        match skipNested rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'
-                        | _ -> false
-                    | TIdent "Dict" :: TLt :: rest ->  // Nested Dict<...>
-                        let rec skipNested toks depth =
-                            match toks with
-                            | TGt :: remaining when depth = 1 -> Some remaining
-                            | TGt :: remaining -> skipNested remaining (depth - 1)
-                            | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                            | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                            | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                            | TLt :: remaining -> skipNested remaining (depth + 1)
-                            | _ :: remaining -> skipNested remaining depth
-                            | [] -> None
-                        match skipNested rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'
-                        | _ -> false
-                    | TLParen :: rest ->  // Tuple type: (Type1, Type2, ...)
-                        // Skip until matching )
-                        let rec skipParens toks depth =
-                            match toks with
-                            | TRParen :: remaining when depth = 1 -> Some remaining
-                            | TRParen :: remaining -> skipParens remaining (depth - 1)
-                            | TLParen :: remaining -> skipParens remaining (depth + 1)
-                            | _ :: remaining -> skipParens remaining depth
-                            | [] -> None
-                        match skipParens rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true  // (T1, T2)>(
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'  // (T1, T2), more types
-                        | Some (TArrow :: _) -> true  // Function type: (T1, T2) -> R
-                        | _ -> false
-                    | _ -> false
+                // Accept whenever we can successfully parse a type argument list.
+                let looksLikeTypeArgs tokens =
+                    match parseTypeArgs tokens [] with
+                    | Ok _ -> true
+                    | Error _ -> false
                 if looksLikeTypeArgs typeArgsStart then
                     parseTypeArgs typeArgsStart []
                     |> Result.map (fun (typeArgs, afterTypes) ->
@@ -1884,65 +1838,17 @@ let parse (tokens: Token list) : Result<Program, string> =
             | _ ->
                 // Qualified variable reference (function as value)
                 Ok (Var fullName, afterQualified)
+        | TIdent name :: TLParen :: TRParen :: rest when not (System.Char.IsUpper(name.[0])) ->
+            // Zero-arg call: fn()
+            Ok (Call (name, []), rest)
         | TIdent name :: TLt :: rest when not (System.Char.IsUpper(name.[0])) ->
             // Could be generic function call: name<type, ...>(args)
             // Or could be comparison: name < expr
-            // Disambiguate by looking for pattern: ident (> | ,ident)* > (
-            // i.e., a sequence of identifiers/types followed by > and then (
-            let rec looksLikeGenericCall tokens =
-                match tokens with
-                | TIdent _ :: TGt :: TLParen :: _ -> true   // Single type arg: name<t>(
-                | TIdent _ :: TComma :: rest -> looksLikeGenericCall rest  // More args: name<t, ...
-                | TIdent "List" :: TLt :: rest ->  // Nested List<...>
-                    // Skip past nested generic type
-                    let rec skipNested toks depth =
-                        match toks with
-                        | TGt :: remaining when depth = 1 -> Some remaining
-                        | TGt :: remaining -> skipNested remaining (depth - 1)
-                        | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                        | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                        | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                        | TLt :: remaining -> skipNested remaining (depth + 1)
-                        | _ :: remaining -> skipNested remaining depth
-                        | [] -> None
-                    match skipNested rest 1 with
-                    | Some (TGt :: TLParen :: _) -> true
-                    | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                    | Some (TComma :: rest') -> looksLikeGenericCall rest'
-                    | _ -> false
-                | TIdent "Dict" :: TLt :: rest ->  // Nested Dict<...>
-                    // Skip past nested generic type
-                    let rec skipNested toks depth =
-                        match toks with
-                        | TGt :: remaining when depth = 1 -> Some remaining
-                        | TGt :: remaining -> skipNested remaining (depth - 1)
-                        | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                        | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                        | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                        | TLt :: remaining -> skipNested remaining (depth + 1)
-                        | _ :: remaining -> skipNested remaining depth
-                        | [] -> None
-                    match skipNested rest 1 with
-                    | Some (TGt :: TLParen :: _) -> true
-                    | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                    | Some (TComma :: rest') -> looksLikeGenericCall rest'
-                    | _ -> false
-                | TLParen :: rest ->  // Tuple type: (Type1, Type2, ...)
-                    // Skip until matching )
-                    let rec skipParens toks depth =
-                        match toks with
-                        | TRParen :: remaining when depth = 1 -> Some remaining
-                        | TRParen :: remaining -> skipParens remaining (depth - 1)
-                        | TLParen :: remaining -> skipParens remaining (depth + 1)
-                        | _ :: remaining -> skipParens remaining depth
-                        | [] -> None
-                    match skipParens rest 1 with
-                    | Some (TGt :: TLParen :: _) -> true  // (T1, T2)>(
-                    | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                    | Some (TComma :: rest') -> looksLikeGenericCall rest'  // (T1, T2), more types
-                    | Some (TArrow :: _) -> true  // Function type: (T1, T2) -> R
-                    | _ -> false
-                | _ -> false
+            // Disambiguate by checking whether a full type argument list parses.
+            let looksLikeGenericCall tokens =
+                match parseTypeArgs tokens [] with
+                | Ok _ -> true
+                | Error _ -> false
             if looksLikeGenericCall rest then
                 // Parse as generic call
                 parseTypeArgs rest []
@@ -2105,7 +2011,8 @@ let parse (tokens: Token list) : Result<Program, string> =
                 | _ -> Error "Expected ';' or ']' in list literal")
 
     and parsePostfix (expr: Expr) (toks: Token list) : Result<Expr * Token list, string> =
-        // Handle postfix operations: tuple access (.0, .1) and field access (.fieldName)
+        // Handle postfix operations: tuple access (.0, .1), field access (.fieldName),
+        // and optional parenthesized call arguments.
         match toks with
         | TDot :: TInt64 index :: rest ->
             if index < 0L then
@@ -2117,11 +2024,70 @@ let parse (tokens: Token list) : Result<Program, string> =
             // Record field access
             let accessExpr = RecordAccess (expr, fieldName)
             parsePostfix accessExpr rest
+        | TLParen :: rest ->
+            // Optional call syntax for interpreter compatibility:
+            // f(a, b), g(), (fun x -> x)(1)
+            // Keep existing `f (x)` behavior for single parenthesized args.
+            let rec hasTopLevelComma (depth: int) (ts: Token list) : bool =
+                match ts with
+                | [] -> false
+                | TComma :: _ when depth = 0 -> true
+                | TLParen :: more -> hasTopLevelComma (depth + 1) more
+                | TRParen :: _ when depth = 0 -> false
+                | TRParen :: more -> hasTopLevelComma (depth - 1) more
+                | _ :: more -> hasTopLevelComma depth more
+            let shouldUseCallSyntax =
+                match rest with
+                | TRParen :: _ -> true
+                | _ -> hasTopLevelComma 0 rest
+            if shouldUseCallSyntax then
+                match expr with
+                | Var _ ->
+                    // Keep `f (x)` as application with a parenthesized argument.
+                    Ok (expr, toks)
+                | _ ->
+                    parseCallArgs rest []
+                    |> Result.bind (fun (args, remaining) ->
+                        let appliedExpr =
+                            match expr with
+                            | Call (funcName, existingArgs) ->
+                                Call (funcName, existingArgs @ args)
+                            | TypeApp (funcName, typeArgs, existingArgs) ->
+                                TypeApp (funcName, typeArgs, existingArgs @ args)
+                            | Constructor (typeName, variantName, None) ->
+                                match args with
+                                | [singleArg] ->
+                                    Constructor (typeName, variantName, Some singleArg)
+                                | _ ->
+                                    Apply (expr, args)
+                            | _ ->
+                                Apply (expr, args)
+                        parsePostfix appliedExpr remaining)
+            else
+                Ok (expr, toks)
         | _ -> Ok (expr, toks)
+
+    and parseCallArgs (toks: Token list) (acc: Expr list) : Result<Expr list * Token list, string> =
+        match toks with
+        | TRParen :: rest ->
+            // End of argument list (including zero-arg calls).
+            Ok (List.rev acc, rest)
+        | _ ->
+            parseExpr toks
+            |> Result.bind (fun (argExpr, remaining) ->
+                match remaining with
+                | TComma :: rest ->
+                    parseCallArgs rest (argExpr :: acc)
+                | TRParen :: rest ->
+                    Ok (List.rev (argExpr :: acc), rest)
+                | _ -> Error "Expected ',' or ')' after function argument")
 
     // Parse top-level elements (functions or expressions)
     let rec parseTopLevels (toks: Token list) (acc: TopLevel list) : Result<Program, string> =
         match toks with
+        | TSemicolon :: rest ->
+            // Optional top-level separator in interpreter pretty-printed programs.
+            parseTopLevels rest acc
         | TEOF :: [] ->
             // End of input
             if List.isEmpty acc then

@@ -317,16 +317,13 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | CharLiteral c -> $"'{escapeCharContent c}'"
     | FloatLiteral f -> formatFloatLiteral f
     | InterpolatedString parts ->
-        match syntax with
-        | CompilerSyntax
-        | InterpreterSyntax ->
-            let partsText =
-                parts
-                |> List.map (function
-                    | StringText t -> escapeStringContent t
-                    | StringExpr e -> $"{{{formatExpr syntax e}}}")
-                |> String.concat ""
-            $"$\"{partsText}\""
+        let partsText =
+            parts
+            |> List.map (function
+                | StringText t -> escapeStringContent t
+                | StringExpr e -> $"{{{formatExpr syntax e}}}")
+            |> String.concat ""
+        $"$\"{partsText}\""
     | BinOp (op, left, right) ->
         let formatChild (isLeftChild: bool) (child: Expr) : string =
             let childText = formatExpr syntax child
@@ -337,8 +334,33 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                 else
                     childText
             | _ -> parenthesizeIfNeeded child childText
+        let leftCanConsumeNegativeNumericArg (expr: Expr) : bool =
+            match expr with
+            | Var funcName when funcName.Contains "." -> true
+            | Call _
+            | TypeApp _
+            | Apply _
+            | Constructor (_, _, None) -> true
+            | _ -> false
+        let isNumericLiteralExpr (expr: Expr) : bool =
+            match expr with
+            | Int64Literal _
+            | Int8Literal _
+            | Int16Literal _
+            | Int32Literal _
+            | UInt8Literal _
+            | UInt16Literal _
+            | UInt32Literal _
+            | UInt64Literal _
+            | FloatLiteral _ -> true
+            | _ -> false
         let leftText = formatChild true left
-        let rightText = formatChild false right
+        let rightTextBase = formatChild false right
+        let rightText =
+            match syntax, op with
+            | InterpreterSyntax, Sub when leftCanConsumeNegativeNumericArg left && isNumericLiteralExpr right ->
+                $"({rightTextBase})"
+            | _ -> rightTextBase
         $"{leftText} {formatBinOp op} {rightText}"
     | UnaryOp (op, inner) ->
         let innerText = parenthesizeIfNeeded inner (formatExpr syntax inner)
@@ -355,7 +377,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             $"{funcName}({argsText})"
         | InterpreterSyntax ->
             if List.isEmpty args then
-                funcName
+                $"{funcName}()"
             else
                 let argsText = args |> List.map formatAppArg |> String.concat " "
                 $"{funcName} {argsText}"
@@ -368,7 +390,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         | InterpreterSyntax ->
             let head = $"{funcName}<{typeArgsText}>"
             match args with
-            | [] -> head
+            | [] -> $"{head}()"
             | firstArg :: restArgs ->
                 let firstText = formatExpr syntax firstArg
                 if List.isEmpty restArgs then
@@ -461,14 +483,20 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             if List.isEmpty parameters then
                 Crash.crash "Cannot render zero-argument lambda in interpreter syntax"
             else
-                let paramsText =
-                    parameters
-                    |> List.map (fun (name, typ) ->
-                        match typ with
-                        | TVar typeVar when typeVar.StartsWith "__interp_lambda_" -> name
-                        | _ -> $"({name}: {formatType typ})")
-                    |> String.concat " "
-                $"fun {paramsText} -> {formatExpr syntax body}"
+                match parameters, body with
+                | [ (paramName, TBool) ], BinOp (And, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
+                    $"(&&) {formatAppArg rightArg}"
+                | [ (paramName, TBool) ], BinOp (Or, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
+                    $"(||) {formatAppArg rightArg}"
+                | _ ->
+                    let paramsText =
+                        parameters
+                        |> List.map (fun (name, typ) ->
+                            match typ with
+                            | TVar typeVar when typeVar.StartsWith "__interp_lambda_" -> name
+                            | _ -> $"({name}: {formatType typ})")
+                        |> String.concat " "
+                    $"fun {paramsText} -> {formatExpr syntax body}"
     | Apply (funcExpr, args) ->
         match syntax with
         | CompilerSyntax ->
@@ -545,4 +573,8 @@ let private formatTopLevel (syntax: Syntax) (topLevel: TopLevel) : string =
     | Expression expr -> formatExpr syntax expr
 
 let formatProgram (syntax: Syntax) (Program items: Program) : string =
-    items |> List.map (formatTopLevel syntax) |> String.concat "\n"
+    let separator =
+        match syntax with
+        | CompilerSyntax -> "\n"
+        | InterpreterSyntax -> "\n;\n"
+    items |> List.map (formatTopLevel syntax) |> String.concat separator
