@@ -34,6 +34,14 @@ let private escapeCharContent (input: string) : string =
         | '\000' -> "\\0"
         | _ -> string c)
 
+let private formatFloatLiteral (value: float) : string =
+    let raw = value.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+    let containsLetters = raw |> Seq.exists System.Char.IsLetter
+    if containsLetters || raw.Contains(".") || raw.Contains("E") || raw.Contains("e") then
+        raw
+    else
+        $"{raw}.0"
+
 let rec private formatType (typ: Type) : string =
     match typ with
     | TInt8 -> "Int8"
@@ -126,6 +134,11 @@ let rec private isAtomicExpr (expr: Expr) : bool =
 let private parenthesizeIfNeeded (expr: Expr) (text: string) : string =
     if isAtomicExpr expr then text else $"({text})"
 
+let private parenthesizeTupleBaseIfNeeded (expr: Expr) (text: string) : string =
+    match expr with
+    | TupleAccess _ -> $"({text})"
+    | _ -> parenthesizeIfNeeded expr text
+
 let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
     match pattern with
     | PUnit -> "()"
@@ -172,7 +185,7 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
         | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support UInt64 literals"
     | PBool b -> if b then "true" else "false"
     | PString s -> $"\"{escapeStringContent s}\""
-    | PFloat f -> $"{f}"
+    | PFloat f -> formatFloatLiteral f
     | PTuple patterns ->
         let parts = patterns |> List.map (formatPattern syntax) |> String.concat ", "
         $"({parts})"
@@ -242,7 +255,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | BoolLiteral b -> if b then "true" else "false"
     | StringLiteral s -> $"\"{escapeStringContent s}\""
     | CharLiteral c -> $"'{escapeCharContent c}'"
-    | FloatLiteral f -> $"{f}"
+    | FloatLiteral f -> formatFloatLiteral f
     | InterpolatedString parts ->
         match syntax with
         | InterpreterSyntax -> Crash.crash "Interpreter syntax does not support interpolated strings"
@@ -294,7 +307,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         let elementsText = elements |> List.map (formatExpr syntax) |> String.concat ", "
         $"({elementsText})"
     | TupleAccess (tupleExpr, index) ->
-        let tupleText = parenthesizeIfNeeded tupleExpr (formatExpr syntax tupleExpr)
+        let tupleText = parenthesizeTupleBaseIfNeeded tupleExpr (formatExpr syntax tupleExpr)
         $"{tupleText}.{index}"
     | RecordLiteral (typeName, fields) ->
         let fieldsText =

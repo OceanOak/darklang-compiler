@@ -125,6 +125,7 @@ let main args =
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
         { Name = "Syntax Interop Tests"; Tests = SyntaxInteropTests.tests }
+        { Name = "Formatting Roundtrip Tests"; Tests = FormattingRoundtripTests.tests }
         { Name = "E2E Format Tests"; Tests = E2EFormatTests.tests }
     |]
 
