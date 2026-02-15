@@ -818,23 +818,32 @@ let rec parseParams (tokens: Token list) (acc: (string * Type) list) : Result<(s
     parseParamsWithContext Set.empty tokens acc
 
 /// Parse record fields in a type definition: { name: Type, name: Type, ... }
-let rec parseRecordFields (tokens: Token list) (acc: (string * Type) list) : Result<(string * Type) list * Token list, string> =
+/// Uses parseTypeWithContext so generic record fields can reference in-scope type parameters.
+let rec parseRecordFieldsWithContext
+    (typeParams: Set<string>)
+    (tokens: Token list)
+    (acc: (string * Type) list)
+    : Result<(string * Type) list * Token list, string> =
     match tokens with
     | TRBrace :: rest ->
         // End of fields
         Ok (List.rev acc, rest)
     | TIdent name :: TColon :: rest ->
-        parseType rest
+        parseTypeWithContext typeParams rest
         |> Result.bind (fun (ty, remaining) ->
             match remaining with
             | TComma :: rest' ->
                 // More fields
-                parseRecordFields rest' ((name, ty) :: acc)
+                parseRecordFieldsWithContext typeParams rest' ((name, ty) :: acc)
             | TRBrace :: rest' ->
                 // End of fields
                 Ok (List.rev ((name, ty) :: acc), rest')
             | _ -> Error "Expected ',' or '}' after record field")
     | _ -> Error "Expected field name in record definition"
+
+/// Parse record fields in a type definition with no type parameters in scope.
+let parseRecordFields (tokens: Token list) (acc: (string * Type) list) : Result<(string * Type) list * Token list, string> =
+    parseRecordFieldsWithContext Set.empty tokens acc
 
 /// Parse sum type variants: Variant1 | Variant2 of Type | ...
 /// Returns list of variants and remaining tokens
@@ -916,7 +925,8 @@ let parseTypeDef (tokens: Token list) : Result<TypeDef * Token list, string> =
             match afterTypeParams with
             | TEquals :: TLBrace :: bodyRest ->
                 // Record type: type Name = { field: Type, ... }
-                parseRecordFields bodyRest []
+                let typeParamSet = Set.ofList typeParams
+                parseRecordFieldsWithContext typeParamSet bodyRest []
                 |> Result.map (fun (fields, remaining) ->
                     (RecordDef (typeName, typeParams, fields), remaining))
             | TEquals :: TIdent variantName :: TOf :: bodyRest when System.Char.IsUpper(variantName.[0]) ->

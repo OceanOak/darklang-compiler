@@ -263,20 +263,48 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
             $"[{headText}{separator}...{formatPattern syntax tail}]"
 
 let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
-    let needsInterpreterAppArgParens (arg: Expr) : bool =
+    let isNegativeNumericLiteral (arg: Expr) : bool =
         match arg with
-        | Call _
-        | TypeApp _
-        | Apply _ -> true
+        | Int64Literal n -> n < 0L
+        | Int8Literal n -> n < 0y
+        | Int16Literal n -> n < 0s
+        | Int32Literal n -> n < 0l
+        | FloatLiteral f ->
+            // Keep -0.0 wrapped as well; it is lexically ambiguous in application position.
+            System.BitConverter.DoubleToInt64Bits(f) < 0L
         | _ -> false
 
     let formatAppArg (arg: Expr) : string =
         let argText = formatExpr syntax arg
         match syntax with
-        | InterpreterSyntax when needsInterpreterAppArgParens arg ->
-            $"({argText})"
-        | _ ->
+        | CompilerSyntax ->
             parenthesizeIfNeeded arg argText
+        | InterpreterSyntax ->
+            match arg with
+            | _ when isNegativeNumericLiteral arg -> $"({argText})"
+            | Constructor (_, _, None) -> $"({argText})"
+            | TupleLiteral _ -> $"({argText})"
+            | Call _
+            | TypeApp _
+            | Apply _ -> $"({argText})"
+            | _ -> parenthesizeIfNeeded arg argText
+
+    let rec formatInterpreterAppArgs (args: Expr list) : string list =
+        match args with
+        | [] -> []
+        | [lastArg] -> [formatAppArg lastArg]
+        | currentArg :: ((UnitLiteral as nextArg) :: restArgs) ->
+            // `f x ()` is ambiguous with zero-arg calls (`x()`).
+            // Parenthesize the preceding argument to preserve argument boundaries.
+            $"({formatAppArg currentArg})"
+            :: (formatInterpreterAppArgs (nextArg :: restArgs))
+        | currentArg :: ((TupleLiteral _ as nextArg) :: restArgs) ->
+            // `f g (a, b)` can be reparsed as applying `g` to tuple elements.
+            // Parenthesize the preceding argument to keep tuple as a separate argument.
+            $"({formatAppArg currentArg})"
+            :: (formatInterpreterAppArgs (nextArg :: restArgs))
+        | currentArg :: restArgs ->
+            formatAppArg currentArg :: formatInterpreterAppArgs restArgs
 
     match expr with
     | UnitLiteral -> "()"
@@ -379,7 +407,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             if List.isEmpty args then
                 $"{funcName}()"
             else
-                let argsText = args |> List.map formatAppArg |> String.concat " "
+                let argsText = args |> formatInterpreterAppArgs |> String.concat " "
                 $"{funcName} {argsText}"
     | TypeApp (funcName, typeArgs, args) ->
         let typeArgsText = typeArgs |> List.map formatType |> String.concat ", "
@@ -391,18 +419,22 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             let head = $"{funcName}<{typeArgsText}>"
             match args with
             | [] -> $"{head}()"
-            | firstArg :: restArgs ->
-                let firstText = formatExpr syntax firstArg
-                if List.isEmpty restArgs then
-                    $"{head}({firstText})"
-                else
-                    let restText = restArgs |> List.map formatAppArg |> String.concat " "
-                    $"{head}({firstText}) {restText}"
+            | _ ->
+                let argsText = args |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{head}({argsText})"
     | TupleLiteral elements ->
         let elementsText = elements |> List.map (formatExpr syntax) |> String.concat ", "
         $"({elementsText})"
     | TupleAccess (tupleExpr, index) ->
-        let tupleText = parenthesizeTupleBaseIfNeeded tupleExpr (formatExpr syntax tupleExpr)
+        let tupleBaseText = formatExpr syntax tupleExpr
+        let tupleText =
+            match syntax, tupleExpr with
+            | InterpreterSyntax, (Call _ | TypeApp _ | Apply _) ->
+                // In interpreter syntax, call application has no mandatory wrapping.
+                // Parenthesize before postfix access so `.0` binds to the call result.
+                $"({tupleBaseText})"
+            | _ ->
+                parenthesizeTupleBaseIfNeeded tupleExpr tupleBaseText
         $"{tupleText}.{index}"
     | RecordLiteral (typeName, fields) ->
         let fieldsText =
@@ -418,7 +450,14 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             |> String.concat ", "
         $"{{ {recordText} with {updatesText} }}"
     | RecordAccess (recordExpr, fieldName) ->
-        let recordText = parenthesizeIfNeeded recordExpr (formatExpr syntax recordExpr)
+        let recordBaseText = formatExpr syntax recordExpr
+        let recordText =
+            match syntax, recordExpr with
+            | InterpreterSyntax, (Call _ | TypeApp _ | Apply _) ->
+                // Same ambiguity as tuple access: ensure `.field` applies to call result.
+                $"({recordBaseText})"
+            | _ ->
+                parenthesizeIfNeeded recordExpr recordBaseText
         $"{recordText}.{fieldName}"
     | Constructor (typeName, variantName, payload) ->
         let fullName =
@@ -508,7 +547,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             if List.isEmpty args then
                 funcText
             else
-                let argsText = args |> List.map formatAppArg |> String.concat " "
+                let argsText = args |> formatInterpreterAppArgs |> String.concat " "
                 $"{funcText} {argsText}"
     | FuncRef funcName -> funcName
     | Closure (funcName, captures) ->
