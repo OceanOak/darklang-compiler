@@ -75,7 +75,7 @@ let x = Option.None in Option.withDefault(x, true) = true
 let x = Option.None in Option.withDefault(x, 3.14) = 3.14
 
 // Char
-let x = Option.None in Option.withDefault(x, 'a') = stdout="a"
+let x = Option.None in Option.withDefault(x, 'a') = 'a'
 
 // Unit
 let x = Option.None in Option.withDefault(x, ()) = ()

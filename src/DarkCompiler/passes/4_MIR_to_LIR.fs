@@ -1370,9 +1370,11 @@ let selectTerminator
             let moveToX0 = [LIR.Mov (LIR.Physical LIR.X0, lirOp)]
             Ok (moveToX0, LIR.Ret, state)
         | MIR.StringSymbol _ ->
-            // Strings don't have a meaningful register return value
-            // The value has been printed, so just exit with code 0
-            Ok ([LIR.Exit], LIR.Ret, state)
+            // Return string symbol address in X0 so callers can use the value.
+            // Top-level printing is handled by MIR.Print, not return lowering.
+            let lirOp = convertOperand operand
+            let moveToX0 = [LIR.Mov (LIR.Physical LIR.X0, lirOp)]
+            Ok (moveToX0, LIR.Ret, state)
         | MIR.Register vreg when returnType = AST.TFloat64 ->
             // Float return - move to D0 via FMov
             let srcFReg = vregToLIRFReg vreg
