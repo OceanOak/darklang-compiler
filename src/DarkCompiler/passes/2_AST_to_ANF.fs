@@ -233,6 +233,9 @@ let isBuiltinUnwrapName (funcName: string) : bool =
 let isBuiltinTestRuntimeErrorName (funcName: string) : bool =
     funcName = "Builtin.testRuntimeError" || funcName = "Stdlib.Builtin.testRuntimeError"
 
+let isBuiltinTestNanName (name: string) : bool =
+    name = "Builtin.testNan" || name = "Stdlib.Builtin.testNan"
+
 let private unwrapErrorPayloadToString (expr: AST.Expr) : string option =
     match expr with
     | AST.UnitLiteral -> Some "()"
@@ -2764,13 +2767,16 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
     | AST.CharLiteral _ -> Ok AST.TChar
     | AST.FloatLiteral _ -> Ok AST.TFloat64
     | AST.Var name ->
-        match Map.tryFind name typeEnv with
-        | Some t -> Ok t
-        | None ->
-            // Check if it's a module function (e.g., Stdlib.Int64.add)
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-            | Some (moduleFunc, _) -> Ok (Stdlib.getFunctionType moduleFunc)
-            | None -> Error $"Cannot infer type: undefined variable '{name}'"
+        if isBuiltinTestNanName name then
+            Ok AST.TFloat64
+        else
+            match Map.tryFind name typeEnv with
+            | Some t -> Ok t
+            | None ->
+                // Check if it's a module function (e.g., Stdlib.Int64.add)
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
+                | Some (moduleFunc, _) -> Ok (Stdlib.getFunctionType moduleFunc)
+                | None -> Error $"Cannot infer type: undefined variable '{name}'"
     | AST.RecordLiteral (typeName, fields) ->
         if typeName = "" then
             // Anonymous record literal - try to find matching type by field names
@@ -3118,7 +3124,8 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 Error $"Internal error: Builtin.unwrap expects 1 argument, got {List.length args}"
         elif isBuiltinTestRuntimeErrorName funcName then
             match args with
-            | [_] -> Ok (AST.TVar "__runtime_error")
+            // testRuntimeError behaves like bottom, but ANF-level inference must stay concrete.
+            | [_] -> Ok AST.TUnit
             | _ ->
                 Error $"Internal error: Builtin.testRuntimeError expects 1 argument, got {List.length args}"
         else
@@ -3271,27 +3278,30 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         Ok (ANF.Return (ANF.FloatLiteral f), varGen)
 
     | AST.Var name ->
-        // Variable reference: look up in environment
-        match Map.tryFind name env with
-        | Some (tempId, _) -> Ok (ANF.Return (ANF.Var tempId), varGen)
-        | None ->
-            // Check if it's a module function (e.g., Stdlib.Int64.add)
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-            | Some (_, _) ->
-                // Module function reference - wrap in closure for uniform calling convention
-                // Note: name should already be resolved by the type checker
-                let (closureId, varGen') = ANF.freshVar varGen
-                let closureAlloc = ANF.ClosureAlloc (name, [])
-                Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
+        if isBuiltinTestNanName name then
+            Ok (ANF.Return (ANF.FloatLiteral System.Double.NaN), varGen)
+        else
+            // Variable reference: look up in environment
+            match Map.tryFind name env with
+            | Some (tempId, _) -> Ok (ANF.Return (ANF.Var tempId), varGen)
             | None ->
-                // Check if it's a function reference (function name used as value)
-                if Map.containsKey name funcReg then
-                    // Wrap in closure for uniform calling convention
+                // Check if it's a module function (e.g., Stdlib.Int64.add)
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
+                | Some (_, _) ->
+                    // Module function reference - wrap in closure for uniform calling convention
+                    // Note: name should already be resolved by the type checker
                     let (closureId, varGen') = ANF.freshVar varGen
                     let closureAlloc = ANF.ClosureAlloc (name, [])
                     Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
-                else
-                    Error $"Undefined variable: {name}"
+                | None ->
+                    // Check if it's a function reference (function name used as value)
+                    if Map.containsKey name funcReg then
+                        // Wrap in closure for uniform calling convention
+                        let (closureId, varGen') = ANF.freshVar varGen
+                        let closureAlloc = ANF.ClosureAlloc (name, [])
+                        Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
+                    else
+                        Error $"Undefined variable: {name}"
 
     | AST.FuncRef name ->
         // Explicit function reference - wrap in closure for uniform calling convention
@@ -3769,24 +3779,34 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
         Error "Generic function calls not yet implemented"
 
     | AST.TupleLiteral elements ->
-        // Convert all elements to atoms
-        let rec convertElements (elems: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+        // Convert all elements to bound atoms so tuple elements can include expressions
+        // that cannot be lowered directly with toAtom (for example Builtin.testRuntimeError).
+        let rec convertElements
+            (elems: AST.Expr list)
+            (vg: ANF.VarGen)
+            (accExprs: ANF.AExpr list)
+            (accAtoms: ANF.Atom list)
+            : Result<ANF.AExpr list * ANF.Atom list * ANF.VarGen, string> =
             match elems with
-            | [] -> Ok (List.rev accAtoms, accBindings, vg)
+            | [] -> Ok (List.rev accExprs, List.rev accAtoms, vg)
             | elem :: rest ->
-                toAtom elem vg env typeReg variantLookup funcReg moduleRegistry
-                |> Result.bind (fun (elemAtom, elemBindings, vg') ->
-                    convertElements rest vg' (elemAtom :: accAtoms) (accBindings @ elemBindings))
+                toANFBoundAtom elem vg env typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun (elemExpr, elemAtom, vg') ->
+                    convertElements rest vg' (elemExpr :: accExprs) (elemAtom :: accAtoms))
 
         convertElements elements varGen [] []
-        |> Result.map (fun (elemAtoms, elemBindings, varGen1) ->
+        |> Result.map (fun (elemExprs, elemAtoms, varGen1) ->
             // Create TupleAlloc and bind to fresh variable
             let (resultVar, varGen2) = ANF.freshVar varGen1
             let tupleExpr = ANF.TupleAlloc elemAtoms
-            let finalExpr = ANF.Let (resultVar, tupleExpr, ANF.Return (ANF.Var resultVar))
-            let exprWithBindings = wrapBindings elemBindings finalExpr
+            let tupleAllocExpr = ANF.Let (resultVar, tupleExpr, ANF.Return (ANF.Var resultVar))
+            let exprWithSetups =
+                List.foldBack
+                    (fun elemExpr acc -> bindReturns elemExpr (fun _ -> acc))
+                    elemExprs
+                    tupleAllocExpr
 
-            (exprWithBindings, varGen2))
+            (exprWithSetups, varGen2))
 
     | AST.TupleAccess (tupleExpr, index) ->
         // Convert tuple to atom and create TupleGet
@@ -4252,44 +4272,40 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     match payloadPattern with
                     | None -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                     | Some innerPattern ->
-                        // Extract payload from heap-allocated variant
-                        // Variant layout: [tag:8][payload:8], so payload is at index 1
-                        let (payloadVar, vg1) = ANF.freshVar vg
-                        let (typedPayloadVar, vg2) = ANF.freshVar vg1
-                        let payloadExpr = ANF.TupleGet (scrutAtom, 1)
-                        // Get payload type from variant lookup if available
-                        let payloadTypeResult =
-                            match Map.tryFind constructorName variantLookup with
-                            | Some (_, typeParams, _, Some payloadTypeTemplate) ->
-                                // Apply type substitution if scrutType has type args
-                                let payloadType =
-                                    match scrutType with
-                                    | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
-                                        let subst = List.zip typeParams typeArgs |> Map.ofList
-                                        let rec substitute t =
-                                            match t with
-                                            | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue t
-                                            | AST.TTuple elems -> AST.TTuple (List.map substitute elems)
-                                            | AST.TList elem -> AST.TList (substitute elem)
-                                            | AST.TDict (k, v) -> AST.TDict (substitute k, substitute v)
-                                            | AST.TSum (name, args) -> AST.TSum (name, List.map substitute args)
-                                            | AST.TFunction (args, ret) -> AST.TFunction (List.map substitute args, substitute ret)
-                                            | _ -> t
-                                        substitute payloadTypeTemplate
-                                    | _ -> payloadTypeTemplate
-                                Ok payloadType
-                            | Some (_, _, _, None) ->
-                                Error $"Constructor '{constructorName}' has no payload type in variant lookup"
-                            | None ->
-                                Error $"Constructor '{constructorName}' not found in variant lookup"
-                        // Now compile the inner pattern with the payload
-                        payloadTypeResult
-                        |> Result.bind (fun payloadType ->
+                        match Map.tryFind constructorName variantLookup with
+                        | Some (_, _, _, None) ->
+                            // Constructor arity mismatch behaves as non-matching.
+                            // Do not introduce payload bindings in this branch body.
+                            toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
+                        | Some (_, typeParams, _, Some payloadTypeTemplate) ->
+                            // Extract payload from heap-allocated variant
+                            // Variant layout: [tag:8][payload:8], so payload is at index 1
+                            let (payloadVar, vg1) = ANF.freshVar vg
+                            let (typedPayloadVar, vg2) = ANF.freshVar vg1
+                            let payloadExpr = ANF.TupleGet (scrutAtom, 1)
+                            // Apply type substitution if scrutType has type args
+                            let payloadType =
+                                match scrutType with
+                                | AST.TSum (_, typeArgs) when List.length typeParams = List.length typeArgs ->
+                                    let subst = List.zip typeParams typeArgs |> Map.ofList
+                                    let rec substitute t =
+                                        match t with
+                                        | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue t
+                                        | AST.TTuple elems -> AST.TTuple (List.map substitute elems)
+                                        | AST.TList elem -> AST.TList (substitute elem)
+                                        | AST.TDict (k, v) -> AST.TDict (substitute k, substitute v)
+                                        | AST.TSum (name, args) -> AST.TSum (name, List.map substitute args)
+                                        | AST.TFunction (args, ret) -> AST.TFunction (List.map substitute args, substitute ret)
+                                        | _ -> t
+                                    substitute payloadTypeTemplate
+                                | _ -> payloadTypeTemplate
                             let typedPayloadExpr = ANF.TypedAtom (ANF.Var payloadVar, payloadType)
                             extractAndCompileBody innerPattern body (ANF.Var typedPayloadVar) payloadType currentEnv vg2
                             |> Result.map (fun (innerExpr, vg3) ->
                                 let expr = ANF.Let (payloadVar, payloadExpr, ANF.Let (typedPayloadVar, typedPayloadExpr, innerExpr))
-                                (expr, vg3)))
+                                (expr, vg3))
+                        | None ->
+                            Error $"Constructor '{constructorName}' not found in variant lookup"
                 | AST.PTuple patterns ->
                     // Recursively collect all variable bindings from a pattern
                     // Returns: updated env, list of bindings, updated vargen
@@ -4362,7 +4378,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | AST.TFunction (args, ret) -> AST.TFunction (List.map (substituteType subst) args, substituteType subst ret)
                                 | _ -> typ
 
-                            let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type, string> =
+                            let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type option, string> =
                                 match Map.tryFind constructorName variantLookup with
                                 | Some (_, typeParams, _, Some payloadTypeTemplate) ->
                                     let payloadType =
@@ -4371,22 +4387,33 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                             let subst = List.zip typeParams typeArgs |> Map.ofList
                                             substituteType subst payloadTypeTemplate
                                         | _ -> payloadTypeTemplate
-                                    Ok payloadType
+                                    Ok (Some payloadType)
                                 | Some (_, _, _, None) ->
-                                    Error $"Constructor '{constructorName}' has no payload type"
+                                    Ok None
                                 | None ->
                                     Error $"Unknown constructor '{constructorName}' in pattern"
 
                             match payloadPattern with
                             | None -> Ok (env, bindings, vg)
                             | Some innerPat ->
-                                // Extract payload (at index 1) and recursively collect
-                                let (payloadVar, vg1) = ANF.freshVar vg
-                                let payloadExpr = ANF.TupleGet (sourceAtom, 1)
-                                let payloadBinding = (payloadVar, payloadExpr)
                                 resolvePayloadType constructorName sourceType
                                 |> Result.bind (fun payloadType ->
-                                    collectPatternBindings innerPat (ANF.Var payloadVar) payloadType env (payloadBinding :: bindings) vg1)
+                                    match payloadType with
+                                    | None ->
+                                        // Constructor arity mismatch should not bind payload.
+                                        Ok (env, bindings, vg)
+                                    | Some concretePayloadType ->
+                                        // Extract payload (at index 1) and recursively collect
+                                        let (payloadVar, vg1) = ANF.freshVar vg
+                                        let payloadExpr = ANF.TupleGet (sourceAtom, 1)
+                                        let payloadBinding = (payloadVar, payloadExpr)
+                                        collectPatternBindings
+                                            innerPat
+                                            (ANF.Var payloadVar)
+                                            concretePayloadType
+                                            env
+                                            (payloadBinding :: bindings)
+                                            vg1)
                         | AST.PRecord (_, fieldPatterns) ->
                             // Extract field types from record type (look up in type registry)
                             let fieldTypes =
@@ -4897,7 +4924,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.TFunction (args, ret) -> AST.TFunction (List.map (substituteType subst) args, substituteType subst ret)
                             | _ -> typ
 
-                        let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type, string> =
+                        let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type option, string> =
                             match Map.tryFind constructorName variantLookup with
                             | Some (_, typeParams, _, Some payloadTypeTemplate) ->
                                 let payloadType =
@@ -4906,20 +4933,31 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         let subst = List.zip typeParams typeArgs |> Map.ofList
                                         substituteType subst payloadTypeTemplate
                                     | _ -> payloadTypeTemplate
-                                Ok payloadType
+                                Ok (Some payloadType)
                             | Some (_, _, _, None) ->
-                                Error $"Constructor '{constructorName}' has no payload type"
+                                Ok None
                             | None ->
                                 Error $"Unknown constructor '{constructorName}' in pattern"
 
                         match payloadPattern with
                         | None -> Ok (env, bindings, vg)
                         | Some innerPat ->
-                            let (payloadVar, vg1) = ANF.freshVar vg
-                            let payloadExpr = ANF.TupleGet (sourceAtom, 1)
                             resolvePayloadType constructorName sourceType
                             |> Result.bind (fun payloadType ->
-                                collectBindings innerPat (ANF.Var payloadVar) payloadType env ((payloadVar, payloadExpr) :: bindings) vg1)
+                                match payloadType with
+                                | None ->
+                                    // Constructor arity mismatch should not bind payload.
+                                    Ok (env, bindings, vg)
+                                | Some concretePayloadType ->
+                                    let (payloadVar, vg1) = ANF.freshVar vg
+                                    let payloadExpr = ANF.TupleGet (sourceAtom, 1)
+                                    collectBindings
+                                        innerPat
+                                        (ANF.Var payloadVar)
+                                        concretePayloadType
+                                        env
+                                        ((payloadVar, payloadExpr) :: bindings)
+                                        vg1)
                     | AST.PRecord (_, fieldPatterns) ->
                         let fieldTypes =
                             match sourceType with
@@ -5349,7 +5387,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | AST.TSum (name, args) -> AST.TSum (name, List.map (substituteType subst) args)
                         | AST.TFunction (args, ret) -> AST.TFunction (List.map (substituteType subst) args, substituteType subst ret)
                         | _ -> typ
-                    let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type, string> =
+                    let resolvePayloadType (constructorName: string) (scrutineeType: AST.Type) : Result<AST.Type option, string> =
                         match Map.tryFind constructorName variantLookup with
                         | Some (_, typeParams, _, Some payloadTypeTemplate) ->
                             let payloadType =
@@ -5358,19 +5396,31 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     let subst = List.zip typeParams typeArgs |> Map.ofList
                                     substituteType subst payloadTypeTemplate
                                 | _ -> payloadTypeTemplate
-                            Ok payloadType
+                            Ok (Some payloadType)
                         | Some (_, _, _, None) ->
-                            Error $"Constructor '{constructorName}' has no payload type"
+                            Ok None
                         | None ->
                             Error $"Unknown constructor '{constructorName}' in pattern"
                     match payloadPattern with
                     | None -> Ok (env, bindings, vg)
                     | Some innerPattern ->
-                        let (payloadVar, vg1) = ANF.freshVar vg
-                        let payloadExpr = ANF.TupleGet (sourceAtom, 1)
                         resolvePayloadType constructorName sourceType
                         |> Result.bind (fun payloadType ->
-                            collectNestedPatternBindings innerPattern (ANF.Var payloadVar) payloadType env (bindings @ [(payloadVar, payloadExpr)]) vg1)
+                            match payloadType with
+                            | None ->
+                                // Constructor arity mismatch behaves as a non-match and
+                                // contributes no payload bindings.
+                                Ok (env, bindings, vg)
+                            | Some concretePayloadType ->
+                                let (payloadVar, vg1) = ANF.freshVar vg
+                                let payloadExpr = ANF.TupleGet (sourceAtom, 1)
+                                collectNestedPatternBindings
+                                    innerPattern
+                                    (ANF.Var payloadVar)
+                                    concretePayloadType
+                                    env
+                                    (bindings @ [ (payloadVar, payloadExpr) ])
+                                    vg1)
                 | AST.PList patterns ->
                     let elemType =
                         match sourceType with
@@ -6607,27 +6657,30 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
         Ok (ANF.FloatLiteral f, [], varGen)
 
     | AST.Var name ->
-        // Variable reference: look up in environment
-        match Map.tryFind name env with
-        | Some (tempId, _) -> Ok (ANF.Var tempId, [], varGen)
-        | None ->
-            // Check if it's a module function (e.g., Stdlib.Int64.add)
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-            | Some (_, _) ->
-                // Module function reference - wrap in closure for uniform calling convention
-                // Note: name should already be resolved by the type checker
-                let (closureId, varGen') = ANF.freshVar varGen
-                let closureAlloc = ANF.ClosureAlloc (name, [])
-                Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
+        if isBuiltinTestNanName name then
+            Ok (ANF.FloatLiteral System.Double.NaN, [], varGen)
+        else
+            // Variable reference: look up in environment
+            match Map.tryFind name env with
+            | Some (tempId, _) -> Ok (ANF.Var tempId, [], varGen)
             | None ->
-                // Check if it's a function reference (function name used as value)
-                if Map.containsKey name funcReg then
-                    // Wrap in closure for uniform calling convention
+                // Check if it's a module function (e.g., Stdlib.Int64.add)
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
+                | Some (_, _) ->
+                    // Module function reference - wrap in closure for uniform calling convention
+                    // Note: name should already be resolved by the type checker
                     let (closureId, varGen') = ANF.freshVar varGen
                     let closureAlloc = ANF.ClosureAlloc (name, [])
                     Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
-                else
-                    Error $"Undefined variable: {name}"
+                | None ->
+                    // Check if it's a function reference (function name used as value)
+                    if Map.containsKey name funcReg then
+                        // Wrap in closure for uniform calling convention
+                        let (closureId, varGen') = ANF.freshVar varGen
+                        let closureAlloc = ANF.ClosureAlloc (name, [])
+                        Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
+                    else
+                        Error $"Undefined variable: {name}"
 
     | AST.FuncRef name ->
         // Explicit function reference - wrap in closure for uniform calling convention

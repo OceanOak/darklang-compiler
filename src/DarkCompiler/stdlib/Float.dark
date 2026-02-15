@@ -4,6 +4,8 @@
 
 // Stdlib.Float - Float operations
 
+def Stdlib.Float.multiply(a: Float, b: Float) : Float = a * b
+
 // Get IEEE 754 bit representation of Float as UInt64 (intrinsic)
 def Stdlib.Float.toBits(f: Float) : UInt64 = 0UL
 
@@ -222,4 +224,3 @@ def Stdlib.List.zip<a, b>(list1: List<a>, list2: List<b>) : List<(a, b)> =
     | ([], _) -> []
     | (_, []) -> []
     | ([h1, ...t1], [h2, ...t2]) -> [(h1, h2), ...Stdlib.List.zip<a, b>(t1, t2)]
-

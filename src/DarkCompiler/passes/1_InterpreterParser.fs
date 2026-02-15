@@ -1357,6 +1357,15 @@ let parse (tokens: Token list) : Result<Program, string> =
     // Recursive descent parser with operator precedence
     // Precedence (low to high): or < and < comparison < +/- < */ < unary
 
+    let startsWithNegativeNumericLiteral (toks: Token list) : bool =
+        match toks with
+        | TMinus :: TInt64 _ :: _
+        | TMinus :: TInt8 _ :: _
+        | TMinus :: TInt16 _ :: _
+        | TMinus :: TInt32 _ :: _
+        | TMinus :: TFloat _ :: _ -> true
+        | _ -> false
+
     let canStartApplicationArg (toks: Token list) : bool =
         match toks with
         | TInt64 _ :: _
@@ -1378,6 +1387,18 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TLBracket :: _
         | TFun :: _ -> true
         | _ -> false
+
+    let canStartNegativeNumericApplicationArg (callee: Expr) (toks: Token list) : bool =
+        if not (startsWithNegativeNumericLiteral toks) then
+            false
+        else
+            match callee with
+            // Keep subtraction precedence for bare variables (`x - 1L`),
+            // but allow negative numeric literals as call args in contexts
+            // that are clearly call-like in interpreter syntax.
+            | Var funcName when funcName.Contains "." -> true
+            | Call _ | TypeApp _ | Apply _ | Constructor (_, _, None) -> true
+            | _ -> false
 
     let appendCallArg (callee: Expr) (argExpr: Expr) : Expr =
         match callee with
@@ -1669,14 +1690,24 @@ let parse (tokens: Token list) : Result<Program, string> =
                 parseApplication postfixExpr remaining'))
 
     and parseApplication (callee: Expr) (toks: Token list) : Result<Expr * Token list, string> =
-        if canStartApplicationArg toks then
-            // Parse exactly one atomic argument, then continue left-associatively.
-            parsePrimaryBase toks
-            |> Result.bind (fun (argBaseExpr, afterArgBase) ->
-                parsePostfix argBaseExpr afterArgBase
-                |> Result.bind (fun (argExpr, afterArg) ->
-                    let applied = appendCallArg callee argExpr
-                    parseApplication applied afterArg))
+        let negativeNumericArg = canStartNegativeNumericApplicationArg callee toks
+        if negativeNumericArg || canStartApplicationArg toks then
+            // Parse exactly one argument, then continue left-associatively.
+            // Negative numeric literals are tokenized as `-` + literal.
+            // Parse those with unary parsing so expressions like `f -1.0` become
+            // function application rather than subtraction from `f`.
+            let parseOneArg () : Result<Expr * Token list, string> =
+                if negativeNumericArg then
+                    parseUnary toks
+                else
+                    parsePrimaryBase toks
+                    |> Result.bind (fun (argBaseExpr, afterArgBase) ->
+                        parsePostfix argBaseExpr afterArgBase)
+
+            parseOneArg ()
+            |> Result.bind (fun (argExpr, afterArg) ->
+                let applied = appendCallArg callee argExpr
+                parseApplication applied afterArg)
         else
             Ok (callee, toks)
 

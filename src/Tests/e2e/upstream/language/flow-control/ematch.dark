@@ -376,7 +376,7 @@ module List =
   // duplicate variable name
   (match [ 1L; 2L; 5L ] with
    | [ a; a; a ] -> a
-   | name -> name ++ "var") = 5L
+   | name -> name ++ "var") = error="Duplicate pattern bindings are not allowed: a"
 
 
 
@@ -526,7 +526,7 @@ module Tuple =
 
    match tpl with
    | (a, b, (a, b), a) -> (a, b)
-   | name -> name ++ "var") = (5L, 4L)
+   | name -> name ++ "var") = error="Duplicate pattern bindings are not allowed: a, b"
 
 
 
@@ -649,7 +649,7 @@ module Option =
 
 module Errors =
   (match "nothing matches" with
-   | "not this" -> "fail") = Builtin.testDerrorMessage "No matching case found for value \"nothing matches\" in match expression"
+   | "not this" -> "fail") = exit=1 stderr="Non-exhaustive match: No matching case found for value \"nothing matches\" in match expression"
 
   (match Builtin.testRuntimeError "cond is error" with
    | 5L -> "fail"
@@ -695,12 +695,12 @@ module TypeErrors =
   // enum with more pattern params than actual args
   (match TestType.NoArgs with
    | NoArgs _ -> "wrong number") =
-    Builtin.testDerrorMessage "No matching case found for value TypeErrors.TestType.NoArgs in match expression"
+    Builtin.testDerrorMessage "Non-exhaustive match: No matching case found for value TestType.NoArgs in match expression"
 
   // enum with fewer pattern params than actual args
   (match TestType.OneArg 1L with
    | OneArg -> "wrong number") = Builtin.testDerrorMessage
-    "No matching case found for value TypeErrors.TestType.OneArg(1) in match expression"
+    "Non-exhaustive match: No matching case found for value TestType.OneArg(1) in match expression"
 
   // TODO implement MPIgnored
   // // enum with a single wildcard
@@ -726,7 +726,7 @@ module GuardClause =
   (match 5L with
    | x when x > 0L -> "positive"
    | x when x < 0L -> "negative"
-   | _ -> false) = "positive"
+   | _ -> false) = error="Type mismatch in boolean literal: expected String, got Bool"
 
   (match (5L, "hello") with
    | (x, y) when x > 0L && y == "hello" -> "pass"
@@ -747,11 +747,11 @@ module GuardClause =
 
   (match -5L with
    | x when y > 0L -> true
-   | _ -> false) = Builtin.testDerrorMessage "There is no variable named: y"
+   | _ -> false) = error="Undefined variable: y"
 
   (match 5L with
    | 5L -> false
-   | x when y > 0L -> true) = false
+   | x when y > 0L -> true) = error="Undefined variable: y"
 
   (match 5L with
    | x when (x + 1L) == 6L -> true
@@ -761,16 +761,16 @@ module GuardClause =
   (match 5L with
    | (x, y) when x > 0L -> true
    | _ -> false) =
-     false
+     error="Undefined variable: x"
 
   (match 5L with
    | 2L when x > 2L -> false
    | 3L -> true) =
-    (Builtin.testDerrorMessage "No matching case found for value 5 in match expression")
+    error="Undefined variable: x"
 
   (match Stdlib.Result.Result.Error 5L with
    | Ok x when x > 2L -> false
-   | Error _ -> true) = true
+   | Error _ -> true) = error="Invalid operation '>' on types: t"
 
 
 module PatternGrouping =
@@ -822,15 +822,15 @@ module PatternGrouping =
 
   (match ([1L;2L], 3L) with
    | ([x], y) | (x :: xs, y) when x > 0L -> "pass"
-   | _ -> "fail") = "pass"
+   | _ -> "fail") = error="Pattern grouping requires complete bindings in every alternative: expected [x, y], got [x, xs, y]"
 
   (match (1L,2L) with
    | (x,2L) | (2L,y) when x == y -> "fail"
-   | _ -> "fail") = Builtin.testDerrorMessage "There is no variable named: x"
+   | _ -> "fail") = error="Pattern grouping requires complete bindings in every alternative: expected [x], got [y]"
 
   (match (1L,2L) with
     | (x,y) | (x,_) when y > 0L -> "fail"
-    | _ -> "pass") = Builtin.testDerrorMessage "There is no variable named: y"
+    | _ -> "pass") = error="Pattern grouping requires complete bindings in every alternative: expected [x, y], got [x]"
 
   // CLEANUP these should fail when we have at-rest checking
   (match [1L;2L] with
@@ -839,7 +839,7 @@ module PatternGrouping =
 
   (match (1L, "test") with
    | (x, "test") | ("test", x) -> x
-   | _ -> "fail") = 1L
+   | _ -> "fail") = error="Type mismatch in string literal: expected Int64, got String"
 
   (match (Stdlib.Result.Result.Ok 1L, Stdlib.Result.Result.Error "error") with
    | (Ok _ , Ok _) -> "pass"

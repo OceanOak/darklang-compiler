@@ -126,6 +126,9 @@ let private isBuiltinUnwrapName (funcName: string) : bool =
 let private isBuiltinTestRuntimeErrorName (funcName: string) : bool =
     funcName = "Builtin.testRuntimeError" || funcName = "Stdlib.Builtin.testRuntimeError"
 
+let private isBuiltinTestNanName (name: string) : bool =
+    name = "Builtin.testNan" || name = "Stdlib.Builtin.testNan"
+
 let private variantNameEndsWith (suffix: string) (variantName: string) : bool =
     variantName = suffix || variantName.EndsWith($".{suffix}")
 
@@ -449,7 +452,10 @@ let rec collectFreeVars (expr: Expr) (bound: Set<string>) : Set<string> =
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ ->
         Set.empty
     | Var name ->
-        if Set.contains name bound then Set.empty else Set.singleton name
+        if Set.contains name bound || isBuiltinTestNanName name then
+            Set.empty
+        else
+            Set.singleton name
     | BinOp (_, left, right) ->
         Set.union (collectFreeVars left bound) (collectFreeVars right bound)
     | UnaryOp (_, inner) ->
@@ -1300,30 +1306,39 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             |> Result.map (fun (bodyType, body') -> (bodyType, Let (name, value', body'))))
 
     | Var name ->
-        // Variable reference: look up in environment
-        match Map.tryFind name env with
-        | Some varType ->
+        if isBuiltinTestNanName name then
+            let builtinExpr = Var "Builtin.testNan"
             match expectedType with
             | Some expected ->
-                // Use reconcileTypes to handle type variables and type aliases
-                match reconcileTypes (Some aliasReg) expected varType with
-                | Some reconciledType -> Ok (reconciledType, expr)
-                | None -> Error (TypeMismatch (expected, varType, $"variable {name}"))
-            | None -> Ok (varType, expr)
-        | None ->
-            // Check if it's a module function (e.g., Stdlib.Int64.add)
-            let moduleRegistry = Stdlib.buildModuleRegistry ()
-            match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-            | Some (moduleFunc, resolvedName) ->
-                let funcType = Stdlib.getFunctionType moduleFunc
+                match reconcileTypes (Some aliasReg) expected TFloat64 with
+                | Some reconciledType -> Ok (reconciledType, builtinExpr)
+                | None -> Error (TypeMismatch (expected, TFloat64, $"variable {name}"))
+            | None -> Ok (TFloat64, builtinExpr)
+        else
+            // Variable reference: look up in environment
+            match Map.tryFind name env with
+            | Some varType ->
                 match expectedType with
                 | Some expected ->
-                    match reconcileTypes (Some aliasReg) expected funcType with
-                    | Some reconciledType -> Ok (reconciledType, Var resolvedName)
-                    | None -> Error (TypeMismatch (expected, funcType, $"variable {name}"))
-                | None -> Ok (funcType, Var resolvedName)
+                    // Use reconcileTypes to handle type variables and type aliases
+                    match reconcileTypes (Some aliasReg) expected varType with
+                    | Some reconciledType -> Ok (reconciledType, expr)
+                    | None -> Error (TypeMismatch (expected, varType, $"variable {name}"))
+                | None -> Ok (varType, expr)
             | None ->
-                Error (UndefinedVariable name)
+                // Check if it's a module function (e.g., Stdlib.Int64.add)
+                let moduleRegistry = Stdlib.buildModuleRegistry ()
+                match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
+                | Some (moduleFunc, resolvedName) ->
+                    let funcType = Stdlib.getFunctionType moduleFunc
+                    match expectedType with
+                    | Some expected ->
+                        match reconcileTypes (Some aliasReg) expected funcType with
+                        | Some reconciledType -> Ok (reconciledType, Var resolvedName)
+                        | None -> Error (TypeMismatch (expected, funcType, $"variable {name}"))
+                    | None -> Ok (funcType, Var resolvedName)
+                | None ->
+                    Error (UndefinedVariable name)
 
     | If (cond, thenBranch, elseBranch) ->
         // If expression: condition must be bool, branches must have same type

@@ -25,6 +25,7 @@ let int64Module : ModuleDef = {
 let floatModule : ModuleDef = {
     Name = "Stdlib.Float"
     Functions = [
+        { Name = "multiply"; TypeParams = []; ParamTypes = [TFloat64; TFloat64]; ReturnType = TFloat64 }
         { Name = "sqrt"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }
         { Name = "abs"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }
         { Name = "negate"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }

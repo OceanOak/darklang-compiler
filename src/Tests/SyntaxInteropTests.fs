@@ -44,6 +44,20 @@ let testParseInterpreterTripleQuotedInterpolation () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
+    let source = "Stdlib.Float.multiply -0.0 -1.0"
+    match InterpreterParser.parseString false source with
+    | Error err -> Error $"Interpreter parser failed: {err}"
+    | Ok (Program [Expression (Call ("Stdlib.Float.multiply", [FloatLiteral left; FloatLiteral right]))]) ->
+        if left = -0.0 && right = -1.0 then
+            Ok ()
+        else
+            Error $"Expected negative float args, got left={left}, right={right}"
+    | Ok (Program [Expression expr]) ->
+        Error $"Unexpected AST for negative float application args: {expr}"
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let testPrettyPrintInterpreterSyntax () : TestResult =
     let source = "let x = 5 in Stdlib.Int64.add(x, 1)"
     match Parser.parseString false source with
@@ -90,6 +104,7 @@ let tests = [
     ("compiler library interpreter parse", testCompilerLibraryParseInterpreterSyntax)
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
+    ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)
     ("pretty-print compiler syntax", testPrettyPrintCompilerSyntax)
     ("reject bare int literal", testInterpreterParserRejectsBareIntLiteral)

@@ -22,10 +22,25 @@ let getListDisplayStringFunc (elemType: AST.Type) : string option =
 /// Transforms: Return atom  →  Let (_, Print (atom, type), Return atom)
 /// For list types, generates: Call toDisplayString, then Print the string
 let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExpr) : AExpr * VarGen =
+    let defaultPrintType =
+        match programType with
+        // Builtin.testRuntimeError is represented as a sentinel TVar in type checking.
+        // Printing should stay concrete so downstream passes never see this type variable.
+        | AST.TVar "__runtime_error" -> AST.TUnit
+        | _ -> programType
+
     match expr with
     | Return atom ->
+        // Dead-code elimination can reduce a typed expression branch to `()`
+        // (for example, `Builtin.testRuntimeError` in a selected match arm).
+        // Printing must follow the runtime atom shape, not only the original program type.
+        let printType =
+            match atom with
+            | ANF.UnitLiteral -> AST.TUnit
+            | _ -> defaultPrintType
+
         // For list types, call toDisplayString first
-        match programType with
+        match printType with
         | AST.TSum ("Stdlib.Option.Option", [AST.TList elemType]) ->
             match getListDisplayStringFunc elemType with
             | Some toDisplayStringName ->
@@ -33,12 +48,12 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
                 let (keepFunc, varGen1) = freshVar varGen
                 let (printTmp, varGen2) = freshVar varGen1
                 let keepExpr = Atom (FuncRef toDisplayStringName)
-                let printExpr = Print (atom, programType)
+                let printExpr = Print (atom, printType)
                 (Let (keepFunc, keepExpr, Let (printTmp, printExpr, Return atom)), varGen2)
             | None ->
                 // Unsupported element type, fall back to simple print
                 let (printTmp, varGen') = freshVar varGen
-                (Let (printTmp, Print (atom, programType), Return atom), varGen')
+                (Let (printTmp, Print (atom, printType), Return atom), varGen')
         | AST.TList elemType ->
             match getListDisplayStringFunc elemType with
             | Some toDisplayStringName ->
@@ -52,7 +67,7 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
             | None ->
                 // Unsupported element type, fall back to simple print
                 let (printTmp, varGen') = freshVar varGen
-                (Let (printTmp, Print (atom, programType), Return atom), varGen')
+                (Let (printTmp, Print (atom, printType), Return atom), varGen')
         | AST.TFloat64 ->
             // For Float64, call Float.toString first, then print the string
             let (strTmp, varGen1) = freshVar varGen
@@ -63,7 +78,7 @@ let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExp
         | _ ->
             // Non-list types: simple print
             let (printTmp, varGen') = freshVar varGen
-            (Let (printTmp, Print (atom, programType), Return atom), varGen')
+            (Let (printTmp, Print (atom, printType), Return atom), varGen')
     | Let (tempId, cexpr, body) ->
         // Recurse into body
         let (body', varGen') = wrapReturnWithPrint programType varGen body
