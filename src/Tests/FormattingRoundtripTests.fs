@@ -56,5 +56,21 @@ let tests : (string * (unit -> TestResult)) list =
             Name = "nested tuple access keeps required parentheses"
             Source = "let outer = ((1, 2), (3, 4)) in (outer.0).0"
         }
+        {
+            Name = "top-level expression after def is preserved"
+            Source = "def triple(x: Int64) : Int64 = x * 3 triple(7) + triple(7)"
+        }
+        {
+            Name = "top-level expression after def with chained add is preserved"
+            Source = "def f(x: Int64) : Int64 = x * 2 f(1) + f(2) + f(3)"
+        }
+        {
+            Name = "nested match branch body keeps required parentheses"
+            Source = "match [1] with | [x] -> (match [x] with | [a] -> a | _ -> 0) | _ -> 0"
+        }
+        {
+            Name = "let wrapping nested match branch body keeps required parentheses"
+            Source = "match [1] with | [x] -> (let y = x in match [y] with | [z] -> z | _ -> 0) | _ -> 0"
+        }
     ]
     |> List.map mkRoundtripTest

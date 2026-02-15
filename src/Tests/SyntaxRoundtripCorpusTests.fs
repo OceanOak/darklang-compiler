@@ -40,7 +40,9 @@ let private syntaxModeForFile (sourceFile: string) : SyntaxMode =
         }
 
 let private allowInternalForFile (sourceFile: string) : bool =
-    sourceFile.Replace('\\', '/').Contains("/stdlib-internal/")
+    let normalized = sourceFile.Replace('\\', '/')
+    normalized.Contains("/stdlib-internal/")
+    || normalized.EndsWith("/e2e/stdlib_internals.e2e")
 
 let private parseBySyntax
     (sourceSyntax: CompilerLibrary.SourceSyntax)
@@ -57,6 +59,11 @@ let private syntaxName (sourceSyntax: CompilerLibrary.SourceSyntax) : string =
     | CompilerLibrary.InterpreterSyntax -> "InterpreterSyntax"
 
 let private snippetsForTest (test: E2ETest) : Snippet list =
+    let sourceHasTopLevelDefinition =
+        let trimmed = test.Source.TrimStart()
+        trimmed.StartsWith("def ")
+        || trimmed.StartsWith("type ")
+
     let preambleSnippet =
         if String.IsNullOrWhiteSpace test.Preamble then
             []
@@ -68,8 +75,11 @@ let private snippetsForTest (test: E2ETest) : Snippet list =
 
     let expectedSnippet =
         match test.ExpectedValueExpr with
-        | Some rhs -> [ { Label = "expected-value"; Source = rhs } ]
+        | Some rhs when not sourceHasTopLevelDefinition ->
+            [ { Label = "expected-value"; Source = rhs } ]
         | None -> []
+        | Some _ ->
+            []
 
     preambleSnippet @ sourceSnippet @ expectedSnippet
 

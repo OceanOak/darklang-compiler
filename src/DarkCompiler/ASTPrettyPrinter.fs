@@ -105,6 +105,52 @@ let private formatUnaryOp (op: UnaryOp) : string =
     | Not -> "!"
     | BitNot -> "~~~"
 
+let private isComparisonOp (op: BinOp) : bool =
+    match op with
+    | Eq
+    | Neq
+    | Lt
+    | Gt
+    | Lte
+    | Gte -> true
+    | _ -> false
+
+let private binOpPrecedence (op: BinOp) : int =
+    match op with
+    | Or -> 1
+    | And -> 2
+    | BitOr -> 3
+    | BitXor -> 4
+    | BitAnd -> 5
+    | Eq
+    | Neq
+    | Lt
+    | Gt
+    | Lte
+    | Gte -> 6
+    | Shl
+    | Shr -> 7
+    | Add
+    | Sub
+    | StringConcat -> 8
+    | Mul
+    | Div
+    | Mod -> 9
+
+let private shouldParenthesizeBinChild (parentOp: BinOp) (isLeftChild: bool) (childOp: BinOp) : bool =
+    let parentPrec = binOpPrecedence parentOp
+    let childPrec = binOpPrecedence childOp
+    if childPrec < parentPrec then
+        true
+    elif childPrec > parentPrec then
+        false
+    elif isComparisonOp parentOp then
+        true
+    else
+        // Operators are left-associative: left child can omit equal-precedence
+        // parentheses, right child needs them to preserve tree shape.
+        not isLeftChild
+
 let rec private isAtomicExpr (expr: Expr) : bool =
     match expr with
     | UnitLiteral
@@ -123,6 +169,9 @@ let rec private isAtomicExpr (expr: Expr) : bool =
     | InterpolatedString _
     | Var _
     | FuncRef _
+    | Call _
+    | TypeApp _
+    | Apply _
     | TupleLiteral _
     | RecordLiteral _
     | ListLiteral _
@@ -268,8 +317,17 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                 |> String.concat ""
             $"$\"{partsText}\""
     | BinOp (op, left, right) ->
-        let leftText = parenthesizeIfNeeded left (formatExpr syntax left)
-        let rightText = parenthesizeIfNeeded right (formatExpr syntax right)
+        let formatChild (isLeftChild: bool) (child: Expr) : string =
+            let childText = formatExpr syntax child
+            match child with
+            | BinOp (childOp, _, _) ->
+                if shouldParenthesizeBinChild op isLeftChild childOp then
+                    $"({childText})"
+                else
+                    childText
+            | _ -> parenthesizeIfNeeded child childText
+        let leftText = formatChild true left
+        let rightText = formatChild false right
         $"{leftText} {formatBinOp op} {rightText}"
     | UnaryOp (op, inner) ->
         let innerText = parenthesizeIfNeeded inner (formatExpr syntax inner)
@@ -337,6 +395,13 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             | InterpreterSyntax -> $"{fullName} {payloadText}"
     | Match (scrutinee, cases) ->
         let scrutineeText = formatExpr syntax scrutinee
+        let formatCaseBody (body: Expr) : string =
+            let bodyText = formatExpr syntax body
+            match body with
+            // Without parens, nested match case bars get parsed as outer cases.
+            | Match _
+            | Let _ -> $"({bodyText})"
+            | _ -> bodyText
         let caseText =
             cases
             |> List.map (fun case ->
@@ -349,7 +414,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                     match case.Guard with
                     | None -> ""
                     | Some guardExpr -> $" when {formatExpr syntax guardExpr}"
-                $"| {patternsText}{guardText} -> {formatExpr syntax case.Body}")
+                $"| {patternsText}{guardText} -> {formatCaseBody case.Body}")
             |> String.concat " "
         $"match {scrutineeText} with {caseText}"
     | ListLiteral elements ->
