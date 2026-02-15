@@ -20,6 +20,7 @@
     <Compile Include="TestDSL/E2EFormat.fs" />
     <Compile Include="TestDSL/TypeCheckingFormat.fs" />
     <Compile Include="TestDSL/OptimizationFormat.fs" />
+    <Compile Include="TestDSL/FormattingRoundtripFormat.fs" />
     <Compile Include="Runners/PassTestRunner.fs" />
     <Compile Include="Runners/ARM64EncodingTestRunner.fs" />
     <Compile Include="Runners/E2ETestRunner.fs" />
@@ -73,6 +74,7 @@
     <None Include="verification/**/*.e2e" />
     <None Include="typecheck/**/*.typecheck" />
     <None Include="optimization/**/*.opt" />
+    <None Include="formatting-roundtrip/**/*.roundtrip" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />

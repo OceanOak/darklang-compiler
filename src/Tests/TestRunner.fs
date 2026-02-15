@@ -102,6 +102,7 @@ let main args =
     let mir2lirTestFiles  = getTestFiles "passes/mir2lir" "mir2lir"
     let lir2arm64TestFiles  = getTestFiles "passes/lir2arm64" "lir2arm64"
     let arm64encTestFiles  = getTestFiles "passes/arm64enc" "arm64enc"
+    let formattingRoundtripTestFiles = getTestFiles "formatting-roundtrip" "roundtrip"
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let buildUnitTests (_stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
@@ -125,7 +126,7 @@ let main args =
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
         { Name = "Syntax Interop Tests"; Tests = SyntaxInteropTests.tests }
-        { Name = "Formatting Roundtrip Tests"; Tests = FormattingRoundtripTests.tests }
+        { Name = "Formatting Roundtrip Tests"; Tests = FormattingRoundtripTests.tests formattingRoundtripTestFiles }
         { Name = "E2E Format Tests"; Tests = E2EFormatTests.tests }
     |]
 

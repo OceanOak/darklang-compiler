@@ -1,76 +1,68 @@
 // FormattingRoundtripTests.fs - Focused parser/pretty roundtrip regression tests.
 //
-// Keeps minimal expressions that have historically failed roundtripping.
+// Loads minimal expressions from data files so new regression cases do not
+// require recompiling tests.
 
 module FormattingRoundtripTests
 
+open System.IO
 open AST
 open Parser
 open ASTPrettyPrinter
+open TestDSL.FormattingRoundtripFormat
 
 type TestResult = Result<unit, string>
 
-type private RoundtripCase = {
-    Name: string
-    Source: string
-}
-
-let private roundtripCompilerSyntax (source: string) : TestResult =
-    match Parser.parseString false source with
+let private roundtripCompilerSyntax (testCase: FormattingRoundtripCase) : TestResult =
+    match Parser.parseString false testCase.Source with
     | Error err ->
-        Error $"Initial parse failed.\nSource: {source}\nError: {err}"
+        Error (
+            $"Initial parse failed.\nFile: {testCase.SourceFile}\nTest: {testCase.Name}\n"
+            + $"Source: {testCase.Source}\nError: {err}"
+        )
     | Ok ast0 ->
         let printed0 = ASTPrettyPrinter.formatProgram CompilerSyntax ast0
         match Parser.parseString false printed0 with
         | Error err ->
-            Error $"Re-parse failed.\nSource: {source}\nPretty: {printed0}\nError: {err}"
+            Error (
+                $"Re-parse failed.\nFile: {testCase.SourceFile}\nTest: {testCase.Name}\n"
+                + $"Source: {testCase.Source}\nPretty: {printed0}\nError: {err}"
+            )
         | Ok ast1 ->
             let printed1 = ASTPrettyPrinter.formatProgram CompilerSyntax ast1
             if ast0 <> ast1 then
                 Error (
                     "AST changed after roundtrip.\n"
-                    + $"Source: {source}\n"
+                    + $"File: {testCase.SourceFile}\n"
+                    + $"Test: {testCase.Name}\n"
+                    + $"Source: {testCase.Source}\n"
                     + $"Pretty (pass 1): {printed0}\n"
                     + $"Pretty (pass 2): {printed1}"
                 )
             elif printed0 <> printed1 then
                 Error (
                     "Pretty-printer output was not idempotent.\n"
-                    + $"Source: {source}\n"
+                    + $"File: {testCase.SourceFile}\n"
+                    + $"Test: {testCase.Name}\n"
+                    + $"Source: {testCase.Source}\n"
                     + $"Pretty (pass 1): {printed0}\n"
                     + $"Pretty (pass 2): {printed1}"
                 )
             else
                 Ok ()
 
-let private mkRoundtripTest (caseData: RoundtripCase) : string * (unit -> TestResult) =
-    (caseData.Name, fun () -> roundtripCompilerSyntax caseData.Source)
+let private parseFailureTest (path: string) (msg: string) : string * (unit -> TestResult) =
+    let label = Path.GetFileName path
+    ($"parse {label}", fun () -> Error msg)
 
-let tests : (string * (unit -> TestResult)) list =
-    [
-        {
-            Name = "float literal zero keeps float syntax"
-            Source = "0.0"
-        }
-        {
-            Name = "nested tuple access keeps required parentheses"
-            Source = "let outer = ((1, 2), (3, 4)) in (outer.0).0"
-        }
-        {
-            Name = "top-level expression after def is preserved"
-            Source = "def triple(x: Int64) : Int64 = x * 3 triple(7) + triple(7)"
-        }
-        {
-            Name = "top-level expression after def with chained add is preserved"
-            Source = "def f(x: Int64) : Int64 = x * 2 f(1) + f(2) + f(3)"
-        }
-        {
-            Name = "nested match branch body keeps required parentheses"
-            Source = "match [1] with | [x] -> (match [x] with | [a] -> a | _ -> 0) | _ -> 0"
-        }
-        {
-            Name = "let wrapping nested match branch body keeps required parentheses"
-            Source = "match [1] with | [x] -> (let y = x in match [y] with | [z] -> z | _ -> 0) | _ -> 0"
-        }
-    ]
-    |> List.map mkRoundtripTest
+let tests (testFiles: string array) : (string * (unit -> TestResult)) list =
+    testFiles
+    |> Array.sort
+    |> Array.toList
+    |> List.collect (fun path ->
+        match parseFormattingRoundtripFile path with
+        | Ok parsed ->
+            parsed
+            |> List.map (fun caseData -> (caseData.Name, fun () -> roundtripCompilerSyntax caseData))
+        | Error msg ->
+            [ parseFailureTest path msg ])

@@ -17,6 +17,8 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
 ## Fix one failure at a time
 1. Take only the first failing case from `./run-tests --parser-pretty-roundtrip`.
 2. Add a minimal regression test first:
+   - For parser/pretty formatting regressions, add one expression to:
+     - `src/Tests/formatting-roundtrip/compiler.roundtrip`
    - Prefer `src/Tests/e2e/*.e2e` when it is user-visible syntax behavior.
    - Use `src/Tests/SyntaxInteropTests.fs` only for narrowly scoped parser/printer rules.
 3. Confirm the regression fails:
