@@ -1759,25 +1759,38 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TFalse :: rest -> Ok (BoolLiteral false, rest)
         | TFun :: rest ->
             // Interpreter lambda syntax: fun x y -> body
-            let rec parseFunParamNames (toks: Token list) (acc: string list) : Result<string list * Token list, string> =
+            let lambdaSeed = List.length rest
+
+            let rec parseFunParameters
+                (toks: Token list)
+                (paramIndex: int)
+                (acc: (string * Type) list)
+                : Result<(string * Type) list * Token list, string> =
                 match toks with
-                | TIdent name :: remaining when not (System.Char.IsUpper(name.[0])) ->
-                    parseFunParamNames remaining (name :: acc)
                 | TArrow :: remaining when not (List.isEmpty acc) ->
                     Ok (List.rev acc, remaining)
-                | _ -> Error "Expected one or more parameter names before '->' in fun expression"
+                | TIdent name :: remaining when not (System.Char.IsUpper(name.[0])) ->
+                    let typeVarName = $"__interp_lambda_{lambdaSeed}_{paramIndex}_{name}"
+                    parseFunParameters
+                        remaining
+                        (paramIndex + 1)
+                        ((name, TVar typeVarName) :: acc)
+                | TLParen :: TIdent name :: TColon :: remaining when not (System.Char.IsUpper(name.[0])) ->
+                    parseType remaining
+                    |> Result.bind (fun (paramType, afterType) ->
+                        match afterType with
+                        | TRParen :: remaining' ->
+                            parseFunParameters
+                                remaining'
+                                (paramIndex + 1)
+                                ((name, paramType) :: acc)
+                        | _ -> Error "Expected ')' after typed lambda parameter")
+                | _ -> Error "Expected one or more parameters before '->' in fun expression"
 
-            let lambdaSeed = List.length rest
-            parseFunParamNames rest []
-            |> Result.bind (fun (paramNames, bodyStart) ->
+            parseFunParameters rest 0 []
+            |> Result.bind (fun (parameters, bodyStart) ->
                 parseExpr bodyStart
                 |> Result.map (fun (body, remaining) ->
-                    let parameters =
-                        paramNames
-                        |> List.mapi (fun idx name ->
-                            // Preserve unknown param types as unique type variables.
-                            let typeVarName = $"__interp_lambda_{lambdaSeed}_{idx}_{name}"
-                            (name, TVar typeVarName))
                     (Lambda (parameters, body), remaining)))
         // Qualified identifier: Stdlib.Int64.add, Module.func, or Stdlib.Result.Result.Ok
         | TIdent name :: TDot :: TIdent nextName :: rest when System.Char.IsUpper(name.[0]) ->

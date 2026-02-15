@@ -25,6 +25,15 @@ type private Snippet = {
     Source: string
 }
 
+type private RoundtripPlan = {
+    CheckLabel: string
+    ParseOriginalSyntax: string
+    PrettySyntax: ASTPrettyPrinter.Syntax
+    ParsePrettySyntax: string
+    ParseOriginal: string -> Result<AST.Program, string>
+    ParsePretty: string -> Result<AST.Program, string>
+}
+
 let private syntaxModeForFile (sourceFile: string) : SyntaxMode =
     let normalized = sourceFile.Replace('\\', '/')
     if normalized.Contains("/interpreter/")
@@ -53,10 +62,47 @@ let private parseBySyntax
     | CompilerLibrary.CompilerSyntax -> Parser.parseString allowInternal source
     | CompilerLibrary.InterpreterSyntax -> InterpreterParser.parseString allowInternal source
 
-let private syntaxName (sourceSyntax: CompilerLibrary.SourceSyntax) : string =
+let private sourceSyntaxName (sourceSyntax: CompilerLibrary.SourceSyntax) : string =
     match sourceSyntax with
     | CompilerLibrary.CompilerSyntax -> "CompilerSyntax"
     | CompilerLibrary.InterpreterSyntax -> "InterpreterSyntax"
+
+let private prettySyntaxName (syntax: ASTPrettyPrinter.Syntax) : string =
+    match syntax with
+    | ASTPrettyPrinter.CompilerSyntax -> "CompilerSyntax"
+    | ASTPrettyPrinter.InterpreterSyntax -> "InterpreterSyntax"
+
+let private formatProgramSafe
+    (syntax: ASTPrettyPrinter.Syntax)
+    (ast: AST.Program)
+    : Result<string, string> =
+    try
+        Ok (ASTPrettyPrinter.formatProgram syntax ast)
+    with ex ->
+        Error ex.Message
+
+let private roundtripPlans (mode: SyntaxMode) (allowInternal: bool) : RoundtripPlan list =
+    let parseOriginal = parseBySyntax mode.SourceSyntax allowInternal
+    let parseNative = parseBySyntax mode.SourceSyntax allowInternal
+    let parseInterpreter = parseBySyntax CompilerLibrary.InterpreterSyntax allowInternal
+    [
+        {
+            CheckLabel = "source-syntax"
+            ParseOriginalSyntax = sourceSyntaxName mode.SourceSyntax
+            PrettySyntax = mode.PrettySyntax
+            ParsePrettySyntax = sourceSyntaxName mode.SourceSyntax
+            ParseOriginal = parseOriginal
+            ParsePretty = parseNative
+        }
+        {
+            CheckLabel = "interpreter-syntax"
+            ParseOriginalSyntax = sourceSyntaxName mode.SourceSyntax
+            PrettySyntax = ASTPrettyPrinter.InterpreterSyntax
+            ParsePrettySyntax = sourceSyntaxName CompilerLibrary.InterpreterSyntax
+            ParseOriginal = parseOriginal
+            ParsePretty = parseInterpreter
+        }
+    ]
 
 let private snippetsForTest (test: E2ETest) : Snippet list =
     let preambleSnippet =
@@ -78,38 +124,41 @@ let private snippetsForTest (test: E2ETest) : Snippet list =
 
 let private failureHeader
     (kind: string)
+    (plan: RoundtripPlan)
     (sourceFile: string)
     (testName: string)
     (snippetLabel: string)
-    (sourceSyntax: CompilerLibrary.SourceSyntax)
     (allowInternal: bool)
     : string =
     [
         $"Roundtrip failure kind: {kind}"
+        $"Roundtrip check: {plan.CheckLabel}"
         $"File: {sourceFile}"
         $"Test: {testName}"
         $"Snippet: {snippetLabel}"
-        $"Syntax: {syntaxName sourceSyntax}"
+        $"Parse original syntax: {plan.ParseOriginalSyntax}"
+        $"Pretty syntax: {prettySyntaxName plan.PrettySyntax}"
+        $"Parse pretty syntax: {plan.ParsePrettySyntax}"
         $"Allow internal: {allowInternal}"
     ]
     |> String.concat "\n"
 
-let private roundtripSnippet
+let private roundtripWithPlan
     (sourceFile: string)
     (testName: string)
-    (mode: SyntaxMode)
+    (plan: RoundtripPlan)
     (allowInternal: bool)
     (snippet: Snippet)
     : TestResult =
-    match parseBySyntax mode.SourceSyntax allowInternal snippet.Source with
+    match plan.ParseOriginal snippet.Source with
     | Error originalParseError ->
         let header =
             failureHeader
                 "ParseOriginalFailed"
+                plan
                 sourceFile
                 testName
                 snippet.Label
-                mode.SourceSyntax
                 allowInternal
         Error (
             $"{header}\n"
@@ -118,71 +167,119 @@ let private roundtripSnippet
             + snippet.Source
         )
     | Ok ast0 ->
-        let printed0 = ASTPrettyPrinter.formatProgram mode.PrettySyntax ast0
-        match parseBySyntax mode.SourceSyntax allowInternal printed0 with
-        | Error prettyParseError ->
+        match formatProgramSafe plan.PrettySyntax ast0 with
+        | Error prettyError ->
             let header =
                 failureHeader
-                    "ParsePrettyFailed"
+                    "PrettyPrintFailed"
+                    plan
                     sourceFile
                     testName
                     snippet.Label
-                    mode.SourceSyntax
                     allowInternal
             Error (
                 $"{header}\n"
-                + $"\nPretty parse error: {prettyParseError}\n"
+                + $"\nPretty-print error: {prettyError}\n"
                 + "\nOriginal source:\n"
                 + snippet.Source
-                + "\n\nPretty-printed source:\n"
-                + printed0
             )
-        | Ok ast1 ->
-            let printed1 = ASTPrettyPrinter.formatProgram mode.PrettySyntax ast1
-            if ast0 <> ast1 then
-                let ast0Repr = sprintf "%A" ast0
-                let ast1Repr = sprintf "%A" ast1
+        | Ok printed0 ->
+            match plan.ParsePretty printed0 with
+            | Error prettyParseError ->
                 let header =
                     failureHeader
-                        "AstChangedAfterRoundtrip"
+                        "ParsePrettyFailed"
+                        plan
                         sourceFile
                         testName
                         snippet.Label
-                        mode.SourceSyntax
                         allowInternal
                 Error (
                     $"{header}\n"
+                    + $"\nPretty parse error: {prettyParseError}\n"
                     + "\nOriginal source:\n"
                     + snippet.Source
-                    + "\n\nPretty-printed source (first pass):\n"
+                    + "\n\nPretty-printed source:\n"
                     + printed0
-                    + "\n\nPretty-printed source (second pass):\n"
-                    + printed1
-                    + "\n\nParsed AST (first parse):\n"
-                    + ast0Repr
-                    + "\n\nParsed AST (second parse):\n"
-                    + ast1Repr
                 )
-            elif printed0 <> printed1 then
-                let header =
-                    failureHeader
-                        "PrettyNotIdempotent"
-                        sourceFile
-                        testName
-                        snippet.Label
-                        mode.SourceSyntax
-                        allowInternal
-                Error (
-                    $"{header}\n"
-                    + "\nOriginal source:\n"
-                    + snippet.Source
-                    + "\n\nPretty-printed source (first pass):\n"
-                    + printed0
-                    + "\n\nPretty-printed source (second pass):\n"
-                    + printed1
-                )
-            else
-                Ok ()
+            | Ok ast1 ->
+                match formatProgramSafe plan.PrettySyntax ast1 with
+                | Error prettyError ->
+                    let header =
+                        failureHeader
+                            "PrettyPrintSecondPassFailed"
+                            plan
+                            sourceFile
+                            testName
+                            snippet.Label
+                            allowInternal
+                    Error (
+                        $"{header}\n"
+                        + $"\nPretty-print second pass error: {prettyError}\n"
+                        + "\nOriginal source:\n"
+                        + snippet.Source
+                    )
+                | Ok printed1 ->
+                    if ast0 <> ast1 then
+                        let ast0Repr = sprintf "%A" ast0
+                        let ast1Repr = sprintf "%A" ast1
+                        let header =
+                            failureHeader
+                                "AstChangedAfterRoundtrip"
+                                plan
+                                sourceFile
+                                testName
+                                snippet.Label
+                                allowInternal
+                        Error (
+                            $"{header}\n"
+                            + "\nOriginal source:\n"
+                            + snippet.Source
+                            + "\n\nPretty-printed source (first pass):\n"
+                            + printed0
+                            + "\n\nPretty-printed source (second pass):\n"
+                            + printed1
+                            + "\n\nParsed AST (first parse):\n"
+                            + ast0Repr
+                            + "\n\nParsed AST (second parse):\n"
+                            + ast1Repr
+                        )
+                    elif printed0 <> printed1 then
+                        let header =
+                            failureHeader
+                                "PrettyNotIdempotent"
+                                plan
+                                sourceFile
+                                testName
+                                snippet.Label
+                                allowInternal
+                        Error (
+                            $"{header}\n"
+                            + "\nOriginal source:\n"
+                            + snippet.Source
+                            + "\n\nPretty-printed source (first pass):\n"
+                            + printed0
+                            + "\n\nPretty-printed source (second pass):\n"
+                            + printed1
+                        )
+                    else
+                        Ok ()
+
+let private roundtripSnippet
+    (sourceFile: string)
+    (testName: string)
+    (mode: SyntaxMode)
+    (allowInternal: bool)
+    (snippet: Snippet)
+    : TestResult =
+    let rec loop (remainingPlans: RoundtripPlan list) : TestResult =
+        match remainingPlans with
+        | [] -> Ok ()
+        | plan :: rest ->
+            match roundtripWithPlan sourceFile testName plan allowInternal snippet with
+            | Ok () -> loop rest
+            | Error _ as err -> err
+    loop (roundtripPlans mode allowInternal)
 
 let private runRoundtripForTest
     (sourceFile: string)

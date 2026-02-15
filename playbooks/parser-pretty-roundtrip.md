@@ -7,11 +7,12 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
    - `./run-tests --parser-pretty-roundtrip`
 2. The suite is disabled by default and only runs with that flag.
 3. The suite stops at the first failure and prints:
-   - failure kind (`ParseOriginalFailed`, `ParsePrettyFailed`, `AstChangedAfterRoundtrip`, `PrettyNotIdempotent`)
+   - failure kind (`ParseOriginalFailed`, `PrettyPrintFailed`, `ParsePrettyFailed`, `PrettyPrintSecondPassFailed`, `AstChangedAfterRoundtrip`, `PrettyNotIdempotent`)
+   - roundtrip check (`source-syntax` or `interpreter-syntax`)
    - file name
    - test name
    - snippet type (`preamble`, `source`, or `expected-value`)
-   - syntax mode and `allowInternal` setting
+   - parse/pretty/reparse syntax details and `allowInternal` setting
    - original and pretty-printed code (plus parse error when relevant)
 
 ## Fix one failure at a time

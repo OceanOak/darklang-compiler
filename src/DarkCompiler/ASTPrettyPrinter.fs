@@ -367,11 +367,15 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             $"{funcName}<{typeArgsText}>({argsText})"
         | InterpreterSyntax ->
             let head = $"{funcName}<{typeArgsText}>"
-            if List.isEmpty args then
-                head
-            else
-                let argsText = args |> List.map formatAppArg |> String.concat " "
-                $"{head} {argsText}"
+            match args with
+            | [] -> head
+            | firstArg :: restArgs ->
+                let firstText = formatExpr syntax firstArg
+                if List.isEmpty restArgs then
+                    $"{head}({firstText})"
+                else
+                    let restText = restArgs |> List.map formatAppArg |> String.concat " "
+                    $"{head}({firstText}) {restText}"
     | TupleLiteral elements ->
         let elementsText = elements |> List.map (formatExpr syntax) |> String.concat ", "
         $"({elementsText})"
@@ -457,7 +461,13 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             if List.isEmpty parameters then
                 Crash.crash "Cannot render zero-argument lambda in interpreter syntax"
             else
-                let paramsText = parameters |> List.map fst |> String.concat " "
+                let paramsText =
+                    parameters
+                    |> List.map (fun (name, typ) ->
+                        match typ with
+                        | TVar typeVar when typeVar.StartsWith "__interp_lambda_" -> name
+                        | _ -> $"({name}: {formatType typ})")
+                    |> String.concat " "
                 $"fun {paramsText} -> {formatExpr syntax body}"
     | Apply (funcExpr, args) ->
         match syntax with
@@ -491,14 +501,16 @@ let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
             |> String.concat ", "
         $"def {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
     | InterpreterSyntax ->
-        let bodyText = formatExpr syntax funcDef.Body
-        if List.isEmpty funcDef.Params then
-            $"let {funcDef.Name} = {bodyText}"
-        else
-            let paramNames = funcDef.Params |> List.map fst
-            let lambdaText =
-                List.foldBack (fun name acc -> $"fun {name} -> {acc}") paramNames bodyText
-            $"let {funcDef.Name} = {lambdaText}"
+        let typeParamsText =
+            if List.isEmpty funcDef.TypeParams then ""
+            else
+                let joined = String.concat ", " funcDef.TypeParams
+                $"<{joined}>"
+        let paramsText =
+            funcDef.Params
+            |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+            |> String.concat ", "
+        $"let {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
 
 let private formatTypeDef (typeDef: TypeDef) : string =
     let formatTypeParams (typeParams: string list) : string =
