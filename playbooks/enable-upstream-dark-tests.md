@@ -27,27 +27,14 @@ Enable all upstream `.dark` tests by default, one test at a time, while keeping 
 1. Keep using focused enablement (`--filter=<file>.dark`) while a file still has unresolved failures.
 2. When a file reaches the desired state (no unresolved failures for the enabled tests in that file), move it toward default execution by updating `src/Tests/TestRunner.fs` include logic.
 3. Re-run full `./run-tests` after any `TestRunner` inclusion change.
-4. Record the file-level rollout decision in the Progress Log.
-
-## Progress Log
-| Date | File | Test | Change | Result | Notes |
-| --- | --- | --- | --- | --- | --- |
-| 2026-02-15 | `src/Tests/e2e/upstream/language/flow-control/eif.dark` | `L3: (if true then Builtin.testRuntimeError "a" else 0L)` | Replaced `skip="Builtin.testRuntimeError is not supported yet"` with `exit=1 stderr="Uncaught exception: a"` | Enabled and passing in filtered run (`6 passed, 4 failed, 6 skipped`) | This confirms `Builtin.testRuntimeError` is executable in this scenario; skip reason was stale for this case. |
+4. Record the file-level rollout decision in the Learnings Log.
 
 ## Learnings Log
-| Date | Learning | Evidence |
-| --- | --- | --- |
-| 2026-02-15 | In `eif.dark`, one previously skipped runtime-error test can be enabled using explicit `exit/stderr` expectations. | `./dark -q -e '(if true then Builtin.testRuntimeError "a" else 0L)' --syntax=interpreter` binary run produced exit `1` and stderr `Uncaught exception: a`. |
-| 2026-02-15 | Current blocker in same file is mostly diagnostic-text drift for type errors, not execution crashes. | Filtered run still fails at `L1`, `L17`, `L18`, `L19` with `Expected error message ... not found in stderr`. |
+| Situation | How to Identify It | What to Do | How to Validate |
+| --- | --- | --- | --- |
+| Compile-error tests fail because expected message text no longer matches | Focused run shows `Expected error message '...' not found in stderr` while process still exits non-zero during compile stage. | Treat this as diagnostic-text drift first: inspect current compiler error text, then update expectation strings if semantics are unchanged. Only change compiler behavior if message drift reveals a real semantic regression. | After adjusting expectations or code, rerun focused tests; then run full `./run-tests` before landing. |
 
 ## Guidance Log (Paul)
 | Date | Question Asked | Why It Was Needed | Paul’s Guidance | Applied |
 | --- | --- | --- | --- | --- |
 | _pending_ | _none yet_ | _n/a_ | _n/a_ | _n/a_ |
-
-## Next Candidate Tests
-1. `eif.dark:L5` (same runtime-error family as L3)
-2. `eif.dark:L7`
-3. `eif.dark:L8`
-
-These are likely the fastest follow-ups because they are adjacent to the now-enabled L3 case.

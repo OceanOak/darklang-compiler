@@ -2,7 +2,7 @@
 
 (if true then Builtin.testRuntimeError "a" else 0L) = exit=1 stderr="Uncaught exception: a"
 
-(if false then 0L else Builtin.testRuntimeError "a") = skip="Builtin.testRuntimeError is not supported yet"
+(if false then 0L else Builtin.testRuntimeError "a") = exit=1 stderr="Uncaught exception: a"
 
 (if false then Builtin.testRuntimeError "a" else 0L) = skip="Builtin.testRuntimeError is not supported yet"
 (if true then 0L else Builtin.testRuntimeError "a") = skip="Builtin.testRuntimeError is not supported yet"
