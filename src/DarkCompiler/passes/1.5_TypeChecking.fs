@@ -1329,7 +1329,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | Some outerExpected -> Some outerExpected
                         | None -> Some thenType
 
-                    checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg elseExpectedType
+                    let elseResult =
+                        match checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg elseExpectedType with
+                        | Ok checkedElse ->
+                            Ok checkedElse
+                        | Error originalErr ->
+                            // When no outer expected type exists, we type-check else with then-type context.
+                            // If that fails due to contextual mismatch, re-check else unconstrained so the
+                            // final diagnostic can report branch-vs-branch mismatch, not literal mismatch.
+                            match expectedType, originalErr with
+                            | None, TypeMismatch (expectedElse, _, _) when expectedElse = thenType ->
+                                checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                            | _ ->
+                                Error originalErr
+
+                    elseResult
                     |> Result.bind (fun (elseType, else') ->
                         let reconciledBranchType =
                             match reconcileTypes (Some aliasReg) thenType elseType with

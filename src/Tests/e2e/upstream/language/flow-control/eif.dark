@@ -4,7 +4,7 @@
 
 (if false then 0L else Builtin.testRuntimeError "a") = exit=1 stderr="Uncaught exception: a"
 
-(if false then Builtin.testRuntimeError "a" else 0L) = skip="Builtin.testRuntimeError is not supported yet"
+(if false then Builtin.testRuntimeError "a" else 0L) = 0L
 (if true then 0L else Builtin.testRuntimeError "a") = skip="Builtin.testRuntimeError is not supported yet"
 (if false then "" else "correct") = "correct"
 (if () then "" else "") = error="Encountered a condition that must be a Bool, but got an Unit (())"
