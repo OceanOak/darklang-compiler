@@ -529,6 +529,145 @@ let rec applySubstToType (subst: Substitution) (typ: AST.Type) : AST.Type =
     | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRawPtr ->
         typ  // Concrete types are unchanged
 
+/// Collect type variable names in first-seen order.
+let rec collectTypeVarsInType (typ: AST.Type) (acc: string list) : string list =
+    let add name =
+        if List.contains name acc then acc else acc @ [name]
+
+    match typ with
+    | AST.TVar name -> add name
+    | AST.TFunction (paramTypes, returnType) ->
+        let withParams = paramTypes |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+        collectTypeVarsInType returnType withParams
+    | AST.TTuple elemTypes ->
+        elemTypes |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | AST.TRecord (_, typeArgs) ->
+        typeArgs |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | AST.TSum (_, typeArgs) ->
+        typeArgs |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | AST.TList elemType ->
+        collectTypeVarsInType elemType acc
+    | AST.TDict (keyType, valueType) ->
+        let withKey = collectTypeVarsInType keyType acc
+        collectTypeVarsInType valueType withKey
+    | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+    | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
+    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRawPtr ->
+        acc
+
+/// Infer record type parameter order from field type variables.
+/// This relies on first occurrence order of type variables in field types.
+let inferRecordTypeParamsFromFields (fields: (string * AST.Type) list) : string list =
+    fields |> List.fold (fun acc (_, fieldType) -> collectTypeVarsInType fieldType acc) []
+
+/// Build a substitution for generic record fields from concrete type arguments.
+let buildRecordFieldSubst (fields: (string * AST.Type) list) (typeArgs: AST.Type list) : Substitution option =
+    let typeParams = inferRecordTypeParamsFromFields fields
+    if List.length typeParams = List.length typeArgs then
+        Some (List.zip typeParams typeArgs |> Map.ofList)
+    else
+        None
+
+/// Match a type pattern (may contain type variables) against a concrete type.
+let rec matchTypePattern (pattern: AST.Type) (actual: AST.Type) : Result<(string * AST.Type) list, string> =
+    match pattern with
+    | AST.TVar name ->
+        match actual with
+        | AST.TVar actualName when actualName = name -> Ok []
+        | _ -> Ok [(name, actual)]
+    | _ ->
+        match actual with
+        | AST.TVar _ ->
+            // ANF-side inference may observe unresolved constructor type args.
+            // Treat unconstrained actual type variables as compatible placeholders.
+            Ok []
+        | _ ->
+            match pattern with
+            | AST.TFunction (patternParams, patternRet) ->
+                match actual with
+                | AST.TFunction (actualParams, actualRet) when List.length patternParams = List.length actualParams ->
+                    let paramResults =
+                        List.zip patternParams actualParams
+                        |> List.map (fun (p, a) -> matchTypePattern p a)
+                    let retResult = matchTypePattern patternRet actualRet
+                    (paramResults @ [retResult])
+                    |> List.fold (fun acc res ->
+                        match acc, res with
+                        | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e) (Ok [])
+                | _ -> Error "Function type mismatch"
+            | AST.TTuple patternElems ->
+                match actual with
+                | AST.TTuple actualElems when List.length patternElems = List.length actualElems ->
+                    List.zip patternElems actualElems
+                    |> List.map (fun (p, a) -> matchTypePattern p a)
+                    |> List.fold (fun acc res ->
+                        match acc, res with
+                        | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e) (Ok [])
+                | _ -> Error "Tuple type mismatch"
+            | AST.TRecord (patternName, patternArgs) ->
+                match actual with
+                | AST.TRecord (actualName, actualArgs)
+                    when patternName = actualName && List.length patternArgs = List.length actualArgs ->
+                    List.zip patternArgs actualArgs
+                    |> List.map (fun (p, a) -> matchTypePattern p a)
+                    |> List.fold (fun acc res ->
+                        match acc, res with
+                        | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e) (Ok [])
+                | _ -> Error "Record type mismatch"
+            | AST.TSum (patternName, patternArgs) ->
+                match actual with
+                | AST.TSum (actualName, actualArgs)
+                    when patternName = actualName && List.length patternArgs = List.length actualArgs ->
+                    List.zip patternArgs actualArgs
+                    |> List.map (fun (p, a) -> matchTypePattern p a)
+                    |> List.fold (fun acc res ->
+                        match acc, res with
+                        | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e) (Ok [])
+                | _ ->
+                    Error $"Sum type mismatch: expected {typeToString pattern}, got {typeToString actual}"
+            | AST.TList patternElem ->
+                match actual with
+                | AST.TList actualElem -> matchTypePattern patternElem actualElem
+                | _ -> Error "List type mismatch"
+            | AST.TDict (patternKey, patternValue) ->
+                match actual with
+                | AST.TDict (actualKey, actualValue) ->
+                    match matchTypePattern patternKey actualKey, matchTypePattern patternValue actualValue with
+                    | Ok keyBindings, Ok valueBindings -> Ok (keyBindings @ valueBindings)
+                    | Error e, _ -> Error e
+                    | _, Error e -> Error e
+                | _ -> Error "Dict type mismatch"
+            | _ ->
+                if pattern = actual then Ok [] else Error "Type mismatch"
+
+/// Consolidate type variable bindings, preferring concrete types when both appear.
+let consolidateTypeBindings (bindings: (string * AST.Type) list) : Result<Map<string, AST.Type>, string> =
+    bindings
+    |> List.fold (fun acc (name, typ) ->
+        acc |> Result.bind (fun m ->
+            match Map.tryFind name m with
+            | None -> Ok (Map.add name typ m)
+            | Some existingType ->
+                if existingType = typ then
+                    Ok m
+                elif containsTypeVar existingType && not (containsTypeVar typ) then
+                    Ok (Map.add name typ m)
+                elif containsTypeVar typ && not (containsTypeVar existingType) then
+                    Ok m
+                elif containsTypeVar existingType && containsTypeVar typ then
+                    Ok m
+                else
+                    Error $"Type variable {name} has conflicting inferences: {typeToString existingType} vs {typeToString typ}"))
+        (Ok Map.empty)
+
 /// Apply a substitution to an expression, replacing type variables in type annotations
 let rec applySubstToExpr (subst: Substitution) (expr: AST.Expr) : AST.Expr =
     match expr with
@@ -1454,26 +1593,81 @@ let rec simpleInferType
         | Some (AST.TTuple elemTypes) when index >= 0 && index < List.length elemTypes ->
             Some (List.item index elemTypes)
         | _ -> None
-    | AST.RecordLiteral (typeName, _) ->
-        // Record literal has the record's type
-        Some (AST.TRecord (typeName, []))
+    | AST.RecordLiteral (typeName, fields) ->
+        if typeName = "" then
+            None
+        else
+            match Map.tryFind typeName typeReg with
+            | None ->
+                Some (AST.TRecord (typeName, []))
+            | Some expectedFields ->
+                let fieldMap = Map.ofList fields
+                let typeParams = inferRecordTypeParamsFromFields expectedFields
+                let rec inferBindings remaining acc =
+                    match remaining with
+                    | [] -> Some acc
+                    | (fieldName, expectedFieldType) :: rest ->
+                        match Map.tryFind fieldName fieldMap with
+                        | None -> inferBindings rest acc
+                        | Some fieldExpr ->
+                            match simpleInferType fieldExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
+                            | None -> inferBindings rest acc
+                            | Some actualFieldType ->
+                                match matchTypePattern expectedFieldType actualFieldType with
+                                | Ok newBindings -> inferBindings rest (acc @ newBindings)
+                                | Error _ -> inferBindings rest acc
+
+                match inferBindings expectedFields [] with
+                | None ->
+                    Some (AST.TRecord (typeName, []))
+                | Some bindings ->
+                    match consolidateTypeBindings bindings with
+                    | Error _ ->
+                        Some (AST.TRecord (typeName, []))
+                    | Ok subst ->
+                        let typeArgs =
+                            typeParams
+                            |> List.map (fun name -> Map.tryFind name subst |> Option.defaultValue (AST.TVar name))
+                        Some (AST.TRecord (typeName, typeArgs))
     | AST.RecordAccess (recordExpr, fieldName) ->
         match simpleInferType recordExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
-        | Some (AST.TRecord (typeName, _)) ->
+        | Some (AST.TRecord (typeName, typeArgs)) ->
             match Map.tryFind typeName typeReg with
-            | Some fields -> fields |> List.tryFind (fun (name, _) -> name = fieldName) |> Option.map snd
+            | Some fields ->
+                fields
+                |> List.tryFind (fun (name, _) -> name = fieldName)
+                |> Option.map (fun (_, fieldTypePattern) ->
+                    match buildRecordFieldSubst fields typeArgs with
+                    | Some subst -> applySubstToType subst fieldTypePattern
+                    | None -> fieldTypePattern)
             | None -> None
         | _ -> None
-    | AST.Constructor (typeName, variantName, _) ->
-        // Sum type constructor has the sum type
+    | AST.Constructor (typeName, variantName, payload) ->
+        // Sum type constructor has the sum type; infer generic args from payload when possible.
         match Map.tryFind variantName variantLookup with
-        | Some (sumTypeName, typeParams, _, _) ->
-            let typeArgs =
-                if List.isEmpty typeParams then
-                    []
-                else
-                    typeParams |> List.map AST.TVar
-            Some (AST.TSum (sumTypeName, typeArgs))
+        | Some (sumTypeName, typeParams, _, payloadPattern) ->
+            let defaultTypeArgs = typeParams |> List.map AST.TVar
+            match payloadPattern, payload with
+            | Some expectedPayloadType, Some payloadExpr ->
+                match simpleInferType payloadExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
+                | Some actualPayloadType ->
+                    match matchTypePattern expectedPayloadType actualPayloadType with
+                    | Ok bindings ->
+                        match consolidateTypeBindings bindings with
+                        | Ok subst ->
+                            let typeArgs =
+                                typeParams
+                                |> List.map (fun typeParam ->
+                                    Map.tryFind typeParam subst |> Option.defaultValue (AST.TVar typeParam))
+                            Some (AST.TSum (sumTypeName, typeArgs))
+                        | Error _ ->
+                            Some (AST.TSum (sumTypeName, defaultTypeArgs))
+                    | Error _ ->
+                        Some (AST.TSum (sumTypeName, defaultTypeArgs))
+                | None ->
+                    Some (AST.TSum (sumTypeName, defaultTypeArgs))
+            | _ ->
+                Some (AST.TSum (sumTypeName, defaultTypeArgs))
         | None ->
             if typeName = "" then
                 None
@@ -2458,7 +2652,7 @@ let rec generateStructuralEquality
 
         compareElements 0 elemTypes [] [] varGen
 
-    | AST.TRecord (typeName, _) ->
+    | AST.TRecord (typeName, typeArgs) ->
         // Compare each record field and AND the results
         match Map.tryFind typeName typeReg with
         | None ->
@@ -2466,6 +2660,13 @@ let rec generateStructuralEquality
             let (cmpVar, vg') = ANF.freshVar varGen
             ([(cmpVar, ANF.Prim (ANF.Eq, leftAtom, rightAtom))], ANF.Var cmpVar, vg')
         | Some fields ->
+            let concreteFields =
+                match buildRecordFieldSubst fields typeArgs with
+                | Some subst ->
+                    fields |> List.map (fun (name, fieldType) -> (name, applySubstToType subst fieldType))
+                | None ->
+                    fields
+
             let rec compareFields index fieldList accBindings accResults vg =
                 match fieldList with
                 | [] ->
@@ -2504,7 +2705,7 @@ let rec generateStructuralEquality
                         let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var leftFieldVar, ANF.Var rightFieldVar)
                         compareFields (index + 1) restFields (baseBindings @ [(cmpVar, cmpExpr)]) (accResults @ [ANF.Var cmpVar]) vg3
 
-            compareFields 0 fields [] [] varGen
+            compareFields 0 concreteFields [] [] varGen
 
     | AST.TSum (typeName, _) ->
         // Check if ANY variant in this type has a payload
@@ -2588,7 +2789,39 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 let names = String.concat ", " matches
                 Error $"Ambiguous record literal: matches multiple types: {names}"
         else
-            Ok (AST.TRecord (typeName, []))
+            match Map.tryFind typeName typeReg with
+            | None ->
+                Error $"Unknown record type: {typeName}"
+            | Some expectedFields ->
+                let fieldMap = Map.ofList fields
+                let typeParams = inferRecordTypeParamsFromFields expectedFields
+
+                let rec inferBindings
+                    (remainingFields: (string * AST.Type) list)
+                    (accBindings: (string * AST.Type) list)
+                    : Result<(string * AST.Type) list, string> =
+                    match remainingFields with
+                    | [] -> Ok accBindings
+                    | (fieldName, expectedFieldType) :: rest ->
+                        match Map.tryFind fieldName fieldMap with
+                        | None ->
+                            // Type checker should have enforced completeness already.
+                            inferBindings rest accBindings
+                        | Some fieldExpr ->
+                            inferType fieldExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                            |> Result.bind (fun actualFieldType ->
+                                matchTypePattern expectedFieldType actualFieldType
+                                |> Result.bind (fun newBindings ->
+                                    inferBindings rest (accBindings @ newBindings)))
+
+                inferBindings expectedFields []
+                |> Result.bind consolidateTypeBindings
+                |> Result.map (fun subst ->
+                    let typeArgs =
+                        typeParams
+                        |> List.map (fun typeParam ->
+                            Map.tryFind typeParam subst |> Option.defaultValue (AST.TVar typeParam))
+                    AST.TRecord (typeName, typeArgs))
     | AST.RecordUpdate (recordExpr, _) ->
         // Record update returns the same type as the record being updated
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
@@ -2596,11 +2829,16 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         inferType recordExpr typeEnv typeReg variantLookup funcReg moduleRegistry
         |> Result.bind (fun recordType ->
             match recordType with
-            | AST.TRecord (typeName, _) ->
+            | AST.TRecord (typeName, typeArgs) ->
                 match Map.tryFind typeName typeReg with
                 | Some fields ->
                     match List.tryFind (fun (name, _) -> name = fieldName) fields with
-                    | Some (_, fieldType) -> Ok fieldType
+                    | Some (_, fieldTypePattern) ->
+                        let fieldType =
+                            match buildRecordFieldSubst fields typeArgs with
+                            | Some subst -> applySubstToType subst fieldTypePattern
+                            | None -> fieldTypePattern
+                        Ok fieldType
                     | None -> Error $"Record type {typeName} has no field '{fieldName}'"
                 | None -> Error $"Unknown record type: {typeName}"
             | _ -> Error $"Cannot access field on non-record type")
@@ -2621,10 +2859,31 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 Ok (List.item index elemTypes)
             | AST.TTuple _ -> Error $"Tuple index {index} out of bounds"
             | _ -> Error "Cannot access index on non-tuple type")
-    | AST.Constructor (_, variantName, _) ->
+    | AST.Constructor (_, variantName, payload) ->
         match Map.tryFind variantName variantLookup with
-        | Some (typeName, _, _, _) -> Ok (AST.TSum (typeName, []))  // Type args inferred during type checking
-        | None -> Error $"Unknown constructor: {variantName}"
+        | None ->
+            Error $"Unknown constructor: {variantName}"
+        | Some (typeName, typeParams, _, payloadPattern) ->
+            let defaultTypeArgs = typeParams |> List.map AST.TVar
+            match payloadPattern, payload with
+            | Some expectedPayloadType, Some payloadExpr ->
+                inferType payloadExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+                |> Result.bind (fun actualPayloadType ->
+                    match matchTypePattern expectedPayloadType actualPayloadType with
+                    | Error _ ->
+                        Ok (AST.TSum (typeName, defaultTypeArgs))
+                    | Ok bindings ->
+                        match consolidateTypeBindings bindings with
+                        | Error _ ->
+                            Ok (AST.TSum (typeName, defaultTypeArgs))
+                        | Ok subst ->
+                            let typeArgs =
+                                typeParams
+                                |> List.map (fun typeParam ->
+                                    Map.tryFind typeParam subst |> Option.defaultValue (AST.TVar typeParam))
+                            Ok (AST.TSum (typeName, typeArgs)))
+            | _ ->
+                Ok (AST.TSum (typeName, defaultTypeArgs))
     | AST.ListLiteral elements ->
         match elements with
         | [] -> Ok (AST.TList (AST.TVar "t"))  // Preserve unknown element type for empty lists
@@ -3196,8 +3455,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 else
                                     (eqResultAtom, eqBindings, varGen3)
                             Ok (wrapBindings finalBindings (ANF.Return finalAtom), varGen4)
-                        | Ok AST.TString ->
-                            // String equality - call __string_eq
+                        | Ok AST.TString
+                        | Ok AST.TChar ->
+                            // String/char equality - call __string_eq (chars are single-grapheme strings)
                             let (tempVar, varGen3) = ANF.freshVar varGen2
                             let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
                             // For Neq, negate the result
@@ -6503,8 +6763,9 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                                 (eqResultAtom, eqBindings, varGen3)
                         let allBindings = leftBindings @ rightBindings @ finalBindings
                         Ok (finalAtom, allBindings, varGen4)
-                    | Ok AST.TString ->
-                        // String equality - call __string_eq
+                    | Ok AST.TString
+                    | Ok AST.TChar ->
+                        // String/char equality - call __string_eq (chars are single-grapheme strings)
                         let (tempVar, varGen3) = ANF.freshVar varGen2
                         let cexpr = ANF.Call ("__string_eq", [leftAtom; rightAtom])
                         // For Neq, negate the result

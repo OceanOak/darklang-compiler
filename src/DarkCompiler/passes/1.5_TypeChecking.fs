@@ -182,7 +182,8 @@ let rec applyTypeVarRenaming (subst: Map<string, string>) (t: Type) : Type =
         TFunction (List.map (applyTypeVarRenaming subst) paramTypes, applyTypeVarRenaming subst retType)
     | TTuple elems -> TTuple (List.map (applyTypeVarRenaming subst) elems)
     | TSum (name, args) -> TSum (name, List.map (applyTypeVarRenaming subst) args)
-    | TRecord _ | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TRecord (name, args) -> TRecord (name, List.map (applyTypeVarRenaming subst) args)
+    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr -> t
 
 /// Type environment - maps variable names to their types
@@ -251,6 +252,8 @@ let rec applySubst (subst: Substitution) (typ: Type) : Type =
         TFunction (List.map (applySubst subst) paramTypes, applySubst subst returnType)
     | TTuple elemTypes ->
         TTuple (List.map (applySubst subst) elemTypes)
+    | TRecord (name, typeArgs) ->
+        TRecord (name, List.map (applySubst subst) typeArgs)
     | TList elemType ->
         TList (applySubst subst elemType)
     | TSum (name, typeArgs) ->
@@ -258,8 +261,47 @@ let rec applySubst (subst: Substitution) (typ: Type) : Type =
     | TDict (keyType, valueType) ->
         TDict (applySubst subst keyType, applySubst subst valueType)
     | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
-    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRecord _ | TRawPtr ->
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr ->
         typ  // Concrete types are unchanged
+
+/// Collect type variable names in first-seen order.
+let rec collectTypeVarsInType (typ: Type) (acc: string list) : string list =
+    let add name =
+        if List.contains name acc then acc else acc @ [name]
+
+    match typ with
+    | TVar name -> add name
+    | TFunction (paramTypes, returnType) ->
+        let withParams = paramTypes |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+        collectTypeVarsInType returnType withParams
+    | TTuple elemTypes ->
+        elemTypes |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | TRecord (_, typeArgs) ->
+        typeArgs |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | TSum (_, typeArgs) ->
+        typeArgs |> List.fold (fun a t -> collectTypeVarsInType t a) acc
+    | TList elemType ->
+        collectTypeVarsInType elemType acc
+    | TDict (keyType, valueType) ->
+        let withKey = collectTypeVarsInType keyType acc
+        collectTypeVarsInType valueType withKey
+    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr ->
+        acc
+
+/// Infer record type parameter order from field type variables.
+/// This relies on first occurrence order of type variables in field types.
+let inferRecordTypeParamsFromFields (fields: (string * Type) list) : string list =
+    fields |> List.fold (fun acc (_, fieldType) -> collectTypeVarsInType fieldType acc) []
+
+/// Build a substitution for generic record fields from concrete type arguments.
+let buildRecordFieldSubstitution (fields: (string * Type) list) (typeArgs: Type list) : Result<Substitution, string> =
+    let typeParams = inferRecordTypeParamsFromFields fields
+    if List.length typeParams <> List.length typeArgs then
+        Error
+            $"Record type argument arity mismatch: expected {List.length typeParams}, got {List.length typeArgs}"
+    else
+        Ok (List.zip typeParams typeArgs |> Map.ofList)
 
 /// Build a substitution from type parameters and type arguments
 let buildSubstitution (typeParams: string list) (typeArgs: Type list) : Result<Substitution, string> =
@@ -325,18 +367,23 @@ let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
 let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
     match typ with
     | TRecord (name, typeArgs) ->
-        // Check if this record name is actually a type alias
+        // Resolve type arguments first.
+        let resolvedArgs = List.map (resolveType aliasReg) typeArgs
+        // Check if this record name is actually a type alias.
         match Map.tryFind name aliasReg with
-        | Some ([], targetType) ->
-            // Non-generic alias, resolve the target type too
-            resolveType aliasReg targetType
-        | Some (typeParams, _) ->
-            // This alias expects type arguments but none provided
-            // Return as-is (error will be caught elsewhere)
-            typ
+        | Some (typeParams, targetType) ->
+            if List.length typeParams <> List.length resolvedArgs then
+                // Mismatched type args, return as-is (error caught elsewhere)
+                TRecord (name, resolvedArgs)
+            else
+                // Build substitution and apply to target type
+                let subst = List.zip typeParams resolvedArgs |> Map.ofList
+                let substituted = applySubst subst targetType
+                // Recursively resolve in case target is also an alias
+                resolveType aliasReg substituted
         | None ->
             // Not an alias, it's a real record type
-            typ
+            TRecord (name, resolvedArgs)
     | TSum (name, typeArgs) ->
         // Check if this sum type name is actually a type alias
         match Map.tryFind name aliasReg with
@@ -626,6 +673,7 @@ let rec containsTVar (typ: Type) : bool =
     | TList elemType -> containsTVar elemType
     | TDict (keyType, valueType) -> containsTVar keyType || containsTVar valueType
     | TTuple elemTypes -> List.exists containsTVar elemTypes
+    | TRecord (_, typeArgs) -> List.exists containsTVar typeArgs
     | TSum (_, typeArgs) -> List.exists containsTVar typeArgs
     | TFunction (paramTypes, retType) ->
         List.exists containsTVar paramTypes || containsTVar retType
@@ -943,12 +991,154 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
                         else
                             let comparisonExpr =
-                                match leftType with
-                                | TList elemType ->
-                                    let equalsCall = TypeApp ("Stdlib.List.equals", [elemType], [left'; right'])
-                                    if op = Neq then UnaryOp (Not, equalsCall) else equalsCall
-                                | _ ->
-                                    BinOp (op, left', right')
+                                let makeCase pattern body : MatchCase =
+                                    { Patterns = NonEmptyList.singleton pattern
+                                      Guard = None
+                                      Body = body }
+
+                                let chainAnd (exprs: Expr list) : Expr =
+                                    match exprs with
+                                    | [] -> BoolLiteral true
+                                    | first :: rest -> List.fold (fun acc e -> BinOp (And, acc, e)) first rest
+
+                                let rec buildEqExpr (seen: Set<string>) (counter: int) (typ: Type) (leftExpr: Expr) (rightExpr: Expr) : Expr * int =
+                                    let typeKey = typeToString typ
+                                    if Set.contains typeKey seen then
+                                        // Avoid infinite expansion for recursive type definitions.
+                                        (BinOp (Eq, leftExpr, rightExpr), counter)
+                                    else
+                                        let seen' = Set.add typeKey seen
+                                        match typ with
+                                        | TList elemType ->
+                                            (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
+
+                                        | TTuple elemTypes ->
+                                            let leftTupleVar = $"__tuple_eq_left_{counter}"
+                                            let rightTupleVar = $"__tuple_eq_right_{counter}"
+
+                                            let (elementComparisons, nextCounter) =
+                                                elemTypes
+                                                |> List.indexed
+                                                |> List.fold
+                                                    (fun (acc, c) (index, elemType) ->
+                                                        let (elemEq, c') =
+                                                            buildEqExpr
+                                                                seen'
+                                                                c
+                                                                elemType
+                                                                (TupleAccess (Var leftTupleVar, index))
+                                                                (TupleAccess (Var rightTupleVar, index))
+                                                        (acc @ [elemEq], c'))
+                                                    ([], counter + 1)
+
+                                            let tupleBody = chainAnd elementComparisons
+                                            (Let (leftTupleVar, leftExpr, Let (rightTupleVar, rightExpr, tupleBody)), nextCounter)
+
+                                        | TRecord (recordTypeName, typeArgs) ->
+                                            match Map.tryFind recordTypeName typeReg with
+                                            | None ->
+                                                (BinOp (Eq, leftExpr, rightExpr), counter)
+                                            | Some fields ->
+                                                let concreteFields =
+                                                    match buildRecordFieldSubstitution fields typeArgs with
+                                                    | Ok subst ->
+                                                        fields |> List.map (fun (name, fieldType) -> (name, applySubst subst fieldType))
+                                                    | Error _ ->
+                                                        fields
+
+                                                let leftRecordVar = $"__record_eq_left_{counter}"
+                                                let rightRecordVar = $"__record_eq_right_{counter}"
+
+                                                let (fieldComparisons, nextCounter) =
+                                                    concreteFields
+                                                    |> List.fold
+                                                        (fun (acc, c) (fieldName, fieldType) ->
+                                                            let (fieldEq, c') =
+                                                                buildEqExpr
+                                                                    seen'
+                                                                    c
+                                                                    fieldType
+                                                                    (RecordAccess (Var leftRecordVar, fieldName))
+                                                                    (RecordAccess (Var rightRecordVar, fieldName))
+                                                            (acc @ [fieldEq], c'))
+                                                        ([], counter + 1)
+
+                                                let recordBody = chainAnd fieldComparisons
+                                                (Let (leftRecordVar, leftExpr, Let (rightRecordVar, rightExpr, recordBody)), nextCounter)
+
+                                        | TSum (sumTypeName, sumTypeArgs) ->
+                                            let leftSumVar = $"__sum_eq_left_{counter}"
+                                            let rightSumVar = $"__sum_eq_right_{counter}"
+
+                                            let variantsForType =
+                                                variantLookup
+                                                |> Map.toList
+                                                |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
+                                                    if variantTypeName = sumTypeName then
+                                                        let concretePayloadOpt =
+                                                            match payloadOpt with
+                                                            | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
+                                                                let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+                                                                Some (applySubst subst payloadType)
+                                                            | Some payloadType ->
+                                                                Some payloadType
+                                                            | None ->
+                                                                None
+                                                        Some (variantName, tag, concretePayloadOpt)
+                                                    else
+                                                        None)
+                                                |> List.sortBy (fun (_, tag, _) -> tag)
+
+                                            let rec buildVariantCases
+                                                (variants: (string * int * Type option) list)
+                                                (c: int)
+                                                (acc: MatchCase list)
+                                                : MatchCase list * int =
+                                                match variants with
+                                                | [] -> (List.rev acc, c)
+                                                | (variantName, tag, payloadTypeOpt) :: rest ->
+                                                    match payloadTypeOpt with
+                                                    | None ->
+                                                        let rightWhenSameVariant =
+                                                            makeCase (PConstructor (variantName, None)) (BoolLiteral true)
+                                                        let rightNoMatch =
+                                                            makeCase PWildcard (BoolLiteral false)
+                                                        let rightMatchExpr =
+                                                            Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
+                                                        let leftCase =
+                                                            makeCase (PConstructor (variantName, None)) rightMatchExpr
+                                                        buildVariantCases rest c (leftCase :: acc)
+                                                    | Some payloadType ->
+                                                        let leftPayloadVar = $"__sum_eq_left_payload_{tag}_{c}"
+                                                        let rightPayloadVar = $"__sum_eq_right_payload_{tag}_{c}"
+                                                        let (payloadEqExpr, c') =
+                                                            buildEqExpr seen' (c + 1) payloadType (Var leftPayloadVar) (Var rightPayloadVar)
+                                                        let rightWhenSameVariant =
+                                                            makeCase
+                                                                (PConstructor (variantName, Some (PVar rightPayloadVar)))
+                                                                payloadEqExpr
+                                                        let rightNoMatch =
+                                                            makeCase PWildcard (BoolLiteral false)
+                                                        let rightMatchExpr =
+                                                            Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
+                                                        let leftCase =
+                                                            makeCase
+                                                                (PConstructor (variantName, Some (PVar leftPayloadVar)))
+                                                                rightMatchExpr
+                                                        buildVariantCases rest c' (leftCase :: acc)
+
+                                            let (variantCases, nextCounter) =
+                                                buildVariantCases variantsForType (counter + 1) []
+
+                                            let defaultCase = makeCase PWildcard (BoolLiteral false)
+                                            let sumBody = Match (Var leftSumVar, variantCases @ [defaultCase])
+                                            (Let (leftSumVar, leftExpr, Let (rightSumVar, rightExpr, sumBody)), nextCounter)
+
+                                        | _ ->
+                                            (BinOp (Eq, leftExpr, rightExpr), counter)
+
+                                let (eqExpr, _) = buildEqExpr Set.empty 0 leftType left' right'
+                                if op = Neq then If (eqExpr, BoolLiteral false, BoolLiteral true) else eqExpr
                             match expectedType with
                             | Some TBool | None -> Ok (TBool, comparisonExpr)
                             | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
@@ -1815,36 +2005,68 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         let extraStr = String.concat ", " extraFields
                         Error (GenericError $"Unknown fields in record literal: {extraStr}")
                     else
-                        // Type check each field and collect transformed fields
-                        let rec checkFieldsInOrder remaining accFields =
+                        // Type check each field, infer generic bindings, and collect transformed fields.
+                        let rec checkFieldsInOrder
+                            (remaining: (string * Type) list)
+                            (accFields: (string * Expr) list)
+                            (accBindings: (string * Type) list)
+                            : Result<(string * Expr) list * (string * Type) list, TypeError> =
                             match remaining with
-                            | [] -> Ok (List.rev accFields)
+                            | [] -> Ok (List.rev accFields, accBindings)
                             | (fname, expectedFieldType) :: rest ->
                                 match Map.tryFind fname fieldMap with
                                 | Some fieldExpr ->
                                     checkExpr fieldExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedFieldType)
                                     |> Result.bind (fun (actualType, fieldExpr') ->
-                                        if actualType = expectedFieldType then
-                                            checkFieldsInOrder rest ((fname, fieldExpr') :: accFields)
-                                        else
+                                        match matchTypes expectedFieldType actualType with
+                                        | Ok newBindings ->
+                                            checkFieldsInOrder
+                                                rest
+                                                ((fname, fieldExpr') :: accFields)
+                                                (accBindings @ newBindings)
+                                        | Error _ ->
                                             Error (TypeMismatch (expectedFieldType, actualType, $"field {fname}")))
-                                | None -> checkFieldsInOrder rest accFields // Already checked for missing fields
+                                | None ->
+                                    checkFieldsInOrder rest accFields accBindings // Already checked for missing fields
 
-                        checkFieldsInOrder expectedFields []
-                        |> Result.map (fun fields' -> (TRecord (resolvedTypeName, []), RecordLiteral (resolvedTypeName, fields')))
+                        checkFieldsInOrder expectedFields [] []
+                        |> Result.bind (fun (fields', rawBindings) ->
+                            match consolidateBindings rawBindings with
+                            | Error msg ->
+                                Error (GenericError $"Incompatible generic record field types: {msg}")
+                            | Ok subst ->
+                                let inferredTypeParams = inferRecordTypeParamsFromFields expectedFields
+                                let inferredTypeArgs =
+                                    inferredTypeParams
+                                    |> List.map (fun name -> Map.tryFind name subst |> Option.defaultValue (TVar name))
+                                let inferredRecordType = TRecord (resolvedTypeName, inferredTypeArgs)
+
+                                match expectedType with
+                                | Some expected ->
+                                    if typesCompatibleWithAliases aliasReg expected inferredRecordType then
+                                        Ok (inferredRecordType, RecordLiteral (resolvedTypeName, fields'))
+                                    else
+                                        Error (TypeMismatch (expected, inferredRecordType, "record literal"))
+                                | None ->
+                                    Ok (inferredRecordType, RecordLiteral (resolvedTypeName, fields')))
 
     | RecordUpdate (recordExpr, updates) ->
         // Check the record expression to get its type
         checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
-            | TRecord (typeName, _) ->
+            | TRecord (typeName, typeArgs) ->
                 // Resolve type alias before looking up in typeReg
                 let resolvedTypeName = resolveTypeName aliasReg typeName
                 match Map.tryFind resolvedTypeName typeReg with
                 | None ->
                     Error (GenericError $"Unknown record type: {typeName}")
                 | Some expectedFields ->
+                    let subst =
+                        match buildRecordFieldSubstitution expectedFields typeArgs with
+                        | Ok s -> s
+                        | Error _ -> Map.empty
+
                     // Check for unknown fields in update
                     let expectedFieldNames = expectedFields |> List.map fst |> Set.ofList
                     let unknownFields =
@@ -1865,10 +2087,11 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | [] -> Ok (List.rev accUpdates)
                             | (fname, updateExpr) :: rest ->
                                 match Map.tryFind fname fieldTypeMap with
-                                | Some expectedFieldType ->
+                                | Some fieldTypePattern ->
+                                    let expectedFieldType = applySubst subst fieldTypePattern
                                     checkExpr updateExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedFieldType)
                                     |> Result.bind (fun (actualType, updateExpr') ->
-                                        if actualType = expectedFieldType then
+                                        if typesCompatibleWithAliases aliasReg expectedFieldType actualType then
                                             checkUpdates rest ((fname, updateExpr') :: accUpdates)
                                         else
                                             Error (TypeMismatch (expectedFieldType, actualType, $"field {fname} in record update")))
@@ -1876,7 +2099,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                     Error (GenericError $"Field {fname} not found in record type {typeName}")
 
                         checkUpdates updates []
-                        |> Result.map (fun updates' -> (TRecord (typeName, []), RecordUpdate (recordExpr', updates')))
+                        |> Result.map (fun updates' -> (TRecord (resolvedTypeName, typeArgs), RecordUpdate (recordExpr', updates')))
             | other ->
                 Error (GenericError $"Cannot use record update syntax on non-record type {typeToString other}"))
 
@@ -1885,7 +2108,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
-            | TRecord (typeName, _) ->
+            | TRecord (typeName, typeArgs) ->
                 // Resolve type alias before looking up in typeReg
                 let resolvedTypeName = resolveTypeName aliasReg typeName
                 match Map.tryFind resolvedTypeName typeReg with
@@ -1895,9 +2118,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     match List.tryFind (fun (name, _) -> name = fieldName) fields with
                     | None ->
                         Error (GenericError $"Record type {typeName} has no field '{fieldName}'")
-                    | Some (_, fieldType) ->
+                    | Some (_, fieldTypePattern) ->
+                        let fieldType =
+                            match buildRecordFieldSubstitution fields typeArgs with
+                            | Ok subst -> applySubst subst fieldTypePattern
+                            | Error _ -> fieldTypePattern
                         match expectedType with
-                        | Some expected when expected <> fieldType ->
+                        | Some expected when not (typesCompatibleWithAliases aliasReg expected fieldType) ->
                             Error (TypeMismatch (expected, fieldType, $"field access .{fieldName}"))
                         | _ -> Ok (fieldType, RecordAccess (recordExpr', fieldName))
             | other ->
@@ -2093,15 +2320,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         Ok []
                 | PRecord (_, fieldPatterns) ->
                     match patternType with
-                    | TRecord (recordName, _) ->
+                    | TRecord (recordName, recordTypeArgs) ->
                         // Resolve type alias before looking up in typeReg
                         let resolvedRecordName = resolveTypeName aliasReg recordName
                         match Map.tryFind resolvedRecordName typeReg with
                         | Some fields ->
+                            let subst =
+                                match buildRecordFieldSubstitution fields recordTypeArgs with
+                                | Ok s -> s
+                                | Error _ -> Map.empty
                             fieldPatterns
                             |> List.map (fun (fieldName, pat) ->
                                 match List.tryFind (fun (n, _) -> n = fieldName) fields with
-                                | Some (_, fieldType) -> extractPatternBindings pat fieldType
+                                | Some (_, fieldType) ->
+                                    let concreteFieldType = applySubst subst fieldType
+                                    extractPatternBindings pat concreteFieldType
                                 | None -> Error (GenericError $"Unknown field in pattern: {fieldName}"))
                             |> List.fold (fun acc res ->
                                 match acc, res with
