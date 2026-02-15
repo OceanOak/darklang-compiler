@@ -33,6 +33,17 @@ let testParseInterpreterLambdaApplication () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testParseInterpreterTripleQuotedInterpolation () : TestResult =
+    let source = "$\"\"\"test {\"1\"}\"\"\""
+    match InterpreterParser.parseString false source with
+    | Error err -> Error $"Interpreter parser failed on triple-quoted interpolation: {err}"
+    | Ok (Program [Expression (InterpolatedString [StringText "test "; StringExpr (StringLiteral "1")])]) ->
+        Ok ()
+    | Ok (Program [Expression expr]) ->
+        Error $"Unexpected AST for triple-quoted interpolation: {expr}"
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let testPrettyPrintInterpreterSyntax () : TestResult =
     let source = "let x = 5 in Stdlib.Int64.add(x, 1)"
     match Parser.parseString false source with
@@ -78,6 +89,7 @@ let testInterpreterParserRejectsCommaSeparatedLists () : TestResult =
 let tests = [
     ("compiler library interpreter parse", testCompilerLibraryParseInterpreterSyntax)
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
+    ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)
     ("pretty-print compiler syntax", testPrettyPrintCompilerSyntax)
     ("reject bare int literal", testInterpreterParserRejectsBareIntLiteral)

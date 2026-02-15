@@ -79,8 +79,30 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "eif.dark")
     let ematchUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "ematch.dark")
-    let upstreamDarkPaths = [| eifUpstreamDarkPath; ematchUpstreamDarkPath |]
-    let defaultUpstreamDarkPaths = [| eifUpstreamDarkPath |]
+    let eandUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "eand.dark")
+    let eorUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "eor.dark")
+    let evariableUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "evariable.dark")
+    let dfloatUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "dfloat.dark")
+    let estringUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "estring.dark")
+    let upstreamDarkPaths =
+        [| eifUpstreamDarkPath
+           ematchUpstreamDarkPath
+           eandUpstreamDarkPath
+           eorUpstreamDarkPath
+           evariableUpstreamDarkPath
+           dfloatUpstreamDarkPath
+           estringUpstreamDarkPath |]
+    let defaultUpstreamDarkPaths =
+        [| eifUpstreamDarkPath
+           eandUpstreamDarkPath
+           eorUpstreamDarkPath
+           evariableUpstreamDarkPath
+           estringUpstreamDarkPath |]
     for path in upstreamDarkPaths do
         if not (File.Exists path) then
             Crash.crash $"Missing required upstream dark test file: {path}"

@@ -312,6 +312,10 @@ let lex (input: string) : Result<Token list, string> =
         | '$' :: '"' :: rest ->
             // Parse interpolated string: $"Hello {name}!"
             // Returns TInterpString token with parts list
+            let (isTripleQuoted, contentStart) =
+                match rest with
+                | '"' :: '"' :: remaining -> (true, remaining)
+                | _ -> (false, rest)
 
             // Helper to parse escape sequences (same as regular strings)
             let parseEscape (cs: char list) : Result<char * char list, string> =
@@ -336,13 +340,19 @@ let lex (input: string) : Result<Token list, string> =
             let rec collectLiteralPart (cs: char list) (chars: char list) : Result<string * char list, string> =
                 match cs with
                 | [] -> Error "Unterminated interpolated string"
-                | '"' :: remaining ->
+                | '"' :: '"' :: '"' :: remaining when isTripleQuoted ->
                     let str = System.String(List.rev chars |> List.toArray)
-                    Ok (str, '"' :: remaining)  // Put " back for caller to detect end
+                    Ok (str, '"' :: '"' :: '"' :: remaining)  // Put """ back for caller to detect end
+                | '"' :: remaining ->
+                    if isTripleQuoted then
+                        collectLiteralPart remaining ('"' :: chars)
+                    else
+                        let str = System.String(List.rev chars |> List.toArray)
+                        Ok (str, '"' :: remaining)  // Put " back for caller to detect end
                 | '{' :: remaining ->
                     let str = System.String(List.rev chars |> List.toArray)
                     Ok (str, '{' :: remaining)  // Put { back for caller to detect expression
-                | '\\' :: escRest ->
+                | '\\' :: escRest when not isTripleQuoted ->
                     match parseEscape escRest with
                     | Ok (c, remaining) -> collectLiteralPart remaining (c :: chars)
                     | Error err -> Error err
@@ -376,7 +386,10 @@ let lex (input: string) : Result<Token list, string> =
             // Parse all parts and build InterpPart list
             let rec parseInterpParts (cs: char list) (parts: InterpPart list) : Result<InterpPart list * char list, string> =
                 match cs with
-                | '"' :: remaining ->
+                | '"' :: '"' :: '"' :: remaining when isTripleQuoted ->
+                    // End of triple-quoted interpolated string
+                    Ok (List.rev parts, remaining)
+                | '"' :: remaining when not isTripleQuoted ->
                     // End of interpolated string
                     Ok (List.rev parts, remaining)
                 | '{' :: remaining ->
@@ -401,9 +414,24 @@ let lex (input: string) : Result<Token list, string> =
                             parseInterpParts afterLit (InterpText str :: parts)
                     | Error err -> Error err
 
-            match parseInterpParts rest [] with
+            match parseInterpParts contentStart [] with
             | Ok (parts, remaining) ->
                 lexHelper remaining (TInterpString parts :: acc)
+            | Error err -> Error err
+
+        | '"' :: '"' :: '"' :: rest ->
+            // Parse raw triple-quoted string literal: """..."""
+            let rec parseTripleString (cs: char list) (chars: char list) : Result<string * char list, string> =
+                match cs with
+                | [] -> Error "Unterminated triple-quoted string literal"
+                | '"' :: '"' :: '"' :: remaining ->
+                    let str = System.String(List.rev chars |> List.toArray)
+                    Ok (str, remaining)
+                | c :: remaining ->
+                    parseTripleString remaining (c :: chars)
+
+            match parseTripleString rest [] with
+            | Ok (str, remaining) -> lexHelper remaining (TStringLit str :: acc)
             | Error err -> Error err
 
         | '\'' :: rest ->
