@@ -22,7 +22,7 @@ let hasVerificationArg (args: string array) : bool =
 let hasVerboseArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--verbose" || arg = "-v")
 
-// Check if --parser-pretty-roundtrip is present (enable parser/pretty-printer corpus roundtrip)
+// Check if --parser-pretty-roundtrip is present (legacy compatibility no-op)
 let hasParserPrettyRoundtripArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--parser-pretty-roundtrip")
 

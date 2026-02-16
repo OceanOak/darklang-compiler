@@ -24,7 +24,7 @@ let printHelp () =
     println "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
-    println "  --parser-pretty-roundtrip  Enable parser/pretty-printer roundtrip corpus test"
+    println "  --parser-pretty-roundtrip  Legacy no-op (parser/pretty corpus roundtrip runs by default)"
     println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
@@ -34,7 +34,7 @@ let printHelp () =
     println "  Tests --filter=string      Run tests with 'string' in the name"
     println "  Tests --coverage           Run tests and show coverage percentage"
     println "  Tests --verification       Run verification/stress tests"
-    println "  Tests --parser-pretty-roundtrip  Run parser/pretty-printer corpus roundtrip"
+    println "  Tests --parser-pretty-roundtrip  Legacy no-op (corpus roundtrip already enabled)"
 
 [<EntryPoint>]
 let main args =
@@ -55,8 +55,9 @@ let main args =
     // Check for --verification flag (enable verification/stress tests)
     let verificationEnabled = hasVerificationArg args
 
-    // Check for --parser-pretty-roundtrip flag (enable parser/pretty corpus roundtrip)
-    let parserPrettyRoundtripEnabled = hasParserPrettyRoundtripArg args
+    // Parser/pretty corpus roundtrip always runs by default.
+    // Keep --parser-pretty-roundtrip accepted as a compatibility no-op.
+    let _parserPrettyRoundtripFlagPresent = hasParserPrettyRoundtripArg args
 
     // Check for --verbose flag (print failing tests immediately)
     let verbose = hasVerboseArg args
@@ -65,8 +66,7 @@ let main args =
     match filter with
     | Some pattern -> println $"{Colors.gray}  Filter: {pattern}{Colors.reset}"
     | None -> ()
-    if parserPrettyRoundtripEnabled then
-        println $"{Colors.gray}  Parser/pretty corpus roundtrip: enabled{Colors.reset}"
+    println $"{Colors.gray}  Parser/pretty corpus roundtrip: enabled (default){Colors.reset}"
     println ""
 
     // Use the source tree for test data to avoid copying files into the build output.
@@ -197,15 +197,12 @@ let main args =
     let stdlibPassTimingEnd = passTimingTotal ()
     recordPhaseOverhead "Stdlib Build Overhead" elapsed stdlibPassTimingStart stdlibPassTimingEnd
     let optionalRoundtripSuites : UnitTestSuite array =
-        if parserPrettyRoundtripEnabled then
-            [|
-                {
-                    Name = "Syntax Roundtrip Corpus Tests"
-                    Tests = SyntaxRoundtripCorpusTests.tests e2eTestFiles
-                }
-            |]
-        else
-            [||]
+        [|
+            {
+                Name = "Syntax Roundtrip Corpus Tests"
+                Tests = SyntaxRoundtripCorpusTests.tests e2eTestFiles
+            }
+        |]
 
     let allUnitTests = Array.append (buildUnitTests stdlib) optionalRoundtripSuites
 

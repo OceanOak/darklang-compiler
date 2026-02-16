@@ -2,10 +2,10 @@
 
 Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting from the first failing corpus case.
 
-## Run the opt-in corpus test
+## Run the corpus test
 1. Run:
-   - `./run-tests --parser-pretty-roundtrip`
-2. The suite is disabled by default and only runs with that flag.
+   - `./run-tests`
+2. The suite runs by default (the `--parser-pretty-roundtrip` flag is a legacy no-op).
 3. The suite stops at the first failure and prints:
    - failure kind (`ParseOriginalFailed`, `PrettyPrintFailed`, `ParsePrettyFailed`, `PrettyPrintSecondPassFailed`, `AstChangedAfterRoundtrip`, `PrettyNotIdempotent`)
    - roundtrip check (`source-syntax` or `interpreter-syntax`)
@@ -16,7 +16,7 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
    - original and pretty-printed code (plus parse error when relevant)
 
 ## Fix one failure at a time
-1. Take only the first failing case from `./run-tests --parser-pretty-roundtrip`.
+1. Take only the first failing case from `./run-tests`.
 2. Add a minimal regression test first:
    - For parser/pretty formatting regressions, add one expression to:
      - `src/Tests/formatting-roundtrip/compiler.roundtrip`
@@ -30,7 +30,6 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
    - `src/DarkCompiler/ASTPrettyPrinter.fs`
 5. Re-run:
    - `./run-tests`
-   - `./run-tests --parser-pretty-roundtrip`
 6. Repeat from step 1 for the next failure.
 
 ## Notes
