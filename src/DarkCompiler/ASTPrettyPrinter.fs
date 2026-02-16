@@ -513,11 +513,17 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | Lambda (parameters, body) ->
         match syntax with
         | CompilerSyntax ->
-            let paramsText =
-                parameters
-                |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
-                |> String.concat ", "
-            $"({paramsText}) => {formatExpr syntax body}"
+            match parameters, body with
+            | [ (paramName, TBool) ], BinOp (And, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
+                $"(&&) {formatAppArg rightArg}"
+            | [ (paramName, TBool) ], BinOp (Or, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
+                $"(||) {formatAppArg rightArg}"
+            | _ ->
+                let paramsText =
+                    parameters
+                    |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+                    |> String.concat ", "
+                $"({paramsText}) => {formatExpr syntax body}"
         | InterpreterSyntax ->
             if List.isEmpty parameters then
                 Crash.crash "Cannot render zero-argument lambda in interpreter syntax"

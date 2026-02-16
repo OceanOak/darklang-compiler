@@ -512,6 +512,10 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
     | TIdent "RawPtr" :: rest -> Ok (AST.TRawPtr, rest)  // Internal raw pointer type
     | TIdent typeName :: rest when Set.contains typeName typeParams ->
         Ok (TVar typeName, rest)
+    | TIdent typeName :: rest when System.Char.IsLower(typeName.[0]) || typeName.StartsWith "_" ->
+        // Allow type variables in annotations even when not explicitly listed in a type parameter context.
+        // This keeps parser/pretty roundtrips stable for synthesized lambda type variables.
+        Ok (TVar typeName, rest)
     | TIdent "List" :: TLt :: rest ->
         // List type: List<ElementType>
         parseTypeWithContext typeParams rest
@@ -1064,6 +1068,8 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         Ok (PInt16Literal (int16 (-int n)), rest)
     | TMinus :: TInt32 n :: rest ->
         Ok (PInt32Literal (-n), rest)
+    | TMinus :: TFloat f :: rest ->
+        Ok (PFloat (-f), rest)
     | TTrue :: rest ->
         // Boolean true pattern
         Ok (PBool true, rest)
