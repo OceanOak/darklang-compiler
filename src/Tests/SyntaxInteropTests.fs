@@ -58,6 +58,20 @@ let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testStdlibRegistryExcludesNonIntrinsicFloatMultiply () : TestResult =
+    let registry = Stdlib.buildModuleRegistry ()
+    match Map.tryFind "Stdlib.Float.multiply" registry with
+    | Some _ ->
+        Error "Expected Stdlib.Float.multiply to be omitted from module registry (non-intrinsic)"
+    | None ->
+        Ok ()
+
+let testStdlibRegistryIncludesIntrinsicFloatSqrt () : TestResult =
+    let registry = Stdlib.buildModuleRegistry ()
+    match Map.tryFind "Stdlib.Float.sqrt" registry with
+    | Some _ -> Ok ()
+    | None -> Error "Expected Stdlib.Float.sqrt to remain in module registry (intrinsic)"
+
 let testPrettyPrintInterpreterSyntax () : TestResult =
     let source = "let x = 5 in Stdlib.Int64.add(x, 1)"
     match Parser.parseString false source with
@@ -117,6 +131,8 @@ let tests = [
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
+    ("stdlib registry excludes non-intrinsic float multiply", testStdlibRegistryExcludesNonIntrinsicFloatMultiply)
+    ("stdlib registry includes intrinsic float sqrt", testStdlibRegistryIncludesIntrinsicFloatSqrt)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)
     ("pretty-print interpreter nested call arg", testPrettyPrintInterpreterSyntaxParenthesizesNestedCallArg)
     ("pretty-print compiler syntax", testPrettyPrintCompilerSyntax)

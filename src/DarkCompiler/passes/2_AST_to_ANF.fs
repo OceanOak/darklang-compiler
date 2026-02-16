@@ -236,6 +236,20 @@ let isBuiltinTestRuntimeErrorName (funcName: string) : bool =
 let isBuiltinTestNanName (name: string) : bool =
     name = "Builtin.testNan" || name = "Stdlib.Builtin.testNan"
 
+/// Try to look up a name in a map, with fallback to Stdlib prefix.
+/// Returns both the value and resolved name.
+let private tryLookupWithFallback (name: string) (m: Map<string, 'a>) : ('a * string) option =
+    match Map.tryFind name m with
+    | Some v -> Some (v, name)
+    | None ->
+        if name.Contains(".") && not (name.StartsWith("Stdlib.")) then
+            let resolvedName = "Stdlib." + name
+            match Map.tryFind resolvedName m with
+            | Some v -> Some (v, resolvedName)
+            | None -> None
+        else
+            None
+
 let private unwrapErrorPayloadToString (expr: AST.Expr) : string option =
     match expr with
     | AST.UnitLiteral -> Some "()"
@@ -2770,8 +2784,8 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         if isBuiltinTestNanName name then
             Ok AST.TFloat64
         else
-            match Map.tryFind name typeEnv with
-            | Some t -> Ok t
+            match tryLookupWithFallback name typeEnv with
+            | Some (t, _) -> Ok t
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
@@ -3282,25 +3296,25 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             Ok (ANF.Return (ANF.FloatLiteral System.Double.NaN), varGen)
         else
             // Variable reference: look up in environment
-            match Map.tryFind name env with
-            | Some (tempId, _) -> Ok (ANF.Return (ANF.Var tempId), varGen)
+            match tryLookupWithFallback name env with
+            | Some ((tempId, _), _) -> Ok (ANF.Return (ANF.Var tempId), varGen)
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-                | Some (_, _) ->
+                | Some (_, resolvedName) ->
                     // Module function reference - wrap in closure for uniform calling convention
-                    // Note: name should already be resolved by the type checker
                     let (closureId, varGen') = ANF.freshVar varGen
-                    let closureAlloc = ANF.ClosureAlloc (name, [])
+                    let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                     Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
                 | None ->
                     // Check if it's a function reference (function name used as value)
-                    if Map.containsKey name funcReg then
+                    match tryLookupWithFallback name funcReg with
+                    | Some (_, resolvedName) ->
                         // Wrap in closure for uniform calling convention
                         let (closureId, varGen') = ANF.freshVar varGen
-                        let closureAlloc = ANF.ClosureAlloc (name, [])
+                        let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                         Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
-                    else
+                    | None ->
                         Error $"Undefined variable: {name}"
 
     | AST.FuncRef name ->
@@ -6661,25 +6675,25 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             Ok (ANF.FloatLiteral System.Double.NaN, [], varGen)
         else
             // Variable reference: look up in environment
-            match Map.tryFind name env with
-            | Some (tempId, _) -> Ok (ANF.Var tempId, [], varGen)
+            match tryLookupWithFallback name env with
+            | Some ((tempId, _), _) -> Ok (ANF.Var tempId, [], varGen)
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-                | Some (_, _) ->
+                | Some (_, resolvedName) ->
                     // Module function reference - wrap in closure for uniform calling convention
-                    // Note: name should already be resolved by the type checker
                     let (closureId, varGen') = ANF.freshVar varGen
-                    let closureAlloc = ANF.ClosureAlloc (name, [])
+                    let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                     Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
                 | None ->
                     // Check if it's a function reference (function name used as value)
-                    if Map.containsKey name funcReg then
+                    match tryLookupWithFallback name funcReg with
+                    | Some (_, resolvedName) ->
                         // Wrap in closure for uniform calling convention
                         let (closureId, varGen') = ANF.freshVar varGen
-                        let closureAlloc = ANF.ClosureAlloc (name, [])
+                        let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                         Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
-                    else
+                    | None ->
                         Error $"Undefined variable: {name}"
 
     | AST.FuncRef name ->

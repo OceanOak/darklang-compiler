@@ -1316,15 +1316,15 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | None -> Ok (TFloat64, builtinExpr)
         else
             // Variable reference: look up in environment
-            match Map.tryFind name env with
-            | Some varType ->
+            match tryLookupWithFallback name env with
+            | Some (varType, resolvedName) ->
                 match expectedType with
                 | Some expected ->
                     // Use reconcileTypes to handle type variables and type aliases
                     match reconcileTypes (Some aliasReg) expected varType with
-                    | Some reconciledType -> Ok (reconciledType, expr)
+                    | Some reconciledType -> Ok (reconciledType, Var resolvedName)
                     | None -> Error (TypeMismatch (expected, varType, $"variable {name}"))
-                | None -> Ok (varType, expr)
+                | None -> Ok (varType, Var resolvedName)
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 let moduleRegistry = Stdlib.buildModuleRegistry ()

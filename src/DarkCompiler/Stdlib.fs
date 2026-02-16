@@ -1,49 +1,41 @@
 // Stdlib.fs - Standard Library Module Definitions
 //
-// Defines the built-in Stdlib modules that are available to all programs.
-// These modules provide primitive operations wrapped as functions.
+// Defines intrinsic Stdlib module signatures used directly by the compiler.
+// Non-intrinsic stdlib functions are loaded from stdlib/*.dark.
 
 module Stdlib
 
 open AST
 
-/// Stdlib.Int64 module - integer operations
-let int64Module : ModuleDef = {
+/// Intrinsic Stdlib.Int64 functions
+let int64IntrinsicModule : ModuleDef = {
     Name = "Stdlib.Int64"
     Functions = [
-        { Name = "add"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
-        { Name = "sub"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
-        { Name = "mul"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
-        { Name = "div"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
-        { Name = "max"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
-        { Name = "min"; TypeParams = []; ParamTypes = [TInt64; TInt64]; ReturnType = TInt64 }
+        // toFloat : (Int64) -> Float
         { Name = "toFloat"; TypeParams = []; ParamTypes = [TInt64]; ReturnType = TFloat64 }
     ]
 }
 
-/// Stdlib.Float module - floating-point operations
-let floatModule : ModuleDef = {
+/// Intrinsic Stdlib.Float functions
+let floatIntrinsicModule : ModuleDef = {
     Name = "Stdlib.Float"
     Functions = [
-        { Name = "multiply"; TypeParams = []; ParamTypes = [TFloat64; TFloat64]; ReturnType = TFloat64 }
+        // sqrt : (Float) -> Float
         { Name = "sqrt"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }
+        // abs : (Float) -> Float
         { Name = "abs"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }
+        // negate : (Float) -> Float
         { Name = "negate"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TFloat64 }
+        // toInt : (Float) -> Int64
         { Name = "toInt"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TInt64 }
+        // toBits : (Float) -> UInt64
+        { Name = "toBits"; TypeParams = []; ParamTypes = [TFloat64]; ReturnType = TUInt64 }
     ]
 }
 
 /// Helper to create Result<T, String> type
 let resultType (okType: Type) : Type =
     TSum ("Stdlib.Result.Result", [okType; TString])
-
-/// Stdlib.String module - string operations
-let stringModule : ModuleDef = {
-    Name = "Stdlib.String"
-    Functions = [
-        { Name = "length"; TypeParams = []; ParamTypes = [TString]; ReturnType = TInt64 }
-    ]
-}
 
 /// Stdlib.File module - file I/O operations (intrinsics)
 /// These are special-cased in the compiler and generate syscalls
@@ -177,11 +169,10 @@ let rawMemoryIntrinsics : ModuleFunc list = [
     { Name = "__rawptr_to_list"; TypeParams = ["a"]; ParamTypes = [TRawPtr; TInt64]; ReturnType = TList(TVar "a") }
 ]
 
-/// All available Stdlib modules
+/// All intrinsic Stdlib modules
 let allModules : ModuleDef list = [
-    int64Module
-    floatModule
-    stringModule
+    int64IntrinsicModule
+    floatIntrinsicModule
     fileModule
     pathModule
     platformModule
