@@ -2436,7 +2436,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         |> Result.bind (fun (scrutineeType, scrutinee') ->
             // Extract bindings from a pattern based on scrutinee type
             let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
-                let ensureLiteralType (expectedType: Type) : Result<(string * Type) list, TypeError> =
+                let ensureLiteralType
+                    (literalKind: string)
+                    (expectedType: Type)
+                    : Result<(string * Type) list, TypeError> =
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
                     | t when t = expectedType ->
@@ -2446,7 +2449,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         // This is important for patterns like `match [] with | [1L] -> ...`.
                         Ok []
                     | _ ->
-                        Error (GenericError $"Integer literal pattern used on non-{typeToString expectedType} type")
+                        Error (GenericError $"{literalKind} literal pattern used on non-{typeToString expectedType} type")
 
                 match pattern with
                 | PUnit ->
@@ -2454,17 +2457,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | TUnit -> Ok []
                     | _ -> Error (GenericError "Unit pattern can only match unit type")
                 | PWildcard -> Ok []
-                | PInt64 _ -> ensureLiteralType TInt64
-                | PInt8Literal _ -> ensureLiteralType TInt8
-                | PInt16Literal _ -> ensureLiteralType TInt16
-                | PInt32Literal _ -> ensureLiteralType TInt32
-                | PUInt8Literal _ -> ensureLiteralType TUInt8
-                | PUInt16Literal _ -> ensureLiteralType TUInt16
-                | PUInt32Literal _ -> ensureLiteralType TUInt32
-                | PUInt64Literal _ -> ensureLiteralType TUInt64
+                | PInt64 _ -> ensureLiteralType "Integer" TInt64
+                | PInt8Literal _ -> ensureLiteralType "Integer" TInt8
+                | PInt16Literal _ -> ensureLiteralType "Integer" TInt16
+                | PInt32Literal _ -> ensureLiteralType "Integer" TInt32
+                | PUInt8Literal _ -> ensureLiteralType "Integer" TUInt8
+                | PUInt16Literal _ -> ensureLiteralType "Integer" TUInt16
+                | PUInt32Literal _ -> ensureLiteralType "Integer" TUInt32
+                | PUInt64Literal _ -> ensureLiteralType "Integer" TUInt64
                 | PBool _ -> Ok []
                 | PString _ -> Ok []
-                | PFloat _ -> Ok []
+                | PFloat _ -> ensureLiteralType "Float" TFloat64
                 | PVar name -> Ok [(name, patternType)]
                 | PConstructor (variantName, payloadPattern) ->
                     match Map.tryFind variantName variantLookup with
