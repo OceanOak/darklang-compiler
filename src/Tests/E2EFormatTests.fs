@@ -231,6 +231,55 @@ let testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble () : TestResult 
             | _ ->
                 Error $"Expected exactly 2 parsed tests, got {tests.Length}")
 
+let testParsesMultilinePipeBeforeSeparator () : TestResult =
+    let testSource =
+        "(Stdlib.List.map_v0 [ 1L; 2L ] (fun x -> x + 1L))\n"
+        + "|> Stdlib.List.length_v0 = 2L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected multiline pipe test to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                if not (test.Source.Contains("|> Stdlib.List.length_v0")) then
+                    Error $"Expected source to preserve pipe continuation, got: {test.Source}"
+                elif test.ExpectedValueExpr <> Some "2L" then
+                    Error $"Unexpected RHS parse: {test.ExpectedValueExpr}"
+                elif test.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble, got: {test.Preamble}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}")
+
+let testParsesMultilineWithoutLeadingParen () : TestResult =
+    let testSource =
+        "Ctor\n"
+        + "  { a = 1L\n"
+        + "    b = 2L } = Ctor\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected multiline non-paren test to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                if not (test.Source.StartsWith("Ctor\n")) then
+                    Error $"Unexpected source parse: {test.Source}"
+                elif not (test.Source.Contains("b = 2L }")) then
+                    Error $"Expected multiline record body in source, got: {test.Source}"
+                elif test.ExpectedValueExpr <> Some "Ctor" then
+                    Error $"Unexpected RHS parse: {test.ExpectedValueExpr}"
+                elif test.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble, got: {test.Preamble}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}")
+
 let tests = [
     ("parses multiline expectation on next line", testParsesMultilineExpectationOnNextLine)
     ("parses skip attribute", testParsesSkipAttribute)
@@ -241,4 +290,6 @@ let tests = [
     ("parses multiline function-head expectation with next-line arg", testParsesMultilineExpectationWithFunctionHeadAndNextLineArg)
     ("parses bare .e2e rhs as value expression", testParsesBareE2ERightHandSideAsValueExpression)
     ("parses indented rhs continuation without preamble leakage", testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble)
+    ("parses multiline pipe before separator", testParsesMultilinePipeBeforeSeparator)
+    ("parses multiline without leading paren", testParsesMultilineWithoutLeadingParen)
 ]

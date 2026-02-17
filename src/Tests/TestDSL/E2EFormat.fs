@@ -753,44 +753,54 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
 /// Parse a multi-line test expression wrapped in parens
 /// Format: (expr...\n...) = expectations
 let private parseMultilineTest (fullText: string) (startLineNumber: int) (filePath: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<E2ETest, string> =
-    // Find the `) = <expectation>` pattern that closes the expression
-    // We need to find the LAST ) that's followed by ` = <expectation>`
-    let rec findClosingParen (i: int) (inQuotes: bool) (lastMatch: int option) : int option =
-        if i >= fullText.Length then lastMatch
-        elif fullText.[i] = '"' then findClosingParen (i + 1) (not inQuotes) lastMatch
-        elif fullText.[i] = ')' && not inQuotes then
-            let rest = fullText.Substring(i + 1).TrimStart()
-            if rest.StartsWith("=") then
-                let afterEq = rest.Substring(1)
-                if isExpectationCandidate afterEq then
-                    findClosingParen (i + 1) inQuotes (Some i)
+    let trimmed = fullText.TrimStart()
+    if not (trimmed.StartsWith("(")) then
+        // Non-parenthesized multiline expressions should be parsed directly
+        // using the general separator logic.
+        parseTestLineWithPreamble fullText startLineNumber filePath preamble funcLineMap
+    else
+        // Find the `) = <expectation>` pattern that closes the expression
+        // We need to find the LAST ) that's followed by ` = <expectation>`
+        let rec findClosingParen (i: int) (inQuotes: bool) (lastMatch: int option) : int option =
+            if i >= fullText.Length then lastMatch
+            elif fullText.[i] = '"' then findClosingParen (i + 1) (not inQuotes) lastMatch
+            elif fullText.[i] = ')' && not inQuotes then
+                let rest = fullText.Substring(i + 1).TrimStart()
+                if rest.StartsWith("=") then
+                    let afterEq = rest.Substring(1)
+                    if isExpectationCandidate afterEq then
+                        findClosingParen (i + 1) inQuotes (Some i)
+                    else
+                        findClosingParen (i + 1) inQuotes lastMatch
                 else
                     findClosingParen (i + 1) inQuotes lastMatch
             else
                 findClosingParen (i + 1) inQuotes lastMatch
-        else
-            findClosingParen (i + 1) inQuotes lastMatch
 
-    match findClosingParen 0 false None with
-    | None -> Error $"Line {startLineNumber}: Multi-line expression missing ') = <expectation>' pattern"
-    | Some closeParenIdx ->
-        // Extract expression (strip outer parens)
-        let exprStart = fullText.IndexOf('(')
-        if exprStart < 0 then
-            Error $"Line {startLineNumber}: Multi-line expression missing opening '('"
-        else
-            let exprContent = fullText.Substring(exprStart + 1, closeParenIdx - exprStart - 1).Trim()
-            let afterCloseParen = fullText.Substring(closeParenIdx + 1).TrimStart()
-            // afterCloseParen should start with "= expectations"
-            let expectationsStr =
-                if afterCloseParen.StartsWith("=") then afterCloseParen.Substring(1).Trim()
-                else afterCloseParen
+        match findClosingParen 0 false None with
+        | None ->
+            // Support multiline forms where the separator appears after
+            // additional continuation lines (for example newline pipe forms),
+            // not immediately after a closing parenthesis.
+            parseTestLineWithPreamble fullText startLineNumber filePath preamble funcLineMap
+        | Some closeParenIdx ->
+            // Extract expression (strip outer parens)
+            let exprStart = fullText.IndexOf('(')
+            if exprStart < 0 then
+                Error $"Line {startLineNumber}: Multi-line expression missing opening '('"
+            else
+                let exprContent = fullText.Substring(exprStart + 1, closeParenIdx - exprStart - 1).Trim()
+                let afterCloseParen = fullText.Substring(closeParenIdx + 1).TrimStart()
+                // afterCloseParen should start with "= expectations"
+                let expectationsStr =
+                    if afterCloseParen.StartsWith("=") then afterCloseParen.Substring(1).Trim()
+                    else afterCloseParen
 
-            // Reconstruct as single-line format for parsing
-            // Note: The expression itself might contain = signs, but that's fine since
-            // we've already extracted the expectations part
-            let reconstructed = exprContent + " = " + expectationsStr
-            parseTestLineWithPreamble reconstructed startLineNumber filePath preamble funcLineMap
+                // Reconstruct as single-line format for parsing
+                // Note: The expression itself might contain = signs, but that's fine since
+                // we've already extracted the expectations part
+                let reconstructed = exprContent + " = " + expectationsStr
+                parseTestLineWithPreamble reconstructed startLineNumber filePath preamble funcLineMap
 
 /// Remove trailing comment from a line
 let private stripComment (line: string) : string =
@@ -841,6 +851,14 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                     remaining <- remaining - 1
                 lineText.Substring(idx)
 
+        let hasCompleteSeparator (text: string) : bool =
+            match findSeparatorIndex text with
+            | Some sepIdx ->
+                let rhs = text.Substring(sepIdx + 1)
+                not (isIncompleteExpectationHead rhs)
+            | None ->
+                false
+
         for i in 0 .. lines.Length - 1 do
             if i <= skipUntilIndex then
                 ()
@@ -863,7 +881,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                             |> List.rev
                             |> List.map stripComment
                             |> String.concat "\n"
-                        if hasClosingParenTest accumulatedWithoutComments then
+                        if hasClosingParenTest accumulatedWithoutComments || hasCompleteSeparator accumulatedWithoutComments then
                             // Combine all accumulated lines and parse as multi-line test
                             let fullExpr = String.concat "\n" (List.rev pendingExprLines)
                             let preamble = String.concat "\n" (List.rev preambleLines)
@@ -879,8 +897,22 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
 
                         // Check if this starts a multi-line expression: starts with ( but isn't a complete test
                         let isTopLevel = line.Length > 0 && not (Char.IsWhiteSpace(line.[0]))
-                        let mayStartOrBeTest = isTopLevel || allowIndentedTests
-                        if mayStartOrBeTest && trimmedLine.StartsWith("(") && not (isTestLine lineWithoutComment) then
+                        let lineIndent = countLeadingSpaces line
+                        let moduleShift = moduleIndentStack.Length * 2
+                        let isModuleLevelIndented = allowIndentedTests && lineIndent = moduleShift
+                        let mayStartOrBeTest = isTopLevel || isModuleLevelIndented
+                        let isDefinitionStart =
+                            lineWithoutComment.StartsWith("def ")
+                            || lineWithoutComment.StartsWith("type ")
+                            || lineWithoutComment.StartsWith("let ")
+                            || lineWithoutComment.StartsWith("module ")
+
+                        let shouldStartMultilineExpr =
+                            mayStartOrBeTest
+                            && not (isTestLine lineWithoutComment)
+                            && not isDefinitionStart
+
+                        if shouldStartMultilineExpr then
                             // Start accumulating multi-line expression
                             pendingExprLines <- [line]
                             pendingStartLine <- lineNumber
@@ -952,7 +984,6 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                             // Preserve original indentation for multi-line definitions
                                 let normalizedLine =
                                     if allowIndentedTests then
-                                        let moduleShift = moduleIndentStack.Length * 2
                                         trimLeadingSpaces moduleShift line
                                     else
                                         line
