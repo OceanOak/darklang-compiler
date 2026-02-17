@@ -9,7 +9,7 @@ Enable all upstream `.dark` tests by default, one test at a time, while keeping 
 3. If it fails, fix compiler/runtime behavior first when feasible.
 4. If behavior is already correct and only the assertion is outdated, update the test expectation.
 5. Record every learning in this file.
-6. If blocked and guidance is needed, ask Paul and record both question and answer here.
+6. If blocked and guidance is needed, ask user  and record both question and answer here.
 
 ## Iteration Loop (Single-Test)
 1. Pick one skipped test (`skip=...`) from a `.dark` file.
@@ -20,8 +20,7 @@ Enable all upstream `.dark` tests by default, one test at a time, while keeping 
    1. Compiler/runtime fix, or
    2. Test expectation update if runtime/compiler behavior is already correct.
 6. Re-run full `./run-tests`.
-7. Append results to the logs below.
-8. Before landing a batch, ensure the latest run was full `./run-tests`.
+7. Commit
 
 ## Default Rollout Gate
 1. Keep default inclusion scoped while a file still has unresolved failures; use `./dark -r -e ...` probes for fast diagnosis.
@@ -57,6 +56,7 @@ Enable all upstream `.dark` tests by default, one test at a time, while keeping 
 | Multiline `let` expressions without explicit `in` can fail as `Expected expression` | Running a source shaped like `let x = ...` followed by newline body expression fails in interpreter syntax, especially in upstream lambda-heavy files. | Treat this as a newline-sensitive parser gap around `let` binding boundaries; either implement parser support for newline-delimited `let ... <body>` forms or keep the file opt-in until that syntax is supported. | Reproduce with `./dark --syntax=interpreter -r <file-or-expr>` and targeted `./run-tests --filter=<file>.dark`, then run full `./run-tests` after any parser change. |
 | Bare tuple expressions may appear without outer parentheses in upstream interpreter syntax | File-level failures show parse errors like `Unexpected tokens after expression` on sources such as `1L, Builtin.testRuntimeError "test", 3L`. | In interpreter top-level parsing, treat trailing comma-separated expressions as a tuple literal expression instead of rejecting after the first element. | Add a focused `SyntaxInteropTests` case for bare tuple parsing, run `./run-tests --filter=\"Syntax Interop Tests\"`, then validate the target file and full suite. |
 | Tuple literals containing known runtime-failing elements should short-circuit to runtime error | Compiler fails later with `Unsupported tuple element type for printing: TVar "__runtime_error"` when tuple elements include `Builtin.testRuntimeError`. | In tuple literal type-checking, detect the first known runtime-failing element and type the whole tuple expression as bottom-like runtime error (`expected` type if constrained, otherwise `__runtime_error`) by lowering to `Builtin.testRuntimeError`. | Re-run the target file filter to confirm stderr shows uncaught exception text, then run full `./run-tests`. |
+| Remaining disabled upstream `.dark` cases can be commented assertions instead of `skip=...` attributes | `rg` finds no `skip=` in upstream `.dark` files, but targeted files contain commented test lines adjacent to TODOs (for example short-circuiting notes in `eor.dark`). | Treat a commented assertion as the per-iteration skipped case: uncomment exactly one test, replace it with a direct expectation (`=`, `error=`, or `exit/stderr`), and keep scope to one file. If the file is already in `defaultUpstreamDarkPaths`, do not change `TestRunner` include logic for that iteration. | Run full `./run-tests` and confirm the single enabled case and full suite remain green. |
 
 ## Guidance Log (Paul)
 | Date | Question Asked | Why It Was Needed | Paul’s Guidance | Applied |
