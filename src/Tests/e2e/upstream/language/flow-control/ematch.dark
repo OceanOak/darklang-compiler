@@ -282,10 +282,10 @@ module Float =
    | 5.5 -> "fail") = "pass: 6.5"
 
   // CLEANUP negative -0.0 different from 0.0?
-  // (match 0.0 with
-  //  | -0.0 -> "fail1"
-  //  | 0.0 -> "pass"
-  //  | var -> "fail2") = "pass"
+  (match 0.0 with
+   | -0.0 -> "fail1"
+   | 0.0 -> "pass"
+   | var -> "fail2") = "fail1"
 
   (match -4.7 with
    | 4.7 -> "fail"
