@@ -5,8 +5,10 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
 ## Run the corpus test
 1. Run:
    - `./run-tests`
+   - `./run-tests --roundtrip-all-dark` (includes all upstream `.dark` files in the roundtrip corpus)
 2. The suite runs by default (the `--parser-pretty-roundtrip` flag is a legacy no-op).
-3. The suite stops at the first failure and prints:
+3. Use `--roundtrip-all-dark` when systematically fixing upstream `.dark` roundtrip issues.
+4. The suite stops at the first failure and prints:
    - failure kind (`ParseOriginalFailed`, `PrettyPrintFailed`, `ParsePrettyFailed`, `PrettyPrintSecondPassFailed`, `AstChangedAfterRoundtrip`, `PrettyNotIdempotent`)
    - roundtrip check (`source-syntax` or `interpreter-syntax`)
    - file name
@@ -16,20 +18,20 @@ Goal: fix parser/pretty-printer roundtrip failures one-by-one, always starting f
    - original and pretty-printed code (plus parse error when relevant)
 
 ## Fix one failure at a time
-1. Take only the first failing case from `./run-tests`.
+1. Take only the first failing case from the command you ran.
 2. Add a minimal regression test first:
    - For parser/pretty formatting regressions, add one expression to:
      - `src/Tests/formatting-roundtrip/compiler.roundtrip`
    - Prefer `src/Tests/e2e/*.e2e` when it is user-visible syntax behavior.
    - Use `src/Tests/SyntaxInteropTests.fs` only for narrowly scoped parser/printer rules.
 3. Confirm the regression fails:
-   - `./run-tests`
+   - Re-run the same command (`./run-tests` or `./run-tests --roundtrip-all-dark`)
 4. Implement the smallest fix in:
    - `src/DarkCompiler/passes/1_Parser.fs`
    - `src/DarkCompiler/passes/1_InterpreterParser.fs`
    - `src/DarkCompiler/ASTPrettyPrinter.fs`
 5. Re-run:
-   - `./run-tests`
+   - Re-run the same command (`./run-tests` or `./run-tests --roundtrip-all-dark`)
 6. Repeat from step 1 for the next failure.
 
 ## Notes

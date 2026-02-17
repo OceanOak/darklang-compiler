@@ -26,6 +26,10 @@ let hasVerboseArg (args: string array) : bool =
 let hasParserPrettyRoundtripArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--parser-pretty-roundtrip")
 
+// Check if --roundtrip-all-dark is present (include all upstream .dark files in corpus roundtrip)
+let hasRoundtripAllDarkArg (args: string array) : bool =
+    args |> Array.exists (fun arg -> arg = "--roundtrip-all-dark")
+
 // Check if a test name matches the filter (case-insensitive substring match)
 let matchesFilter (filter: string option) (testName: string) : bool =
     match filter with

@@ -25,6 +25,7 @@ let printHelp () =
     println "  --coverage         Show stdlib coverage percentage after running tests"
     println "  --verification     Enable verification/stress tests"
     println "  --parser-pretty-roundtrip  Legacy no-op (parser/pretty corpus roundtrip runs by default)"
+    println "  --roundtrip-all-dark  Include all upstream .dark files in parser/pretty corpus roundtrip"
     println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
@@ -35,6 +36,7 @@ let printHelp () =
     println "  Tests --coverage           Run tests and show coverage percentage"
     println "  Tests --verification       Run verification/stress tests"
     println "  Tests --parser-pretty-roundtrip  Legacy no-op (corpus roundtrip already enabled)"
+    println "  Tests --roundtrip-all-dark  Roundtrip all upstream .dark files and stop on first error"
 
 [<EntryPoint>]
 let main args =
@@ -59,6 +61,9 @@ let main args =
     // Keep --parser-pretty-roundtrip accepted as a compatibility no-op.
     let _parserPrettyRoundtripFlagPresent = hasParserPrettyRoundtripArg args
 
+    // Include every upstream .dark file in corpus roundtrip mode.
+    let roundtripAllDark = hasRoundtripAllDarkArg args
+
     // Check for --verbose flag (print failing tests immediately)
     let verbose = hasVerboseArg args
 
@@ -67,6 +72,10 @@ let main args =
     | Some pattern -> println $"{Colors.gray}  Filter: {pattern}{Colors.reset}"
     | None -> ()
     println $"{Colors.gray}  Parser/pretty corpus roundtrip: enabled (default){Colors.reset}"
+    if roundtripAllDark then
+        println $"{Colors.gray}  Roundtrip upstream .dark coverage: all files (mode enabled){Colors.reset}"
+    else
+        println $"{Colors.gray}  Roundtrip upstream .dark coverage: default subset{Colors.reset}"
     println ""
 
     // Use the source tree for test data to avoid copying files into the build output.
@@ -106,32 +115,44 @@ let main args =
            estringUpstreamDarkPath
            eletUpstreamDarkPath
            epipeUpstreamDarkPath |]
-    let defaultUpstreamDarkPaths =
-        [| eifUpstreamDarkPath
-           ematchUpstreamDarkPath
-           einfixUpstreamDarkPath
-           eandUpstreamDarkPath
-           eorUpstreamDarkPath
-           evariableUpstreamDarkPath
-           dfloatUpstreamDarkPath
-           estringUpstreamDarkPath
-           eletUpstreamDarkPath |]
     for path in upstreamDarkPaths do
         if not (File.Exists path) then
             Crash.crash $"Missing required upstream dark test file: {path}"
 
-    let includeUpstreamDarkPaths =
+    let allUpstreamDarkPaths =
+        Directory.GetFiles(
+            Path.Combine(testDataRoot, "e2e", "upstream"),
+            "*.dark",
+            SearchOption.AllDirectories
+        )
+        |> Array.sort
+
+    let filterUpstreamDarkPaths (paths: string array) : string array =
         match filter with
-        | None -> defaultUpstreamDarkPaths
+        | None -> paths
         | Some pattern ->
             let loweredPattern = pattern.Trim().ToLowerInvariant()
-            upstreamDarkPaths
+            paths
             |> Array.filter (fun path -> path.ToLowerInvariant().Contains(loweredPattern))
+
+    let includeUpstreamDarkPathsForE2E = filterUpstreamDarkPaths upstreamDarkPaths
+
+    let includeUpstreamDarkPathsForRoundtrip =
+        if roundtripAllDark then
+            filterUpstreamDarkPaths allUpstreamDarkPaths
+        else
+            includeUpstreamDarkPathsForE2E
+
+    let e2eFiles = getTestFiles "e2e" "e2e"
 
     let e2eTestFiles =
         Array.append
-            (getTestFiles "e2e" "e2e")
-            includeUpstreamDarkPaths
+            e2eFiles
+            includeUpstreamDarkPathsForE2E
+    let roundtripCorpusTestFiles =
+        Array.append
+            e2eFiles
+            includeUpstreamDarkPathsForRoundtrip
     let verificationTestFiles = getTestFiles "verification" "e2e"
     let optTestFiles = getTestFiles "optimization" "opt"
     let typecheckTestFiles = getTestFiles "typecheck" "typecheck"
@@ -207,7 +228,7 @@ let main args =
         [|
             {
                 Name = "Syntax Roundtrip Corpus Tests"
-                Tests = SyntaxRoundtripCorpusTests.tests e2eTestFiles
+                Tests = SyntaxRoundtripCorpusTests.tests roundtripCorpusTestFiles
             }
         |]
 

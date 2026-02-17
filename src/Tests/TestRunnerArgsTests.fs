@@ -15,6 +15,14 @@ let testParserPrettyRoundtripFlagDetected () : TestResult =
     else
         Error "Expected --parser-pretty-roundtrip to be detected"
 
+let testRoundtripAllDarkFlagDetected () : TestResult =
+    let args = [| "--roundtrip-all-dark" |]
+    if hasRoundtripAllDarkArg args then
+        Ok ()
+    else
+        Error "Expected --roundtrip-all-dark to be detected"
+
 let tests = [
     ("detect parser/pretty roundtrip flag", testParserPrettyRoundtripFlagDetected)
+    ("detect roundtrip all dark flag", testRoundtripAllDarkFlagDetected)
 ]
