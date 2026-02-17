@@ -30,6 +30,16 @@ let hasParserPrettyRoundtripArg (args: string array) : bool =
 let hasRoundtripAllDarkArg (args: string array) : bool =
     args |> Array.exists (fun arg -> arg = "--roundtrip-all-dark")
 
+// Check if --all-test-timings is present (print timing for every test)
+let hasAllTestTimingsArg (args: string array) : bool =
+    args |> Array.exists (fun arg -> arg = "--all-test-timings")
+
+// Parse --timings-json=PATH option
+let parseTimingsJsonArg (args: string array) : string option =
+    args
+    |> Array.tryFind (fun arg -> arg.StartsWith("--timings-json="))
+    |> Option.map (fun arg -> arg.Substring(15))
+
 // Check if a test name matches the filter (case-insensitive substring match)
 let matchesFilter (filter: string option) (testName: string) : bool =
     match filter with

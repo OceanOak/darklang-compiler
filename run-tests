@@ -7,6 +7,9 @@
 #   --filter=PATTERN   Run only tests matching PATTERN (case-insensitive)
 #   --verification     Enable verification/stress tests
 #   --parser-pretty-roundtrip  Legacy no-op (parser/pretty corpus roundtrip runs by default)
+#   --roundtrip-all-dark  Include all upstream .dark files in parser/pretty corpus roundtrip
+#   --all-test-timings  Print timing for every test in final timing summary
+#   --timings-json=PATH  Write machine-readable timing data to PATH
 #   --build-only       Only build, don't run tests
 #   --quiet            Quiet mode: print "success" or list failed tests
 #   --verbose          Print failing tests as soon as they occur
@@ -40,6 +43,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --parser-pretty-roundtrip)
             # Legacy no-op: parser/pretty corpus roundtrip now runs by default.
+            shift
+            ;;
+        --roundtrip-all-dark)
+            TEST_ARGS+=("--roundtrip-all-dark")
+            shift
+            ;;
+        --all-test-timings)
+            TEST_ARGS+=("--all-test-timings")
+            shift
+            ;;
+        --timings-json=*)
+            TEST_ARGS+=("$1")
             shift
             ;;
         --build-only)
@@ -76,6 +91,9 @@ if [ "$HELP" = true ]; then
     echo "  --filter=PATTERN   Run only tests matching PATTERN (case-insensitive substring)"
     echo "  --verification     Enable verification/stress tests"
     echo "  --parser-pretty-roundtrip  Legacy no-op (corpus roundtrip is enabled by default)"
+    echo "  --roundtrip-all-dark  Include all upstream .dark files in parser/pretty corpus roundtrip"
+    echo "  --all-test-timings  Print timing for every test in final timing summary"
+    echo "  --timings-json=PATH  Write machine-readable timing data to PATH"
     echo "  --build-only       Only build, don't run tests"
     echo "  --quiet            Quiet mode: print 'success' or list failed tests"
     echo "  --verbose          Print failing tests as soon as they occur"

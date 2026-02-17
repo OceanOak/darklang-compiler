@@ -7,6 +7,7 @@ module TestRunner.Main
 open System
 open System.IO
 open System.Diagnostics
+open System.Globalization
 open Output
 open TestDSL.PassTestRunner
 open TestDSL.E2EFormat
@@ -26,6 +27,8 @@ let printHelp () =
     println "  --verification     Enable verification/stress tests"
     println "  --parser-pretty-roundtrip  Legacy no-op (parser/pretty corpus roundtrip runs by default)"
     println "  --roundtrip-all-dark  Include all upstream .dark files in parser/pretty corpus roundtrip"
+    println "  --all-test-timings  Print timing for every test in final timing summary"
+    println "  --timings-json=PATH  Write machine-readable timing data to PATH"
     println "  --verbose, -v      Print failing tests as soon as they occur"
     println "  --help, -h         Show this help message"
     println ""
@@ -37,6 +40,8 @@ let printHelp () =
     println "  Tests --verification       Run verification/stress tests"
     println "  Tests --parser-pretty-roundtrip  Legacy no-op (corpus roundtrip already enabled)"
     println "  Tests --roundtrip-all-dark  Roundtrip all upstream .dark files and stop on first error"
+    println "  Tests --all-test-timings  Show timing for every test at the end"
+    println "  Tests --timings-json=/tmp/timings.json  Write timing data as JSON"
 
 [<EntryPoint>]
 let main args =
@@ -64,6 +69,12 @@ let main args =
     // Include every upstream .dark file in corpus roundtrip mode.
     let roundtripAllDark = hasRoundtripAllDarkArg args
 
+    // Print timing for every test in the final timing section.
+    let showAllTestTimings = hasAllTestTimingsArg args
+
+    // Optionally write machine-readable timing data to JSON.
+    let timingsJsonPath = parseTimingsJsonArg args
+
     // Check for --verbose flag (print failing tests immediately)
     let verbose = hasVerboseArg args
 
@@ -76,6 +87,14 @@ let main args =
         println $"{Colors.gray}  Roundtrip upstream .dark coverage: all files (mode enabled){Colors.reset}"
     else
         println $"{Colors.gray}  Roundtrip upstream .dark coverage: default subset{Colors.reset}"
+    if showAllTestTimings then
+        println $"{Colors.gray}  Per-test timings: all tests (mode enabled){Colors.reset}"
+    match timingsJsonPath with
+    | Some path when path.Trim() = "" ->
+        Crash.crash "--timings-json requires a non-empty path"
+    | Some path ->
+        println $"{Colors.gray}  Timing JSON output: {path}{Colors.reset}"
+    | None -> ()
     println ""
 
     // Use the source tree for test data to avoid copying files into the build output.
@@ -124,6 +143,17 @@ let main args =
            derrorUpstreamDarkPath
            elambdaUpstreamDarkPath
            dtupleUpstreamDarkPath |]
+    let defaultUpstreamDarkPaths =
+        [| eifUpstreamDarkPath
+           ematchUpstreamDarkPath
+           einfixUpstreamDarkPath
+           eandUpstreamDarkPath
+           eorUpstreamDarkPath
+           evariableUpstreamDarkPath
+           dfloatUpstreamDarkPath
+           estringUpstreamDarkPath
+           eletUpstreamDarkPath
+           dtupleUpstreamDarkPath |]
     for path in upstreamDarkPaths do
         if not (File.Exists path) then
             Crash.crash $"Missing required upstream dark test file: {path}"
@@ -144,7 +174,10 @@ let main args =
             paths
             |> Array.filter (fun path -> path.ToLowerInvariant().Contains(loweredPattern))
 
-    let includeUpstreamDarkPathsForE2E = filterUpstreamDarkPaths upstreamDarkPaths
+    let includeUpstreamDarkPathsForE2E =
+        match filter with
+        | None -> defaultUpstreamDarkPaths
+        | Some _ -> filterUpstreamDarkPaths upstreamDarkPaths
 
     let includeUpstreamDarkPathsForRoundtrip =
         if roundtripAllDark then
@@ -789,13 +822,81 @@ let main args =
             runState.PassTimings
             runState.Timings
 
+    let escapeJsonString (value: string) : string =
+        value
+        |> Seq.map (fun ch ->
+            match ch with
+            | '\\' -> "\\\\"
+            | '"' -> "\\\""
+            | '\n' -> "\\n"
+            | '\r' -> "\\r"
+            | '\t' -> "\\t"
+            | _ when int ch < 32 -> $"\\u{int ch:x4}"
+            | _ -> string ch)
+        |> String.concat ""
+
+    let formatMilliseconds (elapsed: TimeSpan) : string =
+        elapsed.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)
+
+    let formatOptionalMilliseconds (elapsed: TimeSpan option) : string =
+        match elapsed with
+        | Some value -> formatMilliseconds value
+        | None -> "null"
+
+    let orderedPassTimingNames : string list =
+        let knownOrder = runState.PassTimingOrder |> Seq.toList
+        let extras =
+            runState.PassTimings
+            |> Map.toSeq
+            |> Seq.map fst
+            |> Seq.filter (fun name -> not (List.contains name knownOrder))
+            |> Seq.sort
+            |> Seq.toList
+        knownOrder @ extras
+
+    let writeTimingsJson (path: string) : unit =
+        let testEntries =
+            runState.Timings
+            |> Seq.sortByDescending (fun timing -> timing.TotalTime)
+            |> Seq.map (fun timing ->
+                $"{{\"name\":\"{escapeJsonString timing.Name}\",\"total_ms\":{formatMilliseconds timing.TotalTime},\"compile_ms\":{formatOptionalMilliseconds timing.CompileTime},\"runtime_ms\":{formatOptionalMilliseconds timing.RuntimeTime}}}")
+            |> String.concat ","
+        let passEntries =
+            orderedPassTimingNames
+            |> List.choose (fun name ->
+                Map.tryFind name runState.PassTimings
+                |> Option.map (fun elapsed ->
+                    $"{{\"name\":\"{escapeJsonString name}\",\"elapsed_ms\":{formatMilliseconds elapsed}}}"))
+            |> String.concat ","
+        let summary =
+            $"\"summary\":{{\"passed\":{runState.Passed},\"failed\":{runState.Failed},\"total\":{runState.Passed + runState.Failed},\"total_ms\":{formatMilliseconds totalTimer.Elapsed},\"unaccounted_ms\":{formatMilliseconds unaccountedBreakdown.Unaccounted},\"runtime_unaccounted_ms\":{formatMilliseconds unaccountedBreakdown.Runtime},\"overhead_unaccounted_ms\":{formatMilliseconds unaccountedBreakdown.Overhead}}}"
+        let payload = $"{{{summary},\"tests\":[{testEntries}],\"passes\":[{passEntries}]}}"
+        let directory = Path.GetDirectoryName(path)
+        if not (String.IsNullOrWhiteSpace(directory)) then
+            Directory.CreateDirectory(directory) |> ignore
+        File.WriteAllText(path, payload)
+
+    match timingsJsonPath with
+    | Some path ->
+        writeTimingsJson path
+        println $"  {Colors.gray}⏱  Wrote timing JSON: {path}{Colors.reset}"
+    | None -> ()
+
     // Print slowest tests
     if runState.Timings.Count > 0 then
+        let title =
+            if showAllTestTimings then
+                "⏱ All Test Timings"
+            else
+                "🐢 Slowest Tests"
+        let timingsToDisplay =
+            runState.Timings
+            |> Seq.sortByDescending (fun t -> t.TotalTime)
+            |> (if showAllTestTimings then Seq.toList else Seq.truncate 5 >> Seq.toList)
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        println $"{Colors.bold}{Colors.gray}🐢 Slowest Tests{Colors.reset}"
+        println $"{Colors.bold}{Colors.gray}{title}{Colors.reset}"
         println $"{Colors.bold}{Colors.gray}═══════════════════════════════════════{Colors.reset}"
-        let slowest = runState.Timings |> Seq.sortByDescending (fun t -> t.TotalTime) |> Seq.truncate 5 |> Seq.toList
-        for (i, timing) in slowest |> List.indexed do
+        for (i, timing) in timingsToDisplay |> List.indexed do
             let baseTimingStr =
                 match timing.CompileTime, timing.RuntimeTime with
                 | Some ct, Some rt ->
