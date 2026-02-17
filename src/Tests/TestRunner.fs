@@ -93,6 +93,8 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "estring.dark")
     let eletUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "basic", "elet.dark")
+    let epipeUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "epipe.dark")
     let upstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
@@ -102,7 +104,8 @@ let main args =
            evariableUpstreamDarkPath
            dfloatUpstreamDarkPath
            estringUpstreamDarkPath
-           eletUpstreamDarkPath |]
+           eletUpstreamDarkPath
+           epipeUpstreamDarkPath |]
     let defaultUpstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath

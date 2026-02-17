@@ -205,6 +205,32 @@ let testParsesBareE2ERightHandSideAsValueExpression () : TestResult =
             | _ ->
                 Error $"Expected exactly 1 parsed test, got {tests.Length}")
 
+let testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble () : TestResult =
+    let testSource =
+        "(Stdlib.Option.Option.None |> Stdlib.Option.Option.Some) = Stdlib.Option.Option.Some\n"
+        + "  Stdlib.Option.Option.None\n"
+        + "(1L) = 1L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected RHS continuation to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ first; second ] ->
+                if first.ExpectedValueExpr <> Some "Stdlib.Option.Option.Some\n  Stdlib.Option.Option.None" then
+                    Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
+                elif first.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for first test, got: {first.Preamble}"
+                elif second.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for second test, got: {second.Preamble}"
+                elif second.ExpectedValueExpr <> Some "1L" then
+                    Error $"Unexpected second RHS parse: {second.ExpectedValueExpr}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 2 parsed tests, got {tests.Length}")
+
 let tests = [
     ("parses multiline expectation on next line", testParsesMultilineExpectationOnNextLine)
     ("parses skip attribute", testParsesSkipAttribute)
@@ -214,4 +240,5 @@ let tests = [
     ("parses expectation with keyword inside quoted message", testParsesExpectationWithKeywordInsideQuotedMessage)
     ("parses multiline function-head expectation with next-line arg", testParsesMultilineExpectationWithFunctionHeadAndNextLineArg)
     ("parses bare .e2e rhs as value expression", testParsesBareE2ERightHandSideAsValueExpression)
+    ("parses indented rhs continuation without preamble leakage", testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble)
 ]

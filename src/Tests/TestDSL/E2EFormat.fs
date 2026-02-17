@@ -333,17 +333,18 @@ let private parseSimpleStdout (valueText: string) : Result<string, string> =
         Ok $"{trimmed}\n"
 
 /// Check if line has ) followed by = <expectation> (for multi-line expression closing)
+let private isIncompleteExpectationHead (afterEq: string) : bool =
+    let trimmed = afterEq.Trim()
+    if trimmed.Length = 0 then
+        true
+    else
+        let looksLikeBareIdentifierPath =
+            trimmed
+            |> Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '_' || c = '.')
+        looksLikeBareIdentifierPath
+        && trimmed.Contains(".")
+
 let private hasClosingParenTest (s: string) : bool =
-    let isIncompleteExpectationHead (afterEq: string) : bool =
-        let trimmed = afterEq.Trim()
-        if trimmed.Length = 0 then
-            true
-        else
-            let looksLikeBareIdentifierPath =
-                trimmed
-                |> Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '_' || c = '.')
-            looksLikeBareIdentifierPath
-            && trimmed.Contains(".")
 
     let rec findPattern (i: int) =
         if i >= s.Length then false
@@ -821,6 +822,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
         let mutable pendingStartLine = 0
         let mutable inMultilineExpr = false
         let mutable moduleIndentStack : int list = []
+        let mutable skipUntilIndex = -1
 
         let countLeadingSpaces (lineText: string) : int =
             let mutable idx = 0
@@ -840,78 +842,125 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                 lineText.Substring(idx)
 
         for i in 0 .. lines.Length - 1 do
-            let line = lines.[i]
-            let trimmedLine = line.Trim()
-            let lineNumber = i + 1
+            if i <= skipUntilIndex then
+                ()
+            else
+                let line = lines.[i]
+                let trimmedLine = line.Trim()
+                let lineNumber = i + 1
 
-            // Skip blank lines and comment-only lines
-            if trimmedLine.Length > 0 && not (trimmedLine.StartsWith("//")) then
-                if inMultilineExpr then
-                    // Accumulating multi-line expression
-                    pendingExprLines <- line :: pendingExprLines
+                // Skip blank lines and comment-only lines
+                if trimmedLine.Length > 0 && not (trimmedLine.StartsWith("//")) then
+                    if inMultilineExpr then
+                        // Accumulating multi-line expression
+                        pendingExprLines <- line :: pendingExprLines
 
-                    // Check whether the accumulated expression now has a closing
-                    // ') = <expectation>' pattern. This supports expectations that
-                    // appear on the next line after the '=' token.
-                    let accumulatedWithoutComments =
-                        pendingExprLines
-                        |> List.rev
-                        |> List.map stripComment
-                        |> String.concat "\n"
-                    if hasClosingParenTest accumulatedWithoutComments then
-                        // Combine all accumulated lines and parse as multi-line test
-                        let fullExpr = String.concat "\n" (List.rev pendingExprLines)
-                        let preamble = String.concat "\n" (List.rev preambleLines)
-                        match parseMultilineTest fullExpr pendingStartLine path preamble functionLineMap with
-                        | Ok test -> tests <- test :: tests
-                        | Error err -> errors <- err :: errors
-                        // Reset multi-line state
-                        pendingExprLines <- []
-                        inMultilineExpr <- false
-                    // else: continue accumulating
-                else
-                    let lineWithoutComment = stripComment trimmedLine
-
-                    // Check if this starts a multi-line expression: starts with ( but isn't a complete test
-                    let isTopLevel = line.Length > 0 && not (Char.IsWhiteSpace(line.[0]))
-                    let mayStartOrBeTest = isTopLevel || allowIndentedTests
-                    if mayStartOrBeTest && trimmedLine.StartsWith("(") && not (isTestLine lineWithoutComment) then
-                        // Start accumulating multi-line expression
-                        pendingExprLines <- [line]
-                        pendingStartLine <- lineNumber
-                        inMultilineExpr <- true
-                    elif mayStartOrBeTest && isTestLine lineWithoutComment then
-                        // This is a single-line test - parse it with accumulated preamble
-                        let preamble = String.concat "\n" (List.rev preambleLines)
-                        match parseTestLineWithPreamble trimmedLine lineNumber path preamble functionLineMap with
-                        | Ok test -> tests <- test :: tests
-                        | Error err -> errors <- err :: errors
+                        // Check whether the accumulated expression now has a closing
+                        // ') = <expectation>' pattern. This supports expectations that
+                        // appear on the next line after the '=' token.
+                        let accumulatedWithoutComments =
+                            pendingExprLines
+                            |> List.rev
+                            |> List.map stripComment
+                            |> String.concat "\n"
+                        if hasClosingParenTest accumulatedWithoutComments then
+                            // Combine all accumulated lines and parse as multi-line test
+                            let fullExpr = String.concat "\n" (List.rev pendingExprLines)
+                            let preamble = String.concat "\n" (List.rev preambleLines)
+                            match parseMultilineTest fullExpr pendingStartLine path preamble functionLineMap with
+                            | Ok test -> tests <- test :: tests
+                            | Error err -> errors <- err :: errors
+                            // Reset multi-line state
+                            pendingExprLines <- []
+                            inMultilineExpr <- false
+                        // else: continue accumulating
                     else
-                        let isDarkModuleDecl =
-                            allowIndentedTests
-                            && (trimmedLine.StartsWith("module ") || trimmedLine.StartsWith("module\t"))
+                        let lineWithoutComment = stripComment trimmedLine
 
-                        if isDarkModuleDecl then
-                            let moduleIndent = countLeadingSpaces line
-                            let rec popToParent (stack: int list) : int list =
-                                match stack with
-                                | top :: rest when moduleIndent <= top -> popToParent rest
-                                | _ -> stack
-                            moduleIndentStack <- moduleIndent :: popToParent moduleIndentStack
-                        else
-                        // This is a definition line - add to preamble
-                        // Preserve original indentation for multi-line definitions
-                            let normalizedLine =
+                        // Check if this starts a multi-line expression: starts with ( but isn't a complete test
+                        let isTopLevel = line.Length > 0 && not (Char.IsWhiteSpace(line.[0]))
+                        let mayStartOrBeTest = isTopLevel || allowIndentedTests
+                        if mayStartOrBeTest && trimmedLine.StartsWith("(") && not (isTestLine lineWithoutComment) then
+                            // Start accumulating multi-line expression
+                            pendingExprLines <- [line]
+                            pendingStartLine <- lineNumber
+                            inMultilineExpr <- true
+                        elif mayStartOrBeTest && isTestLine lineWithoutComment then
+                            // This is a single-line test - parse it with accumulated preamble
+                            let preamble = String.concat "\n" (List.rev preambleLines)
+                            let hasIncompleteExpectationHead =
                                 if allowIndentedTests then
-                                    let moduleShift = moduleIndentStack.Length * 2
-                                    trimLeadingSpaces moduleShift line
+                                    match findSeparatorIndex lineWithoutComment with
+                                    | Some sepIdx ->
+                                        let rhs = lineWithoutComment.Substring(sepIdx + 1)
+                                        isIncompleteExpectationHead rhs
+                                    | None -> false
                                 else
-                                    line
-                            preambleLines <- normalizedLine :: preambleLines
-                            // Track function definitions for caching
-                            match extractFuncName normalizedLine with
-                            | Some funcName -> functionLineMap <- Map.add funcName lineNumber functionLineMap
-                            | None -> ()
+                                    false
+
+                            if hasIncompleteExpectationHead then
+                                let rec collectContinuation (j: int) (acc: string list) : string list * int =
+                                    if j >= lines.Length then
+                                        (List.rev acc, j)
+                                    else
+                                        let nextLine = lines.[j]
+                                        let nextTrimmed = nextLine.Trim()
+                                        if nextTrimmed.Length = 0 || nextTrimmed.StartsWith("//") then
+                                            (List.rev acc, j)
+                                        else
+                                            let nextIsIndented = nextLine.Length > 0 && Char.IsWhiteSpace(nextLine.[0])
+                                            let nextWithoutComment = stripComment nextTrimmed
+                                            let nextStartsDefinition =
+                                                nextWithoutComment.StartsWith("def ")
+                                                || nextWithoutComment.StartsWith("type ")
+                                                || nextWithoutComment.StartsWith("let ")
+                                                || nextWithoutComment.StartsWith("module ")
+                                            if nextIsIndented && not nextStartsDefinition && not (isTestLine nextWithoutComment) then
+                                                collectContinuation (j + 1) (nextLine :: acc)
+                                            else
+                                                (List.rev acc, j)
+
+                                let (continuationLines, nextIndex) = collectContinuation (i + 1) []
+                                if not (List.isEmpty continuationLines) then
+                                    let fullExpr = String.concat "\n" (line :: continuationLines)
+                                    match parseMultilineTest fullExpr lineNumber path preamble functionLineMap with
+                                    | Ok test -> tests <- test :: tests
+                                    | Error err -> errors <- err :: errors
+                                    skipUntilIndex <- nextIndex - 1
+                                else
+                                    match parseTestLineWithPreamble trimmedLine lineNumber path preamble functionLineMap with
+                                    | Ok test -> tests <- test :: tests
+                                    | Error err -> errors <- err :: errors
+                            else
+                                match parseTestLineWithPreamble trimmedLine lineNumber path preamble functionLineMap with
+                                | Ok test -> tests <- test :: tests
+                                | Error err -> errors <- err :: errors
+                        else
+                            let isDarkModuleDecl =
+                                allowIndentedTests
+                                && (trimmedLine.StartsWith("module ") || trimmedLine.StartsWith("module\t"))
+
+                            if isDarkModuleDecl then
+                                let moduleIndent = countLeadingSpaces line
+                                let rec popToParent (stack: int list) : int list =
+                                    match stack with
+                                    | top :: rest when moduleIndent <= top -> popToParent rest
+                                    | _ -> stack
+                                moduleIndentStack <- moduleIndent :: popToParent moduleIndentStack
+                            else
+                            // This is a definition line - add to preamble
+                            // Preserve original indentation for multi-line definitions
+                                let normalizedLine =
+                                    if allowIndentedTests then
+                                        let moduleShift = moduleIndentStack.Length * 2
+                                        trimLeadingSpaces moduleShift line
+                                    else
+                                        line
+                                preambleLines <- normalizedLine :: preambleLines
+                                // Track function definitions for caching
+                                match extractFuncName normalizedLine with
+                                | Some funcName -> functionLineMap <- Map.add funcName lineNumber functionLineMap
+                                | None -> ()
 
         // Check for unclosed multi-line expression
         if inMultilineExpr then
