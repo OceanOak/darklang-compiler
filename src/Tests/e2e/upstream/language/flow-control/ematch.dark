@@ -941,9 +941,9 @@ module PatternGrouping =
  | "x" -> "fail") =
   error="Cannot match Int64 value 6 with a String pattern"
 
-// (match false with
-//  | "false" -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Bool value false with a String pattern"
+(match false with
+ | "false" -> "fail") =
+  error="Cannot match Bool value false with a String pattern"
 
 // (match "false" with
 //  | false -> "fail") = Builtin.testDerrorMessage
