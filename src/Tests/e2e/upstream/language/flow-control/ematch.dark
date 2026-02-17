@@ -972,9 +972,8 @@ module PatternGrouping =
 //  | 'c' -> "fail") = Builtin.testDerrorMessage
 //   "Cannot match Bool value true with a Char pattern"
 
-  // (match [ 1L; 2L; 3L ] with
-  //  | "1,2,3" -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match List<Int64> value [  1, 2, ... with a String pattern"
+  (match [ 1L; 2L; 3L ] with
+   | "1,2,3" -> "fail") = exit=1 stderr="Non-exhaustive match: No matching case found for value <unknown> in match expression"
 
   // (match [ 1L; 2L; 3L ] with
   //  | [ 1.0; 2.0; 3.0 ] -> "fail") = Builtin.testDerrorMessage
