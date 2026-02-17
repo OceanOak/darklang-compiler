@@ -889,9 +889,9 @@ module PatternGrouping =
  | 6.0 -> "fail") =
   error="Cannot match Int16 value 6 with a Float pattern"
 
-// (match 6.0 with
-//  | 6s -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Float value 6.0 with an Int16 pattern"
+(match 6.0 with
+ | 6s -> "fail") =
+  error="Cannot match Float value 6.0 with an Int16 pattern"
 
 // (match 6us with
 //  | 6.0 -> "fail") = Builtin.testDerrorMessage
