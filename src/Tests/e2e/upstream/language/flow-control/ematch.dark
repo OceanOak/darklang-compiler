@@ -931,9 +931,8 @@ module PatternGrouping =
 //  | 6Z -> "fail") = Builtin.testDerrorMessage
 //   "Cannot match Float value 6.0 with an UInt128 pattern"
 
-// (match "x" with
-//  | 6L -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match String value \"x\" with an Int64 pattern"
+(match "x" with
+ | 6L -> "fail") = error="Integer literal pattern used on non-Int64 type"
 
 // (match 6L with
 //  | "x" -> "fail") = Builtin.testDerrorMessage
