@@ -2619,126 +2619,160 @@ let rec generateStructuralEquality
     (typeReg: TypeRegistry)
     (variantLookup: VariantLookup)
     : (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen =
+    // Keep bindings in reverse order during construction to avoid quadratic
+    // list appends when comparing deeply nested structures.
+    let addForwardBindingsToRev
+        (accRev: (ANF.TempId * ANF.CExpr) list)
+        (bindings: (ANF.TempId * ANF.CExpr) list)
+        : (ANF.TempId * ANF.CExpr) list =
+        List.fold (fun acc binding -> binding :: acc) accRev bindings
+
+    let combineComparisonResult
+        (accResult: ANF.Atom option)
+        (nextResult: ANF.Atom)
+        (accBindingsRev: (ANF.TempId * ANF.CExpr) list)
+        (vg: ANF.VarGen)
+        : (ANF.Atom option * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) =
+        match accResult with
+        | None ->
+            (Some nextResult, accBindingsRev, vg)
+        | Some previousResult ->
+            let (andVar, vg') = ANF.freshVar vg
+            let andExpr = ANF.Prim (ANF.And, previousResult, nextResult)
+            let updatedBindingsRev = (andVar, andExpr) :: accBindingsRev
+            (Some (ANF.Var andVar), updatedBindingsRev, vg')
+
+    let finalizeBindings
+        (accResult: ANF.Atom option)
+        (accBindingsRev: (ANF.TempId * ANF.CExpr) list)
+        (vg: ANF.VarGen)
+        : (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen =
+        match accResult with
+        | Some resultAtom ->
+            (List.rev accBindingsRev, resultAtom, vg)
+        | None ->
+            let (trueVar, vg') = ANF.freshVar vg
+            let bindingsRev = (trueVar, ANF.Atom (ANF.BoolLiteral true)) :: accBindingsRev
+            (List.rev bindingsRev, ANF.Var trueVar, vg')
 
     match typ with
     | AST.TTuple elemTypes ->
-        // Compare each tuple element and AND the results
-        let rec compareElements index types accBindings accResults vg =
+        let rec compareElements
+            (index: int)
+            (types: AST.Type list)
+            (accResult: ANF.Atom option)
+            (accBindingsRev: (ANF.TempId * ANF.CExpr) list)
+            (vg: ANF.VarGen)
+            : (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen =
             match types with
             | [] ->
-                // AND all results together
-                match accResults with
-                | [] ->
-                    // Empty tuple - always equal
-                    let (trueVar, vg') = ANF.freshVar vg
-                    (accBindings @ [(trueVar, ANF.Atom (ANF.BoolLiteral true))], ANF.Var trueVar, vg')
-                | [single] ->
-                    (accBindings, single, vg)
-                | first :: rest ->
-                    // Chain ANDs: result = r0 && r1 && r2 ...
-                    let rec chainAnds results accBindings vg =
-                        match results with
-                        | [] -> Crash.crash "empty results in chainAnds"
-                        | [last] -> (accBindings, last, vg)
-                        | a :: b :: rest ->
-                            let (andVar, vg') = ANF.freshVar vg
-                            let andExpr = ANF.Prim (ANF.And, a, b)
-                            chainAnds (ANF.Var andVar :: rest) (accBindings @ [(andVar, andExpr)]) vg'
-                    chainAnds (first :: rest) accBindings vg
-
+                finalizeBindings accResult accBindingsRev vg
             | elemType :: restTypes ->
-                // Get left[index] and right[index]
                 let (leftElemVar, vg1) = ANF.freshVar vg
                 let leftGet = ANF.TupleGet (leftAtom, index)
                 let (rightElemVar, vg2) = ANF.freshVar vg1
                 let rightGet = ANF.TupleGet (rightAtom, index)
+                let withElemBindingsRev =
+                    addForwardBindingsToRev
+                        accBindingsRev
+                        [ (leftElemVar, leftGet); (rightElemVar, rightGet) ]
 
-                let baseBindings = accBindings @ [(leftElemVar, leftGet); (rightElemVar, rightGet)]
+                let (elementResult, withComparisonBindingsRev, vg3) =
+                    if isCompoundType elemType then
+                        let (nestedBindings, nestedResult, vgNested) =
+                            generateStructuralEquality
+                                (ANF.Var leftElemVar)
+                                (ANF.Var rightElemVar)
+                                elemType
+                                vg2
+                                typeReg
+                                variantLookup
+                        let updatedBindingsRev =
+                            addForwardBindingsToRev withElemBindingsRev nestedBindings
+                        (nestedResult, updatedBindingsRev, vgNested)
+                    else
+                        let (cmpVar, vgCmp) = ANF.freshVar vg2
+                        let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var leftElemVar, ANF.Var rightElemVar)
+                        let updatedBindingsRev = (cmpVar, cmpExpr) :: withElemBindingsRev
+                        (ANF.Var cmpVar, updatedBindingsRev, vgCmp)
 
-                // Check if element type is also compound
-                if isCompoundType elemType then
-                    // Recursive structural comparison
-                    let (nestedBindings, resultAtom, vg3) =
-                        generateStructuralEquality (ANF.Var leftElemVar) (ANF.Var rightElemVar) elemType vg2 typeReg variantLookup
-                    compareElements (index + 1) restTypes (baseBindings @ nestedBindings) (accResults @ [resultAtom]) vg3
-                else
-                    // Primitive comparison
-                    let (cmpVar, vg3) = ANF.freshVar vg2
-                    let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var leftElemVar, ANF.Var rightElemVar)
-                    compareElements (index + 1) restTypes (baseBindings @ [(cmpVar, cmpExpr)]) (accResults @ [ANF.Var cmpVar]) vg3
+                let (updatedResult, updatedBindingsRev, vg4) =
+                    combineComparisonResult accResult elementResult withComparisonBindingsRev vg3
 
-        compareElements 0 elemTypes [] [] varGen
+                compareElements (index + 1) restTypes updatedResult updatedBindingsRev vg4
+
+        compareElements 0 elemTypes None [] varGen
 
     | AST.TRecord (typeName, typeArgs) ->
-        // Compare each record field and AND the results
         match Map.tryFind typeName typeReg with
         | None ->
-            // Unknown record type - fall back to pointer comparison
             let (cmpVar, vg') = ANF.freshVar varGen
             ([(cmpVar, ANF.Prim (ANF.Eq, leftAtom, rightAtom))], ANF.Var cmpVar, vg')
         | Some fields ->
             let concreteFields =
                 match buildRecordFieldSubst fields typeArgs with
                 | Some subst ->
-                    fields |> List.map (fun (name, fieldType) -> (name, applySubstToType subst fieldType))
+                    fields
+                    |> List.map (fun (name, fieldType) -> (name, applySubstToType subst fieldType))
                 | None ->
                     fields
 
-            let rec compareFields index fieldList accBindings accResults vg =
+            let rec compareFields
+                (index: int)
+                (fieldList: (string * AST.Type) list)
+                (accResult: ANF.Atom option)
+                (accBindingsRev: (ANF.TempId * ANF.CExpr) list)
+                (vg: ANF.VarGen)
+                : (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen =
                 match fieldList with
                 | [] ->
-                    match accResults with
-                    | [] ->
-                        let (trueVar, vg') = ANF.freshVar vg
-                        (accBindings @ [(trueVar, ANF.Atom (ANF.BoolLiteral true))], ANF.Var trueVar, vg')
-                    | [single] ->
-                        (accBindings, single, vg)
-                    | first :: rest ->
-                        let rec chainAnds results accBindings vg =
-                            match results with
-                            | [] -> Crash.crash "empty results in chainAnds"
-                            | [last] -> (accBindings, last, vg)
-                            | a :: b :: rest ->
-                                let (andVar, vg') = ANF.freshVar vg
-                                let andExpr = ANF.Prim (ANF.And, a, b)
-                                chainAnds (ANF.Var andVar :: rest) (accBindings @ [(andVar, andExpr)]) vg'
-                        chainAnds (first :: rest) accBindings vg
-
+                    finalizeBindings accResult accBindingsRev vg
                 | (_, fieldType) :: restFields ->
-                    // Get left.field and right.field (using TupleGet with field index)
                     let (leftFieldVar, vg1) = ANF.freshVar vg
                     let leftGet = ANF.TupleGet (leftAtom, index)
                     let (rightFieldVar, vg2) = ANF.freshVar vg1
                     let rightGet = ANF.TupleGet (rightAtom, index)
+                    let withFieldBindingsRev =
+                        addForwardBindingsToRev
+                            accBindingsRev
+                            [ (leftFieldVar, leftGet); (rightFieldVar, rightGet) ]
 
-                    let baseBindings = accBindings @ [(leftFieldVar, leftGet); (rightFieldVar, rightGet)]
+                    let (fieldResult, withComparisonBindingsRev, vg3) =
+                        if isCompoundType fieldType then
+                            let (nestedBindings, nestedResult, vgNested) =
+                                generateStructuralEquality
+                                    (ANF.Var leftFieldVar)
+                                    (ANF.Var rightFieldVar)
+                                    fieldType
+                                    vg2
+                                    typeReg
+                                    variantLookup
+                            let updatedBindingsRev =
+                                addForwardBindingsToRev withFieldBindingsRev nestedBindings
+                            (nestedResult, updatedBindingsRev, vgNested)
+                        else
+                            let (cmpVar, vgCmp) = ANF.freshVar vg2
+                            let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var leftFieldVar, ANF.Var rightFieldVar)
+                            let updatedBindingsRev = (cmpVar, cmpExpr) :: withFieldBindingsRev
+                            (ANF.Var cmpVar, updatedBindingsRev, vgCmp)
 
-                    if isCompoundType fieldType then
-                        let (nestedBindings, resultAtom, vg3) =
-                            generateStructuralEquality (ANF.Var leftFieldVar) (ANF.Var rightFieldVar) fieldType vg2 typeReg variantLookup
-                        compareFields (index + 1) restFields (baseBindings @ nestedBindings) (accResults @ [resultAtom]) vg3
-                    else
-                        let (cmpVar, vg3) = ANF.freshVar vg2
-                        let cmpExpr = ANF.Prim (ANF.Eq, ANF.Var leftFieldVar, ANF.Var rightFieldVar)
-                        compareFields (index + 1) restFields (baseBindings @ [(cmpVar, cmpExpr)]) (accResults @ [ANF.Var cmpVar]) vg3
+                    let (updatedResult, updatedBindingsRev, vg4) =
+                        combineComparisonResult accResult fieldResult withComparisonBindingsRev vg3
 
-            compareFields 0 concreteFields [] [] varGen
+                    compareFields (index + 1) restFields updatedResult updatedBindingsRev vg4
+
+            compareFields 0 concreteFields None [] varGen
 
     | AST.TSum (typeName, _) ->
-        // Check if ANY variant in this type has a payload
-        let typeVariants =
-            variantLookup
-            |> Map.filter (fun _ (tName, _, _, _) -> tName = typeName)
         let hasAnyPayload =
-            typeVariants |> Map.exists (fun _ (_, _, _, pType) -> pType.IsSome)
+            variantLookup
+            |> Map.exists (fun _ (tName, _, _, payloadType) ->
+                tName = typeName && payloadType.IsSome)
 
         if not hasAnyPayload then
-            // Pure enum - tags are integers, direct comparison works
             let (cmpVar, vg') = ANF.freshVar varGen
             ([(cmpVar, ANF.Prim (ANF.Eq, leftAtom, rightAtom))], ANF.Var cmpVar, vg')
         else
-            // Mixed enum - uniform [tag, payload] representation
-            // Compare tag (index 0) AND payload (index 1)
             let (leftTagVar, vg1) = ANF.freshVar varGen
             let (rightTagVar, vg2) = ANF.freshVar vg1
             let (tagEqVar, vg3) = ANF.freshVar vg2
@@ -2759,7 +2793,6 @@ let rec generateStructuralEquality
             (bindings, ANF.Var resultVar, vg7)
 
     | _ ->
-        // Primitive types - simple comparison
         let (cmpVar, vg') = ANF.freshVar varGen
         ([(cmpVar, ANF.Prim (ANF.Eq, leftAtom, rightAtom))], ANF.Var cmpVar, vg')
 
@@ -6363,29 +6396,41 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let pattern = AST.NonEmptyList.head mc.Patterns
                     let body = mc.Body
                     let (fallbackExpr, vg1) = makeNoMatchingCaseFallback vg
-                    buildPatternGroupComparison (AST.NonEmptyList.toList mc.Patterns) scrutineeAtom' vg1
-                    |> Result.bind (fun cmpOpt ->
-                        let compileBodyWithGuard (vgBody: ANF.VarGen) : Result<ANF.AExpr * ANF.VarGen, string> =
-                            match mc.Guard, pattern with
-                            | None, AST.PList (_ :: _ as listPatterns) ->
-                                compileListPatternWithChecks listPatterns scrutineeAtom' scrutType env body fallbackExpr vgBody
-                            | None, AST.PListCons (headPatterns, tailPattern) ->
-                                compileListConsPatternWithChecks headPatterns tailPattern scrutineeAtom' scrutType env body fallbackExpr vgBody
-                            | None, _ ->
-                                extractAndCompileBody pattern body scrutineeAtom' scrutType env vgBody
-                            | Some guardExpr, _ ->
-                                extractAndCompileBodyWithGuard pattern guardExpr body scrutineeAtom' scrutType env vgBody fallbackExpr
+                    let compileBodyWithGuard (vgBody: ANF.VarGen) : Result<ANF.AExpr * ANF.VarGen, string> =
+                        match mc.Guard, pattern with
+                        | None, AST.PList (_ :: _ as listPatterns) ->
+                            compileListPatternWithChecks listPatterns scrutineeAtom' scrutType env body fallbackExpr vgBody
+                        | None, AST.PListCons (headPatterns, tailPattern) ->
+                            compileListConsPatternWithChecks headPatterns tailPattern scrutineeAtom' scrutType env body fallbackExpr vgBody
+                        | None, _ ->
+                            extractAndCompileBody pattern body scrutineeAtom' scrutType env vgBody
+                        | Some guardExpr, _ ->
+                            extractAndCompileBodyWithGuard pattern guardExpr body scrutineeAtom' scrutType env vgBody fallbackExpr
 
-                        match cmpOpt with
-                        | None ->
-                            // Pattern always matches; guard (if any) decides between body/fallback.
-                            compileBodyWithGuard vg1
-                        | Some (condAtom, bindings, vg2) ->
-                            compileBodyWithGuard vg2
-                            |> Result.map (fun (thenExpr, vg3) ->
-                                let ifExpr = ANF.If (condAtom, thenExpr, fallbackExpr)
-                                let finalExpr = wrapBindings bindings ifExpr
-                                (finalExpr, vg3)))
+                    // The specialized list/list-cons compilers already emit complete
+                    // matching checks plus fallback, so a separate pre-comparison
+                    // condition here would duplicate work and code size.
+                    let canSkipPreComparison =
+                        match mc.Guard, pattern with
+                        | None, AST.PList (_ :: _)
+                        | None, AST.PListCons _ -> true
+                        | _ -> false
+
+                    if canSkipPreComparison then
+                        compileBodyWithGuard vg1
+                    else
+                        buildPatternGroupComparison (AST.NonEmptyList.toList mc.Patterns) scrutineeAtom' vg1
+                        |> Result.bind (fun cmpOpt ->
+                            match cmpOpt with
+                            | None ->
+                                // Pattern always matches; guard (if any) decides between body/fallback.
+                                compileBodyWithGuard vg1
+                            | Some (condAtom, bindings, vg2) ->
+                                compileBodyWithGuard vg2
+                                |> Result.map (fun (thenExpr, vg3) ->
+                                    let ifExpr = ANF.If (condAtom, thenExpr, fallbackExpr)
+                                    let finalExpr = wrapBindings bindings ifExpr
+                                    (finalExpr, vg3)))
                 | mc :: rest ->
                     // For pattern grouping, use first pattern for bindings but OR all patterns for comparison
                     let firstPattern = AST.NonEmptyList.head mc.Patterns
