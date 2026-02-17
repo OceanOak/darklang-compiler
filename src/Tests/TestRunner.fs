@@ -108,6 +108,8 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "derror.dark")
     let elambdaUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "elambda.dark")
+    let dtupleUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "collections", "dtuple.dark")
     let upstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
@@ -120,7 +122,8 @@ let main args =
            eletUpstreamDarkPath
            epipeUpstreamDarkPath
            derrorUpstreamDarkPath
-           elambdaUpstreamDarkPath |]
+           elambdaUpstreamDarkPath
+           dtupleUpstreamDarkPath |]
     for path in upstreamDarkPaths do
         if not (File.Exists path) then
             Crash.crash $"Missing required upstream dark test file: {path}"

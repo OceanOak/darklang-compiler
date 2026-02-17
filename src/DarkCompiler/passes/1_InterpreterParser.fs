@@ -2135,13 +2135,31 @@ let parse (tokens: Token list) : Result<Program, string> =
             // Parse expression
             parseExpr toks
             |> Result.bind (fun (expr, remaining) ->
-                match remaining with
-                | TEOF :: [] ->
-                    // Single expression program
-                    Ok (Program (List.rev (Expression expr :: acc)))
-                | _ ->
-                    // More top-level definitions after expression not allowed for now
-                    Error "Unexpected tokens after expression (only function definitions can be followed by more definitions)")
+                // Support bare tuple syntax at top level: `1L, 2L, 3L`.
+                // Commas inside other contexts (calls/records/lists) are already
+                // consumed before we reach this point.
+                let rec parseTupleTail (tupleItemsRev: Expr list) (toks': Token list) : Result<Expr * Token list, string> =
+                    match toks' with
+                    | TComma :: rest ->
+                        parseExpr rest
+                        |> Result.bind (fun (nextExpr, remaining') ->
+                            parseTupleTail (nextExpr :: tupleItemsRev) remaining')
+                    | _ ->
+                        let finalExpr =
+                            match tupleItemsRev with
+                            | [] -> expr
+                            | _ -> TupleLiteral (expr :: List.rev tupleItemsRev)
+                        Ok (finalExpr, toks')
+
+                parseTupleTail [] remaining
+                |> Result.bind (fun (finalExpr, remaining') ->
+                    match remaining' with
+                    | TEOF :: [] ->
+                        // Single expression program
+                        Ok (Program (List.rev (Expression finalExpr :: acc)))
+                    | _ ->
+                        // More top-level definitions after expression not allowed for now
+                        Error "Unexpected tokens after expression (only function definitions can be followed by more definitions)"))
 
     parseTopLevels tokens []
 

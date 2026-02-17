@@ -126,6 +126,17 @@ let testInterpreterParserRejectsCommaSeparatedLists () : TestResult =
     | Ok _ -> Error "Expected interpreter parser to reject comma-separated list literal"
     | Error _ -> Ok ()
 
+let testInterpreterParserParsesBareTupleExpression () : TestResult =
+    let source = "1L, 2L, 3L"
+    match InterpreterParser.parseString false source with
+    | Error err -> Error $"Interpreter parser failed on bare tuple expression: {err}"
+    | Ok (Program [Expression (TupleLiteral [Int64Literal 1L; Int64Literal 2L; Int64Literal 3L])]) ->
+        Ok ()
+    | Ok (Program [Expression expr]) ->
+        Error $"Unexpected AST for bare tuple expression: {expr}"
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let tests = [
     ("compiler library interpreter parse", testCompilerLibraryParseInterpreterSyntax)
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
@@ -139,4 +150,5 @@ let tests = [
     ("reject bare int literal", testInterpreterParserRejectsBareIntLiteral)
     ("reject compiler lambda syntax", testInterpreterParserRejectsCompilerLambdaSyntax)
     ("reject comma-separated lists", testInterpreterParserRejectsCommaSeparatedLists)
+    ("parse bare tuple expression", testInterpreterParserParsesBareTupleExpression)
 ]

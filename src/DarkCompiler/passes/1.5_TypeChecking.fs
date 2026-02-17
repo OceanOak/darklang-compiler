@@ -2112,18 +2112,43 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | _ -> Ok (List.rev accTypes, List.rev accExprs)
         checkElements elements expectedElemTypes [] []
         |> Result.bind (fun (elemTypes, elements') ->
-            let tupleType = TTuple elemTypes
-            match expectedType with
-            | Some expected ->
-                // Resolve type aliases first, then check compatibility for type variables
-                // This allows Pair<Int64> to match (Int64, Int64) when Pair<a> = (a, a)
-                // and (a, b) to match (Int64, Int64) when using generic functions
-                let resolvedExpected = resolveType aliasReg expected
-                if typesCompatible resolvedExpected tupleType then
-                    Ok (tupleType, TupleLiteral elements')
-                else
-                    Error (TypeMismatch (expected, tupleType, "tuple literal"))
-            | None -> Ok (tupleType, TupleLiteral elements'))
+            // Tuple elements that are known runtime failures should make the whole
+            // tuple expression runtime-fail (bottom-like behavior), preserving the
+            // left-to-right first failure.
+            let firstRuntimeErrorElem =
+                elements'
+                |> List.tryFind (isKnownTestRuntimeErrorExpr Map.empty)
+
+            match firstRuntimeErrorElem with
+            | Some runtimeErrExpr ->
+                let outputType =
+                    match expectedType with
+                    | Some expected -> expected
+                    | None -> TVar "__runtime_error"
+
+                let runtimeErrCall =
+                    match runtimeErrExpr with
+                    | Call (funcName, [argExpr]) when isBuiltinTestRuntimeErrorName funcName ->
+                        Call ("Builtin.testRuntimeError", [argExpr])
+                    | _ ->
+                        match tryExtractKnownTestRuntimeErrorMessage Map.empty runtimeErrExpr with
+                        | Some msg -> Call ("Builtin.testRuntimeError", [StringLiteral msg])
+                        | None -> Call ("Builtin.testRuntimeError", [StringLiteral "<runtime error>"])
+
+                Ok (outputType, runtimeErrCall)
+            | None ->
+                let tupleType = TTuple elemTypes
+                match expectedType with
+                | Some expected ->
+                    // Resolve type aliases first, then check compatibility for type variables
+                    // This allows Pair<Int64> to match (Int64, Int64) when Pair<a> = (a, a)
+                    // and (a, b) to match (Int64, Int64) when using generic functions
+                    let resolvedExpected = resolveType aliasReg expected
+                    if typesCompatible resolvedExpected tupleType then
+                        Ok (tupleType, TupleLiteral elements')
+                    else
+                        Error (TypeMismatch (expected, tupleType, "tuple literal"))
+                | None -> Ok (tupleType, TupleLiteral elements'))
 
     | TupleAccess (tupleExpr, index) ->
         // Check the tuple expression
