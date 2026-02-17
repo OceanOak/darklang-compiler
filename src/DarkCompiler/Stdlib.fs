@@ -199,15 +199,29 @@ let buildModuleRegistry () : ModuleRegistry =
 /// This allows writing Option.isSome instead of Stdlib.Option.isSome
 /// Returns both the function and the resolved name (which may differ from the input)
 let tryGetFunctionWithFallback (registry: ModuleRegistry) (qualifiedName: string) : (ModuleFunc * string) option =
-    match Map.tryFind qualifiedName registry with
-    | Some f -> Some (f, qualifiedName)
+    let tryLookupName (name: string) : (ModuleFunc * string) option =
+        match Map.tryFind name registry with
+        | Some f ->
+            Some (f, name)
+        | None ->
+            // Legacy compatibility: many upstream tests still reference *_v0 names.
+            if name.EndsWith("_v0") then
+                let canonicalName = name.Substring(0, name.Length - 3)
+                match Map.tryFind canonicalName registry with
+                | Some f ->
+                    Some (f, canonicalName)
+                | None ->
+                    None
+            else
+                None
+
+    match tryLookupName qualifiedName with
+    | Some resolved ->
+        Some resolved
     | None ->
         // Try with Stdlib prefix if name has at least one dot (Module.func)
         if qualifiedName.Contains(".") && not (qualifiedName.StartsWith("Stdlib.")) then
-            let resolvedName = "Stdlib." + qualifiedName
-            match Map.tryFind resolvedName registry with
-            | Some f -> Some (f, resolvedName)
-            | None -> None
+            tryLookupName ("Stdlib." + qualifiedName)
         else
             None
 

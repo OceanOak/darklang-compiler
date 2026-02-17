@@ -1176,7 +1176,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                     println $"        {t}ms"
 
                 match typeCheckResult with
-                | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
+                | Error typeErr -> Error (TypeChecking.typeErrorToString typeErr)
                 | Ok (programType, typedUserAst, _userEnv) ->
                     if plan.Verbosity >= 3 then
                         println $"Program type: {TypeChecking.typeToString programType}"
@@ -1704,7 +1704,7 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
     | Ok userAst ->
         // Type check with stdlib environment
         match TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv userAst with
-        | Error typeErr -> Error $"Type error: {TypeChecking.typeErrorToString typeErr}"
+        | Error typeErr -> Error (TypeChecking.typeErrorToString typeErr)
         | Ok (programType, typedUserAst, _) ->
             // Convert to ANF
             match convertTypedProgramToUserOnly stdlib.Context typedUserAst with

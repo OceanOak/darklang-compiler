@@ -129,6 +129,11 @@ let private isBuiltinTestRuntimeErrorName (funcName: string) : bool =
 let private isBuiltinTestNanName (name: string) : bool =
     name = "Builtin.testNan" || name = "Stdlib.Builtin.testNan"
 
+let private isRuntimeErrorType (typ: Type) : bool =
+    match typ with
+    | TVar "__runtime_error" -> true
+    | _ -> false
+
 let private variantNameEndsWith (suffix: string) (variantName: string) : bool =
     variantName = suffix || variantName.EndsWith($".{suffix}")
 
@@ -177,6 +182,78 @@ let rec private isKnownTestRuntimeErrorExpr (boundExprs: Map<string, Expr>) (exp
         |> Option.exists (fun boundExpr -> isKnownTestRuntimeErrorExpr boundExprs boundExpr)
     | _ ->
         false
+
+let rec private tryExtractStringLiteral (boundExprs: Map<string, Expr>) (expr: Expr) : string option =
+    match expr with
+    | StringLiteral s ->
+        Some s
+    | Var varName ->
+        boundExprs
+        |> Map.tryFind varName
+        |> Option.bind (tryExtractStringLiteral boundExprs)
+    | Let (name, valueExpr, bodyExpr) ->
+        let boundExprs' = Map.add name valueExpr boundExprs
+        tryExtractStringLiteral boundExprs' bodyExpr
+    | _ ->
+        None
+
+/// Extract the error message from a known Builtin.testRuntimeError expression, if statically available.
+let rec private tryExtractKnownTestRuntimeErrorMessage
+    (boundExprs: Map<string, Expr>)
+    (expr: Expr)
+    : string option =
+    match expr with
+    | Call (funcName, [argExpr]) when isBuiltinTestRuntimeErrorName funcName ->
+        tryExtractStringLiteral boundExprs argExpr
+    | Let (name, valueExpr, bodyExpr) ->
+        let boundExprs' = Map.add name valueExpr boundExprs
+        tryExtractKnownTestRuntimeErrorMessage boundExprs' bodyExpr
+    | Var varName ->
+        boundExprs
+        |> Map.tryFind varName
+        |> Option.bind (tryExtractKnownTestRuntimeErrorMessage boundExprs)
+    | _ ->
+        None
+
+let private tryFormatLiteralValue (expr: Expr) : string option =
+    match expr with
+    | UnitLiteral -> Some "()"
+    | Int64Literal i -> Some (string i)
+    | Int8Literal i -> Some (string i)
+    | Int16Literal i -> Some (string i)
+    | Int32Literal i -> Some (string i)
+    | UInt8Literal i -> Some (string i)
+    | UInt16Literal i -> Some (string i)
+    | UInt32Literal i -> Some (string i)
+    | UInt64Literal i -> Some (string i)
+    | BoolLiteral true -> Some "true"
+    | BoolLiteral false -> Some "false"
+    | StringLiteral s -> Some $"\"{s}\""
+    | CharLiteral c -> Some $"'{c}'"
+    | FloatLiteral f -> Some (string f)
+    | _ -> None
+
+let private formatLegacyParamTypeError
+    (functionName: string)
+    (paramIndex: int)
+    (paramName: string)
+    (expectedType: Type)
+    (actualType: Type)
+    (actualExpr: Expr)
+    : string =
+    let ordinal =
+        match paramIndex with
+        | 1 -> "1st"
+        | 2 -> "2nd"
+        | 3 -> "3rd"
+        | _ -> $"{paramIndex}th"
+
+    let actualValue =
+        match tryFormatLiteralValue actualExpr with
+        | Some v -> v
+        | None -> typeToString actualType
+
+    $"{functionName}'s {ordinal} parameter `{paramName}` expects {typeToString expectedType}, but got {typeToString actualType} ({actualValue})"
 
 /// Freshen type parameters - generate new unique names for each type param
 /// Returns (fresh type params, substitution map from old to fresh names)
@@ -820,17 +897,33 @@ let inferTypeArgs (typeParams: string list) (paramTypes: Type list) (argTypes: T
 /// Try to look up a function name in a map, with fallback to Stdlib prefix
 /// Returns the value and the resolved name (which may differ from input)
 let tryLookupWithFallback (name: string) (m: Map<string, 'a>) : ('a * string) option =
-    match Map.tryFind name m with
-    | Some v -> Some (v, name)
-    | None ->
-        // Try with Stdlib prefix if name has at least one dot
-        if name.Contains(".") && not (name.StartsWith("Stdlib.")) then
-            let resolvedName = "Stdlib." + name
-            match Map.tryFind resolvedName m with
-            | Some v -> Some (v, resolvedName)
-            | None -> None
+    let withStdlibPrefix (candidate: string) : string option =
+        if candidate.Contains(".") && not (candidate.StartsWith("Stdlib.")) then
+            Some ("Stdlib." + candidate)
         else
             None
+
+    let withoutV0Suffix (candidate: string) : string option =
+        if candidate.EndsWith("_v0") then
+            Some (candidate.Substring(0, candidate.Length - 3))
+        else
+            None
+
+    let candidates =
+        [
+            Some name
+            withoutV0Suffix name
+            withStdlibPrefix name
+            (withStdlibPrefix name |> Option.bind withoutV0Suffix)
+        ]
+        |> List.choose id
+        |> List.distinct
+
+    candidates
+    |> List.tryPick (fun candidate ->
+        match Map.tryFind candidate m with
+        | Some v -> Some (v, candidate)
+        | None -> None)
 
 /// Check expression type top-down, potentially transforming the expression.
 /// Parameters:
@@ -966,23 +1059,40 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | Mod -> "%"
                 | _ -> "?"
 
-            // Check left operand to determine numeric type
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-            |> Result.bind (fun (leftType, left') ->
-                match leftType with
-                | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
-                    // Right operand must be same type
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
-                    |> Result.bind (fun (rightType, right') ->
-                        if rightType <> leftType then
-                            Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
-                        else
-                            match expectedType with
-                            | Some expected when expected <> leftType ->
-                                Error (TypeMismatch (expected, leftType, $"result of {opName}"))
-                            | _ -> Ok (leftType, BinOp (op, left', right')))
-                | other ->
-                    Error (InvalidOperation (opName, [other])))
+            match tryExtractKnownTestRuntimeErrorMessage Map.empty left with
+            | Some msg ->
+                Error (GenericError $"Uncaught exception: {msg}")
+            | None ->
+                // Check left operand to determine numeric type
+                checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                |> Result.bind (fun (leftType, left') ->
+                    match leftType with
+                    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
+                        // Right operand must be same type
+                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
+                        |> Result.mapError (fun err ->
+                            match op, leftType, err with
+                            | Add, TInt64, TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                GenericError
+                                    (formatLegacyParamTypeError
+                                        "Builtin.int64Add"
+                                        2
+                                        "b"
+                                        TInt64
+                                        actualType
+                                        right)
+                            | _ ->
+                                err)
+                        |> Result.bind (fun (rightType, right') ->
+                            if rightType <> leftType then
+                                Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
+                            else
+                                match expectedType with
+                                | Some expected when expected <> leftType ->
+                                    Error (TypeMismatch (expected, leftType, $"result of {opName}"))
+                                | _ -> Ok (leftType, BinOp (op, left', right')))
+                    | other ->
+                        Error (InvalidOperation (opName, [other])))
 
         // Comparison operators: T -> T -> bool
         // Eq and Neq: work on any type (structural equality for complex types)
