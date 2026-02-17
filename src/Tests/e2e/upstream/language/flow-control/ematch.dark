@@ -862,9 +862,8 @@ module PatternGrouping =
 (match 6UL with
  | 6.0 -> "fail") = error="Float literal pattern used on non-Float type"
 
-// (match 6.0 with
-//  | 6UL -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Float value 6.0 with an UInt64 pattern"
+(match 6.0 with
+ | 6UL -> "fail") = error="Integer literal pattern used on non-UInt64 type"
 
 // (match 6y with
 //  | 6.0 -> "fail") = Builtin.testDerrorMessage
