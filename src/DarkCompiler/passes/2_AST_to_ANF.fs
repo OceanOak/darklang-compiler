@@ -5146,9 +5146,33 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let cmpExpr = ANF.Call ("__string_eq", [scrutAtom; ANF.StringLiteral s])
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PFloat f ->
-                    let (cmpVar, vg1) = ANF.freshVar vg
-                    let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.FloatLiteral f)
-                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                    if f = 0.0 then
+                        // Distinguish -0.0 from 0.0 using reciprocal sign.
+                        let patternBits = System.BitConverter.DoubleToInt64Bits(f)
+                        let reciprocalTarget =
+                            if patternBits < 0L then
+                                System.Double.NegativeInfinity
+                            else
+                                System.Double.PositiveInfinity
+                        let (zeroCmpVar, vg1) = ANF.freshVar vg
+                        let zeroCmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.FloatLiteral 0.0)
+                        let (reciprocalVar, vg2) = ANF.freshVar vg1
+                        let reciprocalExpr = ANF.Prim (ANF.Div, ANF.FloatLiteral 1.0, scrutAtom)
+                        let (reciprocalCmpVar, vg3) = ANF.freshVar vg2
+                        let reciprocalCmpExpr =
+                            ANF.Prim (ANF.Eq, ANF.Var reciprocalVar, ANF.FloatLiteral reciprocalTarget)
+                        let (andVar, vg4) = ANF.freshVar vg3
+                        let andExpr = ANF.Prim (ANF.And, ANF.Var zeroCmpVar, ANF.Var reciprocalCmpVar)
+                        let bindings =
+                            [ (zeroCmpVar, zeroCmpExpr)
+                              (reciprocalVar, reciprocalExpr)
+                              (reciprocalCmpVar, reciprocalCmpExpr)
+                              (andVar, andExpr) ]
+                        Ok (Some (ANF.Var andVar, bindings, vg4))
+                    else
+                        let (cmpVar, vg1) = ANF.freshVar vg
+                        let cmpExpr = ANF.Prim (ANF.Eq, scrutAtom, ANF.FloatLiteral f)
+                        Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PConstructor (variantName, payloadPattern) ->
                     match Map.tryFind variantName variantLookup with
                     | Some (_, _, tag, variantPayloadType) ->

@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-17 11:24:01
-**Commit:** `193a113a` - Keep Stdlib registry intrinsic-only
+**Last Updated:** 2026-02-17 22:14:06
+**Commit:** `df8c03bd` - Enable one ematch UInt64 literal pattern assertion
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

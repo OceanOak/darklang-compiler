@@ -367,7 +367,7 @@ match (1, 2) with | (x, x) -> x | _ -> 0 = error="Duplicate pattern bindings are
 match (1, 2) with | (x, _) | (_, _) -> x | _ -> 0 = error="Pattern grouping requires complete bindings in every alternative: expected [x], got []"
 
 // Integer literal pattern on non-int scrutinee should be rejected
-match true with | 1 -> 42 | _ -> 0 = error="Integer literal pattern used on non-Int64 type"
+match true with | 1 -> 42 | _ -> 0 = error="Cannot match Bool value true with an Int64 pattern"
 
 // List cons pattern on non-list type should be rejected (prevents TInt64 fallback in AST_to_ANF)
 // The type checker prevents this - without this check, the compiler would silently assume

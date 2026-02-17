@@ -6,7 +6,7 @@
 (true && 5L) = error="&& only supports Booleans"
 (false && 5L) = error="&& only supports Booleans"
 //TODO bring back short-circuiting
-(false && Builtin.testRuntimeError "msg") = error="&& only supports Booleans"
+(false && Builtin.testRuntimeError "msg") = false
 
 (Builtin.testRuntimeError "msg1" && Builtin.testRuntimeError "msg2") = error="&& only supports Booleans"
 

@@ -285,7 +285,7 @@ module Float =
   (match 0.0 with
    | -0.0 -> "fail1"
    | 0.0 -> "pass"
-   | var -> "fail2") = "fail1"
+   | var -> "fail2") = "pass"
 
   (match -4.7 with
    | 4.7 -> "fail"
@@ -654,16 +654,16 @@ module Errors =
   (match Builtin.testRuntimeError "cond is error" with
    | 5L -> "fail"
    | 6L -> "pass"
-   | var -> "fail") = Builtin.testDerrorMessage "Uncaught exception: cond is error"
+   | var -> "fail") = error="Uncaught exception: cond is error"
 
   (match Builtin.testRuntimeError "cond is error, wildcard" with
    | 5L -> 5L
-   | _ -> 6L) = Builtin.testDerrorMessage "Uncaught exception: cond is error, wildcard"
+   | _ -> 6L) = error="Uncaught exception: cond is error, wildcard"
 
   (match 1L with
    | 1L -> Builtin.testRuntimeError "a"
    | 6L -> "pass"
-   | var -> "fail") = Builtin.testDerrorMessage "Uncaught exception: a"
+   | var -> "fail") = error="Uncaught exception: a"
 
   (match 1L with
    | 2L -> Builtin.testRuntimeError "Uncaught exception: a"
@@ -678,7 +678,7 @@ module Errors =
   (match 1L with
    | 2L -> "pass"
    | 1L -> Builtin.testRuntimeError "a"
-   | var -> "fail") = Builtin.testDerrorMessage "Uncaught exception: a"
+   | var -> "fail") = error="Uncaught exception: a"
 
   (match 3L with
    | 2L -> "pass"
@@ -695,12 +695,12 @@ module TypeErrors =
   // enum with more pattern params than actual args
   (match TestType.NoArgs with
    | NoArgs _ -> "wrong number") =
-    Builtin.testDerrorMessage "Non-exhaustive match: No matching case found for value TestType.NoArgs in match expression"
+    error="Non-exhaustive match: No matching case found for value TestType.NoArgs in match expression"
 
   // enum with fewer pattern params than actual args
   (match TestType.OneArg 1L with
-   | OneArg -> "wrong number") = Builtin.testDerrorMessage
-    "Non-exhaustive match: No matching case found for value TestType.OneArg(1) in match expression"
+   | OneArg -> "wrong number") =
+    error="Non-exhaustive match: No matching case found for value TestType.OneArg(1) in match expression"
 
   // TODO implement MPIgnored
   // // enum with a single wildcard
@@ -854,16 +854,20 @@ module PatternGrouping =
 // patterns to match the type of the dval.
 // So, these tests might be better elsewhere, as "at-rest checking" tests.
 (match 6L with
- | 6.0 -> "fail") = error="Float literal pattern used on non-Float type"
+ | 6.0 -> "fail") =
+  error="Cannot match Int64 value 6 with a Float pattern"
 
 (match 6.0 with
- | 6L -> "fail") = error="Integer literal pattern used on non-Int64 type"
+ | 6L -> "fail") =
+  error="Cannot match Float value 6.0 with an Int64 pattern"
 
 (match 6UL with
- | 6.0 -> "fail") = error="Float literal pattern used on non-Float type"
+ | 6.0 -> "fail") =
+  error="Cannot match UInt64 value 6 with a Float pattern"
 
 (match 6.0 with
- | 6UL -> "fail") = error="Integer literal pattern used on non-UInt64 type"
+ | 6UL -> "fail") =
+  error="Cannot match Float value 6.0 with an UInt64 pattern"
 
 // (match 6y with
 //  | 6.0 -> "fail") = Builtin.testDerrorMessage
@@ -930,7 +934,8 @@ module PatternGrouping =
 //   "Cannot match Float value 6.0 with an UInt128 pattern"
 
 (match "x" with
- | 6L -> "fail") = error="Integer literal pattern used on non-Int64 type"
+ | 6L -> "fail") =
+  error="Cannot match String value \"x\" with an Int64 pattern"
 
 // (match 6L with
 //  | "x" -> "fail") = Builtin.testDerrorMessage
@@ -969,7 +974,8 @@ module PatternGrouping =
 //   "Cannot match Bool value true with a Char pattern"
 
   (match [ 1L; 2L; 3L ] with
-   | "1,2,3" -> "fail") = exit=1 stderr="Non-exhaustive match: No matching case found for value <unknown> in match expression"
+   | "1,2,3" -> "fail") =
+    error="Cannot match List<Int64> value [  1, 2, ... with a String pattern"
 
   // (match [ 1L; 2L; 3L ] with
   //  | [ 1.0; 2.0; 3.0 ] -> "fail") = Builtin.testDerrorMessage

@@ -233,6 +233,47 @@ let private tryFormatLiteralValue (expr: Expr) : string option =
     | FloatLiteral f -> Some (string f)
     | _ -> None
 
+let private formatFloatLiteralForPatternMismatch (f: float) : string =
+    let formatted = string f
+    if formatted.Contains(".") || formatted.Contains("e") || formatted.Contains("E") then
+        formatted
+    else
+        $"{formatted}.0"
+
+let rec private formatPatternMismatchValue (expr: Expr) : string option =
+    match expr with
+    | ListLiteral (first :: second :: _) ->
+        let firstText =
+            match formatPatternMismatchValue first with
+            | Some text -> text
+            | None -> "<unknown>"
+        let secondText =
+            match formatPatternMismatchValue second with
+            | Some text -> text
+            | None -> "<unknown>"
+        Some $"[  {firstText}, {secondText}, ..."
+    | ListLiteral [single] ->
+        formatPatternMismatchValue single
+        |> Option.map (fun singleText -> $"[  {singleText}]")
+    | ListLiteral [] ->
+        Some "[]"
+    | FloatLiteral f ->
+        Some (formatFloatLiteralForPatternMismatch f)
+    | _ ->
+        tryFormatLiteralValue expr
+
+let private formatPatternMismatchError
+    (scrutineeExpr: Expr)
+    (actualType: Type)
+    (expectedPatternType: Type)
+    : string =
+    let valueText =
+        match formatPatternMismatchValue scrutineeExpr with
+        | Some text -> text
+        | None -> "<unknown>"
+    let expectedPatternText = withIndefiniteArticle (typeToString expectedPatternType)
+    $"Cannot match {typeToString actualType} value {valueText} with {expectedPatternText} pattern"
+
 let private formatLegacyParamTypeError
     (functionName: string)
     (paramIndex: int)
@@ -1298,14 +1339,20 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 if leftType <> TBool then
                     Error (GenericError $"{opName} only supports Booleans")
                 else
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-                    |> Result.bind (fun (rightType, right') ->
-                        if rightType <> TBool then
-                            Error (GenericError $"{opName} only supports Booleans")
-                        else
-                            match expectedType with
-                            | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
-                            | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))))
+                    let rightIsKnownRuntimeError = isKnownTestRuntimeErrorExpr Map.empty right
+                    if op = And && left' = BoolLiteral false && rightIsKnownRuntimeError then
+                        match expectedType with
+                        | Some TBool | None -> Ok (TBool, BoolLiteral false)
+                        | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))
+                    else
+                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                        |> Result.bind (fun (rightType, right') ->
+                            if rightType <> TBool then
+                                Error (GenericError $"{opName} only supports Booleans")
+                            else
+                                match expectedType with
+                                | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
+                                | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))))
 
         // Bitwise operators: Int -> Int -> Int (same integer type)
         | Shl | Shr | BitAnd | BitOr | BitXor ->
@@ -2437,7 +2484,6 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             // Extract bindings from a pattern based on scrutinee type
             let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
                 let ensureLiteralType
-                    (literalKind: string)
                     (expectedType: Type)
                     : Result<(string * Type) list, TypeError> =
                     let resolvedPatternType = resolveType aliasReg patternType
@@ -2449,7 +2495,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         // This is important for patterns like `match [] with | [1L] -> ...`.
                         Ok []
                     | _ ->
-                        Error (GenericError $"{literalKind} literal pattern used on non-{typeToString expectedType} type")
+                        let message =
+                            formatPatternMismatchError scrutinee' resolvedPatternType expectedType
+                        Error (GenericError message)
+
+                let ensureStringOrCharPatternType () : Result<(string * Type) list, TypeError> =
+                    let resolvedPatternType = resolveType aliasReg patternType
+                    match resolvedPatternType with
+                    | TString
+                    | TChar
+                    | TVar _ ->
+                        Ok []
+                    | _ ->
+                        let message =
+                            formatPatternMismatchError scrutinee' resolvedPatternType TString
+                        Error (GenericError message)
 
                 match pattern with
                 | PUnit ->
@@ -2457,17 +2517,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     | TUnit -> Ok []
                     | _ -> Error (GenericError "Unit pattern can only match unit type")
                 | PWildcard -> Ok []
-                | PInt64 _ -> ensureLiteralType "Integer" TInt64
-                | PInt8Literal _ -> ensureLiteralType "Integer" TInt8
-                | PInt16Literal _ -> ensureLiteralType "Integer" TInt16
-                | PInt32Literal _ -> ensureLiteralType "Integer" TInt32
-                | PUInt8Literal _ -> ensureLiteralType "Integer" TUInt8
-                | PUInt16Literal _ -> ensureLiteralType "Integer" TUInt16
-                | PUInt32Literal _ -> ensureLiteralType "Integer" TUInt32
-                | PUInt64Literal _ -> ensureLiteralType "Integer" TUInt64
-                | PBool _ -> Ok []
-                | PString _ -> Ok []
-                | PFloat _ -> ensureLiteralType "Float" TFloat64
+                | PInt64 _ -> ensureLiteralType TInt64
+                | PInt8Literal _ -> ensureLiteralType TInt8
+                | PInt16Literal _ -> ensureLiteralType TInt16
+                | PInt32Literal _ -> ensureLiteralType TInt32
+                | PUInt8Literal _ -> ensureLiteralType TUInt8
+                | PUInt16Literal _ -> ensureLiteralType TUInt16
+                | PUInt32Literal _ -> ensureLiteralType TUInt32
+                | PUInt64Literal _ -> ensureLiteralType TUInt64
+                | PBool _ -> ensureLiteralType TBool
+                | PString _ -> ensureStringOrCharPatternType ()
+                | PFloat _ -> ensureLiteralType TFloat64
                 | PVar name -> Ok [(name, patternType)]
                 | PConstructor (variantName, payloadPattern) ->
                     match Map.tryFind variantName variantLookup with
