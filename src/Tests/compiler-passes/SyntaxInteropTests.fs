@@ -58,6 +58,18 @@ let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testParseInterpreterRecordFunctionFieldType () : TestResult =
+    let source =
+        "type RecordWithFn = { fn: Int64 -> Int64 }\n"
+        + "(let record = RecordWithFn { fn = fun x -> x + 1L } in record.fn 6L)"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on record function field type: {err}"
+    | Ok (Program [TypeDef (RecordDef ("RecordWithFn", [], [("fn", TFunction ([AST.TInt64], AST.TInt64))])); Expression _]) ->
+        Ok ()
+    | Ok other ->
+        Error $"Unexpected AST for record function field type: {other}"
+
 let testStdlibRegistryExcludesNonIntrinsicFloatMultiply () : TestResult =
     let registry = Stdlib.buildModuleRegistry ()
     match Map.tryFind "Stdlib.Float.multiply" registry with
@@ -142,6 +154,7 @@ let tests = [
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
+    ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("stdlib registry excludes non-intrinsic float multiply", testStdlibRegistryExcludesNonIntrinsicFloatMultiply)
     ("stdlib registry includes intrinsic float sqrt", testStdlibRegistryIncludesIntrinsicFloatSqrt)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)

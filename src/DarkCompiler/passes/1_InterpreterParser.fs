@@ -634,6 +634,11 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
 
 /// Parse a type annotation with context for type parameters in scope
 and parseTypeWithContext (typeParams: Set<string>) (tokens: Token list) : Result<Type * Token list, string> =
+    let asFunctionParamTypes (ty: Type) : Type list =
+        match ty with
+        | TTuple elements -> elements
+        | _ -> [ty]
+
     let rec parseTupleTail (acc: Type list) (remaining: Token list) : Result<Type * Token list, string> =
         match remaining with
         | TStar :: rest ->
@@ -647,7 +652,15 @@ and parseTypeWithContext (typeParams: Set<string>) (tokens: Token list) : Result
             | _ -> Ok (TTuple allTypes, remaining)
     parseTypeBase typeParams tokens
     |> Result.bind (fun (firstType, remaining) ->
-        parseTupleTail [firstType] remaining)
+        parseTupleTail [firstType] remaining
+        |> Result.bind (fun (parsedType, afterType) ->
+            match afterType with
+            | TArrow :: returnRest ->
+                parseTypeWithContext typeParams returnRest
+                |> Result.map (fun (returnType, remaining') ->
+                    (TFunction (asFunctionParamTypes parsedType, returnType), remaining'))
+            | _ ->
+                Ok (parsedType, afterType)))
 
 /// Parse a type annotation (no type parameters in scope)
 let parseType (tokens: Token list) : Result<Type * Token list, string> =
