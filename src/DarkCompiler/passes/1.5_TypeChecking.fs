@@ -1266,7 +1266,22 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                             (functionEqExpr, counter + 1)
 
                                         | TList elemType ->
-                                            (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
+                                            match elemType with
+                                            | TFunction _ ->
+                                                // Function-value equality is normalized to true for ==, so list equality
+                                                // for function elements is equivalent to both lists having the same length.
+                                                // Evaluate both sides exactly once to preserve side effects/runtime errors.
+                                                let leftListVar = $"__list_eq_left_{counter}"
+                                                let rightListVar = $"__list_eq_right_{counter}"
+                                                let lengthsEqual =
+                                                    BinOp (
+                                                        Eq,
+                                                        TypeApp ("Stdlib.List.length", [elemType], [Var leftListVar]),
+                                                        TypeApp ("Stdlib.List.length", [elemType], [Var rightListVar])
+                                                    )
+                                                (Let (leftListVar, leftExpr, Let (rightListVar, rightExpr, lengthsEqual)), counter + 1)
+                                            | _ ->
+                                                (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
 
                                         | TTuple elemTypes ->
                                             let leftTupleVar = $"__tuple_eq_left_{counter}"
@@ -2977,8 +2992,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | Some other -> Error (TypeMismatch (other, TList (TVar "t"), "empty list"))
             | None -> Ok (TList (TVar "t"), ListLiteral [])
         | first :: rest ->
-            // Infer element type from first element
-            checkExpr first env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+            // Use expected list element type for the first element when available, so
+            // lambda/list literals in expected contexts reconcile type variables consistently.
+            let firstExpectedType =
+                match expectedType with
+                | Some (TList expectedElemType) -> Some expectedElemType
+                | _ -> None
+            checkExpr first env typeReg variantLookup genericFuncReg moduleRegistry aliasReg firstExpectedType
             |> Result.bind (fun (elemType, first') ->
                 // Check remaining elements match the inferred type
                 let rec checkRest remaining acc =

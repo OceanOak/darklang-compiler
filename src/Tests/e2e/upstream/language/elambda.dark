@@ -1,5 +1,5 @@
 // CLEANUP fix equality checks of lambdas
-//Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+18) ]
+Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+18) ]
 
 // Test that empty parameters are removed
 (let y = (fun x ___ -> x + 1L)
