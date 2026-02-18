@@ -976,9 +976,9 @@ module PatternGrouping =
    | "1,2,3" -> "fail") =
     error="Cannot match List<Int64> value [  1, 2, ... with a String pattern"
 
-  // (match [ 1L; 2L; 3L ] with
-  //  | [ 1.0; 2.0; 3.0 ] -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match Int64 value 1 with a Float pattern"
+  (match [ 1L; 2L; 3L ] with
+   | [ 1.0; 2.0; 3.0 ] -> "fail") =
+    error="Cannot match Int64 value 1 with a Float pattern"
 
   (match "" with
    | [ 1L; 2L; 3L ] -> "fail") =

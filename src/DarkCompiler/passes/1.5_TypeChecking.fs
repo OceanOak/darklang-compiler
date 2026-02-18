@@ -271,13 +271,20 @@ let rec private formatPatternMismatchValue (expr: Expr) : string option =
     | _ ->
         tryFormatLiteralValue expr
 
+let rec private narrowPatternMismatchExprByType (actualType: Type) (expr: Expr) : Expr =
+    match actualType, expr with
+    | TList _, _ -> expr
+    | _, ListLiteral (first :: _) -> narrowPatternMismatchExprByType actualType first
+    | _, _ -> expr
+
 let private formatPatternMismatchError
     (scrutineeExpr: Expr)
     (actualType: Type)
     (expectedPatternType: Type)
     : string =
+    let narrowedExpr = narrowPatternMismatchExprByType actualType scrutineeExpr
     let valueText =
-        match formatPatternMismatchValue scrutineeExpr with
+        match formatPatternMismatchValue narrowedExpr with
         | Some text -> text
         | None -> "<unknown>"
     let expectedPatternText = withIndefiniteArticle (typeToString expectedPatternType)
