@@ -234,6 +234,7 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
         | InterpreterSyntax -> $"{n}UL"
     | PBool b -> if b then "true" else "false"
     | PString s -> $"\"{escapeStringContent s}\""
+    | PChar c -> $"'{escapeCharContent c}'"
     | PFloat f -> formatFloatLiteral f
     | PTuple patterns ->
         let parts = patterns |> List.map (formatPattern syntax) |> String.concat ", "

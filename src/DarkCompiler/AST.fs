@@ -111,6 +111,7 @@ type Pattern =
     | PUInt64Literal of uint64                             // 1UL
     | PBool of bool                                        // true, false
     | PString of string                                    // "hello"
+    | PChar of string                                      // 'x'
     | PFloat of float                                      // 3.14
     | PTuple of Pattern list                               // (a, b, c)
     | PRecord of typeName:string * fields:(string * Pattern) list  // { x = a, y = b }

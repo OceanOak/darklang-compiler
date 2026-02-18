@@ -1079,6 +1079,8 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
     | TStringLit s :: rest ->
         // String literal pattern
         Ok (PString s, rest)
+    | TCharLit s :: rest ->
+        Ok (PChar s, rest)
     | TFloat f :: rest ->
         // Float literal pattern
         Ok (PFloat f, rest)
@@ -2039,6 +2041,7 @@ let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
     | PUInt64Literal _
     | PBool _
     | PString _
+    | PChar _
     | PFloat _ -> Ok ()
 
 let rec private validateExpr (expr: Expr) : Result<unit, string> =

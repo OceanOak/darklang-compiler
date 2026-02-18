@@ -1526,6 +1526,7 @@ let rec simpleInferType
         | AST.PUnit
         | AST.PBool _
         | AST.PString _
+        | AST.PChar _
         | AST.PFloat _ -> Map.empty
         | AST.PTuple innerPats ->
             match scrutType with
@@ -3060,6 +3061,7 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             | AST.PUnit
             | AST.PBool _
             | AST.PString _
+            | AST.PChar _
             | AST.PFloat _ -> Map.empty
             | AST.PTuple innerPats ->
                 match scrutType with
@@ -4306,6 +4308,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PBool _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PString _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
+                | AST.PChar _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PFloat _ -> toANF body vg currentEnv typeReg variantLookup funcReg moduleRegistry
                 | AST.PVar name ->
                     // Bind scrutinee to variable name with the correct type
@@ -4371,6 +4374,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | AST.PWildcard
                         | AST.PBool _
                         | AST.PString _
+                        | AST.PChar _
                         | AST.PFloat _ ->
                             // No variable bindings
                             Ok (env, bindings, vg)
@@ -4594,7 +4598,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PUnit
                             | AST.PConstructor _
                             | AST.PBool _
-                            | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                            | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in record field not yet supported: {pat}"
                         | (_, pat) :: rest, [] ->
@@ -4669,7 +4673,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PUnit
                             | AST.PConstructor _
                             | AST.PBool _
-                            | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                            | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 
@@ -4863,7 +4867,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         | AST.PUnit
                                         | AST.PConstructor _
                                         | AST.PBool _
-                                        | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                                        | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                                         | AST.PList _ | AST.PListCons _ ->
                                             Error $"Nested pattern in tuple element not yet supported: {tupPat}"
                                 collectTupleBindings innerPatterns tupleElemTypes (ANF.Var headVar) 0 env allBaseBindings vg2'
@@ -4881,7 +4885,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PUnit
                             | AST.PConstructor _
                             | AST.PBool _
-                            | AST.PString _ | AST.PFloat _ | AST.PRecord _
+                            | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in list cons element not yet supported: {pat}"
                     collectListConsBindings headPatterns scrutAtom currentEnv [] vg
@@ -4930,6 +4934,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | AST.PWildcard
                     | AST.PBool _
                     | AST.PString _
+                    | AST.PChar _
                     | AST.PFloat _ ->
                         Ok (env, bindings, vg)
                     | AST.PVar name ->
@@ -5144,6 +5149,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // String patterns must use byte-wise equality, not pointer equality.
                     let (cmpVar, vg1) = ANF.freshVar vg
                     let cmpExpr = ANF.Call ("__string_eq", [scrutAtom; ANF.StringLiteral s])
+                    Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
+                | AST.PChar c ->
+                    // Char values are represented as single-EGC strings at runtime.
+                    let (cmpVar, vg1) = ANF.freshVar vg
+                    let cmpExpr = ANF.Call ("__string_eq", [scrutAtom; ANF.StringLiteral c])
                     Ok (Some (ANF.Var cmpVar, [(cmpVar, cmpExpr)], vg1))
                 | AST.PFloat f ->
                     if f = 0.0 then
@@ -5381,6 +5391,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 | AST.PWildcard
                 | AST.PBool _
                 | AST.PString _
+                | AST.PChar _
                 | AST.PFloat _ ->
                     Ok (env, bindings, vg)
                 | AST.PVar name ->
@@ -5626,7 +5637,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PUnit
                             | AST.PConstructor _
                             | AST.PBool _
-                            | AST.PString _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                            | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 

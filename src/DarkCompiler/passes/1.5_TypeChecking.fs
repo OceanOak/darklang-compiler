@@ -662,6 +662,7 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
     | PUInt64Literal _
     | PBool _
     | PString _
+    | PChar _
     | PFloat _ -> Set.empty
     | PConstructor (_, None) -> Set.empty
     | PConstructor (_, Some payload) -> collectPatternBindings payload
@@ -2524,6 +2525,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUInt64Literal _ -> ensureLiteralType TUInt64
                 | PBool _ -> ensureLiteralType TBool
                 | PString _ -> ensureStringOrCharPatternType ()
+                | PChar _ -> ensureLiteralType TChar
                 | PFloat _ -> ensureLiteralType TFloat64
                 | PVar name -> Ok [(name, patternType)]
                 | PConstructor (variantName, payloadPattern) ->
@@ -2648,6 +2650,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUInt64Literal _
                 | PBool _
                 | PString _
+                | PChar _
                 | PFloat _ -> []
                 | PVar name -> [ name ]
                 | PConstructor (_, payloadOpt) ->

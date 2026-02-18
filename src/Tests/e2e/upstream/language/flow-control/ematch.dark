@@ -969,9 +969,9 @@ module PatternGrouping =
  | true -> "fail") =
   error="Cannot match Char value 'c' with a Bool pattern"
 
-// (match true with
-//  | 'c' -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Bool value true with a Char pattern"
+(match true with
+ | 'c' -> "fail") =
+  error="Cannot match Bool value true with a Char pattern"
 
   (match [ 1L; 2L; 3L ] with
    | "1,2,3" -> "fail") =
