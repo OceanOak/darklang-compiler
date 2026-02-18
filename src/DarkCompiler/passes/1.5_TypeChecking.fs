@@ -244,6 +244,19 @@ let private formatFloatLiteralForPatternMismatch (f: float) : string =
     else
         $"{formatted}.0"
 
+let private formatListLiteralForNoMatch (elements: Expr list) : string =
+    match elements with
+    | [] -> "[]"
+    | _ ->
+        let elementTexts =
+            elements
+            |> List.map (fun element ->
+                match tryFormatLiteralValue element with
+                | Some text -> text
+                | None -> "<unknown>")
+        let joinedElements = String.concat ", " elementTexts
+        $"[  {joinedElements}]"
+
 let rec private formatPatternMismatchValue (expr: Expr) : string option =
     match expr with
     | ListLiteral (first :: second :: _) ->
@@ -2532,7 +2545,11 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         checkExpr scrutinee env typeReg variantLookup genericFuncReg moduleRegistry aliasReg scrutineeExpectedType
         |> Result.bind (fun (scrutineeType, scrutinee') ->
             // Extract bindings from a pattern based on scrutinee type
-            let rec extractPatternBindings (pattern: Pattern) (patternType: Type) : Result<(string * Type) list, TypeError> =
+            let rec extractPatternBindings
+                (pattern: Pattern)
+                (patternType: Type)
+                (allowNoMatchForKnownListLengthMismatch: bool)
+                : Result<(string * Type) list, TypeError> =
                 let ensureLiteralType
                     (expectedType: Type)
                     : Result<(string * Type) list, TypeError> =
@@ -2619,7 +2636,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | Some innerPattern, Some pType ->
                             // Apply substitution to get concrete payload type
                             let concretePayloadType = applySubst subst pType
-                            extractPatternBindings innerPattern concretePayloadType
+                            extractPatternBindings innerPattern concretePayloadType allowNoMatchForKnownListLengthMismatch
                         | Some _, None ->
                             // Pattern supplied payload for a nullary variant.
                             // Treat as a non-binding pattern; match lowering will make it non-matching.
@@ -2645,7 +2662,8 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     match resolvedPatternType with
                     | TTuple elementTypes when List.length patterns = List.length elementTypes ->
                         List.zip patterns elementTypes
-                        |> List.map (fun (p, t) -> extractPatternBindings p t)
+                        |> List.map (fun (p, t) ->
+                            extractPatternBindings p t allowNoMatchForKnownListLengthMismatch)
                         |> List.fold (fun acc res ->
                             match acc, res with
                             | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
@@ -2687,7 +2705,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 match List.tryFind (fun (n, _) -> n = fieldName) fields with
                                 | Some (_, fieldType) ->
                                     let concreteFieldType = applySubst subst fieldType
-                                    extractPatternBindings pat concreteFieldType
+                                    extractPatternBindings
+                                        pat
+                                        concreteFieldType
+                                        allowNoMatchForKnownListLengthMismatch
                                 | None -> Error (GenericError $"Unknown field in pattern: {fieldName}"))
                             |> List.fold (fun acc res ->
                                 match acc, res with
@@ -2700,14 +2721,54 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
                     | TList elemType ->
-                        // Each element pattern binds variables of the list's element type
-                        patterns
-                        |> List.map (fun p -> extractPatternBindings p elemType)
-                        |> List.fold (fun acc res ->
-                            match acc, res with
-                            | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
-                            | Error e, _ -> Error e
-                            | _, Error e -> Error e) (Ok [])
+                        let hasDefiniteLiteralTypeMismatch =
+                            let resolvedElemType = resolveType aliasReg elemType
+                            let isKnownMismatch expectedType =
+                                match resolvedElemType with
+                                | TVar _ -> false
+                                | _ -> resolvedElemType <> expectedType
+                            let isKnownStringPatternMismatch () =
+                                match resolvedElemType with
+                                | TVar _
+                                | TString
+                                | TChar -> false
+                                | _ -> true
+                            patterns
+                            |> List.exists (fun pattern ->
+                                match pattern with
+                                | PUnit -> isKnownMismatch TUnit
+                                | PInt64 _
+                                | PInt128CompatLiteral _ -> isKnownMismatch TInt64
+                                | PInt8Literal _ -> isKnownMismatch TInt8
+                                | PInt16Literal _ -> isKnownMismatch TInt16
+                                | PInt32Literal _ -> isKnownMismatch TInt32
+                                | PUInt8Literal _ -> isKnownMismatch TUInt8
+                                | PUInt16Literal _ -> isKnownMismatch TUInt16
+                                | PUInt32Literal _ -> isKnownMismatch TUInt32
+                                | PUInt64Literal _
+                                | PUInt128CompatLiteral _ -> isKnownMismatch TUInt64
+                                | PBool _ -> isKnownMismatch TBool
+                                | PString _ -> isKnownStringPatternMismatch ()
+                                | PChar _ -> isKnownMismatch TChar
+                                | PFloat _ -> isKnownMismatch TFloat64
+                                | _ -> false)
+                        match scrutinee' with
+                        | ListLiteral scrutineeElements
+                            when allowNoMatchForKnownListLengthMismatch
+                                 && hasDefiniteLiteralTypeMismatch
+                                 && List.length scrutineeElements <> List.length patterns ->
+                            let valueText = formatListLiteralForNoMatch scrutineeElements
+                            Error (GenericError $"No match for {valueText}")
+                        | _ ->
+                            // Each element pattern binds variables of the list's element type
+                            patterns
+                            |> List.map (fun p ->
+                                extractPatternBindings p elemType allowNoMatchForKnownListLengthMismatch)
+                            |> List.fold (fun acc res ->
+                                match acc, res with
+                                | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                                | Error e, _ -> Error e
+                                | _, Error e -> Error e) (Ok [])
                     | _ ->
                         let valueText =
                             match formatPatternMismatchValue scrutinee' with
@@ -2723,14 +2784,19 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         // Head patterns bind to element type
                         let headBindings =
                             headPatterns
-                            |> List.map (fun p -> extractPatternBindings p elemType)
+                            |> List.map (fun p ->
+                                extractPatternBindings p elemType allowNoMatchForKnownListLengthMismatch)
                             |> List.fold (fun acc res ->
                                 match acc, res with
                                 | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
                                 | Error e, _ -> Error e
                                 | _, Error e -> Error e) (Ok [])
                         // Tail pattern binds to List<elemType>
-                        let tailBindings = extractPatternBindings tailPattern (TList elemType)
+                        let tailBindings =
+                            extractPatternBindings
+                                tailPattern
+                                (TList elemType)
+                                allowNoMatchForKnownListLengthMismatch
                         match headBindings, tailBindings with
                         | Ok hb, Ok tb -> Ok (hb @ tb)
                         | Error e, _ -> Error e
@@ -2811,6 +2877,8 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
 
                 loop allPatterns None
 
+            let allowNoMatchForKnownListLengthMismatchInThisMatch = List.length cases = 1
+
             // Type check each case and ensure they all return the same type
             // Returns (resultType, transformedCases)
             let rec checkCases (remaining: MatchCase list) (resultType: Type option) (accCases: MatchCase list) : Result<Type * MatchCase list, TypeError> =
@@ -2824,7 +2892,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     |> Result.bind (fun () ->
                         // Extract bindings from first pattern after validation.
                         let firstPattern = NonEmptyList.head matchCase.Patterns
-                        extractPatternBindings firstPattern scrutineeType
+                        let allowNoMatchForKnownListLengthMismatch =
+                            allowNoMatchForKnownListLengthMismatchInThisMatch
+                            && List.isEmpty matchCase.Patterns.Tail
+                        extractPatternBindings
+                            firstPattern
+                            scrutineeType
+                            allowNoMatchForKnownListLengthMismatch
                         |> Result.bind (fun bindings ->
                             let caseEnv = List.fold (fun e (name, ty) -> Map.add name ty e) env bindings
                             // Type check guard if present (must be Bool)
