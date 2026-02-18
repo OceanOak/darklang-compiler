@@ -128,9 +128,9 @@ module InvalidFnCalls =
   // misc errors
   derrorFn "msg" = Builtin.testDerrorMessage "Uncaught exception: msg"
 
-  // (let _ = Builtin.testSetExpectedExceptionCount 1L
-  //  throwsException ()) =
-  //   Builtin.testDerrorMessage "Unknown error"
+  (let _ = Builtin.testSetExpectedExceptionCount 1L
+   throwsException ()) =
+    error="Unknown error"
 
 
 // this is making sure that generic type args aren't "carried" into incorrect contexts
