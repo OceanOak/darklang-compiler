@@ -1006,12 +1006,11 @@ module PatternGrouping =
    | _ -> "fail") =
     error="Cannot match Int64 value 1 with a Float pattern"
 
-    // (match Stdlib.Option.Option.Some "hello" with
-  //  | "hello" -> "fail"
-  //  | Some "hello" -> "fail"
-  //  | _ -> "fail") = Builtin.testDerrorMessage
-  //   // TODO bad error message
-  //   "Cannot match Darklang.Stdlib.Option.Option value Da... with a String pattern"
+  (match Stdlib.Option.Option.Some "hello" with
+   | "hello" -> "fail"
+   | Some "hello" -> "fail"
+   | _ -> "fail") =
+    error="Cannot match Stdlib.Option.Option<String> value <unknown> with a String pattern"
 
     // (match "" with
     //  | head :: rest -> "fail") = Builtin.testDerrorMessage
