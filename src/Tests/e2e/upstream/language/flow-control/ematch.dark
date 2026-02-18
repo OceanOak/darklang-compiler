@@ -1037,9 +1037,9 @@ module PatternGrouping =
    | "1,a,true,2.0" -> "fail") =
     error="Cannot match ((Int64, Char), (Bool, Float)) value ((1, 'a'), (true, 2.0)) with a String pattern"
 
-    // (match "" with
-    //  | ((1.0, 'a'), (true, 2.0)) -> "fail") = Builtin.testDerrorMessage
-    //   "Cannot match String value \"\" with a Tuple pattern"
+  (match "" with
+   | ((1.0, 'a'), (true, 2.0)) -> "fail") =
+    error="Cannot match String value \"\" with a Tuple pattern"
 
     // (match ((1L, 'a'), (true, 2.0)) with
     //  | ((1.0, 'a'), (true, 2.0)) -> "fail"
