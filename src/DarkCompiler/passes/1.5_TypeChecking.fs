@@ -3017,42 +3017,62 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | other -> Error (TypeMismatch (TList (TVar "t"), other, "list cons tail must be a list")))
 
     | Lambda (parameters, body) ->
-        // Build environment with lambda parameters
-        let paramEnv =
-            parameters
-            |> List.fold (fun e (name, ty) -> Map.add name ty e) env
+        let typeCheckLambdaWithParams
+            (resolvedParams: (string * Type) list)
+            (bodyExpectedType: Type option)
+            : Result<Type * Expr, TypeError> =
+            let paramEnv =
+                resolvedParams
+                |> List.fold (fun e (name, ty) -> Map.add name ty e) env
+            checkExpr body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg bodyExpectedType
+            |> Result.map (fun (bodyType, body') ->
+                let paramTypes = resolvedParams |> List.map snd
+                (TFunction (paramTypes, bodyType), Lambda (resolvedParams, body')))
 
-        // Type-check the lambda body
-        checkExpr body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-        |> Result.bind (fun (bodyType, body') ->
-            let paramTypes = parameters |> List.map snd
-            let funcType = TFunction (paramTypes, bodyType)
-            match expectedType with
-            | Some (TFunction (expectedParams, expectedRet)) ->
-                // Verify parameter types match
-                if List.length expectedParams <> List.length paramTypes then
-                    Error (TypeMismatch (TFunction (expectedParams, expectedRet), funcType, "lambda parameter count"))
-                else
-                    // Use typesCompatible to allow type variables to unify with concrete types
-                    let paramMismatch =
-                        List.zip expectedParams paramTypes
-                        |> List.tryFind (fun (expected, actual) -> not (typesCompatible expected actual))
-                    match paramMismatch with
-                    | Some (expected, actual) ->
-                        Error (TypeMismatch (expected, actual, "lambda parameter type"))
-                    | None ->
-                        // Use reconcileTypes to handle generic type unification and type aliases
-                        // e.g., Option<t> should unify with Option<Int64>
-                        match reconcileTypes (Some aliasReg) expectedRet bodyType with
+        match expectedType with
+        | Some (TFunction (expectedParams, expectedRet)) ->
+            if List.length expectedParams <> List.length parameters then
+                let declaredParamTypes = parameters |> List.map snd
+                let declaredFuncType = TFunction (declaredParamTypes, TVar "r")
+                Error (TypeMismatch (TFunction (expectedParams, expectedRet), declaredFuncType, "lambda parameter count"))
+            else
+                let rec reconcileParamTypes
+                    (remaining: ((string * Type) * Type) list)
+                    (acc: (string * Type) list)
+                    : Result<(string * Type) list, TypeError> =
+                    match remaining with
+                    | [] -> Ok (List.rev acc)
+                    | ((name, declaredParamType), expectedParamType) :: rest ->
+                        match reconcileTypes (Some aliasReg) declaredParamType expectedParamType with
+                        | Some reconciledParamType ->
+                            reconcileParamTypes rest ((name, reconciledParamType) :: acc)
                         | None ->
-                            Error (TypeMismatch (expectedRet, bodyType, "lambda return type"))
-                        | Some reconciledRetType ->
-                            let reconciledFuncType = TFunction (paramTypes, reconciledRetType)
-                            Ok (reconciledFuncType, Lambda (parameters, body'))
-            | Some other ->
-                Error (TypeMismatch (other, funcType, "lambda"))
-            | None ->
-                Ok (funcType, Lambda (parameters, body')))
+                            Error (TypeMismatch (expectedParamType, declaredParamType, "lambda parameter type"))
+
+                reconcileParamTypes (List.zip parameters expectedParams) []
+                |> Result.bind (fun reconciledParams ->
+                    let bodyExpectedType =
+                        if containsTVar expectedRet then
+                            None
+                        else
+                            Some expectedRet
+                    typeCheckLambdaWithParams reconciledParams bodyExpectedType
+                    |> Result.bind (fun (funcType, lambdaExpr) ->
+                        match funcType with
+                        | TFunction (paramTypes, bodyType) ->
+                            match reconcileTypes (Some aliasReg) expectedRet bodyType with
+                            | None ->
+                                Error (TypeMismatch (expectedRet, bodyType, "lambda return type"))
+                            | Some reconciledRetType ->
+                                Ok (TFunction (paramTypes, reconciledRetType), lambdaExpr)
+                        | _ ->
+                            Error (GenericError "Internal error: lambda did not type-check to a function")))
+        | Some other ->
+            typeCheckLambdaWithParams parameters None
+            |> Result.bind (fun (funcType, _lambdaExpr) ->
+                Error (TypeMismatch (other, funcType, "lambda")))
+        | None ->
+            typeCheckLambdaWithParams parameters None
 
     | Apply (func, args) ->
         // Type-check the function expression

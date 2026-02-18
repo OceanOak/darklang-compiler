@@ -6712,8 +6712,30 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     Ok (wrapBindings allBindings (ANF.Return (ANF.Var resultId)), varGen4)))
 
         | _ ->
-            // Other complex function expressions not yet supported
-            Error $"Complex function application not yet fully implemented: {func}"
+            // General function-expression application (for example record field access):
+            // evaluate function expression to a closure value, then invoke it.
+            toAtom func varGen env typeReg variantLookup funcReg moduleRegistry
+            |> Result.bind (fun (funcAtom, funcBindings, varGen1) ->
+                let rec convertArgs
+                    (remaining: AST.Expr list)
+                    (vg: ANF.VarGen)
+                    (acc: (ANF.Atom * (ANF.TempId * ANF.CExpr) list) list)
+                    =
+                    match remaining with
+                    | [] -> Ok (List.rev acc, vg)
+                    | arg :: rest ->
+                        toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
+                        |> Result.bind (fun (argAtom, argBindings, vg') ->
+                            convertArgs rest vg' ((argAtom, argBindings) :: acc))
+
+                convertArgs args varGen1 []
+                |> Result.map (fun (argResults, varGen2) ->
+                    let argAtoms = argResults |> List.map fst
+                    let argBindings = argResults |> List.collect snd
+                    let (resultId, varGen3) = ANF.freshVar varGen2
+                    let closureCall = ANF.ClosureCall (funcAtom, argAtoms)
+                    let allBindings = funcBindings @ argBindings @ [(resultId, closureCall)]
+                    (wrapBindings allBindings (ANF.Return (ANF.Var resultId)), varGen3)))
 
 /// Convert an AST expression to an atom, introducing let bindings as needed
 and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (funcReg: FunctionRegistry) (moduleRegistry: AST.ModuleRegistry) : Result<ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
@@ -7576,7 +7598,29 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     Ok (ANF.Var resultId, allBindings, varGen4)))
 
         | _ ->
-            Error $"Complex function application in atom position not yet supported: {func}"
+            // General function-expression application in atom position.
+            toAtom func varGen env typeReg variantLookup funcReg moduleRegistry
+            |> Result.bind (fun (funcAtom, funcBindings, varGen1) ->
+                let rec convertArgs
+                    (remaining: AST.Expr list)
+                    (vg: ANF.VarGen)
+                    (acc: (ANF.Atom * (ANF.TempId * ANF.CExpr) list) list)
+                    : Result<(ANF.Atom * (ANF.TempId * ANF.CExpr) list) list * ANF.VarGen, string> =
+                    match remaining with
+                    | [] -> Ok (List.rev acc, vg)
+                    | arg :: rest ->
+                        toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
+                        |> Result.bind (fun (argAtom, argBindings, vg') ->
+                            convertArgs rest vg' ((argAtom, argBindings) :: acc))
+
+                convertArgs args varGen1 []
+                |> Result.map (fun (argResults, varGen2) ->
+                    let argAtoms = argResults |> List.map fst
+                    let argBindings = argResults |> List.collect snd
+                    let (resultId, varGen3) = ANF.freshVar varGen2
+                    let closureCall = ANF.ClosureCall (funcAtom, argAtoms)
+                    let allBindings = funcBindings @ argBindings @ [(resultId, closureCall)]
+                    (ANF.Var resultId, allBindings, varGen3)))
 
 /// Replace Return sites in an AExpr with a continuation expression.
 and bindReturns (expr: ANF.AExpr) (k: ANF.Atom -> ANF.AExpr) : ANF.AExpr =

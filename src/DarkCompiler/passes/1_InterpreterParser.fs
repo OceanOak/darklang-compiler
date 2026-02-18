@@ -1472,19 +1472,44 @@ let parse (tokens: Token list) : Result<Program, string> =
                     | _ -> (Match (value, [{ Patterns = NonEmptyList.singleton pattern; Guard = None; Body = body }]), remaining'')
                 match remaining with
                 | TEquals :: rest' ->
-                    parseExpr rest'
-                    |> Result.bind (fun (value, remaining') ->
+                    let tryParseWithoutInFallback () : Result<Expr * Token list, string> =
+                        // Upstream interpreter syntax allows newline-delimited let bindings:
+                        //   let x = <value>
+                        //   <body>
+                        // but lexer discards newlines. Recover this by trying all prefix/suffix
+                        // splits after '=' and selecting the first split where both sides parse.
+                        let rec trySplits (valueTokensRev: Token list) (remainingTokens: Token list) : Result<Expr * Token list, string> =
+                            match remainingTokens with
+                            | [] ->
+                                Error "Expected expression"
+                            | nextToken :: restTokens ->
+                                let candidateValueTokens = List.rev (nextToken :: valueTokensRev)
+                                match parseExpr candidateValueTokens with
+                                | Ok (candidateValue, []) ->
+                                    match parseExpr restTokens with
+                                    | Ok (candidateBody, remainingAfterBody) ->
+                                        Ok (buildLetExpression candidateValue candidateBody remainingAfterBody)
+                                    | Error _ ->
+                                        trySplits (nextToken :: valueTokensRev) restTokens
+                                | _ ->
+                                    trySplits (nextToken :: valueTokensRev) restTokens
+                        trySplits [] rest'
+
+                    match parseExpr rest' with
+                    | Ok (value, remaining') ->
                         match remaining' with
                         | TIn :: rest'' ->
                             parseExpr rest''
                             |> Result.map (fun (body, remaining'') ->
                                 buildLetExpression value body remaining'')
                         | _ ->
-                            // Upstream interpreter tests allow newline-separated `let` bodies
-                            // without an explicit `in` token.
-                            parseExpr remaining'
-                            |> Result.map (fun (body, remaining'') ->
-                                buildLetExpression value body remaining''))
+                            match parseExpr remaining' with
+                            | Ok (body, remaining'') ->
+                                Ok (buildLetExpression value body remaining'')
+                            | Error _ ->
+                                tryParseWithoutInFallback ()
+                    | Error _ ->
+                        tryParseWithoutInFallback ()
                 | _ -> Error "Expected '=' after let binding pattern")
         | TIf :: rest ->
             // Parse: if cond then thenBranch [else elseBranch]

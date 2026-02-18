@@ -9,6 +9,7 @@ open AST
 open Parser
 open InterpreterParser
 open ASTPrettyPrinter
+open TypeChecking
 
 type TestResult = Result<unit, string>
 
@@ -69,6 +70,34 @@ let testParseInterpreterRecordFunctionFieldType () : TestResult =
         Ok ()
     | Ok other ->
         Error $"Unexpected AST for record function field type: {other}"
+
+let testParseInterpreterNewlineDelimitedLetBody () : TestResult =
+    let source =
+        "let y = (fun x -> x + 1L)\n"
+        + " Stdlib.List.map_v0 [ 1L; 2L; 3L; 4L ] y"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on newline-delimited let body: {err}"
+    | Ok (Program [Expression _]) ->
+        Ok ()
+    | Ok other ->
+        Error $"Unexpected AST for newline-delimited let body: {other}"
+
+let testTypeCheckInterpreterRecordFunctionFieldLambda () : TestResult =
+    let source =
+        "type RecordWithFn = { fn: Int64 -> Int64 }\n"
+        + "(let record = RecordWithFn { fn = fun x -> x + 1L } in record.fn 6L)"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed before type checking record function field lambda: {err}"
+    | Ok ast ->
+        match TypeChecking.checkProgram ast with
+        | Error err ->
+            Error $"Type checking failed for record function field lambda: {typeErrorToString err}"
+        | Ok (resultType, _) when resultType = AST.TInt64 ->
+            Ok ()
+        | Ok (resultType, _) ->
+            Error $"Expected TInt64 result for record function field lambda, got {typeToString resultType}"
 
 let testStdlibRegistryExcludesNonIntrinsicFloatMultiply () : TestResult =
     let registry = Stdlib.buildModuleRegistry ()
@@ -155,6 +184,8 @@ let tests = [
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
+    ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)
+    ("typecheck interpreter record-function-field lambda", testTypeCheckInterpreterRecordFunctionFieldLambda)
     ("stdlib registry excludes non-intrinsic float multiply", testStdlibRegistryExcludesNonIntrinsicFloatMultiply)
     ("stdlib registry includes intrinsic float sqrt", testStdlibRegistryIncludesIntrinsicFloatSqrt)
     ("pretty-print interpreter syntax", testPrettyPrintInterpreterSyntax)
