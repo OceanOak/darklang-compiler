@@ -996,9 +996,9 @@ module PatternGrouping =
    | [ 1L ] -> "fail") =
     error="Cannot match String value \"\" with an Int64 pattern"
 
-  // (match [ [ 1.0 ] ] with
-  //  | [ [ 1L ] ] -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match Float value 1.0 with an Int64 pattern"
+  (match [ [ 1.0 ] ] with
+   | [ [ 1L ] ] -> "fail") =
+    error="Cannot match Float value 1.0 with an Int64 pattern"
 
   // (match [ [ 1L; 2L ]; [ 3L; 4L ] ] with
   //  | [ [ 1.0; 2.0 ]; [ 3L; 4L ] ] -> "fail"
