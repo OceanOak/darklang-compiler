@@ -1040,11 +1040,11 @@ module PatternGrouping =
    | ((1.0, 'a'), (true, 2.0)) -> "fail") =
     error="Cannot match String value \"\" with a Tuple pattern"
 
-    // (match ((1L, 'a'), (true, 2.0)) with
-    //  | ((1.0, 'a'), (true, 2.0)) -> "fail"
-    //  | ((1L, 'a'), (true, 2.0)) -> "fail"
-    //  | _ -> "fail") = Builtin.testDerrorMessage
-    //   "Cannot match Int64 value 1 with a Float pattern"
+  (match ((1L, 'a'), (true, 2.0)) with
+   | ((1.0, 'a'), (true, 2.0)) -> "fail"
+   | ((1L, 'a'), (true, 2.0)) -> "fail"
+   | _ -> "fail") =
+    error="Cannot match Int64 value 1 with a Float pattern"
 
   // (match Stdlib.Result.Result.Error "failure" with
   //  | "failure" -> "fail"
