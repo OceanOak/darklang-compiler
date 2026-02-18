@@ -15,10 +15,10 @@
 // ---------------------------
 // DarkInternal tests are internal
 // ---------------------------
-// module DarkInternal =
-//   (let _ = Builtin.testSetExpectedExceptionCount 1L
-//    Builtin.darkInternalInfraSchedulingRuleList ()) =
-//      (Builtin.testDerrorMessage "Unknown error")
+module DarkInternal =
+  (let _ = Builtin.testSetExpectedExceptionCount 1L
+   Builtin.darkInternalInfraSchedulingRuleList ()) =
+     error="Unknown error"
 
 
 let stringFn (key: String) : String = key ++ " appended string"

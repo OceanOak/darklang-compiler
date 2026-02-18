@@ -893,6 +893,7 @@ let private loadStdlib () : Result<AST.Program, string> =
         "stdlib/UInt32.dark"
         "stdlib/UInt64.dark"
         "stdlib/Bool.dark"
+        "stdlib/Builtin.dark"
         "stdlib/Tuple2.dark"
         "stdlib/Tuple3.dark"
         "stdlib/Result.dark"
