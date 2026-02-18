@@ -920,9 +920,9 @@ module PatternGrouping =
  | 6.0 -> "fail") =
   error="Cannot match Int128 value 6 with a Float pattern"
 
-// (match 6.0 with
-//  | 6Q -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Float value 6.0 with an Int128 pattern"
+(match 6.0 with
+ | 6Q -> "fail") =
+  error="Cannot match Float value 6.0 with an Int128 pattern"
 
 // (match 6Z with
 //  | 6.0 -> "fail") = Builtin.testDerrorMessage
