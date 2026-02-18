@@ -2733,7 +2733,14 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | Ok hb, Ok tb -> Ok (hb @ tb)
                         | Error e, _ -> Error e
                         | _, Error e -> Error e
-                    | _ -> Error (GenericError "List cons pattern used on non-list type")
+                    | _ ->
+                        let valueText =
+                            match formatPatternMismatchValue scrutinee' with
+                            | Some text -> text
+                            | None -> "<unknown>"
+                        let message =
+                            $"Cannot match {typeToString resolvedPatternType} value {valueText} with a List pattern"
+                        Error (GenericError message)
 
             let rec patternBindingNames (pattern: Pattern) : string list =
                 match pattern with

@@ -372,7 +372,7 @@ match true with | 1 -> 42 | _ -> 0 = error="Cannot match Bool value true with an
 // List cons pattern on non-list type should be rejected (prevents TInt64 fallback in AST_to_ANF)
 // The type checker prevents this - without this check, the compiler would silently assume
 // TInt64 element type which would produce incorrect code
-match 42 with | [h, ...t] -> h | _ -> 0 = error="List cons pattern used on non-list type"
+match 42 with | [h, ...t] -> h | _ -> 0 = error="Cannot match Int64 value 42 with a List pattern"
 
 // === Unsupported nested pattern tests ===
 // These test that we properly reject patterns that aren't yet supported,
