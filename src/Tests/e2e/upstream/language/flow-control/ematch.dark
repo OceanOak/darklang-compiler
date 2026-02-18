@@ -1047,8 +1047,8 @@ module PatternGrouping =
    | _ -> "fail") =
     error="Cannot match Int64 value 1 with a Float pattern"
 
-  // (match Stdlib.Result.Result.Error "failure" with
-  //  | "failure" -> "fail"
-  //  | Error "failure" -> "fail"
-  //  | _ -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match Darklang.Stdlib.Result.Result value Da... with a String pattern"
+  (match Stdlib.Result.Result.Error "failure" with
+   | "failure" -> "fail"
+   | Error "failure" -> "fail"
+   | _ -> "fail") =
+    error="Cannot match Stdlib.Result.Result<t, String> value <unknown> with a String pattern"
