@@ -957,9 +957,9 @@ module PatternGrouping =
  | -4.7 -> "fail") =
   error="Cannot match Bool value true with a Float pattern"
 
-// (match () with
-//  | 0L -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Unit value () with an Int64 pattern"
+(match () with
+ | 0L -> "fail") =
+  error="Cannot match Unit value () with an Int64 pattern"
 
 // (match 0L with
 //  | () -> "fail") = Builtin.testDerrorMessage
