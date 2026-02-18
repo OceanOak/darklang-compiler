@@ -1252,6 +1252,19 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                     else
                                         let seen' = Set.add typeKey seen
                                         match typ with
+                                        | TFunction _ ->
+                                            // Upstream contract treats function values as equal for ==.
+                                            // Still evaluate both sides so any side effects/runtime errors are preserved.
+                                            let leftFnVar = $"__fn_eq_left_{counter}"
+                                            let rightFnVar = $"__fn_eq_right_{counter}"
+                                            let functionEqExpr =
+                                                Let (
+                                                    leftFnVar,
+                                                    leftExpr,
+                                                    Let (rightFnVar, rightExpr, BoolLiteral true)
+                                                )
+                                            (functionEqExpr, counter + 1)
+
                                         | TList elemType ->
                                             (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
 
