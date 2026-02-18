@@ -3088,8 +3088,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             Error (GenericError "Internal error: lambda did not type-check to a function")))
         | Some other ->
             typeCheckLambdaWithParams parameters None
-            |> Result.bind (fun (funcType, _lambdaExpr) ->
-                Error (TypeMismatch (other, funcType, "lambda")))
+            |> Result.bind (fun (funcType, lambdaExpr) ->
+                match reconcileTypes (Some aliasReg) other funcType with
+                | Some reconciledType -> Ok (reconciledType, lambdaExpr)
+                | None -> Error (TypeMismatch (other, funcType, "lambda")))
         | None ->
             typeCheckLambdaWithParams parameters None
 
