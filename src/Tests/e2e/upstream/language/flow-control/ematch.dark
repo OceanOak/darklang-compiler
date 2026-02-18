@@ -905,9 +905,9 @@ module PatternGrouping =
  | 6.0 -> "fail") =
   error="Cannot match Int32 value 6 with a Float pattern"
 
-// (match 6.0 with
-//  | 6l -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Float value 6.0 with an Int32 pattern"
+(match 6.0 with
+ | 6l -> "fail") =
+  error="Cannot match Float value 6.0 with an Int32 pattern"
 
 // (match 6ul with
 //  | 6.0 -> "fail") = Builtin.testDerrorMessage
