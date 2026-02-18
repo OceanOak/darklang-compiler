@@ -1033,9 +1033,9 @@ module PatternGrouping =
   //   "Cannot match Int64 value 1 with a Float pattern"
 
 
-    // (match ((1L, 'a'), (true, 2.0)) with
-    //  | "1,a,true,2.0" -> "fail") = Builtin.testDerrorMessage
-    //   "Cannot match ((Int64, Char), (Bool, Float)) value ((1, 'a'),... with a String pattern"
+  (match ((1L, 'a'), (true, 2.0)) with
+   | "1,a,true,2.0" -> "fail") =
+    error="Cannot match ((Int64, Char), (Bool, Float)) value ((1, 'a'), (true, 2.0)) with a String pattern"
 
     // (match "" with
     //  | ((1.0, 'a'), (true, 2.0)) -> "fail") = Builtin.testDerrorMessage
