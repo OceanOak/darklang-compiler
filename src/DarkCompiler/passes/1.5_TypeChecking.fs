@@ -253,8 +253,8 @@ let rec private formatPatternMismatchValue (expr: Expr) : string option =
             | None -> "<unknown>"
         Some $"[  {firstText}, {secondText}, ..."
     | ListLiteral [single] ->
+        // For singleton list mismatches, report the mismatched element value.
         formatPatternMismatchValue single
-        |> Option.map (fun singleText -> $"[  {singleText}]")
     | ListLiteral [] ->
         Some "[]"
     | FloatLiteral f ->

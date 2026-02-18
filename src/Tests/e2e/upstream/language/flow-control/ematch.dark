@@ -992,9 +992,9 @@ module PatternGrouping =
   //  // Different lengths
   //  | [ 1L; 2L; 3L ] -> "fail") = Builtin.testDerrorMessage "No match for [  \"\"]"
 
-  // (match [ "" ] with
-  //  | [ 1L ] -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match String value \"\" with an Int64 pattern"
+  (match [ "" ] with
+   | [ 1L ] -> "fail") =
+    error="Cannot match String value \"\" with an Int64 pattern"
 
   // (match [ [ 1.0 ] ] with
   //  | [ [ 1L ] ] -> "fail") = Builtin.testDerrorMessage
