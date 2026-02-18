@@ -1022,9 +1022,9 @@ module PatternGrouping =
    | "1,a" -> "fail") =
     error="Cannot match (Int64, Char) value (1, 'a') with a String pattern"
 
-  // (match "1,a" with
-  //  | (1L, 'a') -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match String value \"1,a\" with a Tuple pattern"
+  (match "1,a" with
+   | (1L, 'a') -> "fail") =
+    error="Cannot match String value \"1,a\" with a Tuple pattern"
 
   // (match (1L, 'a') with
   //  | (1.0, 'a') -> "fail"

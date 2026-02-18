@@ -2623,6 +2623,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             // Treat as a non-binding pattern; match lowering will make it non-matching.
                             Ok []
                 | PTuple patterns ->
+                    let rec containsVariableBinding (innerPattern: Pattern) : bool =
+                        match innerPattern with
+                        | PVar _ -> true
+                        | PConstructor (_, Some payloadPattern) -> containsVariableBinding payloadPattern
+                        | PTuple nestedPatterns
+                        | PList nestedPatterns ->
+                            nestedPatterns |> List.exists containsVariableBinding
+                        | PRecord (_, fieldPatterns) ->
+                            fieldPatterns
+                            |> List.exists (fun (_, fieldPattern) -> containsVariableBinding fieldPattern)
+                        | PListCons (headPatterns, tailPattern) ->
+                            List.exists containsVariableBinding headPatterns
+                            || containsVariableBinding tailPattern
+                        | _ -> false
+
                     // Resolve type alias before matching (e.g., Pair<Int64> -> (Int64, Int64))
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
@@ -2639,9 +2654,21 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         // Match lowering emits a false condition for this pattern shape.
                         Ok []
                     | _ ->
-                        // Tuple pattern on non-tuple scrutinee should be treated as a non-match.
-                        // Match lowering emits a false condition for this pattern shape.
-                        Ok []
+                        if isRuntimeErrorType resolvedPatternType then
+                            // Preserve runtime error propagation for known failing scrutinees.
+                            Ok []
+                        elif patterns |> List.exists containsVariableBinding then
+                            // Keep non-binding behavior for tuple patterns that would otherwise
+                            // introduce guard/body variables on an incompatible scrutinee type.
+                            Ok []
+                        else
+                            let valueText =
+                                match formatPatternMismatchValue scrutinee' with
+                                | Some text -> text
+                                | None -> "<unknown>"
+                            let message =
+                                $"Cannot match {typeToString resolvedPatternType} value {valueText} with a Tuple pattern"
+                            Error (GenericError message)
                 | PRecord (_, fieldPatterns) ->
                     match patternType with
                     | TRecord (recordName, recordTypeArgs) ->
