@@ -153,7 +153,7 @@ module Equals =
   ((fun x -> let y = 1us in y) == (fun x -> let y = 1us in y)) = true
   ((fun x -> let y = 1us in y) != (fun x -> let y = 2us in x)) = false
 
-  // ((fun x -> let y = 1y in y) == (fun x -> let y = 1y in y)) = true
+  ((fun x -> let y = 1y in y) == (fun x -> let y = 1y in y)) = true
   // ((fun x -> let y = 1y in y) != (fun x -> let y = 2y in x)) = false
 
   // ((fun x -> let y = 1uy in y) == (fun x -> let y = 1uy in y)) = true
