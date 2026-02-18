@@ -278,7 +278,9 @@ let rec private formatPatternMismatchValue (expr: Expr) : string option =
 let rec private narrowPatternMismatchExprByType (actualType: Type) (expr: Expr) : Expr =
     match actualType, expr with
     | TList _, _ -> expr
+    | TTuple _, _ -> expr
     | _, ListLiteral (first :: _) -> narrowPatternMismatchExprByType actualType first
+    | _, TupleLiteral (first :: _) -> narrowPatternMismatchExprByType actualType first
     | _, _ -> expr
 
 let private patternMismatchActualTypeText (actualType: Type) (scrutineeExpr: Expr) : string =

@@ -1025,11 +1025,11 @@ module PatternGrouping =
    | (1L, 'a') -> "fail") =
     error="Cannot match String value \"1,a\" with a Tuple pattern"
 
-  // (match (1L, 'a') with
-  //  | (1.0, 'a') -> "fail"
-  //  | (1L, 'a') -> "fail"
-  //  | (2L, 'b') -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match Int64 value 1 with a Float pattern"
+  (match (1L, 'a') with
+   | (1.0, 'a') -> "fail"
+   | (1L, 'a') -> "fail"
+   | (2L, 'b') -> "fail") =
+    error="Cannot match Int64 value 1 with a Float pattern"
 
 
   (match ((1L, 'a'), (true, 2.0)) with
