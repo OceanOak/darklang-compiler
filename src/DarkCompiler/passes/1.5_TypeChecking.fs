@@ -2512,10 +2512,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         Error (GenericError message)
 
                 match pattern with
-                | PUnit ->
-                    match patternType with
-                    | TUnit -> Ok []
-                    | _ -> Error (GenericError "Unit pattern can only match unit type")
+                | PUnit -> ensureLiteralType TUnit
                 | PWildcard -> Ok []
                 | PInt64 _ -> ensureLiteralType TInt64
                 | PInt8Literal _ -> ensureLiteralType TInt8

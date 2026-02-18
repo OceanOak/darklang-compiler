@@ -961,9 +961,9 @@ module PatternGrouping =
  | 0L -> "fail") =
   error="Cannot match Unit value () with an Int64 pattern"
 
-// (match 0L with
-//  | () -> "fail") = Builtin.testDerrorMessage
-//   "Cannot match Int64 value 0 with an Unit pattern"
+(match 0L with
+ | () -> "fail") =
+  error="Cannot match Int64 value 0 with an Unit pattern"
 
 // (match 'c' with
 //  | true -> "fail") = Builtin.testDerrorMessage
