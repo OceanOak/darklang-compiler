@@ -259,6 +259,15 @@ let rec private formatPatternMismatchValue (expr: Expr) : string option =
         Some "[]"
     | FloatLiteral f ->
         Some (formatFloatLiteralForPatternMismatch f)
+    | TupleLiteral elements ->
+        let elementTexts =
+            elements
+            |> List.map (fun element ->
+                match formatPatternMismatchValue element with
+                | Some text -> text
+                | None -> "<unknown>")
+        let tupleText = String.concat ", " elementTexts
+        Some $"({tupleText})"
     | _ ->
         tryFormatLiteralValue expr
 
