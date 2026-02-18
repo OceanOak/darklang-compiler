@@ -317,7 +317,7 @@ module Equals =
     (() != 0.0) = Builtin.testDerrorMessage "Cannot perform equality check on Unit and Float"
 
     // CLEANUP follow up here when DB references are fully resolved at parse-time
-    //(MyDB != 5L) = Builtin.testDerrorMessage "Cannot perform equality check on TODO and TODO"
+    (MyDB != 5L) = error="Cannot perform equality check on TODO and TODO"
 
   // Other ways to call it
   Stdlib.equals_v0 1Q 1Q = true
