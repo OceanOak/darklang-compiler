@@ -16,6 +16,7 @@
 module Parser
 
 open AST
+open System.Numerics
 
 /// Part of an interpolated string token
 type InterpPart =
@@ -25,6 +26,7 @@ type InterpPart =
 /// Token types for lexer
 and Token =
     | TInt64 of int64       // Default integer (Int64)
+    | TInt128Compat of int64 // Int128 compatibility literal (Q suffix) mapped into Int64 space
     | TInt8 of sbyte        // 8-bit signed: 1y
     | TInt16 of int16       // 16-bit signed: 1s
     | TInt32 of int32       // 32-bit signed: 1l
@@ -32,6 +34,7 @@ and Token =
     | TUInt16 of uint16     // 16-bit unsigned: 1us
     | TUInt32 of uint32     // 32-bit unsigned: 1ul
     | TUInt64 of uint64     // 64-bit unsigned: 1UL
+    | TUInt128Compat of uint64 // UInt128 compatibility literal (Z suffix) mapped into UInt64 space
     | TFloat of float
     | TStringLit of string  // String literal token (named to avoid conflict with AST.TString type)
     | TCharLit of string    // Char literal: 'x' (stores UTF-8 string for EGC support)
@@ -229,7 +232,7 @@ let lex (input: string) : Result<Token list, string> =
                 // Integer with optional type suffix
                 let numStr = System.String(List.toArray intDigits)
 
-                // Check for type suffix: y, uy, s, us, l, ul, L, UL
+                // Check for type suffix: y, uy, s, us, l, ul, L, Q, UL, Z
                 match afterInt with
                 | 'u' :: 'y' :: rest ->
                     // UInt8 suffix: 1uy
@@ -275,6 +278,38 @@ let lex (input: string) : Result<Token list, string> =
                             lexHelper rest (TInt64 System.Int64.MinValue :: acc)
                         else
                             Error $"Integer literal too large: {numStr}"
+                | 'Q' :: rest ->
+                    // Int128 compatibility suffix: 1Q
+                    // Keep parser compatibility by mapping Int128 literals into Int64 two's-complement space.
+                    match BigInteger.TryParse(numStr) with
+                    | (true, value) ->
+                        let two64 = BigInteger.One <<< 64
+                        let normalized = ((value % two64) + two64) % two64
+                        let signed =
+                            if normalized > BigInteger(int64 System.Int64.MaxValue) then
+                                normalized - two64
+                            else
+                                normalized
+                        match System.Int64.TryParse(signed.ToString()) with
+                        | (true, int64Value) -> lexHelper rest (TInt128Compat int64Value :: acc)
+                        | (false, _) -> Error $"Invalid Int128 literal: {numStr}"
+                    | (false, _) ->
+                        Error $"Invalid Int128 literal: {numStr}"
+                | 'Z' :: rest ->
+                    // UInt128 compatibility suffix: 1Z
+                    // Keep parser compatibility by mapping UInt128 literals into UInt64 space modulo 2^64.
+                    match BigInteger.TryParse(numStr) with
+                    | (true, value) ->
+                        if value < BigInteger.Zero then
+                            Error $"UInt128 literal must be non-negative: {numStr}"
+                        else
+                            let two64 = BigInteger.One <<< 64
+                            let normalized = value % two64
+                            match System.UInt64.TryParse(normalized.ToString()) with
+                            | (true, uint64Value) -> lexHelper rest (TUInt128Compat uint64Value :: acc)
+                            | (false, _) -> Error $"Invalid UInt128 literal: {numStr}"
+                    | (false, _) ->
+                        Error $"Invalid UInt128 literal: {numStr}"
                 | _ ->
                     // No suffix: default Int64
                     match System.Int64.TryParse(numStr) with
@@ -1045,6 +1080,8 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
     | TInt64 n :: rest ->
         // Integer literal pattern (Int64)
         Ok (PInt64 n, rest)
+    | TInt128Compat n :: rest ->
+        Ok (PInt128CompatLiteral n, rest)
     | TInt8 n :: rest ->
         Ok (PInt8Literal n, rest)
     | TInt16 n :: rest ->
@@ -1059,9 +1096,13 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         Ok (PUInt32Literal n, rest)
     | TUInt64 n :: rest ->
         Ok (PUInt64Literal n, rest)
+    | TUInt128Compat n :: rest ->
+        Ok (PUInt128CompatLiteral n, rest)
     | TMinus :: TInt64 n :: rest ->
         // Negative integer literal pattern
         Ok (PInt64 (-n), rest)
+    | TMinus :: TInt128Compat n :: rest ->
+        Ok (PInt128CompatLiteral (-n), rest)
     | TMinus :: TInt8 n :: rest ->
         Ok (PInt8Literal (sbyte (-int n)), rest)
     | TMinus :: TInt16 n :: rest ->
@@ -1505,6 +1546,7 @@ let parse (tokens: Token list) : Result<Program, string> =
         match toks with
         // Negative integer literals - parse directly as negative values
         | TMinus :: TInt64 n :: rest -> Ok (Int64Literal (-n), rest)
+        | TMinus :: TInt128Compat n :: rest -> Ok (Int128CompatLiteral (-n), rest)
         | TMinus :: TInt8 n :: rest -> Ok (Int8Literal (-n), rest)
         | TMinus :: TInt16 n :: rest -> Ok (Int16Literal (-n), rest)
         | TMinus :: TInt32 n :: rest -> Ok (Int32Literal (-n), rest)
@@ -1543,6 +1585,7 @@ let parse (tokens: Token list) : Result<Program, string> =
     and parsePrimaryBase (toks: Token list) : Result<Expr * Token list, string> =
         match toks with
         | TInt64 n :: rest -> Ok (Int64Literal n, rest)
+        | TInt128Compat n :: rest -> Ok (Int128CompatLiteral n, rest)
         | TInt8 n :: rest -> Ok (Int8Literal n, rest)
         | TInt16 n :: rest -> Ok (Int16Literal n, rest)
         | TInt32 n :: rest -> Ok (Int32Literal n, rest)
@@ -1550,6 +1593,7 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TUInt16 n :: rest -> Ok (UInt16Literal n, rest)
         | TUInt32 n :: rest -> Ok (UInt32Literal n, rest)
         | TUInt64 n :: rest -> Ok (UInt64Literal n, rest)
+        | TUInt128Compat n :: rest -> Ok (UInt128CompatLiteral n, rest)
         | TFloat f :: rest -> Ok (FloatLiteral f, rest)
         | TStringLit s :: rest -> Ok (StringLiteral s, rest)
         | TCharLit s :: rest -> Ok (CharLiteral s, rest)
@@ -2032,6 +2076,7 @@ let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
     | PUnit
     | PWildcard
     | PInt64 _
+    | PInt128CompatLiteral _
     | PInt8Literal _
     | PInt16Literal _
     | PInt32Literal _
@@ -2039,6 +2084,7 @@ let rec private validatePattern (pattern: Pattern) : Result<unit, string> =
     | PUInt16Literal _
     | PUInt32Literal _
     | PUInt64Literal _
+    | PUInt128CompatLiteral _
     | PBool _
     | PString _
     | PChar _
@@ -2119,8 +2165,8 @@ let rec private validateExpr (expr: Expr) : Result<unit, string> =
         validateNoInternalIdentifier funcName
         |> Result.bind (fun () ->
             captures |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
-    | UnitLiteral | Int64Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
-    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _
+    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ -> Ok ()
 
 let private validateNoInternalIdentifiers (Program items) : Result<Program, string> =

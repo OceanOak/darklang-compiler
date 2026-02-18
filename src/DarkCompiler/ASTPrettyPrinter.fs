@@ -155,6 +155,7 @@ let rec private isAtomicExpr (expr: Expr) : bool =
     match expr with
     | UnitLiteral
     | Int64Literal _
+    | Int128CompatLiteral _
     | Int8Literal _
     | Int16Literal _
     | Int32Literal _
@@ -162,6 +163,7 @@ let rec private isAtomicExpr (expr: Expr) : bool =
     | UInt16Literal _
     | UInt32Literal _
     | UInt64Literal _
+    | UInt128CompatLiteral _
     | BoolLiteral _
     | StringLiteral _
     | CharLiteral _
@@ -204,6 +206,10 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
         match syntax with
         | CompilerSyntax -> $"{n}"
         | InterpreterSyntax -> $"{n}L"
+    | PInt128CompatLiteral n ->
+        match syntax with
+        | CompilerSyntax -> $"{n}Q"
+        | InterpreterSyntax -> $"{n}Q"
     | PInt8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}y"
@@ -232,6 +238,10 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
         match syntax with
         | CompilerSyntax -> $"{n}UL"
         | InterpreterSyntax -> $"{n}UL"
+    | PUInt128CompatLiteral n ->
+        match syntax with
+        | CompilerSyntax -> $"{n}Z"
+        | InterpreterSyntax -> $"{n}Z"
     | PBool b -> if b then "true" else "false"
     | PString s -> $"\"{escapeStringContent s}\""
     | PChar c -> $"'{escapeCharContent c}'"
@@ -267,6 +277,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     let isNegativeNumericLiteral (arg: Expr) : bool =
         match arg with
         | Int64Literal n -> n < 0L
+        | Int128CompatLiteral n -> n < 0L
         | Int8Literal n -> n < 0y
         | Int16Literal n -> n < 0s
         | Int32Literal n -> n < 0l
@@ -313,6 +324,10 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         match syntax with
         | CompilerSyntax -> $"{n}"
         | InterpreterSyntax -> $"{n}L"
+    | Int128CompatLiteral n ->
+        match syntax with
+        | CompilerSyntax -> $"{n}Q"
+        | InterpreterSyntax -> $"{n}Q"
     | Int8Literal n ->
         match syntax with
         | CompilerSyntax -> $"{n}y"
@@ -341,6 +356,10 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         match syntax with
         | CompilerSyntax -> $"{n}UL"
         | InterpreterSyntax -> $"{n}UL"
+    | UInt128CompatLiteral n ->
+        match syntax with
+        | CompilerSyntax -> $"{n}Z"
+        | InterpreterSyntax -> $"{n}Z"
     | BoolLiteral b -> if b then "true" else "false"
     | StringLiteral s -> $"\"{escapeStringContent s}\""
     | CharLiteral c -> $"'{escapeCharContent c}'"
@@ -374,6 +393,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         let isNumericLiteralExpr (expr: Expr) : bool =
             match expr with
             | Int64Literal _
+            | Int128CompatLiteral _
             | Int8Literal _
             | Int16Literal _
             | Int32Literal _
@@ -381,6 +401,7 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
             | UInt16Literal _
             | UInt32Literal _
             | UInt64Literal _
+            | UInt128CompatLiteral _
             | FloatLiteral _ -> true
             | _ -> false
         let leftText = formatChild true left
