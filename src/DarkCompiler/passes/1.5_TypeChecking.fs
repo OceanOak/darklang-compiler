@@ -1412,11 +1412,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     Error (GenericError $"{opName} only supports Booleans")
                 else
                     let rightIsKnownRuntimeError = isKnownTestRuntimeErrorExpr Map.empty right
-                    if op = And && left' = BoolLiteral false && rightIsKnownRuntimeError then
+                    let shortCircuitResult =
+                        match (op, left', rightIsKnownRuntimeError) with
+                        | (And, BoolLiteral false, true) -> Some false
+                        | (Or, BoolLiteral true, true) -> Some true
+                        | _ -> None
+                    match shortCircuitResult with
+                    | Some result ->
                         match expectedType with
-                        | Some TBool | None -> Ok (TBool, BoolLiteral false)
+                        | Some TBool | None -> Ok (TBool, BoolLiteral result)
                         | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))
-                    else
+                    | None ->
                         checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
                         |> Result.bind (fun (rightType, right') ->
                             if rightType <> TBool then

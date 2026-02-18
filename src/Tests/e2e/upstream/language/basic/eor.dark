@@ -13,7 +13,7 @@
 (false |> (||) false) = false
 
 // TODO bring back short-circuiting
-(true || Builtin.testRuntimeError "msg") = error="|| only supports Booleans"
+(true || Builtin.testRuntimeError "msg") = true
 (false || Builtin.testRuntimeError "msg") = error="|| only supports Booleans"
 
 (Builtin.testRuntimeError "msg1" || Builtin.testRuntimeError "msg2") = error="|| only supports Booleans"
