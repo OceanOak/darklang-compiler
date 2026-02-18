@@ -984,9 +984,9 @@ module PatternGrouping =
    | [ 1L; 2L; 3L ] -> "fail") =
     error="Cannot match String value \"\" with a List pattern"
 
-  // (match [ [ 1L; 2L ]; [ 3L; 4L ] ] with
-  //  | "1,2,3,4" -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match List<List<Int64>> value [  [    ... with a String pattern"
+  (match [ [ 1L; 2L ]; [ 3L; 4L ] ] with
+   | "1,2,3,4" -> "fail") =
+    error="Cannot match List<List<Int64>> value"
 
   // (match [ "" ] with
   //  // Different lengths
