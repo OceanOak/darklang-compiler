@@ -502,12 +502,12 @@ def Stdlib.String.dropLast(s: String, n: Int64) : String =
     else if n >= len then ""
     else Stdlib.String.take(s, len - n)
 
-// Get first character as Option (grapheme-aware)
+// Get first Unicode codepoint as Option
 def Stdlib.String.head(s: String) : Stdlib.Option.Option<String> =
-    if Stdlib.String.length(s) == 0 then
-        None
-    else
-        Some(Stdlib.String.take(s, 1))
+    let cps = Stdlib.String.toCodepoints(s) in
+    match cps with
+    | [] -> None
+    | [cp, ...rest] -> Some(Stdlib.String.fromCodepoints([cp]))
 
 // Pad string on the left to reach target length
 // Uses byte-based length for simplicity
