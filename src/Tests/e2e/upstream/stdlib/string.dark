@@ -16,7 +16,7 @@ module Append =
   "a" ++ "" = "a"
   "a" ++ "̂" = "â"
 
-  //Stdlib.String.append "a" "̂" = "â"
+  Stdlib.String.append "a" "̂" = "â"
   Stdlib.String.append "" "" = ""
   Stdlib.String.append "hello" " world" = "hello world"
   Stdlib.String.append "hello" "world" = "helloworld" // Stdlib.String.append works for ASCII range
