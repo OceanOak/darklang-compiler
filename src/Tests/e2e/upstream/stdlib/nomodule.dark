@@ -407,7 +407,7 @@ module NotEquals =
 
 
 // Moving to packages
-// AWS.urlencode_v0 "%" = ""
+AWS.urlencode_v0 "%" = ""
 // AWS.urlencode_v0 "%%" = ""
 // AWS.urlencode_v0 "%A" = "A"
 // AWS.urlencode_v0 "%AA" = "%AA"
