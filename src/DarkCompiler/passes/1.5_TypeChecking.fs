@@ -1185,6 +1185,15 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                         TInt64
                                         actualType
                                         right)
+                            | Mul, TInt64, TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                GenericError
+                                    (formatLegacyParamTypeError
+                                        "Builtin.int64Multiply"
+                                        2
+                                        "b"
+                                        TInt64
+                                        actualType
+                                        right)
                             | _ ->
                                 err)
                         |> Result.bind (fun (rightType, right') ->
