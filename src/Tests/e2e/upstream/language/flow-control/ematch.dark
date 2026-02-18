@@ -1000,11 +1000,11 @@ module PatternGrouping =
    | [ [ 1L ] ] -> "fail") =
     error="Cannot match Float value 1.0 with an Int64 pattern"
 
-  // (match [ [ 1L; 2L ]; [ 3L; 4L ] ] with
-  //  | [ [ 1.0; 2.0 ]; [ 3L; 4L ] ] -> "fail"
-  //  | [ [ 1L; 2L ]; [ 3L; 4L ] ] -> "fail"
-  //  | _ -> "fail") = Builtin.testDerrorMessage
-  //   "Cannot match Int64 value 1 with a Float pattern"
+  (match [ [ 1L; 2L ]; [ 3L; 4L ] ] with
+   | [ [ 1.0; 2.0 ]; [ 3L; 4L ] ] -> "fail"
+   | [ [ 1L; 2L ]; [ 3L; 4L ] ] -> "fail"
+   | _ -> "fail") =
+    error="Cannot match Int64 value 1 with a Float pattern"
 
     // (match Stdlib.Option.Option.Some "hello" with
   //  | "hello" -> "fail"
