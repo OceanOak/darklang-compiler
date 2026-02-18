@@ -115,8 +115,8 @@ module InvalidFnCalls =
     (Builtin.testDerrorMessage "shouldReturnStringButDoesNot's return value expects String, but got Int64 (5)")
 
   // TODO fix this weird edge case (interpreter work)
-  // fnWithTypedReturn<String> () =
-  //   Builtin.testDerrorMessage "fnWithTypedReturn's return value should be a String. However, an Int64 (5) was returned instead."
+  fnWithTypedReturn<String> () =
+    error="fnWithTypedReturn's return value should be a String. However, an Int64 (5) was returned instead."
 
 
   // errors around type args take priority over ones about args
@@ -160,4 +160,3 @@ module GenericTypeArgsAreOK =
 
   (let partial = outer<Bool, String> true
   partial "ignored") = true
-
