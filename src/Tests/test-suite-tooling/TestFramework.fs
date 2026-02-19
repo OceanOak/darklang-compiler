@@ -156,7 +156,13 @@ let buildPassTimingColumns
     (_passTimingOrder: string list)
     (unaccountedTime: TimeSpan)
     : PassTimingColumns =
-    let consolidated = passTimings
+    let hiddenTimingNames =
+        Set.ofList [
+            "Unit Test Suite Execution"
+        ]
+    let consolidated =
+        passTimings
+        |> Map.filter (fun name _ -> not (Set.contains name hiddenTimingNames))
 
     let passDefinitions : (string * string * string) list =
         [
@@ -190,7 +196,6 @@ let buildPassTimingColumns
     let overheadDefinitions : (string * string) list =
         [
             ("Pass Test Suite Execution", "Pass Test Suite Execution")
-            ("Unit Test Suite Execution", "Unit Test Suite Execution")
             ("Stdlib Build Overhead", "Stdlib Build Overhead")
             ("E2E Test Parse", "E2E Test Parse")
             ("E2E Suite Context Overhead", "E2E Suite Context Overhead")

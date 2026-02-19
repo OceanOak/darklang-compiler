@@ -815,7 +815,7 @@ let main args =
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
                 println ""
 
-    // Run tests sequentially
+    // Keep suite timing for accounting consistency, but hide it from overhead display.
     runSuiteWithExecutionTiming
         "Unit Test Suite Execution"
         (fun () -> runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered)
