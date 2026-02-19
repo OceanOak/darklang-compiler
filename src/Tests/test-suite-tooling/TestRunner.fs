@@ -98,7 +98,7 @@ let main args =
     println ""
 
     // Use the source tree for test data to avoid copying files into the build output.
-    let testDataRoot = Path.GetFullPath(__SOURCE_DIRECTORY__)
+    let testDataRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
     let getTestFiles (dir : string) (suffix: string) =
         let fulldir = Path.Combine(testDataRoot, dir)
         Directory.GetFiles(fulldir, $"*.{suffix}", SearchOption.AllDirectories)

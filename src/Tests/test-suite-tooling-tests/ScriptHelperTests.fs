@@ -9,7 +9,7 @@ open System.IO
 type TestResult = Result<unit, string>
 
 let private repoRoot =
-    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
+    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "..", ".."))
 
 let private readFile (path: string) : Result<string, string> =
     try Ok (File.ReadAllText(path))

@@ -9,56 +9,62 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- DSL Test Infrastructure -->
-    <Compile Include="TestDSL/Common.fs" />
-    <Compile Include="TestDSL/ANFParser.fs" />
-    <Compile Include="TestDSL/MIRParser.fs" />
-    <Compile Include="TestDSL/LIRParser.fs" />
-    <Compile Include="TestDSL/ARM64Parser.fs" />
-    <Compile Include="TestDSL/ARM64SymbolicParser.fs" />
-    <Compile Include="TestDSL/ARM64EncodingFormat.fs" />
-    <Compile Include="TestDSL/E2EFormat.fs" />
-    <Compile Include="TestDSL/TypeCheckingFormat.fs" />
-    <Compile Include="TestDSL/OptimizationFormat.fs" />
-    <Compile Include="TestDSL/FormattingRoundtripFormat.fs" />
-    <Compile Include="Runners/PassTestRunner.fs" />
-    <Compile Include="Runners/ARM64EncodingTestRunner.fs" />
-    <Compile Include="Runners/E2ETestRunner.fs" />
-    <Compile Include="Runners/TypeCheckingTestRunner.fs" />
-    <Compile Include="Runners/OptimizationTestRunner.fs" />
-    <Compile Include="TestRunnerColors.fs" />
-    <Compile Include="ProgressBar.fs" />
-    <Compile Include="TestFramework.fs" />
+    <!-- Test suite tooling -->
+    <Compile Include="test-suite-tooling/TestDSL/Common.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/ANFParser.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/MIRParser.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/LIRParser.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/ARM64Parser.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/ARM64SymbolicParser.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/ARM64EncodingFormat.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/E2EFormat.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/TypeCheckingFormat.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/OptimizationFormat.fs" />
+    <Compile Include="test-suite-tooling/TestDSL/FormattingRoundtripFormat.fs" />
+    <Compile Include="test-suite-tooling/Runners/PassTestRunner.fs" />
+    <Compile Include="test-suite-tooling/Runners/ARM64EncodingTestRunner.fs" />
+    <Compile Include="test-suite-tooling/Runners/E2ETestRunner.fs" />
+    <Compile Include="test-suite-tooling/Runners/TypeCheckingTestRunner.fs" />
+    <Compile Include="test-suite-tooling/Runners/OptimizationTestRunner.fs" />
+    <Compile Include="test-suite-tooling/TestRunnerColors.fs" />
+    <Compile Include="test-suite-tooling/ProgressBar.fs" />
+    <Compile Include="test-suite-tooling/TestFramework.fs" />
+    <Compile Include="test-suite-tooling/TestRunnerArgs.fs" />
 
-    <!-- Unit tests -->
-    <Compile Include="TestRunnerArgs.fs" />
-    <Compile Include="TestRunnerArgsTests.fs" />
-    <Compile Include="TestFrameworkTests.fs" />
-    <Compile Include="CliFlagTests.fs" />
-    <Compile Include="IRSymbolTests.fs" />
-    <Compile Include="IRPrinterTests.fs" />
-    <Compile Include="MIROptimizeTests.fs" />
-    <Compile Include="ScriptHelperTests.fs" />
-    <Compile Include="PassTestRunnerTests.fs" />
-    <Compile Include="ProgressBarTests.fs" />
-    <Compile Include="EncodingTests.fs" />
-    <Compile Include="BinaryTests.fs" />
-    <Compile Include="TypeCheckingTests.fs" />
-    <Compile Include="ParallelMoveTests.fs" />
-    <Compile Include="SSALivenessTests.fs" />
-    <Compile Include="PhiResolutionTests.fs" />
-    <Compile Include="ChordalGraphTests.fs" />
-    <Compile Include="ASTToANFTests.fs" />
-    <Compile Include="ANFInliningTests.fs" />
-    <Compile Include="MonomorphizationTests.fs" />
-    <Compile Include="LambdaLiftingTests.fs" />
-    <Compile Include="SyntaxInteropTests.fs" />
-    <Compile Include="FormattingRoundtripTests.fs" />
-    <Compile Include="SyntaxRoundtripCorpusTests.fs" />
-    <Compile Include="E2EFormatTests.fs" />
+    <!-- Tests for test suite tooling -->
+    <Compile Include="test-suite-tooling-tests/TestRunnerArgsTests.fs" />
+    <Compile Include="test-suite-tooling-tests/TestFrameworkTests.fs" />
+    <Compile Include="test-suite-tooling-tests/ScriptHelperTests.fs" />
+    <Compile Include="test-suite-tooling-tests/PassTestRunnerTests.fs" />
+    <Compile Include="test-suite-tooling-tests/ProgressBarTests.fs" />
+    <Compile Include="test-suite-tooling-tests/FormattingRoundtripTests.fs" />
+    <Compile Include="test-suite-tooling-tests/E2EFormatTests.fs" />
+
+    <!-- Compiler driver tests -->
+    <Compile Include="compiler-driver/CliFlagTests.fs" />
+
+    <!-- Compiler pass tests -->
+    <Compile Include="compiler-passes/IRSymbolTests.fs" />
+    <Compile Include="compiler-passes/IRPrinterTests.fs" />
+    <Compile Include="compiler-passes/EncodingTests.fs" />
+    <Compile Include="compiler-passes/BinaryTests.fs" />
+    <Compile Include="compiler-passes/TypeCheckingTests.fs" />
+    <Compile Include="compiler-passes/ParallelMoveTests.fs" />
+    <Compile Include="compiler-passes/SSALivenessTests.fs" />
+    <Compile Include="compiler-passes/PhiResolutionTests.fs" />
+    <Compile Include="compiler-passes/ChordalGraphTests.fs" />
+    <Compile Include="compiler-passes/ASTToANFTests.fs" />
+    <Compile Include="compiler-passes/MonomorphizationTests.fs" />
+    <Compile Include="compiler-passes/LambdaLiftingTests.fs" />
+    <Compile Include="compiler-passes/SyntaxInteropTests.fs" />
+    <Compile Include="compiler-passes/SyntaxRoundtripCorpusTests.fs" />
+
+    <!-- Optimization tests -->
+    <Compile Include="optimizations/MIROptimizeTests.fs" />
+    <Compile Include="optimizations/ANFInliningTests.fs" />
 
     <!-- Test Runner (must be last) -->
-    <Compile Include="TestRunner.fs" />
+    <Compile Include="test-suite-tooling/TestRunner.fs" />
   </ItemGroup>
 
   <ItemGroup>
