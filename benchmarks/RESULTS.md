@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-17 22:14:06
-**Commit:** `df8c03bd` - Enable one ematch UInt64 literal pattern assertion
+**Last Updated:** 2026-02-19 23:03:43
+**Commit:** `249a2b99` - Enable one AWS urlencode upstream test via legacy wrapper support
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

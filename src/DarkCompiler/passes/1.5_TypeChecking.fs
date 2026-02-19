@@ -1360,6 +1360,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                             | TSum (sumTypeName, sumTypeArgs) ->
                                                 let leftSumVar = $"__sum_eq_left_{counter}"
                                                 let rightSumVar = $"__sum_eq_right_{counter}"
+                                                let sumPairVar = $"__sum_eq_pair_{counter}"
 
                                                 let variantsForType =
                                                     variantLookup
@@ -1390,40 +1391,42 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                                     | (variantName, tag, payloadTypeOpt) :: rest ->
                                                         match payloadTypeOpt with
                                                         | None ->
-                                                            let rightWhenSameVariant =
-                                                                makeCase (PConstructor (variantName, None)) (BoolLiteral true)
-                                                            let rightNoMatch =
-                                                                makeCase PWildcard (BoolLiteral false)
-                                                            let rightMatchExpr =
-                                                                Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
-                                                            let leftCase =
-                                                                makeCase (PConstructor (variantName, None)) rightMatchExpr
-                                                            buildVariantCases rest c (leftCase :: acc)
+                                                            let pairPattern =
+                                                                PTuple [PConstructor (variantName, None); PConstructor (variantName, None)]
+                                                            let pairCase = makeCase pairPattern (BoolLiteral true)
+                                                            buildVariantCases rest c (pairCase :: acc)
                                                         | Some payloadType ->
                                                             let leftPayloadVar = $"__sum_eq_left_payload_{tag}_{c}"
                                                             let rightPayloadVar = $"__sum_eq_right_payload_{tag}_{c}"
                                                             let (payloadEqExpr, c') =
                                                                 buildEqExpr seen' (c + 1) payloadType (Var leftPayloadVar) (Var rightPayloadVar)
-                                                            let rightWhenSameVariant =
-                                                                makeCase
-                                                                    (PConstructor (variantName, Some (PVar rightPayloadVar)))
-                                                                    payloadEqExpr
-                                                            let rightNoMatch =
-                                                                makeCase PWildcard (BoolLiteral false)
-                                                            let rightMatchExpr =
-                                                                Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
-                                                            let leftCase =
-                                                                makeCase
-                                                                    (PConstructor (variantName, Some (PVar leftPayloadVar)))
-                                                                    rightMatchExpr
-                                                            buildVariantCases rest c' (leftCase :: acc)
+                                                            let pairPattern =
+                                                                PTuple [
+                                                                    PConstructor (variantName, Some (PVar leftPayloadVar))
+                                                                    PConstructor (variantName, Some (PVar rightPayloadVar))
+                                                                ]
+                                                            let pairCase = makeCase pairPattern payloadEqExpr
+                                                            buildVariantCases rest c' (pairCase :: acc)
 
                                                 let (variantCases, nextCounter) =
                                                     buildVariantCases variantsForType (counter + 1) []
 
                                                 let defaultCase = makeCase PWildcard (BoolLiteral false)
-                                                let sumBody = Match (Var leftSumVar, variantCases @ [defaultCase])
-                                                (Let (leftSumVar, leftExpr, Let (rightSumVar, rightExpr, sumBody)), nextCounter)
+                                                let sumBody = Match (Var sumPairVar, variantCases @ [defaultCase])
+                                                (Let (
+                                                    leftSumVar,
+                                                    leftExpr,
+                                                    Let (
+                                                        rightSumVar,
+                                                        rightExpr,
+                                                        Let (
+                                                            sumPairVar,
+                                                            TupleLiteral [Var leftSumVar; Var rightSumVar],
+                                                            sumBody
+                                                        )
+                                                    )
+                                                ),
+                                                 nextCounter)
 
                                             | _ ->
                                                 (BinOp (Eq, leftExpr, rightExpr), counter)

@@ -29,6 +29,110 @@ let expectType (expr: Expr) (expectedType: Type) : TestResult =
 let testInt64Literal () : TestResult =
     expectType (Int64Literal 42L) TInt64
 
+let rec countMatches (expr: Expr) : int =
+    let childMatches =
+        match expr with
+        | UnitLiteral
+        | Int64Literal _
+        | Int128CompatLiteral _
+        | Int8Literal _
+        | Int16Literal _
+        | Int32Literal _
+        | UInt8Literal _
+        | UInt16Literal _
+        | UInt32Literal _
+        | UInt64Literal _
+        | UInt128CompatLiteral _
+        | BoolLiteral _
+        | StringLiteral _
+        | CharLiteral _
+        | FloatLiteral _
+        | Var _
+        | FuncRef _ ->
+            []
+        | InterpolatedString parts ->
+            parts
+            |> List.choose (function
+                | StringText _ -> None
+                | StringExpr e -> Some e)
+        | BinOp (_, left, right) ->
+            [left; right]
+        | UnaryOp (_, inner) ->
+            [inner]
+        | Let (_, value, body) ->
+            [value; body]
+        | If (cond, thenBranch, elseBranch) ->
+            [cond; thenBranch; elseBranch]
+        | Call (_, args)
+        | TypeApp (_, _, args)
+        | TupleLiteral args
+        | ListLiteral args ->
+            args
+        | TupleAccess (tuple, _) ->
+            [tuple]
+        | RecordLiteral (_, fields) ->
+            fields |> List.map snd
+        | RecordUpdate (recordExpr, updates) ->
+            recordExpr :: (updates |> List.map snd)
+        | RecordAccess (recordExpr, _) ->
+            [recordExpr]
+        | Constructor (_, _, payload) ->
+            payload |> Option.toList
+        | Match (scrutinee, cases) ->
+            scrutinee :: (cases |> List.map (fun c -> c.Body))
+        | ListCons (head, tail) ->
+            head @ [tail]
+        | Lambda (_, body) ->
+            [body]
+        | Apply (func, args) ->
+            func :: args
+        | Closure (_, captures) ->
+            captures
+
+    let childCount = childMatches |> List.sumBy countMatches
+    match expr with
+    | Match _ -> childCount + 1
+    | _ -> childCount
+
+/// Sum equality should lower to one pair-match instead of nested match trees.
+let testSumEqualityUsesSinglePairMatch () : TestResult =
+    let sumDef =
+        TypeDef (
+            SumTypeDef (
+                "ChoiceTc",
+                ["a"; "b"],
+                [
+                    { Name = "ChoiceLeftTc"; Payload = Some (TVar "a") }
+                    { Name = "ChoiceRightTc"; Payload = Some (TVar "b") }
+                ]
+            )
+        )
+
+    let eqExpr =
+        Let (
+            "a",
+            Constructor ("ChoiceTc", "ChoiceLeftTc", Some (Int64Literal 1L)),
+            Let (
+                "b",
+                Constructor ("ChoiceTc", "ChoiceLeftTc", Some (Int64Literal 1L)),
+                BinOp (Eq, Var "a", Var "b")
+            )
+        )
+
+    let program = Program [sumDef; Expression eqExpr]
+
+    match checkProgram program with
+    | Ok (TBool, Program [_; Expression typedExpr]) ->
+        let matchCount = countMatches typedExpr
+        if matchCount = 1 then
+            Ok ()
+        else
+            Error $"Expected one Match in transformed sum equality, got {matchCount}"
+    | Ok (actualType, Program _) ->
+        Error $"Expected Bool result type, got {typeToString actualType}"
+    | Error err ->
+        Error $"Type checking failed: {typeErrorToString err}"
+
 /// Test that addition of integers has type TInt64
 let testAddition () : TestResult =
     expectType (BinOp (Add, Int64Literal 2L, Int64Literal 3L)) TInt64
@@ -68,6 +172,7 @@ let testComplexExpression () : TestResult =
 
 let tests = [
     ("Integer literal", testInt64Literal)
+    ("Sum equality uses single pair match", testSumEqualityUsesSinglePairMatch)
     ("Addition", testAddition)
     ("Subtraction", testSubtraction)
     ("Multiplication", testMultiplication)
