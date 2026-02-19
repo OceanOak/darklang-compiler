@@ -207,6 +207,7 @@ let main args =
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let buildUnitTests (_stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
         { Name = "Test Runner Args Tests"; Tests = TestRunnerArgsTests.tests }
+        { Name = "Test Framework Tests"; Tests = TestFrameworkTests.tests }
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
@@ -256,6 +257,17 @@ let main args =
             Crash.crash $"recordPhaseOverhead: pass timing delta ({passDelta}) is negative for {name}"
         let overhead = elapsed - passDelta
         recordNonPassTiming name overhead
+    let runSuiteWithExecutionTiming (timingName: string) (runSuite: unit -> unit) : unit =
+        let suitePassTimingStart = passTimingTotal ()
+        let suiteTimer = Stopwatch.StartNew()
+        runSuite ()
+        suiteTimer.Stop()
+        let suitePassTimingEnd = passTimingTotal ()
+        recordPhaseOverhead
+            timingName
+            suiteTimer.Elapsed
+            suitePassTimingStart
+            suitePassTimingEnd
 
     let stdlibPassTimingStart = passTimingTotal ()
     let timer = Stopwatch.StartNew()
@@ -513,49 +525,58 @@ let main args =
     let anf2mirTests = anf2mirTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
     let runANF2MIRFile =
         runPassTestFile loadANF2MIRTest (fun (input, expected) -> runANF2MIRTest input expected)
-    runFileSuite
-        runState
-        symbols
-        "📦 ANF→MIR Tests"
-        "ANF→MIR"
-        anf2mirTests
-        Path.GetFileName
-        (fun testName -> $"ANF→MIR: {testName}")
-        runANF2MIRFile
-        (handlePassTestSuccess "ANF→MIR")
-        (handlePassTestError "ANF→MIR")
+    runSuiteWithExecutionTiming
+        "Pass Test Suite Execution"
+        (fun () ->
+            runFileSuite
+                runState
+                symbols
+                "📦 ANF→MIR Tests"
+                "ANF→MIR"
+                anf2mirTests
+                Path.GetFileName
+                (fun testName -> $"ANF→MIR: {testName}")
+                runANF2MIRFile
+                (handlePassTestSuccess "ANF→MIR")
+                (handlePassTestError "ANF→MIR"))
 
     // Run MIR→LIR tests
     let mir2lirTests = mir2lirTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
     let runMIR2LIRFile =
         runPassTestFile loadMIR2LIRTest (fun (input, expected) -> runMIR2LIRTest input expected)
-    runFileSuite
-        runState
-        symbols
-        "🔄 MIR→LIR Tests"
-        "MIR→LIR"
-        mir2lirTests
-        Path.GetFileName
-        (fun testName -> $"MIR→LIR: {testName}")
-        runMIR2LIRFile
-        (handlePassTestSuccess "MIR→LIR")
-        (handlePassTestError "MIR→LIR")
+    runSuiteWithExecutionTiming
+        "Pass Test Suite Execution"
+        (fun () ->
+            runFileSuite
+                runState
+                symbols
+                "🔄 MIR→LIR Tests"
+                "MIR→LIR"
+                mir2lirTests
+                Path.GetFileName
+                (fun testName -> $"MIR→LIR: {testName}")
+                runMIR2LIRFile
+                (handlePassTestSuccess "MIR→LIR")
+                (handlePassTestError "MIR→LIR"))
 
     // Run LIR→ARM64 tests
     let lir2arm64Tests = lir2arm64TestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
     let runLIR2ARM64File =
         runPassTestFile loadLIR2ARM64Test (fun (input, expected) -> runLIR2ARM64Test input expected)
-    runFileSuite
-        runState
-        symbols
-        "🎯 LIR→ARM64 Tests"
-        "LIR→ARM64"
-        lir2arm64Tests
-        Path.GetFileName
-        (fun testName -> $"LIR→ARM64: {testName}")
-        runLIR2ARM64File
-        (handlePassTestSuccess "LIR→ARM64")
-        (handlePassTestError "LIR→ARM64")
+    runSuiteWithExecutionTiming
+        "Pass Test Suite Execution"
+        (fun () ->
+            runFileSuite
+                runState
+                symbols
+                "🎯 LIR→ARM64 Tests"
+                "LIR→ARM64"
+                lir2arm64Tests
+                Path.GetFileName
+                (fun testName -> $"LIR→ARM64: {testName}")
+                runLIR2ARM64File
+                (handlePassTestSuccess "LIR→ARM64")
+                (handlePassTestError "LIR→ARM64"))
 
     // Run ARM64 encoding tests
     let arm64encTests = arm64encTestFiles |> Array.filter (fun p -> matchesFilter filter (Path.GetFileName p))
@@ -563,17 +584,20 @@ let main args =
         runPassTestFile
             TestDSL.ARM64EncodingTestRunner.loadARM64EncodingTest
             TestDSL.ARM64EncodingTestRunner.runARM64EncodingTest
-    runFileSuite
-        runState
-        symbols
-        "⚙️  ARM64 Encoding Tests"
-        "ARM64 Enc"
-        arm64encTests
-        Path.GetFileName
-        (fun testName -> $"ARM64 Encoding: {testName}")
-        runARM64EncodingFile
-        (handlePassTestSuccess "ARM64 Encoding")
-        (handlePassTestError "ARM64 Encoding")
+    runSuiteWithExecutionTiming
+        "Pass Test Suite Execution"
+        (fun () ->
+            runFileSuite
+                runState
+                symbols
+                "⚙️  ARM64 Encoding Tests"
+                "ARM64 Enc"
+                arm64encTests
+                Path.GetFileName
+                (fun testName -> $"ARM64 Encoding: {testName}")
+                runARM64EncodingFile
+                (handlePassTestSuccess "ARM64 Encoding")
+                (handlePassTestError "ARM64 Encoding"))
 
     // Run Type Checking tests
     let typecheckTests =
@@ -627,17 +651,20 @@ let main args =
               Details = [] }
         ProgressBar.update progress
         { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
-    runFileSuite
-        runState
-        symbols
-        "📋 Type Checking Tests"
-        "TypeCheck"
-        typecheckTests
-        (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
-        (fun fileName -> $"TypeCheck: {fileName}")
-        runTypecheckFile
-        handleTypecheckSuccess
-        handleTypecheckError
+    runSuiteWithExecutionTiming
+        "Pass Test Suite Execution"
+        (fun () ->
+            runFileSuite
+                runState
+                symbols
+                "📋 Type Checking Tests"
+                "TypeCheck"
+                typecheckTests
+                (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
+                (fun fileName -> $"TypeCheck: {fileName}")
+                runTypecheckFile
+                handleTypecheckSuccess
+                handleTypecheckError)
 
     // Run Optimization Tests (ANF, MIR, LIR)
     if optTestFiles.Length > 0 then
@@ -693,17 +720,20 @@ let main args =
                   Details = [] }
             ProgressBar.update progress
             { Passed = 0; Failed = 1; FailedTests = [ failedInfo ] }
-        runFileSuite
-            runState
-            symbols
-            "⚡ Optimization Tests"
-            "Optimization"
-            optTestFiles
-            (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
-            (fun fileName -> $"Optimization: {fileName}")
-            runOptimizationFile
-            handleOptimizationSuccess
-            handleOptimizationError
+        runSuiteWithExecutionTiming
+            "Pass Test Suite Execution"
+            (fun () ->
+                runFileSuite
+                    runState
+                    symbols
+                    "⚡ Optimization Tests"
+                    "Optimization"
+                    optTestFiles
+                    (fun testPath -> Path.GetFileNameWithoutExtension (testPath: string))
+                    (fun fileName -> $"Optimization: {fileName}")
+                    runOptimizationFile
+                    handleOptimizationSuccess
+                    handleOptimizationError)
 
     // Order unit test suites so non-stdlib tests run first.
     let splitUnitTestsByStdlibNeed
@@ -788,7 +818,9 @@ let main args =
                 println ""
 
     // Run tests sequentially
-    runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered
+    runSuiteWithExecutionTiming
+        "Unit Test Suite Execution"
+        (fun () -> runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered)
     runE2EAndVerification stdlib
 
     // Compute stdlib coverage only if --coverage flag is set

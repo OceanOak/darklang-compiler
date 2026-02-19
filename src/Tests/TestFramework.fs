@@ -189,6 +189,8 @@ let buildPassTimingColumns
 
     let overheadDefinitions : (string * string) list =
         [
+            ("Pass Test Suite Execution", "Pass Test Suite Execution")
+            ("Unit Test Suite Execution", "Unit Test Suite Execution")
             ("Stdlib Build Overhead", "Stdlib Build Overhead")
             ("E2E Test Parse", "E2E Test Parse")
             ("E2E Suite Context Overhead", "E2E Suite Context Overhead")

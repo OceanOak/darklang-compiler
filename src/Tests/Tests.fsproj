@@ -33,6 +33,7 @@
     <!-- Unit tests -->
     <Compile Include="TestRunnerArgs.fs" />
     <Compile Include="TestRunnerArgsTests.fs" />
+    <Compile Include="TestFrameworkTests.fs" />
     <Compile Include="CliFlagTests.fs" />
     <Compile Include="IRSymbolTests.fs" />
     <Compile Include="IRPrinterTests.fs" />

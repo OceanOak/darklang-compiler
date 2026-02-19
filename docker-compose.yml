@@ -3,10 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Override LOCAL_UID/LOCAL_GID when host IDs differ from macOS defaults (501:20)
+      args:
+        LOCAL_UID: ${LOCAL_UID:-501}
+        LOCAL_GID: ${LOCAL_GID:-20}
       platforms:
         - linux/arm64
     image: compiler-for-dark:dev
     container_name: compiler-dev
+    user: "${LOCAL_UID:-501}:${LOCAL_GID:-20}"
 
     # Volume mounts
     volumes:
@@ -20,10 +25,6 @@ services:
 
       # Persist .NET packages across container restarts
       - dotnet-packages:/home/paulbiggar/.nuget/packages
-
-      # Persist build outputs (optional, for speed)
-      - build-output:/Users/paulbiggar/projects/compiler-for-dark/bin
-      - build-intermediate:/Users/paulbiggar/projects/compiler-for-dark/obj
 
     working_dir: /Users/paulbiggar/projects/compiler-for-dark
 
@@ -43,5 +44,3 @@ services:
 
 volumes:
   dotnet-packages:
-  build-output:
-  build-intermediate:
