@@ -410,7 +410,7 @@ module NotEquals =
 AWS.urlencode_v0 "%" = ""
 AWS.urlencode_v0 "%%" = ""
 AWS.urlencode_v0 "%A" = "A"
-// AWS.urlencode_v0 "%AA" = "%AA"
+AWS.urlencode_v0 "%AA" = "%AA"
 // AWS.urlencode_v0 "" = ""
 // AWS.urlencode_v0 "殢" = "%E6%AE%A2"
 // AWS.urlencode_v0 "https://google.com?q=left shark&l=en" = "https%3A//google.com%3Fq%3Dleft%20shark%26l%3Den" // Test fails without a comment here
