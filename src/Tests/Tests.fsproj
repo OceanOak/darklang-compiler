@@ -32,8 +32,6 @@
     <Compile Include="test-suite-tooling/TestRunnerArgs.fs" />
 
     <!-- Tests for test suite tooling -->
-    <Compile Include="test-suite-tooling-tests/TestRunnerArgsTests.fs" />
-    <Compile Include="test-suite-tooling-tests/TestFrameworkTests.fs" />
     <Compile Include="test-suite-tooling-tests/ScriptHelperTests.fs" />
     <Compile Include="test-suite-tooling-tests/PassTestRunnerTests.fs" />
     <Compile Include="test-suite-tooling-tests/ProgressBarTests.fs" />

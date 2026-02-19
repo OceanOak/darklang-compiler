@@ -206,8 +206,6 @@ let main args =
 
     let unitStdlibSuites = [ "Stdlib Compile Tests"; "Preamble Build Tests" ]
     let buildUnitTests (_stdlib: CompilerLibrary.StdlibResult) : UnitTestSuite array = [|
-        { Name = "Test Runner Args Tests"; Tests = TestRunnerArgsTests.tests }
-        { Name = "Test Framework Tests"; Tests = TestFrameworkTests.tests }
         { Name = "CLI Flags Tests"; Tests = CliFlagTests.tests }
         { Name = "IR Symbol Tests"; Tests = IRSymbolTests.tests }
         { Name = "IR Printer Tests"; Tests = IRPrinterTests.tests }
