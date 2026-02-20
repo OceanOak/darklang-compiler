@@ -5936,14 +5936,19 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let elemTypes =
                         match tupleType with
                         | AST.TTuple types -> types
-                        | _ -> List.replicate (List.length tupPats) AST.TInt64
+                        | _ -> Crash.crash $"Tuple head pattern expects tuple element type, got {typeToString tupleType}"
                     match tupPats with
                     | [] -> Ok (env, bindings, vg)
                     | tupPat :: tupRest ->
                         let (rawElemVar, vg1) = ANF.freshVar vg
                         let rawElemExpr = ANF.TupleGet (tupleAtom, idx)
                         let rawElemBinding = (rawElemVar, rawElemExpr)
-                        let elemT = if idx < List.length elemTypes then List.item idx elemTypes else AST.TInt64
+                        let elemT =
+                            if idx < List.length elemTypes then
+                                List.item idx elemTypes
+                            else
+                                Crash.crash
+                                    $"Tuple head pattern arity mismatch: requested index {idx}, tuple has {List.length elemTypes} elements"
                         // Wrap with TypedAtom to preserve correct element type in TypeMap
                         let (elemVar, vg1') = ANF.freshVar vg1
                         let elemExpr = ANF.TypedAtom (ANF.Var rawElemVar, elemT)
@@ -5958,6 +5963,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             extractTupleBindings tupRest tupleAtom tupleType (idx + 1) env (bindings @ [rawElemBinding]) vg1
                         | _ ->
                             Error $"Nested pattern in tuple element not yet supported: {tupPat}"
+
+                let tupleHeadPatternCanMatch (tupleType: AST.Type) (patterns: AST.Pattern list) : bool =
+                    match tupleType with
+                    | AST.TTuple elemTypes -> List.length elemTypes = List.length patterns
+                    | _ -> false
 
                 match headPatterns with
                 | [] ->
@@ -6022,8 +6032,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PVar name -> Ok (Map.add name (typedHeadVar, elemType) currentEnv, [], vg3', None)  // Use typed head var with element type
                             | AST.PWildcard -> Ok (currentEnv, [], vg3', None)
                             | AST.PTuple innerPatterns ->
-                                extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
-                                |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
+                                if tupleHeadPatternCanMatch elemType innerPatterns then
+                                    extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
+                                    |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
+                                else
+                                    let (guardVar, vg4) = ANF.freshVar vg3'
+                                    Ok (currentEnv, [], vg4, Some (guardVar, ANF.Atom (ANF.BoolLiteral false)))
                             | (AST.PInt64 _ as pat)
                             | (AST.PInt128CompatLiteral _ as pat)
                             | (AST.PInt8Literal _ as pat)
@@ -6101,8 +6115,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PVar name -> Ok (Map.add name (typedHeadVar, elemType) currentEnv, [], vg3', None)  // Use typed head var with element type
                             | AST.PWildcard -> Ok (currentEnv, [], vg3', None)
                             | AST.PTuple innerPatterns ->
-                                extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
-                                |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
+                                if tupleHeadPatternCanMatch elemType innerPatterns then
+                                    extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
+                                    |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
+                                else
+                                    let (guardVar, vg4) = ANF.freshVar vg3'
+                                    Ok (currentEnv, [], vg4, Some (guardVar, ANF.Atom (ANF.BoolLiteral false)))
                             | (AST.PInt64 _ as pat)
                             | (AST.PInt128CompatLiteral _ as pat)
                             | (AST.PInt8Literal _ as pat)

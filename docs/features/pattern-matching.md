@@ -169,6 +169,12 @@ match list with
 2. Extract head: `HeapLoad(list, 8)`
 3. Extract tail: `HeapLoad(list, 16)`
 
+Tuple destructuring inside list-cons heads (for example, `[(a, b), ...rest]`)
+uses the tuple element type from the list element type. If tuple arity does not
+match (for example `[(a, b, c), ...rest]` against a list of 2-tuples), the
+pattern is treated as a non-match and falls through to later cases. The ANF
+lowering does not default missing tuple element types to `Int64`.
+
 ## Constructor Pattern Compilation
 
 ```dark
