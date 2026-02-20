@@ -177,7 +177,7 @@ module Object =
   // // name with newline
   // // TODO not sure what's right here
   // format (Json.Object [ ("a\nb", Json.Null) ]) = "{\"a\nb\": null}"
-  // parse  "{\"a\nb\": null}" = parsedOk (Json.Object [ ("a\nb", Json.Null) ])
+  parse  "{\"a\nb\": null}" = parsedOk (Json.Object [ ("a\nb", Json.Null) ])
 
 module Errors =
   // names must be strings
