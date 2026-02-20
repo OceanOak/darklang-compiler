@@ -466,9 +466,41 @@ let lex (input: string) : Result<Token list, string> =
                 | c :: remaining ->
                     parseCharContent remaining (c :: chars)
 
-            match parseCharContent rest [] with
-            | Ok (str, remaining) -> lexHelper remaining (TCharLit str :: acc)
-            | Error err -> Error err
+            let parseCharLiteral () : Result<Token list, string> =
+                match parseCharContent rest [] with
+                | Ok (str, remaining) -> lexHelper remaining (TCharLit str :: acc)
+                | Error err -> Error err
+
+            let isApostropheTypeVarContext =
+                match acc with
+                | TLt :: _  // generic/type arg list start: <'a>
+                | TComma :: _  // additional generic/type arg: <'a, 'b>
+                | TColon :: _  // type annotation: x: 'a
+                | TArrow :: _  // function return type: ('a) -> 'b
+                | TOf :: _  // sum payload type: Case of 'a
+                | TEquals :: _ ->  // type alias body: type T = 'a
+                    true
+                | _ ->
+                    false
+
+            let rec parseTypeVarName (cs: char list) (chars: char list) : string * char list =
+                match cs with
+                | c :: remaining when System.Char.IsLetterOrDigit(c) || c = '_' ->
+                    parseTypeVarName remaining (c :: chars)
+                | _ ->
+                    (System.String(List.rev chars |> List.toArray), cs)
+
+            match rest with
+            | c :: _ when isApostropheTypeVarContext && (System.Char.IsLetter(c) || c = '_') ->
+                let (typeVarName, afterTypeVar) = parseTypeVarName rest []
+                match afterTypeVar with
+                | '\'' :: _ ->
+                    // Still a char literal if we see a closing quote.
+                    parseCharLiteral ()
+                | _ ->
+                    lexHelper afterTypeVar (TIdent typeVarName :: acc)
+            | _ ->
+                parseCharLiteral ()
 
         | '"' :: rest ->
             // Parse string literal with escape sequences

@@ -59,6 +59,18 @@ let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testCompilerParserParsesApostropheTypeArgAtCallSite () : TestResult =
+    let source = "Stdlib.Json.parse<'a>(\"5\")"
+    match Parser.parseString false source with
+    | Error err ->
+        Error $"Compiler parser failed on apostrophe type argument call site: {err}"
+    | Ok (Program [Expression (TypeApp ("Stdlib.Json.parse", [TVar "a"], [StringLiteral "5"]))]) ->
+        Ok ()
+    | Ok (Program [Expression expr]) ->
+        Error $"Unexpected AST for apostrophe type argument call site: {expr}"
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let testParseInterpreterRecordFunctionFieldType () : TestResult =
     let source =
         "type RecordWithFn = { fn: Int64 -> Int64 }\n"
@@ -183,6 +195,7 @@ let tests = [
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
+    ("parse compiler apostrophe type argument call site", testCompilerParserParsesApostropheTypeArgAtCallSite)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)
     ("typecheck interpreter record-function-field lambda", testTypeCheckInterpreterRecordFunctionFieldLambda)
