@@ -86,7 +86,7 @@ definedPolyFn<String>(X.B "str") = definedPolyFn (X.B "str")
 
 module InvalidFnCalls =
   (functionWhichDoesntExist 6L) =
-    (Builtin.testDerrorMessage "There is no variable named: functionWhichDoesntExist")
+    error="There is no variable named: functionWhichDoesntExist"
 
 
   // errors around type args

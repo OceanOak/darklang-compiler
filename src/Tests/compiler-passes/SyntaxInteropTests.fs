@@ -98,6 +98,33 @@ let testCompilerParserParsesApostropheTypeArgSpaceCallSite () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testInterpreterParserParsesApostropheTypeParamsInFunctionDef () : TestResult =
+    let source = "let fnWithTypeArgAndOneParam<'a> (arg: 'a) : 'a = arg"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on apostrophe type params in function definition: {err}"
+    | Ok (Program [FunctionDef fnDef]) ->
+        if fnDef.TypeParams = ["a"] then
+            Ok ()
+        else
+            Error $"Expected function type params ['a'], got: {fnDef.TypeParams}"
+    | Ok other ->
+        Error $"Unexpected AST for interpreter apostrophe type parameter function definition: {other}"
+
+let testInterpreterParserParsesCurriedTopLevelLetFunctionDef () : TestResult =
+    let source = "let addCurried (x: Int64) (y: Int64) : Int64 = x + y"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on curried top-level let function definition: {err}"
+    | Ok (Program [FunctionDef fnDef]) ->
+        match fnDef.Params with
+        | [("x", AST.TInt64); ("y", AST.TInt64)] ->
+            Ok ()
+        | _ ->
+            Error $"Unexpected parameters parsed for curried function definition: {fnDef.Params}"
+    | Ok other ->
+        Error $"Unexpected AST for interpreter curried top-level let function definition: {other}"
+
 let testParseInterpreterRecordFunctionFieldType () : TestResult =
     let source =
         "type RecordWithFn = { fn: Int64 -> Int64 }\n"
@@ -225,6 +252,8 @@ let tests = [
     ("parse interpreter pipe minus operator section", testParseInterpreterPipeMinusOperatorSection)
     ("parse compiler apostrophe type argument call site", testCompilerParserParsesApostropheTypeArgAtCallSite)
     ("parse compiler apostrophe type argument space call site", testCompilerParserParsesApostropheTypeArgSpaceCallSite)
+    ("parse interpreter apostrophe type params in function def", testInterpreterParserParsesApostropheTypeParamsInFunctionDef)
+    ("parse interpreter curried top-level let function def", testInterpreterParserParsesCurriedTopLevelLetFunctionDef)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)
     ("typecheck interpreter record-function-field lambda", testTypeCheckInterpreterRecordFunctionFieldLambda)
