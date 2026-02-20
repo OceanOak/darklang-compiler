@@ -4703,37 +4703,44 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // Helper to extract tuple elements from a value
                     // tupleType is the type of the tuple being destructured
                     let rec collectTupleBindings (tupPats: AST.Pattern list) (tupleAtom: ANF.Atom) (tupleType: AST.Type) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-                        let tupleElemTypes =
+                        let tupleElemTypesResult =
                             match tupleType with
-                            | AST.TTuple types -> types
-                            | _ -> List.replicate (List.length tupPats) AST.TInt64
-                        match tupPats with
-                        | [] -> Ok (env, bindings, vg)
-                        | tupPat :: tupRest ->
-                            let (elemVar, vg1) = ANF.freshVar vg
-                            let elemExpr = ANF.TupleGet (tupleAtom, idx)
-                            let elemBinding = (elemVar, elemExpr)
-                            let elemT = if idx < List.length tupleElemTypes then List.item idx tupleElemTypes else AST.TInt64
-                            match tupPat with
-                            | AST.PVar name ->
-                                let newEnv = Map.add name (elemVar, elemT) env
-                                collectTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [elemBinding]) vg1
-                            | AST.PWildcard ->
-                                collectTupleBindings tupRest tupleAtom tupleType (idx + 1) env bindings vg1
-                            | AST.PInt64 _ | AST.PInt128CompatLiteral _
-                            | AST.PInt8Literal _
-                            | AST.PInt16Literal _
-                            | AST.PInt32Literal _
-                            | AST.PUInt8Literal _
-                            | AST.PUInt16Literal _
-                            | AST.PUInt32Literal _
-                            | AST.PUInt64Literal _ | AST.PUInt128CompatLiteral _
-                            | AST.PUnit
-                            | AST.PConstructor _
-                            | AST.PBool _
-                            | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
-                            | AST.PList _ | AST.PListCons _ ->
-                                Error $"Nested pattern in tuple element not yet supported: {tupPat}"
+                            | AST.TTuple types when List.length types >= List.length tupPats -> Ok types
+                            | AST.TTuple types ->
+                                Error $"Tuple pattern expects {List.length tupPats} elements but got {List.length types}"
+                            | _ ->
+                                Error $"Tuple pattern expects tuple elements, got {typeToString tupleType}"
+                        match tupleElemTypesResult with
+                        | Error err ->
+                            Error err
+                        | Ok tupleElemTypes ->
+                            match tupPats with
+                            | [] -> Ok (env, bindings, vg)
+                            | tupPat :: tupRest ->
+                                let (elemVar, vg1) = ANF.freshVar vg
+                                let elemExpr = ANF.TupleGet (tupleAtom, idx)
+                                let elemBinding = (elemVar, elemExpr)
+                                let elemT = List.item idx tupleElemTypes
+                                match tupPat with
+                                | AST.PVar name ->
+                                    let newEnv = Map.add name (elemVar, elemT) env
+                                    collectTupleBindings tupRest tupleAtom tupleType (idx + 1) newEnv (bindings @ [elemBinding]) vg1
+                                | AST.PWildcard ->
+                                    collectTupleBindings tupRest tupleAtom tupleType (idx + 1) env bindings vg1
+                                | AST.PInt64 _ | AST.PInt128CompatLiteral _
+                                | AST.PInt8Literal _
+                                | AST.PInt16Literal _
+                                | AST.PInt32Literal _
+                                | AST.PUInt8Literal _
+                                | AST.PUInt16Literal _
+                                | AST.PUInt32Literal _
+                                | AST.PUInt64Literal _ | AST.PUInt128CompatLiteral _
+                                | AST.PUnit
+                                | AST.PConstructor _
+                                | AST.PBool _
+                                | AST.PString _ | AST.PChar _ | AST.PFloat _ | AST.PTuple _ | AST.PRecord _
+                                | AST.PList _ | AST.PListCons _ ->
+                                    Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 
                     let patternLen = List.length patterns
                     if patternLen = 0 then
