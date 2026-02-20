@@ -59,6 +59,21 @@ let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
+let testParseInterpreterPipeMinusOperatorSection () : TestResult =
+    let source = "4L |> (-) 3L"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on pipe minus operator section: {err}"
+    | Ok (Program [Expression (Apply (Lambda ([(paramName, _)], BinOp (Sub, Var leftName, Int64Literal 3L)), [Int64Literal 4L]))]) ->
+        if paramName = "$pipe_arg" && leftName = "$pipe_arg" then
+            Ok ()
+        else
+            Error $"Unexpected pipe operator-section lambda binding: param={paramName}, left={leftName}"
+    | Ok (Program [Expression expr]) ->
+        Error $"Unexpected AST for pipe minus operator section: {expr}"
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let testCompilerParserParsesApostropheTypeArgAtCallSite () : TestResult =
     let source = "Stdlib.Json.parse<'a>(\"5\")"
     match Parser.parseString false source with
@@ -207,6 +222,7 @@ let tests = [
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
     ("parse interpreter triple-quoted interpolation", testParseInterpreterTripleQuotedInterpolation)
     ("parse interpreter negative float application args", testParseInterpreterNegativeFloatApplicationArgs)
+    ("parse interpreter pipe minus operator section", testParseInterpreterPipeMinusOperatorSection)
     ("parse compiler apostrophe type argument call site", testCompilerParserParsesApostropheTypeArgAtCallSite)
     ("parse compiler apostrophe type argument space call site", testCompilerParserParsesApostropheTypeArgSpaceCallSite)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)

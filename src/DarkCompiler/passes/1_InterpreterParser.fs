@@ -1945,20 +1945,31 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TLParen :: rest ->
             // Could be parenthesized expression, tuple literal, or operator section
             // Check for operator section: (&&), (||), (+), (-), (*), (/), etc.
+            let parsePipeOperatorSection
+                (op: BinOp)
+                (paramType: Type)
+                (afterOp: Token list)
+                : Result<Expr * Token list, string> =
+                parseUnary afterOp
+                |> Result.map (fun (rightArg, remaining) ->
+                    let lambda =
+                        Lambda ([("$pipe_arg", paramType)], BinOp (op, Var "$pipe_arg", rightArg))
+                    (lambda, remaining))
             match rest with
             | TAnd :: TRParen :: afterOp ->
                 // (&&) - operator section, parse the right operand
-                parseUnary afterOp
-                |> Result.map (fun (rightArg, remaining) ->
-                    // Create lambda: \$x -> $x && rightArg
-                    let lambda = Lambda ([("$pipe_arg", TBool)], BinOp (And, Var "$pipe_arg", rightArg))
-                    (lambda, remaining))
+                parsePipeOperatorSection And TBool afterOp
             | TOr :: TRParen :: afterOp ->
                 // (||) - operator section
-                parseUnary afterOp
-                |> Result.map (fun (rightArg, remaining) ->
-                    let lambda = Lambda ([("$pipe_arg", TBool)], BinOp (Or, Var "$pipe_arg", rightArg))
-                    (lambda, remaining))
+                parsePipeOperatorSection Or TBool afterOp
+            | TPlus :: TRParen :: afterOp ->
+                let sectionType =
+                    TVar $"__interp_pipe_add_section_{List.length rest}_{List.length afterOp}"
+                parsePipeOperatorSection Add sectionType afterOp
+            | TMinus :: TRParen :: afterOp ->
+                let sectionType =
+                    TVar $"__interp_pipe_sub_section_{List.length rest}_{List.length afterOp}"
+                parsePipeOperatorSection Sub sectionType afterOp
             | _ ->
                 parseExpr rest
                 |> Result.bind (fun (firstExpr, remaining) ->
