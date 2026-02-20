@@ -4576,7 +4576,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let elemType =
                                 match sourceType with
                                 | AST.TList t -> t
-                                | _ -> AST.TInt64
+                                | _ -> AST.TVar "__list_elem_unknown"
                             // For list patterns, extract head elements using FingerTree operations
                             // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
                             // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
@@ -6616,12 +6616,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             // Build OR of multiple pattern conditions for pattern grouping
             // Returns: combined condition atom, all bindings, updated vargen
             let patternStaticallyCannotMatchScrutinee (pattern: AST.Pattern) : bool =
-                match pattern with
-                | AST.PTuple tuplePatterns ->
-                    match scrutType with
-                    | AST.TTuple elemTypes -> List.length tuplePatterns <> List.length elemTypes
-                    | _ -> true
-                | _ -> false
+                patternStaticallyCannotMatchType pattern scrutType
 
             let makeFalseCondition (vg: ANF.VarGen) : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
                 let (cmpVar, vg1) = ANF.freshVar vg

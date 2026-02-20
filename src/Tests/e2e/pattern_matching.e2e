@@ -370,6 +370,10 @@ match (1, 2) with | (x, _) | (_, _) -> x | _ -> 0 = error="Pattern grouping requ
 // Regression: lowering previously hit a TInt64 fallback and crashed during MIR conversion.
 match 42 with | 0 | [_] -> 1 | _ -> 99 = 99
 
+// Nested list pattern inside a grouped tuple alternative must not execute list extraction on non-list tuple fields.
+// Regression: default TInt64 element typing let an impossible branch segfault at runtime.
+match (1, 2) with | (x, 0) | ([x], _) -> x | _ -> 99 = 99
+
 // Tuple arity-mismatch alternatives in a grouped pattern must not default bindings to Int64.
 // The impossible `(x, _, _)` alternative should contribute no type bindings, so `x` stays String.
 (match ("a" ++ "b", 1) with | (x, _) | (x, _, _) -> x | _ -> "") == "ab" = true
