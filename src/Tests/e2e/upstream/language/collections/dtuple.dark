@@ -10,4 +10,4 @@
   error="Uncaught exception: test"
 
 (1L, Builtin.testRuntimeError "error1", Builtin.testRuntimeError "error2") =
-  (Builtin.testDerrorMessage "Uncaught exception: error1")
+  error="Uncaught exception: error1"
