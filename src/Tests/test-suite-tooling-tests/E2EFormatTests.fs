@@ -28,7 +28,7 @@ let private withTempFile (contents: string) (f: string -> TestResult) : TestResu
 let testParsesMultilineExpectationOnNextLine () : TestResult =
     let testSource =
         "(if true then Builtin.testRuntimeError \"a\" else 0L) =\n"
-        + "  Builtin.testDerrorMessage \"Uncaught exception: a\"\n"
+        + "  error=\"Uncaught exception: a\"\n"
 
     withTempFile testSource (fun path ->
         match parseE2ETestFile path with
@@ -40,11 +40,11 @@ let testParsesMultilineExpectationOnNextLine () : TestResult =
                 if not (test.Source.Contains("Builtin.testRuntimeError")) then
                     Error $"Expected parsed source to contain runtime error expression, got: {test.Source}"
                 elif test.ExpectedValueExpr <> None then
-                    Error "Expected Builtin.testDerrorMessage expectation to be parsed as error expectation"
+                    Error "Expected error= expectation to be parsed as error expectation"
                 elif test.ExpectedExitCode <> 1 then
                     Error $"Expected exit code 1, got {test.ExpectedExitCode}"
-                elif test.ExpectedStderr <> Some "Uncaught exception: a" then
-                    Error $"Expected stderr message parse, got: {test.ExpectedStderr}"
+                elif test.ExpectedErrorMessage <> Some "Uncaught exception: a" then
+                    Error $"Expected error message parse, got: {test.ExpectedErrorMessage}"
                 else
                     Ok ()
             | _ ->
@@ -144,7 +144,7 @@ let testParsesExpectationWithKeywordInsideQuotedMessage () : TestResult =
     let testSource =
         "module Errors =\n"
         + "  (match \"nothing matches\" with\n"
-        + "   | \"not this\" -> \"fail\") = Builtin.testDerrorMessage \"No matching case found for value \\\"nothing matches\\\" in match expression\"\n"
+        + "   | \"not this\" -> \"fail\") = error=\"No matching case found for value \\\"nothing matches\\\" in match expression\"\n"
 
     withTempFile testSource (fun path ->
         match parseE2ETestFile path with
@@ -155,8 +155,8 @@ let testParsesExpectationWithKeywordInsideQuotedMessage () : TestResult =
             | [ test ] ->
                 if test.ExpectedExitCode <> 1 then
                     Error $"Expected exit code 1, got {test.ExpectedExitCode}"
-                elif test.ExpectedStderr <> Some "No matching case found for value \"nothing matches\" in match expression" then
-                    Error $"Unexpected stderr parse: {test.ExpectedStderr}"
+                elif test.ExpectedErrorMessage <> Some "No matching case found for value \"nothing matches\" in match expression" then
+                    Error $"Unexpected error message parse: {test.ExpectedErrorMessage}"
                 else
                     Ok ()
             | _ ->
@@ -165,8 +165,8 @@ let testParsesExpectationWithKeywordInsideQuotedMessage () : TestResult =
 let testParsesMultilineExpectationWithFunctionHeadAndNextLineArg () : TestResult =
     let testSource =
         "(match 1L with\n"
-        + " | 1L -> \"wrong number\") = Builtin.testDerrorMessage\n"
-        + "  \"No matching case found\"\n"
+        + " | 1L -> \"wrong number\") =\n"
+        + "  error=\"No matching case found\"\n"
 
     withTempFile testSource (fun path ->
         match parseE2ETestFile path with
@@ -177,8 +177,8 @@ let testParsesMultilineExpectationWithFunctionHeadAndNextLineArg () : TestResult
             | [ test ] ->
                 if test.ExpectedExitCode <> 1 then
                     Error $"Expected exit code 1, got {test.ExpectedExitCode}"
-                elif test.ExpectedStderr <> Some "No matching case found" then
-                    Error $"Unexpected stderr parse: {test.ExpectedStderr}"
+                elif test.ExpectedErrorMessage <> Some "No matching case found" then
+                    Error $"Unexpected error message parse: {test.ExpectedErrorMessage}"
                 elif test.Preamble.Trim().Length <> 0 then
                     Error $"Expected empty preamble, got: {test.Preamble}"
                 else

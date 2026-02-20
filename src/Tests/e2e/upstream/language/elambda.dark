@@ -12,7 +12,7 @@ Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+1
 
 (let y = (fun msg -> Builtin.testRuntimeError msg)
  Stdlib.List.map_v0 [ "1"; "2"; "3"; "4" ] y) =
-   (Builtin.testDerrorMessage "Uncaught exception: 1")
+   error="Uncaught exception: 1"
 
 (let y = (fun a b -> a + b) in y 2L 3L) = 5L
 (let y = (fun (a, b) -> a + b) in y (2L, 3L)) = 5L
@@ -20,7 +20,7 @@ Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+1
 (let y = (fun a b -> a * b) in Stdlib.List.fold_v0 [ 1L; 2L; 3L; 4L ] 1L y) = 24L
 
 (Stdlib.List.fold_v0 [ 4L ] 1L (Builtin.testRuntimeError "test")) =
-  (Builtin.testDerrorMessage "Uncaught exception: test")
+  error="Uncaught exception: test"
 
 (let x = 5L
  let y = (fun c -> x + c)
@@ -34,7 +34,7 @@ Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+1
 
 (let y = (fun c -> if c > 2L then Builtin.testRuntimeError "err" else 18L)
  [ 1L; 2L; 3L; 4L ] |> Stdlib.List.map_v0 y) =
-  Builtin.testDerrorMessage "Uncaught exception: err"
+  error="Uncaught exception: err"
 
 (let y = (fun c -> if c > 2L then Builtin.testRuntimeError "err" else 18L)
  [ 1L; 2L ] |> Stdlib.List.map_v0 y) = [ 18L; 18L ]
@@ -91,7 +91,7 @@ Stdlib.List.push_v0 [] (fun x -> -4.611686018e+18) = [ (fun x -> -4.611686018e+1
 (let triplets = [ (1L, "one", true); (2L, "two", false) ]
  let transformer = fun (num, str) -> $"{Stdlib.Int64.toString num}:{str}"
  Stdlib.List.map_v0 triplets transformer) =
-  Builtin.testDerrorMessage "Could not deconstruct value (1, \"one\", true) into pattern ([variable], [variable])"
+  error="Could not deconstruct value (1, \"one\", true) into pattern ([variable], [variable])"
 
 Stdlib.Dict.map_v0
   (Dict

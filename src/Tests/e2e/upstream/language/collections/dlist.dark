@@ -7,9 +7,9 @@
 [ 5L; Stdlib.Int64.add_v0 1L 5L; 0L ] = [ 5L; 6L; 0L ]
 
 [ 5L; Builtin.testRuntimeError "test"; 0L ] =
-  Builtin.testDerrorMessage "Uncaught exception: test"
+  error="Uncaught exception: test"
 
 [ 5L; Builtin.testRuntimeError "1"; Builtin.testRuntimeError "2" ] =
-  Builtin.testDerrorMessage "Uncaught exception: 1"
+  error="Uncaught exception: 1"
 
 // TODO mixed data attempts
