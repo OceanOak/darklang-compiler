@@ -3,3 +3,7 @@
 
 // Raw float load should preserve float type through if-join
 let rawPtr = __raw_alloc(8) in let _ = __raw_set<Float>(rawPtr, 0, 1.5) in let rawVal = __raw_get<Float>(rawPtr, 0) in if true then rawVal else 2.5 = 1.5
+
+// __raw_get<T> should preserve T through ANF inferType when lowered to __raw_get_* intrinsics.
+// Regression: a fallback to TInt64 made this tuple/list pattern arm get optimized away.
+let p = __raw_alloc(8) in let _ = __raw_set<(List<String>, Int64)>(p, 0, (["a"], 1)) in let x = __raw_get<(List<String>, Int64)>(p, 0) in match x with | ([_], _) -> 1 | _ -> 2 = 1

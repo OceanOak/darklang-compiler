@@ -3339,8 +3339,10 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     // Check if it's a monomorphized intrinsic (e.g., __raw_get_i64)
                     // These are raw memory operations that work with 8-byte values
                     if funcName.StartsWith("__raw_get_") then
-                        // __raw_get<T> returns T, but at ANF level it's just Int64 (8 bytes)
-                        Ok AST.TInt64
+                        // Preserve the monomorphized return type; defaulting to Int64 can
+                        // incorrectly mark pattern-match branches as impossible.
+                        let suffix = funcName.Substring("__raw_get_".Length)
+                        tryParseMangledType variantLookup suffix
                     elif funcName.StartsWith("__raw_set_") then
                         // __raw_set<T> returns Unit
                         Ok AST.TUnit

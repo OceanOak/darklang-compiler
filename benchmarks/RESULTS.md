@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 23:01:33
-**Commit:** `d98a25c7` - Remove one TInt64 tuple fallback in list-cons tuple typing
+**Last Updated:** 2026-02-20 23:56:18
+**Commit:** `53acca14` - Remove one nested list-cons TInt64 fallback in ANF typing
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
