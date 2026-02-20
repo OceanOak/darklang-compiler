@@ -3123,7 +3123,10 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                 | AST.TTuple elemTypes when List.length elemTypes = List.length innerPats ->
                     List.zip innerPats elemTypes
                     |> List.fold (fun acc (pat, typ) -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat typ)) Map.empty
-                | _ -> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat AST.TInt64)) Map.empty innerPats
+                | _ ->
+                    // Non-matching tuple patterns must not introduce bindings with fabricated types.
+                    // Type checking treats these as non-matching alternatives.
+                    Map.empty
             | AST.PRecord (patternRecordName, fieldPats) ->
                 // Preserve concrete field types from the matched record.
                 // Falling back to Int64 here causes downstream mis-lowering (e.g. string == uses pointer eq).

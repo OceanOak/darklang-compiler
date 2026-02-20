@@ -366,6 +366,10 @@ match (1, 2) with | (x, x) -> x | _ -> 0 = error="Duplicate pattern bindings are
 // Pattern groups must bind the same names in every alternative
 match (1, 2) with | (x, _) | (_, _) -> x | _ -> 0 = error="Pattern grouping requires complete bindings in every alternative: expected [x], got []"
 
+// Tuple arity-mismatch alternatives in a grouped pattern must not default bindings to Int64.
+// The impossible `(x, _, _)` alternative should contribute no type bindings, so `x` stays String.
+(match ("a" ++ "b", 1) with | (x, _) | (x, _, _) -> x | _ -> "") == "ab" = true
+
 // Integer literal pattern on non-int scrutinee should be rejected
 match true with | 1 -> 42 | _ -> 0 = error="Cannot match Bool value true with an Int64 pattern"
 

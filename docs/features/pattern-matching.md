@@ -91,6 +91,13 @@ If a string field is inferred as `Int64`, later equality lowering will emit
 primitive pointer equality (`==`) instead of `__string_eq`, producing incorrect
 results for equal-but-distinct strings.
 
+### Pattern Grouping Type Preservation
+
+Grouped alternatives (`| pat1 | pat2 -> body`) must only contribute bindings
+from alternatives that can structurally match the scrutinee type. If an
+alternative is impossible (for example tuple arity mismatch), it must not add
+fabricated bindings with default types such as `Int64`.
+
 ### List Pattern
 ```dark
 | [] -> 0
