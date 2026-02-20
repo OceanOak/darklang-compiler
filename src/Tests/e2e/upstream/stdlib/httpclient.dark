@@ -42,7 +42,7 @@ let errUnsupportedProtocol = Stdlib.Result.Result.Error(Stdlib.HttpClient.Reques
 
 // basic requests work
 // TODO: these tests are flaky – replace httpbin.org call with a local server
-// ((get "https://httpbin.org" []) |> Stdlib.Result.map (fun r -> r.statusCode)) = Stdlib.Result.Result.Ok 200L
+((get "https://httpbin.org" []) |> Stdlib.Result.map (fun r -> r.statusCode)) = Stdlib.Result.Result.Ok 200L
 // ((get "http://httpbin.org" []) |> Stdlib.Result.map (fun r -> r.statusCode)) = Stdlib.Result.Result.Ok 200L
 
 Stdlib.HttpClient.request "get" "https://darklang.com" [ 1L ] [] =
