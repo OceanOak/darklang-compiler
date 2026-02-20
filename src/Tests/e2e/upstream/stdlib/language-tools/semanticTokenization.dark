@@ -586,14 +586,14 @@ module TokenizeExpression =
       (TokenType.Keyword, (0L, 16L), (0L, 20L))
       (TokenType.Keyword, (0L, 21L), (0L, 26L)) ]
 
-  // // CLEANUP: fix this, the range is correct, but the order isn't for typeArgs
-  // ("Builtin.jsonParse<Bool> \"true\"" |> tokenize) =
-  //   [ (TokenType.ModuleName, (0L, 0L), (0L, 7L))
-  //     (TokenType.FunctionName, (0L, 8L), (0L, 17L))
-  //     (TokenType.TypeName, (0L, 18L), (0L, 22L))
-  //     (TokenType.Symbol, (0L, 24L), (0L, 25L))
-  //     (TokenType.String, (0L, 25L), (0L, 29L))
-  //     (TokenType.Symbol, (0L, 29L), (0L, 30L)) ]
+  // CLEANUP: fix this, the range is correct, but the order isn't for typeArgs
+  ("Builtin.jsonParse<Bool> \"true\"" |> tokenize) =
+    [ (TokenType.ModuleName, (0L, 0L), (0L, 7L))
+      (TokenType.FunctionName, (0L, 8L), (0L, 17L))
+      (TokenType.TypeName, (0L, 18L), (0L, 22L))
+      (TokenType.Symbol, (0L, 24L), (0L, 25L))
+      (TokenType.String, (0L, 25L), (0L, 29L))
+      (TokenType.Symbol, (0L, 29L), (0L, 30L)) ]
 
   ("if true then true else false" |> tokenize) =
     [ (TokenType.Keyword, (0L, 0L), (0L, 2L))
