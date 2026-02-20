@@ -1330,6 +1330,31 @@ let parse (tokens: Token list) : Result<Program, string> =
     // Recursive descent parser with operator precedence
     // Precedence (low to high): or < and < comparison < +/- < */ < unary
 
+    // Compiler syntax normally requires parenthesized call arguments (`f(x)`), but
+    // upstream tests also exercise generic calls with a single space-applied argument
+    // (`f<'a> "x"`). Keep this narrowly targeted to generic-call parsing.
+    let canStartSpaceApplicationArg (toks: Token list) : bool =
+        match toks with
+        | TInt64 _ :: _
+        | TInt128Compat _ :: _
+        | TInt8 _ :: _
+        | TInt16 _ :: _
+        | TInt32 _ :: _
+        | TUInt8 _ :: _
+        | TUInt16 _ :: _
+        | TUInt32 _ :: _
+        | TUInt64 _ :: _
+        | TUInt128Compat _ :: _
+        | TFloat _ :: _
+        | TStringLit _ :: _
+        | TCharLit _ :: _
+        | TTrue :: _
+        | TFalse :: _
+        | TIdent _ :: _
+        | TLParen :: _
+        | TLBracket :: _ -> true
+        | _ -> false
+
     /// Parse multiple cases for pattern matching: | p1 -> e1 | p2 -> e2 ...
     let rec parseCases (toks: Token list) (acc: MatchCase list) : Result<MatchCase list * Token list, string> =
         match toks with
@@ -1679,59 +1704,14 @@ let parse (tokens: Token list) : Result<Program, string> =
                 Ok (Constructor (typeName, variantName, None), afterQualified)
             | TLt :: typeArgsStart ->
                 // Qualified generic function call: Stdlib.List.length<t>(args)
-                // Check if this looks like type arguments (ident followed by > or ,)
-                let rec looksLikeTypeArgs tokens =
-                    match tokens with
-                    | TIdent _ :: TGt :: TLParen :: _ -> true
-                    | TIdent _ :: TComma :: rest -> looksLikeTypeArgs rest
-                    | TIdent "List" :: TLt :: rest ->  // Nested List<...>
-                        let rec skipNested toks depth =
-                            match toks with
-                            | TGt :: remaining when depth = 1 -> Some remaining
-                            | TGt :: remaining -> skipNested remaining (depth - 1)
-                            | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                            | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                            | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                            | TLt :: remaining -> skipNested remaining (depth + 1)
-                            | _ :: remaining -> skipNested remaining depth
-                            | [] -> None
-                        match skipNested rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'
+                let looksLikeTypeArgs tokens =
+                    match parseTypeArgs tokens [] with
+                    | Ok (_, afterTypes) ->
+                        match afterTypes with
+                        | TLParen :: _ -> true
+                        | _ when canStartSpaceApplicationArg afterTypes -> true
                         | _ -> false
-                    | TIdent "Dict" :: TLt :: rest ->  // Nested Dict<...>
-                        let rec skipNested toks depth =
-                            match toks with
-                            | TGt :: remaining when depth = 1 -> Some remaining
-                            | TGt :: remaining -> skipNested remaining (depth - 1)
-                            | TShr :: remaining when depth = 1 -> Some (TGt :: remaining)  // >> is two >'s
-                            | TShr :: remaining when depth = 2 -> Some remaining  // both >'s consumed
-                            | TShr :: remaining -> skipNested remaining (depth - 2)  // >> decreases by 2
-                            | TLt :: remaining -> skipNested remaining (depth + 1)
-                            | _ :: remaining -> skipNested remaining depth
-                            | [] -> None
-                        match skipNested rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'
-                        | _ -> false
-                    | TLParen :: rest ->  // Tuple type: (Type1, Type2, ...)
-                        // Skip until matching )
-                        let rec skipParens toks depth =
-                            match toks with
-                            | TRParen :: remaining when depth = 1 -> Some remaining
-                            | TRParen :: remaining -> skipParens remaining (depth - 1)
-                            | TLParen :: remaining -> skipParens remaining (depth + 1)
-                            | _ :: remaining -> skipParens remaining depth
-                            | [] -> None
-                        match skipParens rest 1 with
-                        | Some (TGt :: TLParen :: _) -> true  // (T1, T2)>(
-                        | Some (TShr :: _) -> true  // >> followed by ( - TShr has one > left for outer
-                        | Some (TComma :: rest') -> looksLikeTypeArgs rest'  // (T1, T2), more types
-                        | Some (TArrow :: _) -> true  // Function type: (T1, T2) -> R
-                        | _ -> false
-                    | _ -> false
+                    | Error _ -> false
                 if looksLikeTypeArgs typeArgsStart then
                     parseTypeArgs typeArgsStart []
                     |> Result.bind (fun (typeArgs, afterTypes) ->
@@ -1740,7 +1720,12 @@ let parse (tokens: Token list) : Result<Program, string> =
                             parseCallArgs argsStart []
                             |> Result.map (fun (args, remaining) ->
                                 (TypeApp (fullName, typeArgs, args), remaining))
-                        | _ -> Error $"Expected '(' after type arguments in generic call to {fullName}")
+                        | _ when canStartSpaceApplicationArg afterTypes ->
+                            parseSpaceApplicationArgs afterTypes []
+                            |> Result.map (fun (args, remaining) ->
+                                (TypeApp (fullName, typeArgs, args), remaining))
+                        | _ ->
+                            Error $"Expected '(' or space-applied argument after type arguments in generic call to {fullName}")
                 else
                     // Not type args, treat as variable reference and leave < for comparison
                     Ok (Var fullName, TLt :: typeArgsStart)
@@ -2021,6 +2006,16 @@ let parse (tokens: Token list) : Result<Program, string> =
                     let applyExpr = Apply (expr, args)
                     parsePostfix applyExpr remaining)
         | _ -> Ok (expr, toks)
+
+    and parseSpaceApplicationArgs (toks: Token list) (acc: Expr list) : Result<Expr list * Token list, string> =
+        if canStartSpaceApplicationArg toks then
+            parsePrimaryBase toks
+            |> Result.bind (fun (argBaseExpr, afterArgBase) ->
+                parsePostfix argBaseExpr afterArgBase
+                |> Result.bind (fun (argExpr, afterArg) ->
+                    parseSpaceApplicationArgs afterArg (argExpr :: acc)))
+        else
+            Ok (List.rev acc, toks)
 
     and parseCallArgs (toks: Token list) (acc: Expr list) : Result<Expr list * Token list, string> =
         match toks with
