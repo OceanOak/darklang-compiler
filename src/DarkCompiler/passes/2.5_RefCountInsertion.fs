@@ -362,6 +362,7 @@ let rec analyzeReturns
 let isBorrowingExpr (cexpr: CExpr) : bool =
     match cexpr with
     | TupleGet _ -> true           // Extracts pointer from tuple/list - borrowed from parent
+    | RawGet _ -> true             // RawGet reads existing memory; it does not transfer ownership
     | Atom (Var _) -> true         // Alias/copy of existing variable - don't double-dec
     | TypedAtom (Var _, _) -> true // TypedAtom wrapping a variable - also borrowed
     | Call (funcName, _) ->
@@ -498,6 +499,8 @@ let rec insertRCWithAnalysis
             (finalExpr, finalVarGen, finalTypes, typeCache2)
 
         | RLet (tempId, cexpr, bodyInfo, _) ->
+            let (TempId tempIdInt) = tempId
+
             // First, infer the type of this binding and add to context
             let (maybeType, typeCache1) =
                 match Map.tryFind cexpr typeCache with
@@ -505,6 +508,33 @@ let rec insertRCWithAnalysis
                 | None ->
                     let inferred = inferCExprType ctx cexpr
                     (inferred, Map.add cexpr inferred typeCache)
+
+            // When a temp is immediately aliased (let x = y), infer y's type from x's first call-site.
+            let inferAliasedVarTypeFromUse (aliasedTemp: TempId) (nextBody: ReturnAnnotatedExpr) : AST.Type option =
+                let inferFromCall (funcName: string) (args: Atom list) : AST.Type option =
+                    match Map.tryFind funcName ctx.FuncReg with
+                    | Some (AST.TFunction (paramTypes, _)) ->
+                        args
+                        |> List.mapi (fun idx atom -> (idx, atom))
+                        |> List.tryPick (fun (idx, atom) ->
+                            match atom with
+                            | Var tid when tid = aliasedTemp && idx < List.length paramTypes ->
+                                Some (List.item idx paramTypes)
+                            | _ ->
+                                None)
+                    | _ ->
+                        None
+
+                match nextBody with
+                | RLet (_, Call (funcName, args), _, _) ->
+                    inferFromCall funcName args
+                | RLet (_, TailCall (funcName, args), _, _) ->
+                    inferFromCall funcName args
+                | RIf (Var tid, _, _, _) when tid = aliasedTemp ->
+                    Some AST.TBool
+                | _ ->
+                    None
+
             // Use a TypedAtom alias in the body to preserve the intended payload type
             // when TupleGet cannot infer it from a multi-parameter sum.
             let inferredType =
@@ -514,10 +544,23 @@ let rec insertRCWithAnalysis
                     match cexpr, bodyInfo with
                     | TupleGet _, RLet (_, TypedAtom (Var sourceId, aliasType), _, _) when sourceId = tempId ->
                         aliasType
+                    | RawGet (_, _, None), RLet (_, TypedAtom (Var sourceId, aliasType), _, _) when sourceId = tempId ->
+                        // RawGet without an explicit type is often immediately re-typed via TypedAtom.
+                        // Preserve that alias type instead of guessing Int64.
+                        aliasType
+                    | RawGet (_, _, None), RLet (aliasTemp, Atom (Var sourceId), nextBody, _) when sourceId = tempId ->
+                        match inferAliasedVarTypeFromUse aliasTemp nextBody with
+                        | Some inferredAliasType ->
+                            inferredAliasType
+                        | None ->
+                            // Keep unresolved rather than guessing Int64.
+                            AST.TVar $"raw_get_{tempIdInt}"
+                    | RawGet (_, _, None), _ ->
+                        // Unknown RawGet payload type: preserve as unresolved type variable.
+                        AST.TVar $"raw_get_{tempIdInt}"
                     | _ ->
-                        // Fallback for cases where inference is still incomplete.
-                        // TODO: remove this once all CExprs are fully typed.
-                        AST.TInt64
+                        // Preserve unresolved type information instead of defaulting to Int64.
+                        AST.TVar $"inferred_{tempIdInt}"
 
             let typesWithBinding =
                 match cexpr with
