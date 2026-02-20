@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-19 23:03:43
-**Commit:** `249a2b99` - Enable one AWS urlencode upstream test via legacy wrapper support
+**Last Updated:** 2026-02-20 11:15:04
+**Commit:** `4f0d5826` - Reduce sum equality IR explosion in typechecker
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

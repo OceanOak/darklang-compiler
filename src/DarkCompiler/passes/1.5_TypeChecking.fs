@@ -599,6 +599,132 @@ let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
 let typesEqual (aliasReg: AliasRegistry) (t1: Type) (t2: Type) : bool =
     resolveType aliasReg t1 = resolveType aliasReg t2
 
+/// Internal type-app markers emitted during type checking.
+/// These markers are materialized to direct calls before leaving this pass.
+type private InternalTypeAppMarker =
+    | EqHelperDispatch
+
+/// Internal type-app values carried in `Expr.TypeApp` nodes.
+/// We encode/decode them through marker names at the pass boundary.
+type private InternalTypeApp =
+    | EqHelperDispatchTypeApp of targetType: Type * leftExpr: Expr * rightExpr: Expr
+
+let private internalTypeAppMarkerName (marker: InternalTypeAppMarker) : string =
+    match marker with
+    | EqHelperDispatch -> "__dark_internal_eq_helper_dispatch"
+
+let private tryParseInternalTypeAppMarker (funcName: string) : InternalTypeAppMarker option =
+    if funcName = internalTypeAppMarkerName EqHelperDispatch then
+        Some EqHelperDispatch
+    else
+        None
+
+let private makeInternalTypeApp (internalTypeApp: InternalTypeApp) : Expr =
+    match internalTypeApp with
+    | EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr) ->
+        TypeApp (internalTypeAppMarkerName EqHelperDispatch, [targetType], [leftExpr; rightExpr])
+
+let private tryDecodeInternalTypeApp (expr: Expr) : InternalTypeApp option =
+    match expr with
+    | TypeApp (funcName, [targetType], [leftExpr; rightExpr]) ->
+        match tryParseInternalTypeAppMarker funcName with
+        | Some EqHelperDispatch ->
+            Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr))
+        | None ->
+            None
+    | _ ->
+        None
+
+let private sumTypeHasPayload (variantLookup: VariantLookup) (sumTypeName: string) : bool =
+    variantLookup
+    |> Map.exists (fun _ (variantTypeName, _, _, payloadTypeOpt) ->
+        variantTypeName = sumTypeName && payloadTypeOpt.IsSome)
+
+/// Only tuple/record and payload-carrying sums need generated helpers.
+let private needsEqHelperForResolvedType (variantLookup: VariantLookup) (typ: Type) : bool =
+    match typ with
+    | TTuple _
+    | TRecord _ ->
+        true
+    | TSum (sumTypeName, _) ->
+        sumTypeHasPayload variantLookup sumTypeName
+    | _ ->
+        false
+
+let private sanitizeHelperNamePrefix (input: string) : string =
+    let chars =
+        input
+        |> Seq.map (fun c -> if System.Char.IsLetterOrDigit c then c else '_')
+        |> Seq.truncate 48
+        |> Seq.toArray
+
+    if Array.isEmpty chars then
+        "type"
+    else
+        System.String(chars)
+
+/// Stable, deterministic hash used for generated helper function names.
+let private stableHelperNameHash (input: string) : uint64 =
+    let initial = 14695981039346656037UL
+    let prime = 1099511628211UL
+    input
+    |> Seq.fold (fun acc ch -> (acc ^^^ uint64 (int ch)) * prime) initial
+
+/// Name for a concrete structural equality helper.
+let private eqHelperName (typ: Type) : string =
+    let typeText = typeToString typ
+    let prefix = sanitizeHelperNamePrefix typeText
+    let hash = stableHelperNameHash typeText
+    $"__dark_eq_{prefix}_{hash:x16}"
+
+/// Build a left-associative boolean conjunction chain.
+let private chainAndExpr (exprs: Expr list) : Expr =
+    match exprs with
+    | [] ->
+        BoolLiteral true
+    | first :: rest ->
+        List.fold (fun acc expr -> BinOp (And, acc, expr)) first rest
+
+/// Build an equality expression for two already type-checked operands.
+/// For tuple/record/sum, emit a typed internal dispatch marker that will later
+/// be rewritten to a call to the generated concrete helper function.
+let private buildEqExprForType
+    (aliasReg: AliasRegistry)
+    (variantLookup: VariantLookup)
+    (typ: Type)
+    (leftExpr: Expr)
+    (rightExpr: Expr)
+    : Expr =
+    let resolvedType = resolveType aliasReg typ
+    match resolvedType with
+    | TFunction _ ->
+        // Preserve side effects/runtime errors by evaluating both sides.
+        Let ("__dark_eq_fn_pair", TupleLiteral [leftExpr; rightExpr], BoolLiteral true)
+    | TList elemType ->
+        let resolvedElemType = resolveType aliasReg elemType
+        match resolvedElemType with
+        | TFunction _ ->
+            // Function-value equality is normalized to true, so list equality on
+            // function elements reduces to length equality.
+            let pairVar = "__dark_eq_list_pair"
+            let leftListExpr = TupleAccess (Var pairVar, 0)
+            let rightListExpr = TupleAccess (Var pairVar, 1)
+            Let (
+                pairVar,
+                TupleLiteral [leftExpr; rightExpr],
+                BinOp (
+                    Eq,
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], [leftListExpr]),
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], [rightListExpr])
+                )
+            )
+        | _ ->
+            TypeApp ("Stdlib.List.equals", [resolvedElemType], [leftExpr; rightExpr])
+    | _ when needsEqHelperForResolvedType variantLookup resolvedType ->
+        makeInternalTypeApp (EqHelperDispatchTypeApp (resolvedType, leftExpr, rightExpr))
+    | _ ->
+        BinOp (Eq, leftExpr, rightExpr)
+
 // =============================================================================
 // Free Variable Analysis for Closures
 // =============================================================================
@@ -1253,186 +1379,12 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             if rightType <> leftType then
                                 Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
                             else
+                                let eqExpr = buildEqExprForType aliasReg variantLookup leftType left' right'
                                 let comparisonExpr =
-                                    let makeCase pattern body : MatchCase =
-                                        { Patterns = NonEmptyList.singleton pattern
-                                          Guard = None
-                                          Body = body }
-
-                                    let chainAnd (exprs: Expr list) : Expr =
-                                        match exprs with
-                                        | [] -> BoolLiteral true
-                                        | first :: rest -> List.fold (fun acc e -> BinOp (And, acc, e)) first rest
-
-                                    let rec buildEqExpr (seen: Set<string>) (counter: int) (typ: Type) (leftExpr: Expr) (rightExpr: Expr) : Expr * int =
-                                        let typeKey = typeToString typ
-                                        if Set.contains typeKey seen then
-                                            // Avoid infinite expansion for recursive type definitions.
-                                            (BinOp (Eq, leftExpr, rightExpr), counter)
-                                        else
-                                            let seen' = Set.add typeKey seen
-                                            match typ with
-                                            | TFunction _ ->
-                                                // Upstream contract treats function values as equal for ==.
-                                                // Still evaluate both sides so any side effects/runtime errors are preserved.
-                                                let leftFnVar = $"__fn_eq_left_{counter}"
-                                                let rightFnVar = $"__fn_eq_right_{counter}"
-                                                let functionEqExpr =
-                                                    Let (
-                                                        leftFnVar,
-                                                        leftExpr,
-                                                        Let (rightFnVar, rightExpr, BoolLiteral true)
-                                                    )
-                                                (functionEqExpr, counter + 1)
-
-                                            | TList elemType ->
-                                                match elemType with
-                                                | TFunction _ ->
-                                                    // Function-value equality is normalized to true for ==, so list equality
-                                                    // for function elements is equivalent to both lists having the same length.
-                                                    // Evaluate both sides exactly once to preserve side effects/runtime errors.
-                                                    let leftListVar = $"__list_eq_left_{counter}"
-                                                    let rightListVar = $"__list_eq_right_{counter}"
-                                                    let lengthsEqual =
-                                                        BinOp (
-                                                            Eq,
-                                                            TypeApp ("Stdlib.List.length", [elemType], [Var leftListVar]),
-                                                            TypeApp ("Stdlib.List.length", [elemType], [Var rightListVar])
-                                                        )
-                                                    (Let (leftListVar, leftExpr, Let (rightListVar, rightExpr, lengthsEqual)), counter + 1)
-                                                | _ ->
-                                                    (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
-
-                                            | TTuple elemTypes ->
-                                                let leftTupleVar = $"__tuple_eq_left_{counter}"
-                                                let rightTupleVar = $"__tuple_eq_right_{counter}"
-
-                                                let (elementComparisons, nextCounter) =
-                                                    elemTypes
-                                                    |> List.indexed
-                                                    |> List.fold
-                                                        (fun (acc, c) (index, elemType) ->
-                                                            let (elemEq, c') =
-                                                                buildEqExpr
-                                                                    seen'
-                                                                    c
-                                                                    elemType
-                                                                    (TupleAccess (Var leftTupleVar, index))
-                                                                    (TupleAccess (Var rightTupleVar, index))
-                                                            (acc @ [elemEq], c'))
-                                                        ([], counter + 1)
-
-                                                let tupleBody = chainAnd elementComparisons
-                                                (Let (leftTupleVar, leftExpr, Let (rightTupleVar, rightExpr, tupleBody)), nextCounter)
-
-                                            | TRecord (recordTypeName, typeArgs) ->
-                                                match Map.tryFind recordTypeName typeReg with
-                                                | None ->
-                                                    (BinOp (Eq, leftExpr, rightExpr), counter)
-                                                | Some fields ->
-                                                    let concreteFields =
-                                                        match buildRecordFieldSubstitution fields typeArgs with
-                                                        | Ok subst ->
-                                                            fields |> List.map (fun (name, fieldType) -> (name, applySubst subst fieldType))
-                                                        | Error _ ->
-                                                            fields
-
-                                                    let leftRecordVar = $"__record_eq_left_{counter}"
-                                                    let rightRecordVar = $"__record_eq_right_{counter}"
-
-                                                    let (fieldComparisons, nextCounter) =
-                                                        concreteFields
-                                                        |> List.fold
-                                                            (fun (acc, c) (fieldName, fieldType) ->
-                                                                let (fieldEq, c') =
-                                                                    buildEqExpr
-                                                                        seen'
-                                                                        c
-                                                                        fieldType
-                                                                        (RecordAccess (Var leftRecordVar, fieldName))
-                                                                        (RecordAccess (Var rightRecordVar, fieldName))
-                                                                (acc @ [fieldEq], c'))
-                                                            ([], counter + 1)
-
-                                                    let recordBody = chainAnd fieldComparisons
-                                                    (Let (leftRecordVar, leftExpr, Let (rightRecordVar, rightExpr, recordBody)), nextCounter)
-
-                                            | TSum (sumTypeName, sumTypeArgs) ->
-                                                let leftSumVar = $"__sum_eq_left_{counter}"
-                                                let rightSumVar = $"__sum_eq_right_{counter}"
-                                                let sumPairVar = $"__sum_eq_pair_{counter}"
-
-                                                let variantsForType =
-                                                    variantLookup
-                                                    |> Map.toList
-                                                    |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
-                                                        if variantTypeName = sumTypeName then
-                                                            let concretePayloadOpt =
-                                                                match payloadOpt with
-                                                                | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
-                                                                    let subst = List.zip typeParams sumTypeArgs |> Map.ofList
-                                                                    Some (applySubst subst payloadType)
-                                                                | Some payloadType ->
-                                                                    Some payloadType
-                                                                | None ->
-                                                                    None
-                                                            Some (variantName, tag, concretePayloadOpt)
-                                                        else
-                                                            None)
-                                                    |> List.sortBy (fun (_, tag, _) -> tag)
-
-                                                let rec buildVariantCases
-                                                    (variants: (string * int * Type option) list)
-                                                    (c: int)
-                                                    (acc: MatchCase list)
-                                                    : MatchCase list * int =
-                                                    match variants with
-                                                    | [] -> (List.rev acc, c)
-                                                    | (variantName, tag, payloadTypeOpt) :: rest ->
-                                                        match payloadTypeOpt with
-                                                        | None ->
-                                                            let pairPattern =
-                                                                PTuple [PConstructor (variantName, None); PConstructor (variantName, None)]
-                                                            let pairCase = makeCase pairPattern (BoolLiteral true)
-                                                            buildVariantCases rest c (pairCase :: acc)
-                                                        | Some payloadType ->
-                                                            let leftPayloadVar = $"__sum_eq_left_payload_{tag}_{c}"
-                                                            let rightPayloadVar = $"__sum_eq_right_payload_{tag}_{c}"
-                                                            let (payloadEqExpr, c') =
-                                                                buildEqExpr seen' (c + 1) payloadType (Var leftPayloadVar) (Var rightPayloadVar)
-                                                            let pairPattern =
-                                                                PTuple [
-                                                                    PConstructor (variantName, Some (PVar leftPayloadVar))
-                                                                    PConstructor (variantName, Some (PVar rightPayloadVar))
-                                                                ]
-                                                            let pairCase = makeCase pairPattern payloadEqExpr
-                                                            buildVariantCases rest c' (pairCase :: acc)
-
-                                                let (variantCases, nextCounter) =
-                                                    buildVariantCases variantsForType (counter + 1) []
-
-                                                let defaultCase = makeCase PWildcard (BoolLiteral false)
-                                                let sumBody = Match (Var sumPairVar, variantCases @ [defaultCase])
-                                                (Let (
-                                                    leftSumVar,
-                                                    leftExpr,
-                                                    Let (
-                                                        rightSumVar,
-                                                        rightExpr,
-                                                        Let (
-                                                            sumPairVar,
-                                                            TupleLiteral [Var leftSumVar; Var rightSumVar],
-                                                            sumBody
-                                                        )
-                                                    )
-                                                ),
-                                                 nextCounter)
-
-                                            | _ ->
-                                                (BinOp (Eq, leftExpr, rightExpr), counter)
-
-                                    let (eqExpr, _) = buildEqExpr Set.empty 0 leftType left' right'
-                                    if op = Neq then If (eqExpr, BoolLiteral false, BoolLiteral true) else eqExpr
+                                    if op = Neq then
+                                        UnaryOp (Not, eqExpr)
+                                    else
+                                        eqExpr
                                 match expectedType with
                                 | Some TBool | None -> Ok (TBool, comparisonExpr)
                                 | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
@@ -3246,6 +3198,455 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | Some funcType -> Ok (funcType, Closure (funcName, captures'))
             | None -> Error (UndefinedVariable funcName))
 
+type private EqHelperExprMode =
+    | ExpandCurrent
+    | UseHelperCall
+
+let private makeSimpleMatchCase (pattern: Pattern) (body: Expr) : MatchCase =
+    { Patterns = NonEmptyList.singleton pattern
+      Guard = None
+      Body = body }
+
+let rec private buildEqHelperExpr
+    (aliasReg: AliasRegistry)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (mode: EqHelperExprMode)
+    (typ: Type)
+    (leftExpr: Expr)
+    (rightExpr: Expr)
+    : Expr =
+    let resolvedType = resolveType aliasReg typ
+
+    match (mode, resolvedType) with
+    | UseHelperCall, helperType when needsEqHelperForResolvedType variantLookup helperType ->
+        Call (eqHelperName helperType, [leftExpr; rightExpr])
+
+    | _, TFunction _ ->
+        // Preserve side effects/runtime errors by evaluating both sides.
+        Let ("__dark_eq_helper_fn_pair", TupleLiteral [leftExpr; rightExpr], BoolLiteral true)
+
+    | _, TList elemType ->
+        let resolvedElemType = resolveType aliasReg elemType
+        match resolvedElemType with
+        | TFunction _ ->
+            // Function-value equality is normalized to true, so list equality on
+            // function elements reduces to length equality.
+            let pairVar = "__dark_eq_helper_list_pair"
+            let leftListExpr = TupleAccess (Var pairVar, 0)
+            let rightListExpr = TupleAccess (Var pairVar, 1)
+            Let (
+                pairVar,
+                TupleLiteral [leftExpr; rightExpr],
+                BinOp (
+                    Eq,
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], [leftListExpr]),
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], [rightListExpr])
+                )
+            )
+        | _ ->
+            TypeApp ("Stdlib.List.equals", [resolvedElemType], [leftExpr; rightExpr])
+
+    | ExpandCurrent, TTuple elemTypes ->
+        let leftTupleVar = "__dark_eq_helper_tuple_left"
+        let rightTupleVar = "__dark_eq_helper_tuple_right"
+        let elementComparisons =
+            elemTypes
+            |> List.mapi (fun index elemType ->
+                buildEqHelperExpr
+                    aliasReg
+                    typeReg
+                    variantLookup
+                    UseHelperCall
+                    elemType
+                    (TupleAccess (Var leftTupleVar, index))
+                    (TupleAccess (Var rightTupleVar, index)))
+        Let (leftTupleVar, leftExpr, Let (rightTupleVar, rightExpr, chainAndExpr elementComparisons))
+
+    | ExpandCurrent, TRecord (recordTypeName, typeArgs) ->
+        match Map.tryFind recordTypeName typeReg with
+        | None ->
+            BinOp (Eq, leftExpr, rightExpr)
+        | Some fields ->
+            let concreteFields =
+                match buildRecordFieldSubstitution fields typeArgs with
+                | Ok subst ->
+                    fields |> List.map (fun (name, fieldType) -> (name, resolveType aliasReg (applySubst subst fieldType)))
+                | Error _ ->
+                    fields |> List.map (fun (name, fieldType) -> (name, resolveType aliasReg fieldType))
+
+            let leftRecordVar = "__dark_eq_helper_record_left"
+            let rightRecordVar = "__dark_eq_helper_record_right"
+            let fieldComparisons =
+                concreteFields
+                |> List.mapi (fun index (_, fieldType) ->
+                    buildEqHelperExpr
+                        aliasReg
+                        typeReg
+                        variantLookup
+                        UseHelperCall
+                        fieldType
+                        (TupleAccess (Var leftRecordVar, index))
+                        (TupleAccess (Var rightRecordVar, index)))
+            Let (leftRecordVar, leftExpr, Let (rightRecordVar, rightExpr, chainAndExpr fieldComparisons))
+
+    | ExpandCurrent, TSum (sumTypeName, sumTypeArgs) ->
+        if not (sumTypeHasPayload variantLookup sumTypeName) then
+            BinOp (Eq, leftExpr, rightExpr)
+        else
+            let variantsForType =
+                variantLookup
+                |> Map.toList
+                |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
+                    if variantTypeName = sumTypeName then
+                        let concretePayloadOpt =
+                            match payloadOpt with
+                            | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
+                                let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+                                Some (resolveType aliasReg (applySubst subst payloadType))
+                            | Some payloadType ->
+                                Some (resolveType aliasReg payloadType)
+                            | None ->
+                                None
+                        Some (variantName, tag, concretePayloadOpt)
+                    else
+                        None)
+                |> List.sortBy (fun (_, tag, _) -> tag)
+
+            let variantCases =
+                variantsForType
+                |> List.map (fun (variantName, tag, payloadTypeOpt) ->
+                    match payloadTypeOpt with
+                    | None ->
+                        let pairPattern =
+                            PTuple [PConstructor (variantName, None); PConstructor (variantName, None)]
+                        makeSimpleMatchCase pairPattern (BoolLiteral true)
+                    | Some payloadType ->
+                        let leftPayloadVar = $"__dark_eq_helper_left_payload_{tag}"
+                        let rightPayloadVar = $"__dark_eq_helper_right_payload_{tag}"
+                        let payloadEqExpr =
+                            buildEqHelperExpr
+                                aliasReg
+                                typeReg
+                                variantLookup
+                                UseHelperCall
+                                payloadType
+                                (Var leftPayloadVar)
+                                (Var rightPayloadVar)
+                        let pairPattern =
+                            PTuple [
+                                PConstructor (variantName, Some (PVar leftPayloadVar))
+                                PConstructor (variantName, Some (PVar rightPayloadVar))
+                            ]
+                        makeSimpleMatchCase pairPattern payloadEqExpr)
+
+            let defaultCase = makeSimpleMatchCase PWildcard (BoolLiteral false)
+            let sumPairVar = "__dark_eq_helper_sum_pair"
+            Let (sumPairVar, TupleLiteral [leftExpr; rightExpr], Match (Var sumPairVar, variantCases @ [defaultCase]))
+
+    | _, _ ->
+        BinOp (Eq, leftExpr, rightExpr)
+
+let private collectDirectEqHelperDeps
+    (aliasReg: AliasRegistry)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (typ: Type)
+    : Type list =
+    let addIfHelperType (candidate: Type) : Type option =
+        let resolved = resolveType aliasReg candidate
+        if needsEqHelperForResolvedType variantLookup resolved then Some resolved else None
+
+    let resolvedType = resolveType aliasReg typ
+    let deps =
+        match resolvedType with
+        | TTuple elemTypes ->
+            elemTypes |> List.choose addIfHelperType
+        | TRecord (recordTypeName, typeArgs) ->
+            match Map.tryFind recordTypeName typeReg with
+            | None ->
+                []
+            | Some fields ->
+                let concreteFields =
+                    match buildRecordFieldSubstitution fields typeArgs with
+                    | Ok subst ->
+                        fields |> List.map (fun (_, fieldType) -> resolveType aliasReg (applySubst subst fieldType))
+                    | Error _ ->
+                        fields |> List.map (fun (_, fieldType) -> resolveType aliasReg fieldType)
+                concreteFields |> List.choose addIfHelperType
+        | TSum (sumTypeName, sumTypeArgs) ->
+            variantLookup
+            |> Map.toList
+            |> List.choose (fun (_, (variantTypeName, typeParams, _, payloadOpt)) ->
+                if variantTypeName = sumTypeName then
+                    match payloadOpt with
+                    | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
+                        let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+                        addIfHelperType (applySubst subst payloadType)
+                    | Some payloadType ->
+                        addIfHelperType payloadType
+                    | None ->
+                        None
+                else
+                    None)
+        | _ ->
+            []
+    deps |> List.distinctBy eqHelperName
+
+type private EqHelperGenerationState = {
+    InProgress: Set<string>
+    Generated: Map<string, FunctionDef>
+}
+
+let rec private ensureEqHelperForType
+    (aliasReg: AliasRegistry)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (typ: Type)
+    (state: EqHelperGenerationState)
+    : EqHelperGenerationState =
+    let resolvedType = resolveType aliasReg typ
+    if not (needsEqHelperForResolvedType variantLookup resolvedType) then
+        state
+    else
+        let helper = eqHelperName resolvedType
+        if Map.containsKey helper state.Generated || Set.contains helper state.InProgress then
+            state
+        else
+            let stateInProgress = { state with InProgress = Set.add helper state.InProgress }
+            let deps = collectDirectEqHelperDeps aliasReg typeReg variantLookup resolvedType
+            let stateWithDeps =
+                deps
+                |> List.fold
+                    (fun currentState depType ->
+                        ensureEqHelperForType aliasReg typeReg variantLookup depType currentState)
+                    stateInProgress
+
+            let leftParam = "__dark_eq_left"
+            let rightParam = "__dark_eq_right"
+            let helperBody =
+                buildEqHelperExpr
+                    aliasReg
+                    typeReg
+                    variantLookup
+                    ExpandCurrent
+                    resolvedType
+                    (Var leftParam)
+                    (Var rightParam)
+
+            let helperDef : FunctionDef = {
+                Name = helper
+                TypeParams = []
+                Params = [ (leftParam, resolvedType); (rightParam, resolvedType) ]
+                ReturnType = TBool
+                Body = helperBody
+            }
+
+            {
+                InProgress = Set.remove helper stateWithDeps.InProgress
+                Generated = Map.add helper helperDef stateWithDeps.Generated
+            }
+
+let rec private collectEqHelperTypesFromExpr (aliasReg: AliasRegistry) (expr: Expr) : Set<Type> =
+    let collectFromExprs (exprs: Expr list) : Set<Type> =
+        exprs
+        |> List.map (collectEqHelperTypesFromExpr aliasReg)
+        |> List.fold Set.union Set.empty
+
+    match expr with
+    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ ->
+        Set.empty
+    | BinOp (_, left, right) ->
+        Set.union (collectEqHelperTypesFromExpr aliasReg left) (collectEqHelperTypesFromExpr aliasReg right)
+    | UnaryOp (_, inner) ->
+        collectEqHelperTypesFromExpr aliasReg inner
+    | Let (_, value, body) ->
+        Set.union (collectEqHelperTypesFromExpr aliasReg value) (collectEqHelperTypesFromExpr aliasReg body)
+    | If (cond, thenBranch, elseBranch) ->
+        Set.union
+            (collectEqHelperTypesFromExpr aliasReg cond)
+            (Set.union
+                (collectEqHelperTypesFromExpr aliasReg thenBranch)
+                (collectEqHelperTypesFromExpr aliasReg elseBranch))
+    | Call (_, args) ->
+        collectFromExprs args
+    | TypeApp (_, _, args) as typeAppExpr ->
+        match tryDecodeInternalTypeApp typeAppExpr with
+        | Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr)) ->
+            Set.add
+                (resolveType aliasReg targetType)
+                (Set.union
+                    (collectEqHelperTypesFromExpr aliasReg leftExpr)
+                    (collectEqHelperTypesFromExpr aliasReg rightExpr))
+        | None ->
+            collectFromExprs args
+    | TupleLiteral elements ->
+        collectFromExprs elements
+    | TupleAccess (tupleExpr, _) ->
+        collectEqHelperTypesFromExpr aliasReg tupleExpr
+    | RecordLiteral (_, fields) ->
+        fields |> List.map snd |> collectFromExprs
+    | RecordUpdate (recordExpr, updates) ->
+        Set.union
+            (collectEqHelperTypesFromExpr aliasReg recordExpr)
+            (updates |> List.map snd |> collectFromExprs)
+    | RecordAccess (recordExpr, _) ->
+        collectEqHelperTypesFromExpr aliasReg recordExpr
+    | Constructor (_, _, payload) ->
+        payload |> Option.map (collectEqHelperTypesFromExpr aliasReg) |> Option.defaultValue Set.empty
+    | Match (scrutinee, cases) ->
+        let scrutineeTypes = collectEqHelperTypesFromExpr aliasReg scrutinee
+        let caseTypes =
+            cases
+            |> List.map (fun matchCase ->
+                let guardTypes =
+                    matchCase.Guard
+                    |> Option.map (collectEqHelperTypesFromExpr aliasReg)
+                    |> Option.defaultValue Set.empty
+                Set.union guardTypes (collectEqHelperTypesFromExpr aliasReg matchCase.Body))
+            |> List.fold Set.union Set.empty
+        Set.union scrutineeTypes caseTypes
+    | ListLiteral elements ->
+        collectFromExprs elements
+    | ListCons (headElements, tailExpr) ->
+        Set.union (collectFromExprs headElements) (collectEqHelperTypesFromExpr aliasReg tailExpr)
+    | Lambda (_, body) ->
+        collectEqHelperTypesFromExpr aliasReg body
+    | Apply (funcExpr, args) ->
+        Set.union (collectEqHelperTypesFromExpr aliasReg funcExpr) (collectFromExprs args)
+    | Closure (_, captures) ->
+        collectFromExprs captures
+    | InterpolatedString parts ->
+        parts
+        |> List.choose (function
+            | StringText _ -> None
+            | StringExpr partExpr -> Some (collectEqHelperTypesFromExpr aliasReg partExpr))
+        |> List.fold Set.union Set.empty
+
+let rec private materializeEqHelperCallsInExpr (aliasReg: AliasRegistry) (expr: Expr) : Expr =
+    let recurse = materializeEqHelperCallsInExpr aliasReg
+
+    match expr with
+    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ ->
+        expr
+    | BinOp (op, left, right) ->
+        BinOp (op, recurse left, recurse right)
+    | UnaryOp (op, inner) ->
+        UnaryOp (op, recurse inner)
+    | Let (name, value, body) ->
+        Let (name, recurse value, recurse body)
+    | If (cond, thenBranch, elseBranch) ->
+        If (recurse cond, recurse thenBranch, recurse elseBranch)
+    | Call (funcName, args) ->
+        Call (funcName, List.map recurse args)
+    | TypeApp (funcName, typeArgs, args) as typeAppExpr ->
+        match tryDecodeInternalTypeApp typeAppExpr with
+        | Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr)) ->
+            let helperType = resolveType aliasReg targetType
+            Call (eqHelperName helperType, [recurse leftExpr; recurse rightExpr])
+        | None ->
+            TypeApp (funcName, typeArgs, List.map recurse args)
+    | TupleLiteral elements ->
+        TupleLiteral (List.map recurse elements)
+    | TupleAccess (tupleExpr, index) ->
+        TupleAccess (recurse tupleExpr, index)
+    | RecordLiteral (typeName, fields) ->
+        RecordLiteral (typeName, fields |> List.map (fun (name, fieldExpr) -> (name, recurse fieldExpr)))
+    | RecordUpdate (recordExpr, updates) ->
+        RecordUpdate (recurse recordExpr, updates |> List.map (fun (name, updateExpr) -> (name, recurse updateExpr)))
+    | RecordAccess (recordExpr, fieldName) ->
+        RecordAccess (recurse recordExpr, fieldName)
+    | Constructor (typeName, variantName, payload) ->
+        Constructor (typeName, variantName, payload |> Option.map recurse)
+    | Match (scrutinee, cases) ->
+        Match (
+            recurse scrutinee,
+            cases
+            |> List.map (fun matchCase -> {
+                matchCase with
+                    Guard = matchCase.Guard |> Option.map recurse
+                    Body = recurse matchCase.Body
+            })
+        )
+    | ListLiteral elements ->
+        ListLiteral (List.map recurse elements)
+    | ListCons (headElements, tailExpr) ->
+        ListCons (List.map recurse headElements, recurse tailExpr)
+    | Lambda (parameters, body) ->
+        Lambda (parameters, recurse body)
+    | Apply (funcExpr, args) ->
+        Apply (recurse funcExpr, List.map recurse args)
+    | Closure (funcName, captures) ->
+        Closure (funcName, List.map recurse captures)
+    | InterpolatedString parts ->
+        InterpolatedString (
+            parts
+            |> List.map (function
+                | StringText text -> StringText text
+                | StringExpr partExpr -> StringExpr (recurse partExpr))
+        )
+
+let private materializeEqHelpersInTopLevels
+    (aliasReg: AliasRegistry)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (topLevels: TopLevel list)
+    : TopLevel list =
+    let collectFromTopLevel (topLevel: TopLevel) : Set<Type> =
+        match topLevel with
+        | FunctionDef funcDef ->
+            collectEqHelperTypesFromExpr aliasReg funcDef.Body
+        | Expression expr ->
+            collectEqHelperTypesFromExpr aliasReg expr
+        | TypeDef _ ->
+            Set.empty
+
+    let rewriteTopLevel (topLevel: TopLevel) : TopLevel =
+        match topLevel with
+        | FunctionDef funcDef ->
+            FunctionDef { funcDef with Body = materializeEqHelperCallsInExpr aliasReg funcDef.Body }
+        | Expression expr ->
+            Expression (materializeEqHelperCallsInExpr aliasReg expr)
+        | TypeDef _ ->
+            topLevel
+
+    let helperTypes =
+        topLevels
+        |> List.map collectFromTopLevel
+        |> List.fold Set.union Set.empty
+
+    let rewrittenTopLevels = topLevels |> List.map rewriteTopLevel
+
+    if Set.isEmpty helperTypes then
+        rewrittenTopLevels
+    else
+        let initialState = {
+            InProgress = Set.empty
+            Generated = Map.empty
+        }
+
+        let finalState =
+            helperTypes
+            |> Set.toList
+            |> List.sortBy typeToString
+            |> List.fold
+                (fun currentState helperType ->
+                    ensureEqHelperForType aliasReg typeReg variantLookup helperType currentState)
+                initialState
+
+        let helperTopLevels =
+            finalState.Generated
+            |> Map.toList
+            |> List.map snd
+            |> List.sortBy (fun helperDef -> helperDef.Name)
+            |> List.map FunctionDef
+
+        helperTopLevels @ rewrittenTopLevels
+
 /// Type-check a function definition
 /// Returns the transformed function body (with Call -> TypeApp transformations)
 let checkFunctionDef (funcDef: FunctionDef) (env: TypeEnv) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (genericFuncReg: GenericFuncRegistry) (moduleRegistry: ModuleRegistry) (aliasReg: AliasRegistry) : Result<FunctionDef, TypeError> =
@@ -3380,17 +3781,19 @@ let private checkProgramInternal (baseEnv: TypeCheckEnv option) (program: Progra
     |> Result.bind (fun topLevelsWithTypes ->
         // Extract just the top-levels
         let topLevels' = topLevelsWithTypes |> List.map snd
+        let topLevelsWithEqHelpers =
+            materializeEqHelpersInTopLevels mergedAliasReg typeReg variantLookup topLevels'
         // Find the type of the main expression (if any)
         let mainExprType = topLevelsWithTypes |> List.tryPick (function (Some t, Expression _) -> Some t | _ -> None)
         match mainExprType with
         | Some typ ->
             // We have a main expression with its type - no need to re-check
-            Ok (typ, Program topLevels', typeCheckEnv)
+            Ok (typ, Program topLevelsWithEqHelpers, typeCheckEnv)
         | None ->
             // No main expression - just functions
             // For now, require a "main" function with signature () -> int
             match Map.tryFind "main" funcSigs with
-            | Some ([], TInt64) -> Ok (TInt64, Program topLevels', typeCheckEnv)
+            | Some ([], TInt64) -> Ok (TInt64, Program topLevelsWithEqHelpers, typeCheckEnv)
             | Some _ -> Error (GenericError "main function must have signature () -> int")
             | None -> Error (GenericError "Program must have either a main expression or a main() : int function"))
 

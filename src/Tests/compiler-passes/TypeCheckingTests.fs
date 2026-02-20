@@ -122,14 +122,35 @@ let testSumEqualityUsesSinglePairMatch () : TestResult =
     let program = Program [sumDef; Expression eqExpr]
 
     match checkProgram program with
-    | Ok (TBool, Program [_; Expression typedExpr]) ->
-        let matchCount = countMatches typedExpr
-        if matchCount = 1 then
-            Ok ()
+    | Ok (actualType, Program topLevels) ->
+        if actualType <> TBool then
+            Error $"Expected Bool result type, got {typeToString actualType}"
         else
-            Error $"Expected one Match in transformed sum equality, got {matchCount}"
-    | Ok (actualType, Program _) ->
-        Error $"Expected Bool result type, got {typeToString actualType}"
+            let helperDefs =
+                topLevels
+                |> List.choose (function
+                    | FunctionDef funcDef when funcDef.Name.StartsWith("__dark_eq_") -> Some funcDef
+                    | _ -> None)
+
+            let expressionMatchCount =
+                topLevels
+                |> List.choose (function
+                    | Expression typedExpr -> Some (countMatches typedExpr)
+                    | _ -> None)
+                |> List.tryHead
+                |> Option.defaultValue -1
+
+            match helperDefs with
+            | [] ->
+                Error "Expected generated structural equality helper function for sum equality"
+            | helperDef :: _ ->
+                let helperMatchCount = countMatches helperDef.Body
+                if helperMatchCount <> 1 then
+                    Error $"Expected helper body to contain one Match, got {helperMatchCount}"
+                elif expressionMatchCount <> 0 then
+                    Error $"Expected top-level expression to call helper without Match nodes, got {expressionMatchCount}"
+                else
+                    Ok ()
     | Error err ->
         Error $"Type checking failed: {typeErrorToString err}"
 
