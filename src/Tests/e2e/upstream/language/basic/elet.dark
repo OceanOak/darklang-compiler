@@ -1,5 +1,5 @@
 (let x = Builtin.testRuntimeError "a" in 5L) =
-  Builtin.testDerrorMessage "Uncaught exception: a"
+  error="Uncaught exception: a"
 
 (let x = Builtin.testRuntimeError "a" in Builtin.testRuntimeError "b") =
   Builtin.testDerrorMessage "Uncaught exception: a"
