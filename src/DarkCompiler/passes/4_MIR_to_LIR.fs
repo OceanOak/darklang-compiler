@@ -1073,6 +1073,10 @@ let selectInstr
         | AST.TUnit ->
             // Unit: print "()" with newline
             Ok ([LIR.PrintChars [byte '('; byte ')'; byte '\n']], state)
+        | AST.TRuntimeError ->
+            // Runtime-error expressions are normalized to Unit before print insertion,
+            // but keep this branch explicit for exhaustiveness.
+            Ok ([LIR.PrintChars [byte '('; byte ')'; byte '\n']], state)
         | AST.TFunction _ ->
             // Functions shouldn't be printed, but just print address
             let lirSrc = convertOperand src

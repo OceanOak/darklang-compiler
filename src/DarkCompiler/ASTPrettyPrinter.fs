@@ -58,6 +58,7 @@ let rec private formatType (typ: Type) : string =
     | TBytes -> "Bytes"
     | TChar -> "Char"
     | TUnit -> "Unit"
+    | TRuntimeError -> "RuntimeError"
     | TRawPtr -> "RawPtr"
     | TVar name -> name
     | TList elemType -> $"List<{formatType elemType}>"

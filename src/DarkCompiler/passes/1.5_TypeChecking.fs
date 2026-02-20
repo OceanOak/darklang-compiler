@@ -52,6 +52,7 @@ let rec typeToString (t: Type) : string =
     | TBytes -> "Bytes"
     | TChar -> "Char"
     | TUnit -> "Unit"
+    | TRuntimeError -> "RuntimeError"
     | TFunction (params', ret) ->
         let paramStr = params' |> List.map typeToString |> String.concat ", "
         $"({paramStr}) -> {typeToString ret}"
@@ -133,7 +134,7 @@ let private isBuiltinTestNanName (name: string) : bool =
 
 let private isRuntimeErrorType (typ: Type) : bool =
     match typ with
-    | TVar "__runtime_error" -> true
+    | TRuntimeError -> true
     | _ -> false
 
 let private variantNameEndsWith (suffix: string) (variantName: string) : bool =
@@ -365,7 +366,7 @@ let rec applyTypeVarRenaming (subst: Map<string, string>) (t: Type) : Type =
     | TSum (name, args) -> TSum (name, List.map (applyTypeVarRenaming subst) args)
     | TRecord (name, args) -> TRecord (name, List.map (applyTypeVarRenaming subst) args)
     | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
-    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr -> t
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr -> t
 
 /// Type environment - maps variable names to their types
 type TypeEnv = Map<string, Type>
@@ -442,7 +443,7 @@ let rec applySubst (subst: Substitution) (typ: Type) : Type =
     | TDict (keyType, valueType) ->
         TDict (applySubst subst keyType, applySubst subst valueType)
     | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
-    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr ->
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         typ  // Concrete types are unchanged
 
 /// Collect type variable names in first-seen order.
@@ -467,7 +468,7 @@ let rec collectTypeVarsInType (typ: Type) (acc: string list) : string list =
         let withKey = collectTypeVarsInType keyType acc
         collectTypeVarsInType valueType withKey
     | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
-    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr ->
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         acc
 
 /// Infer record type parameter order from field type variables.
@@ -591,7 +592,7 @@ let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
     | TDict (keyType, valueType) ->
         TDict (resolveType aliasReg keyType, resolveType aliasReg valueType)
     | TVar _ | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
-    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRawPtr ->
+    | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         typ  // Primitive types and type variables are unchanged
 
 /// Compare two types for equality, resolving type aliases first
@@ -864,10 +865,14 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
 /// Example: matchTypes (TVar "T") TInt64 = Ok [("T", TInt64)]
 /// Helper for matching concrete types - also handles when actual is a TVar
 let matchConcrete (expectedType: Type) (actual: Type) : Result<(string * Type) list, string> =
-    match actual with
-    | t when t = expectedType -> Ok []
-    | TVar name -> Ok [(name, expectedType)]  // Bind TVar to concrete type
-    | _ -> Error $"Expected {typeToString expectedType}, got {typeToString actual}"
+    if expectedType = TRuntimeError || actual = TRuntimeError then
+        // Runtime-error expressions are bottom-like and can inhabit any expected type.
+        Ok []
+    else
+        match actual with
+        | t when t = expectedType -> Ok []
+        | TVar name -> Ok [(name, expectedType)]  // Bind TVar to concrete type
+        | _ -> Error $"Expected {typeToString expectedType}, got {typeToString actual}"
 
 let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list, string> =
     match pattern with
@@ -897,6 +902,7 @@ let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list,
         | TString -> Ok []
         | _ -> matchConcrete TChar actual
     | TUnit -> matchConcrete TUnit actual
+    | TRuntimeError -> matchConcrete TRuntimeError actual
     | TRawPtr -> matchConcrete TRawPtr actual
     | TList patternElem ->
         match actual with
@@ -1050,6 +1056,10 @@ let reconcileTypes (aliasReg: AliasRegistry option) (t1: Type) (t2: Type) : Type
     let t2' = aliasReg |> Option.map (fun reg -> resolveType reg t2) |> Option.defaultValue t2
 
     if t1' = t2' then
+        Some t1'
+    elif t1' = TRuntimeError then
+        Some t2'
+    elif t2' = TRuntimeError then
         Some t1'
     elif t1' = TString && t2' = TChar then
         Some TString
@@ -1712,7 +1722,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     let outputType =
                         match expectedType with
                         | Some expected -> expected
-                        | None -> TVar "__runtime_error"
+                        | None -> TRuntimeError
                     Ok (outputType, Call ("Builtin.testRuntimeError", [argExpr'])))
             | _ ->
                 Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
@@ -2252,7 +2262,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let outputType =
                     match expectedType with
                     | Some expected -> expected
-                    | None -> TVar "__runtime_error"
+                    | None -> TRuntimeError
 
                 let runtimeErrCall =
                     match runtimeErrExpr with
@@ -2585,6 +2595,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             None
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
+                    | t when isRuntimeErrorType t ->
+                        // Runtime error scrutinees are bottom-like: allow typechecking to proceed
+                        // so evaluation order preserves the runtime failure at execution time.
+                        Ok []
                     | t when t = expectedType ->
                         Ok []
                     | TVar _ ->
@@ -2603,6 +2617,10 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let ensureStringOrCharPatternType () : Result<(string * Type) list, TypeError> =
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
+                    | t when isRuntimeErrorType t ->
+                        // See ensureLiteralType: preserve runtime-error propagation by not
+                        // rejecting pattern type checks on known failing scrutinees.
+                        Ok []
                     | TString
                     | TChar
                     | TVar _ ->

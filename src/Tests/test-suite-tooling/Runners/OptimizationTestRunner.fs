@@ -23,11 +23,9 @@ let private externalReturnTypes : Map<string, AST.Type> =
         ("__hash_i64", TInt64)
         ("__hash_str", TInt64)
         ("__hash_bool", TInt64)
-        ("__hash_unknown", TInt64)
         ("__key_eq_i64", TBool)
         ("__key_eq_str", TBool)
         ("__key_eq_bool", TBool)
-        ("__key_eq_unknown", TBool)
         ("__string_hash", TInt64)
         ("__string_eq", TBool)
     ]

@@ -122,6 +122,8 @@ Common filter patterns: tuple, record, list, string, float, closure, match, adt,
 2. **No mutability** - Pure functional code only
 3. **Pass files numbered** - e.g., `1_Parser.fs`, `2_AST_to_ANF.fs`
 4. **Tests first** - Write/identify failing test before fixing bugs
+5. **No sentinels in compiler passes** - Model special states with explicit discriminated unions/enums and typed cases
+6. **No string sentinels anywhere** - Never encode control flow or unknown states in magic strings (for example `"__some_internal_state"`)
 
 ## Before Making Changes
 

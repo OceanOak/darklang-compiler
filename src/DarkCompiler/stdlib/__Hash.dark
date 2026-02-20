@@ -33,9 +33,5 @@ def __key_eq_i64(left: Int64, right: Int64) : Bool = left == right
 def __key_eq_bool(left: Bool, right: Bool) : Bool = left == right
 def __key_eq_str(left: String, right: String) : Bool = __string_eq(left, right)
 
-// Crash if type args are unresolved at runtime
-def __hash_unknown<a>(_value: a) : Int64 =
-    __raw_get<Int64>(__int64_to_rawptr(0), 0)
-
-def __key_eq_unknown<a>(_left: a, _right: a) : Bool =
-    __raw_get<Bool>(__int64_to_rawptr(0), 0)
+// Unresolved generic __hash/__key_eq calls are handled in compiler lowering by
+// emitting explicit runtime errors before codegen; no unknown fallback stubs live here.

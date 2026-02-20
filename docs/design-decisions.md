@@ -42,7 +42,7 @@ Source → AST → ANF → MIR → LIR → ARM64 → Binary
 
 **Trade-off**: Binary size increases with more specializations. Acceptable for current use case.
 
-**Policy**: The compiler does not default unresolved type parameters to arbitrary concrete types. If monomorphization needs hashing or equality on an unresolved type, it emits `__hash_unknown`/`__key_eq_unknown` intrinsics that crash if executed, making unreachable paths explicit instead of silently picking a type.
+**Policy**: The compiler does not default unresolved type parameters to arbitrary concrete types. If monomorphization needs hashing or equality on an unresolved type, lowering emits an explicit runtime error expression (`Builtin.testRuntimeError`), making unreachable paths explicit instead of silently picking a type.
 
 ## Reference Counting for Memory Management
 

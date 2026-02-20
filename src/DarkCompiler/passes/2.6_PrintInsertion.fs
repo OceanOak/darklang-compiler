@@ -24,9 +24,9 @@ let getListDisplayStringFunc (elemType: AST.Type) : string option =
 let rec wrapReturnWithPrint (programType: AST.Type) (varGen: VarGen) (expr: AExpr) : AExpr * VarGen =
     let defaultPrintType =
         match programType with
-        // Builtin.testRuntimeError is represented as a sentinel TVar in type checking.
-        // Printing should stay concrete so downstream passes never see this type variable.
-        | AST.TVar "__runtime_error" -> AST.TUnit
+        // Builtin.testRuntimeError has a bottom-like compile-time type.
+        // Printing should stay concrete so downstream passes never see it.
+        | AST.TRuntimeError -> AST.TUnit
         | _ -> programType
 
     match expr with

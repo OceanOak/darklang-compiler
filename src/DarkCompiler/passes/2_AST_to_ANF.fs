@@ -36,6 +36,7 @@ let rec typeToString (ty: AST.Type) : string =
     | AST.TChar -> "char"
     | AST.TFloat64 -> "f64"
     | AST.TUnit -> "unit"
+    | AST.TRuntimeError -> "runtime_error"
     | AST.TRawPtr -> "ptr"
     | AST.TVar name -> name
     | AST.TRecord (name, args) -> name + (if List.isEmpty args then "" else "<" + (args |> List.map typeToString |> String.concat ",") + ">")
@@ -202,12 +203,6 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
     // __list_empty<a> returns 0 (null pointer = empty finger tree)
     | name, [] when name = "__list_empty" || name.StartsWith("__list_empty_") ->
         Some (ANF.Atom (ANF.IntLiteral (ANF.Int64 0L)))
-
-    // __hash_unknown/__key_eq_unknown crash at runtime when type args are unresolved
-    | "__hash_unknown", [_] ->
-        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
-    | "__key_eq_unknown", [_; _] ->
-        Some (ANF.RawGet (ANF.IntLiteral (ANF.Int64 0L), ANF.IntLiteral (ANF.Int64 0L), None))
 
     | _ -> None
 
@@ -381,6 +376,7 @@ let rec typeToMangledName (t: AST.Type) : string =
     | AST.TBytes -> "bytes"
     | AST.TChar -> "char"
     | AST.TUnit -> "unit"
+    | AST.TRuntimeError -> "runtime_error"
     | AST.TFunction (paramTypes, retType) ->
         let paramStr = paramTypes |> List.map typeToMangledName |> String.concat "_"
         let retStr = typeToMangledName retType
@@ -511,13 +507,23 @@ let tryParseMangledType (variantLookup: VariantLookup) (mangled: string) : Resul
 let specName (funcName: string) (typeArgs: AST.Type list) : string =
     if List.isEmpty typeArgs then
         funcName
-    elif funcName = "__hash" && List.exists containsTypeVar typeArgs then
-        "__hash_unknown"
-    elif funcName = "__key_eq" && List.exists containsTypeVar typeArgs then
-        "__key_eq_unknown"
     else
         let typeStr = typeArgs |> List.map typeToMangledName |> String.concat "_"
         $"{funcName}_{typeStr}"
+
+let private isGenericKeyIntrinsicName (funcName: string) : bool =
+    funcName = "__hash" || funcName = "__key_eq"
+
+let private unresolvedKeyIntrinsicTypeArgErrorExpr (funcName: string) : AST.Expr =
+    AST.Call ("Builtin.testRuntimeError", [AST.StringLiteral $"Internal error: unresolved type arguments for {funcName}"])
+
+/// Preserve left-to-right argument evaluation before forcing a runtime error.
+let private wrapWithIgnoredArgEvaluations (args: AST.Expr list) (body: AST.Expr) : AST.Expr =
+    args
+    |> List.indexed
+    |> List.rev
+    |> List.fold (fun acc (index, argExpr) ->
+        AST.Let ($"__dark_internal_unresolved_arg_eval_{index}", argExpr, acc)) body
 
 /// Type substitution - maps type variable names to concrete types
 type Substitution = Map<string, AST.Type>
@@ -543,7 +549,7 @@ let rec applySubstToType (subst: Substitution) (typ: AST.Type) : AST.Type =
         AST.TRecord (name, List.map (applySubstToType subst) typeArgs)
     | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
     | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
-    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRawPtr ->
+    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRuntimeError | AST.TRawPtr ->
         typ  // Concrete types are unchanged
 
 /// Collect type variable names in first-seen order.
@@ -569,7 +575,7 @@ let rec collectTypeVarsInType (typ: AST.Type) (acc: string list) : string list =
         collectTypeVarsInType valueType withKey
     | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
     | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64
-    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRawPtr ->
+    | AST.TBool | AST.TFloat64 | AST.TString | AST.TBytes | AST.TChar | AST.TUnit | AST.TRuntimeError | AST.TRawPtr ->
         acc
 
 /// Infer record type parameter order from field type variables.
@@ -932,6 +938,9 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
             // Optimization: avoid building a Dict from an empty list when types are concrete.
             let specializedName = specName "Stdlib.Dict.empty" typeArgs
             AST.Call (specializedName, [])
+        elif isGenericKeyIntrinsicName funcName && hasTypeVars then
+            let replacedArgs = List.map replaceTypeApps args
+            wrapWithIgnoredArgEvaluations replacedArgs (unresolvedKeyIntrinsicTypeArgErrorExpr funcName)
         else
             let specializedName = specName funcName typeArgs
             AST.Call (specializedName, List.map replaceTypeApps args)
@@ -1043,8 +1052,9 @@ let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : 
             let emptyDictSpec = (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
                                 && args = [AST.ListLiteral []]
                                 && not hasTypeVars
+            let unresolvedKeyIntrinsicSpec = isGenericKeyIntrinsicName funcName && hasTypeVars
             let resolvedNameResult =
-                if funcName = "__hash" || funcName = "__key_eq" then
+                if isGenericKeyIntrinsicName funcName then
                     Ok (specName funcName typeArgs)
                 elif isIntrinsicTypeAppName funcName then
                     Ok (specName funcName typeArgs)
@@ -1058,13 +1068,18 @@ let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : 
                     | Some name -> Ok name
                     | None -> Error (missingSpecMessage funcName typeArgs)
 
-            resolvedNameResult
-            |> Result.bind (fun resolvedName ->
-                if emptyDictSpec then
-                    Ok (AST.Call (resolvedName, []))
-                else
-                    mapResult replace args
-                    |> Result.map (fun args' -> AST.Call (resolvedName, args')))
+            if unresolvedKeyIntrinsicSpec then
+                mapResult replace args
+                |> Result.map (fun args' ->
+                    wrapWithIgnoredArgEvaluations args' (unresolvedKeyIntrinsicTypeArgErrorExpr funcName))
+            else
+                resolvedNameResult
+                |> Result.bind (fun resolvedName ->
+                    if emptyDictSpec then
+                        Ok (AST.Call (resolvedName, []))
+                    else
+                        mapResult replace args
+                        |> Result.map (fun args' -> AST.Call (resolvedName, args')))
         | AST.TupleLiteral elements ->
             mapResult replace elements
             |> Result.map AST.TupleLiteral
