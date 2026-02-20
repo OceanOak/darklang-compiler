@@ -35,6 +35,25 @@ Enable all upstream `.dark` tests by default, one test at a time, while keeping 
 3. Re-run full `./run-tests` after any `TestRunner` inclusion change.
 4. Record the file-level rollout decision in the Learnings Log.
 
+## Order:
+Go in this order for re-enabling tests
+- src/Tests/e2e/upstream/language/apply/eapply.dark
+- src/Tests/e2e/upstream/language/custom-data/aliases.dark
+- src/Tests/e2e/upstream/language/flow-control/epipe.dark
+- src/Tests/e2e/upstream/language/elambda.dark
+- src/Tests/e2e/upstream/stdlib/list.dark
+- src/Tests/e2e/upstream/stdlib/string.dark
+- src/Tests/e2e/upstream/stdlib/date.dark
+- src/Tests/e2e/upstream/stdlib/dict.dark
+- src/Tests/e2e/upstream/stdlib/float.dark
+- src/Tests/e2e/upstream/stdlib/http.dark
+- src/Tests/e2e/upstream/stdlib/json.dark
+- src/Tests/e2e/upstream/stdlib/alt-json.dark
+- src/Tests/e2e/upstream/stdlib/nomodule.dark
+- src/Tests/e2e/upstream/language/derror.dark
+- src/Tests/e2e/upstream/language/interpreter.dark
+- src/Tests/e2e/upstream/stdlib/httpclient.dark
+
 ## Learnings Log
 | Situation | How to Identify It | What to Do | How to Validate |
 | --- | --- | --- | --- |
