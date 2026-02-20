@@ -103,6 +103,11 @@ non-record, guarded and unguarded record alternatives in grouped cases must
 fall through as non-matches. Lowering must not fabricate record field bindings
 with `Int64` defaults.
 
+Nested record destructuring inside tuple patterns follows the same rule. If a
+tuple slot is statically non-record, record field extraction must report a type
+error (`Record pattern used on non-record type ...`) instead of inventing
+record field bindings with `Int64`.
+
 List alternatives in grouped patterns follow the same rule. For example,
 `match 42 with | 0 | [_] -> ...` must not crash while extracting bindings for
 `[_]`, and must treat the list alternative as a non-match for the `Int64`

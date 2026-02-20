@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 21:17:55
-**Commit:** `d03f4965` - Refresh benchmark metadata for current commit
+**Last Updated:** 2026-02-20 21:55:37
+**Commit:** `fc91db31` - Remove one TInt64 fallback in nested list pattern typing
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

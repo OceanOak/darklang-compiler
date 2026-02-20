@@ -438,6 +438,10 @@ match [2, 2, 3] with | [1, ...rest] -> 42 | _ -> 0 = 0
 // Tuple arity mismatch in list-cons head must fall through (regression for TInt64 fallback in tuple element typing)
 match [(1, 2)] with | [(a, b, c), ...rest] -> 1 | _ -> 2 = 2
 
+// Nested record pattern in a tuple should not silently bind Int64 when the tuple element is not a record.
+// Regression: this used to default to TInt64 and then execute as if the pattern were valid.
+type Person = { name: String } match (Person { name = "ok" }, 0) with | (y, Unknown { name = x }) -> x | _ -> 1 = error="Record pattern used on non-record type"
+
 // Tuple arity mismatch inside constructor payload list pattern must not default missing tuple slots to Int64.
 // Regression: this previously matched and evaluated the branch body instead of surfacing the tuple arity issue.
 type TupleListBox = TupleListBox of List<(Int64, Int64)> match TupleListBox([(1, 2)]) with | TupleListBox([(a, b, c)]) -> 1 | _ -> 2 = error="Tuple pattern expects 3 elements but got 2"

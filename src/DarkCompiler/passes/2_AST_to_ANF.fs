@@ -4544,33 +4544,45 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                             (payloadBinding :: bindings)
                                             vg1)
                         | AST.PRecord (_, fieldPatterns) ->
-                            // Extract field types from record type (look up in type registry)
-                            let fieldTypes =
+                            let fieldTypesResult : Result<AST.Type list, string> =
                                 match sourceType with
                                 | AST.TRecord (recordName, _) ->
                                     match Map.tryFind recordName typeReg with
-                                    | Some fields -> fields |> List.map snd
-                                    | None -> List.replicate (List.length fieldPatterns) AST.TInt64
-                                | _ -> List.replicate (List.length fieldPatterns) AST.TInt64
-                            // Extract each field and recursively collect bindings
-                            let rec collectFromRecord (fields: (string * AST.Pattern) list) (types: AST.Type list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) =
-                                match fields, types with
-                                | [], _ -> Ok (env, bindings, vg)
-                                | (_, p) :: rest, t :: restTypes ->
-                                    let (fieldVar, vg1) = ANF.freshVar vg
-                                    let fieldExpr = ANF.TupleGet (sourceAtom, idx)
-                                    let fieldBinding = (fieldVar, fieldExpr)
-                                    collectPatternBindings p (ANF.Var fieldVar) t env (fieldBinding :: bindings) vg1
-                                    |> Result.bind (fun (env', bindings', vg') ->
-                                        collectFromRecord rest restTypes (idx + 1) env' bindings' vg')
-                                | (_, p) :: rest, [] ->
-                                    let (fieldVar, vg1) = ANF.freshVar vg
-                                    let fieldExpr = ANF.TupleGet (sourceAtom, idx)
-                                    let fieldBinding = (fieldVar, fieldExpr)
-                                    collectPatternBindings p (ANF.Var fieldVar) AST.TInt64 env (fieldBinding :: bindings) vg1
-                                    |> Result.bind (fun (env', bindings', vg') ->
-                                        collectFromRecord rest [] (idx + 1) env' bindings' vg')
-                            collectFromRecord fieldPatterns fieldTypes 0 env bindings vg
+                                    | Some fields ->
+                                        Ok (fields |> List.map snd)
+                                    | None ->
+                                        Error $"Unknown record type: {recordName}"
+                                | AST.TVar sourceTypeVar ->
+                                    // Preserve unresolved field types when record shape is unknown.
+                                    Ok (
+                                        fieldPatterns
+                                        |> List.mapi (fun idx _ ->
+                                            AST.TVar $"__record_field_{sourceTypeVar}_{idx}")
+                                    )
+                                | _ ->
+                                    Error $"Record pattern used on non-record type {typeToString sourceType}"
+                            fieldTypesResult
+                            |> Result.bind (fun fieldTypes ->
+                                // Extract each field and recursively collect bindings
+                                let rec collectFromRecord (fields: (string * AST.Pattern) list) (types: AST.Type list) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) =
+                                    match fields, types with
+                                    | [], _ -> Ok (env, bindings, vg)
+                                    | (_, p) :: rest, t :: restTypes ->
+                                        let (fieldVar, vg1) = ANF.freshVar vg
+                                        let fieldExpr = ANF.TupleGet (sourceAtom, idx)
+                                        let fieldBinding = (fieldVar, fieldExpr)
+                                        collectPatternBindings p (ANF.Var fieldVar) t env (fieldBinding :: bindings) vg1
+                                        |> Result.bind (fun (env', bindings', vg') ->
+                                            collectFromRecord rest restTypes (idx + 1) env' bindings' vg')
+                                    | (_, p) :: rest, [] ->
+                                        let (fieldVar, vg1) = ANF.freshVar vg
+                                        let fieldExpr = ANF.TupleGet (sourceAtom, idx)
+                                        let fieldBinding = (fieldVar, fieldExpr)
+                                        let unresolvedFieldType = AST.TVar $"__record_field_missing_{idx}"
+                                        collectPatternBindings p (ANF.Var fieldVar) unresolvedFieldType env (fieldBinding :: bindings) vg1
+                                        |> Result.bind (fun (env', bindings', vg') ->
+                                            collectFromRecord rest [] (idx + 1) env' bindings' vg')
+                                collectFromRecord fieldPatterns fieldTypes 0 env bindings vg)
                         | AST.PList innerPatterns ->
                             // Extract element type from list type
                             let elemType =
@@ -5687,37 +5699,49 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
 
                         loop (List.zip patterns elemTypes) 0 env bindings vg
                 | AST.PRecord (recordName, fieldPatterns) ->
-                    let fieldTypes =
+                    let fieldTypesResult : Result<AST.Type list, string> =
                         match sourceType with
                         | AST.TRecord (_, _) ->
                             match Map.tryFind recordName typeReg with
-                            | Some fields -> fields |> List.map snd
-                            | None -> List.replicate (List.length fieldPatterns) AST.TInt64
+                            | Some fields ->
+                                Ok (fields |> List.map snd)
+                            | None ->
+                                Error $"Unknown record type: {recordName}"
+                        | AST.TVar sourceTypeVar ->
+                            // Preserve unresolved field types when record shape is unknown.
+                            Ok (
+                                fieldPatterns
+                                |> List.mapi (fun idx _ ->
+                                    AST.TVar $"__record_field_{sourceTypeVar}_{idx}")
+                            )
                         | _ ->
-                            List.replicate (List.length fieldPatterns) AST.TInt64
-                    let rec loop
-                        (remaining: (string * AST.Pattern) list)
-                        (types: AST.Type list)
-                        (idx: int)
-                        (currentEnv: VarEnv)
-                        (currentBindings: (ANF.TempId * ANF.CExpr) list)
-                        (currentVg: ANF.VarGen)
-                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-                        match remaining, types with
-                        | [], _ -> Ok (currentEnv, currentBindings, currentVg)
-                        | (_, pat) :: rest, fieldType :: restTypes ->
-                            let (fieldVar, vg1) = ANF.freshVar currentVg
-                            let fieldExpr = ANF.TupleGet (sourceAtom, idx)
-                            collectNestedPatternBindings pat (ANF.Var fieldVar) fieldType currentEnv (currentBindings @ [(fieldVar, fieldExpr)]) vg1
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                loop rest restTypes (idx + 1) env' bindings' vg')
-                        | (_, pat) :: rest, [] ->
-                            let (fieldVar, vg1) = ANF.freshVar currentVg
-                            let fieldExpr = ANF.TupleGet (sourceAtom, idx)
-                            collectNestedPatternBindings pat (ANF.Var fieldVar) AST.TInt64 currentEnv (currentBindings @ [(fieldVar, fieldExpr)]) vg1
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                loop rest [] (idx + 1) env' bindings' vg')
-                    loop fieldPatterns fieldTypes 0 env bindings vg
+                            Error $"Record pattern used on non-record type {typeToString sourceType}"
+                    fieldTypesResult
+                    |> Result.bind (fun fieldTypes ->
+                        let rec loop
+                            (remaining: (string * AST.Pattern) list)
+                            (types: AST.Type list)
+                            (idx: int)
+                            (currentEnv: VarEnv)
+                            (currentBindings: (ANF.TempId * ANF.CExpr) list)
+                            (currentVg: ANF.VarGen)
+                            : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+                            match remaining, types with
+                            | [], _ -> Ok (currentEnv, currentBindings, currentVg)
+                            | (_, pat) :: rest, fieldType :: restTypes ->
+                                let (fieldVar, vg1) = ANF.freshVar currentVg
+                                let fieldExpr = ANF.TupleGet (sourceAtom, idx)
+                                collectNestedPatternBindings pat (ANF.Var fieldVar) fieldType currentEnv (currentBindings @ [(fieldVar, fieldExpr)]) vg1
+                                |> Result.bind (fun (env', bindings', vg') ->
+                                    loop rest restTypes (idx + 1) env' bindings' vg')
+                            | (_, pat) :: rest, [] ->
+                                let (fieldVar, vg1) = ANF.freshVar currentVg
+                                let fieldExpr = ANF.TupleGet (sourceAtom, idx)
+                                let unresolvedFieldType = AST.TVar $"__record_field_missing_{idx}"
+                                collectNestedPatternBindings pat (ANF.Var fieldVar) unresolvedFieldType currentEnv (currentBindings @ [(fieldVar, fieldExpr)]) vg1
+                                |> Result.bind (fun (env', bindings', vg') ->
+                                    loop rest [] (idx + 1) env' bindings' vg')
+                        loop fieldPatterns fieldTypes 0 env bindings vg)
                 | AST.PConstructor (constructorName, payloadPattern) ->
                     let rec substituteType (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
                         match typ with
