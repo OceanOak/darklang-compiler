@@ -181,6 +181,10 @@ match (for example `[(a, b, c), ...rest]` against a list of 2-tuples), the
 pattern is treated as a non-match and falls through to later cases. The ANF
 lowering does not default missing tuple element types to `Int64`.
 
+The same non-match behavior applies when tuple destructuring appears inside
+guarded list patterns (`when ...`): mismatched tuple arity must fall through
+instead of binding extra elements as `Int64`.
+
 ## Constructor Pattern Compilation
 
 ```dark

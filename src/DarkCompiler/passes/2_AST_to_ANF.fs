@@ -4973,6 +4973,36 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 // Then compile the body with those bindings in scope
                 // Finally, generate: let <bindings> in if <guard> then <body> else <elseExpr>
 
+                // Return true only when we can prove a pattern can never match this type.
+                // Used to preserve "fall through" semantics for guarded patterns that should not bind.
+                let rec patternDefinitelyCannotMatchType (pat: AST.Pattern) (patType: AST.Type) : bool =
+                    match pat with
+                    | AST.PTuple innerPatterns ->
+                        match patType with
+                        | AST.TTuple elemTypes ->
+                            List.length innerPatterns <> List.length elemTypes
+                            || List.exists2 patternDefinitelyCannotMatchType innerPatterns elemTypes
+                        | AST.TVar _ -> false
+                        | _ -> true
+                    | AST.PList innerPatterns ->
+                        match patType with
+                        | AST.TList elemType ->
+                            innerPatterns
+                            |> List.exists (fun innerPat ->
+                                patternDefinitelyCannotMatchType innerPat elemType)
+                        | AST.TVar _ -> false
+                        | _ -> true
+                    | AST.PListCons (headPatterns, tailPattern) ->
+                        match patType with
+                        | AST.TList elemType ->
+                            (headPatterns
+                             |> List.exists (fun headPat ->
+                                 patternDefinitelyCannotMatchType headPat elemType))
+                            || patternDefinitelyCannotMatchType tailPattern patType
+                        | AST.TVar _ -> false
+                        | _ -> true
+                    | _ -> false
+
                 // Helper to collect pattern variable bindings (simplified version for common patterns)
                 // sourceType is the type of the source being matched
                 let rec collectBindings (pat: AST.Pattern) (sourceAtom: ANF.Atom) (sourceType: AST.Type) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
@@ -5001,8 +5031,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | AST.PTuple innerPatterns ->
                         let elemTypes =
                             match sourceType with
-                            | AST.TTuple types -> types
-                            | _ -> List.replicate (List.length innerPatterns) AST.TInt64
+                            | AST.TTuple types when List.length types = List.length innerPatterns -> types
+                            | AST.TTuple types ->
+                                Crash.crash
+                                    $"collectBindings(PTuple): expected {List.length innerPatterns} tuple elements, got {List.length types}"
+                            | _ ->
+                                Crash.crash
+                                    $"collectBindings(PTuple): expected tuple source type, got {typeToString sourceType}"
                         let rec collectFromTuple pats types idx env bindings vg =
                             match pats, types with
                             | [], _ -> Ok (env, bindings, vg)
@@ -5013,11 +5048,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 |> Result.bind (fun (env', bindings', vg') ->
                                     collectFromTuple rest restTypes (idx + 1) env' bindings' vg')
                             | p :: rest, [] ->
-                                let (elemVar, vg1) = ANF.freshVar vg
-                                let elemExpr = ANF.TupleGet (sourceAtom, idx)
-                                collectBindings p (ANF.Var elemVar) AST.TInt64 env ((elemVar, elemExpr) :: bindings) vg1
-                                |> Result.bind (fun (env', bindings', vg') ->
-                                    collectFromTuple rest [] (idx + 1) env' bindings' vg')
+                                let remaining = List.length (p :: rest)
+                                Crash.crash
+                                    $"collectBindings(PTuple): missing tuple element type at index {idx}; {remaining} pattern elements remain"
                         collectFromTuple innerPatterns elemTypes 0 env bindings vg
                     | AST.PConstructor (constructorName, payloadPattern) ->
                         let rec substituteType (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
@@ -5142,21 +5175,24 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     collectHeads rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
                         collectHeads headPatterns sourceAtom env bindings vg
 
-                collectBindings pattern scrutAtom scrutType currentEnv [] vg
-                |> Result.bind (fun (newEnv, bindings, vg1) ->
-                    // Compile guard expression in the extended environment
-                    toAtom guardExpr vg1 newEnv typeReg variantLookup funcReg moduleRegistry
-                    |> Result.bind (fun (guardAtom, guardBindings, vg2) ->
-                        // Compile body expression in the extended environment
-                        toANF body vg2 newEnv typeReg variantLookup funcReg moduleRegistry
-                        |> Result.map (fun (bodyExpr, vg3) ->
-                            // Build: if guard then body else elseExpr
-                            let ifExpr = ANF.If (guardAtom, bodyExpr, elseExpr)
-                            // Wrap guard bindings
-                            let withGuardBindings = wrapBindings guardBindings ifExpr
-                            // Wrap pattern bindings (in reverse order since we accumulated in reverse)
-                            let finalExpr = wrapBindings (List.rev bindings) withGuardBindings
-                            (finalExpr, vg3))))
+                if patternDefinitelyCannotMatchType pattern scrutType then
+                    Ok (elseExpr, vg)
+                else
+                    collectBindings pattern scrutAtom scrutType currentEnv [] vg
+                    |> Result.bind (fun (newEnv, bindings, vg1) ->
+                        // Compile guard expression in the extended environment
+                        toAtom guardExpr vg1 newEnv typeReg variantLookup funcReg moduleRegistry
+                        |> Result.bind (fun (guardAtom, guardBindings, vg2) ->
+                            // Compile body expression in the extended environment
+                            toANF body vg2 newEnv typeReg variantLookup funcReg moduleRegistry
+                            |> Result.map (fun (bodyExpr, vg3) ->
+                                // Build: if guard then body else elseExpr
+                                let ifExpr = ANF.If (guardAtom, bodyExpr, elseExpr)
+                                // Wrap guard bindings
+                                let withGuardBindings = wrapBindings guardBindings ifExpr
+                                // Wrap pattern bindings (in reverse order since we accumulated in reverse)
+                                let finalExpr = wrapBindings (List.rev bindings) withGuardBindings
+                                (finalExpr, vg3))))
 
             // Build comparison expression for a pattern
             let rec buildPatternComparison (pattern: AST.Pattern) (scrutAtom: ANF.Atom) (vg: ANF.VarGen) : Result<(ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen) option, string> =
