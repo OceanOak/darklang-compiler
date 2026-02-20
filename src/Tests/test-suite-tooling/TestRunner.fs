@@ -108,6 +108,8 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "eif.dark")
     let ematchUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "ematch.dark")
+    let eapplyUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "apply", "eapply.dark")
     let einfixUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "apply", "einfix.dark")
     let eandUpstreamDarkPath =
@@ -133,6 +135,7 @@ let main args =
     let upstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
+           eapplyUpstreamDarkPath
            einfixUpstreamDarkPath
            eandUpstreamDarkPath
            eorUpstreamDarkPath
@@ -304,12 +307,62 @@ let main args =
 
     let allUnitTests = Array.append (buildUnitTests stdlib) optionalRoundtripSuites
 
+    // Upstream enablement is intentionally incremental: keep tests discoverable, but
+    // only run line-allowlisted cases for files currently being enabled.
+    let upstreamEnablementLineAllowlist : Map<string, Set<int>> =
+        Map.ofList
+            [
+                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7 ])
+            ]
+
+    let normalizePath (path: string) : string =
+        path.Replace('\\', '/')
+
+    let enabledLinesForSourceFile (sourceFile: string) : Set<int> option =
+        let normalizedSourceFile = normalizePath sourceFile
+        upstreamEnablementLineAllowlist
+        |> Map.tryPick (fun suffix lines ->
+            if normalizedSourceFile.EndsWith(suffix) then Some lines else None)
+
+    let tryParseTestLineNumber (testName: string) : int option =
+        if testName.StartsWith("L") then
+            let colonIndex = testName.IndexOf(':')
+            if colonIndex > 1 then
+                let lineText = testName.Substring(1, colonIndex - 1)
+                match Int32.TryParse(lineText) with
+                | true, value -> Some value
+                | false, _ -> None
+            else
+                None
+        else
+            None
+
+    let applyUpstreamEnablementGate (test: E2ETest) : E2ETest =
+        if Option.isSome test.SkipReason then
+            test
+        else
+            match enabledLinesForSourceFile test.SourceFile with
+            | None ->
+                test
+            | Some enabledLines ->
+                match tryParseTestLineNumber test.Name with
+                | Some lineNumber when Set.contains lineNumber enabledLines ->
+                    test
+                | Some _ ->
+                    { test with
+                        SkipReason = Some "pending upstream enablement" }
+                | None ->
+                    test
+
     let loadE2ETests (testFiles: string array) : E2ETest array * (string * string) list =
         let tests = ResizeArray<E2ETest>()
         let mutable parseErrors = []
         for testFile in testFiles do
             match parseE2ETestFile testFile with
-            | Ok parsed -> tests.AddRange(parsed)
+            | Ok parsed ->
+                parsed
+                |> List.map applyUpstreamEnablementGate
+                |> tests.AddRange
             | Error msg -> parseErrors <- (testFile, msg) :: parseErrors
         (tests.ToArray(), List.rev parseErrors)
 
@@ -417,9 +470,14 @@ let main args =
                         | None ->
                             preambleFailureResult "Missing built suite contexts", TimeSpan.Zero
                         | Some currentSuiteContexts ->
-                            match Map.tryFind test.SourceFile currentSuiteContexts.PreambleContexts with
+                            let contextKey = TestDSL.E2ETestRunner.preambleContextKeyForTest test
+                            match Map.tryFind contextKey currentSuiteContexts.PreambleContexts with
                             | None ->
-                                preambleFailureResult $"Missing built preamble context for {test.SourceFile}", TimeSpan.Zero
+                                match Map.tryFind contextKey currentSuiteContexts.PreambleErrors with
+                                | Some err ->
+                                    preambleFailureResult $"Preamble build failed: {err}", TimeSpan.Zero
+                                | None ->
+                                    preambleFailureResult $"Missing built preamble context for {test.SourceFile}", TimeSpan.Zero
                             | Some ctx ->
                                 let passTimingStart = passTimingTotal ()
                                 let testResult =
