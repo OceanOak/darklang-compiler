@@ -773,7 +773,7 @@ module Head =
   // CLEANUP uncomment when switched to new parser
   Stdlib.String.head "👱👱🏻👱🏼👱🏽👱🏾👱🏿" = Stdlib.Option.Option.Some '👱'
   Stdlib.String.head "🧟‍♀️🧟‍♂️" = Stdlib.Option.Option.Some '🧟'
-  // Stdlib.String.head "👨‍❤️‍💋‍👨" = Stdlib.Option.Option.Some '👨‍❤️‍💋‍👨'
+  Stdlib.String.head "👨‍❤️‍💋‍👨" = Stdlib.Option.Option.Some '👨‍❤️‍💋‍👨'
 
 module ArticleFor =
   Stdlib.String.articleFor "apple" = "an"
