@@ -111,6 +111,22 @@ let testInterpreterParserParsesApostropheTypeParamsInFunctionDef () : TestResult
     | Ok other ->
         Error $"Unexpected AST for interpreter apostrophe type parameter function definition: {other}"
 
+let testInterpreterParserParsesApostropheTypeVarInTypeAnnotation () : TestResult =
+    let source =
+        "let returnsResultOk () : Stdlib.Result.Result<Int64, 'err> =\n"
+        + "  Stdlib.Result.Result.Ok 5L"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on apostrophe type var in type annotation: {err}"
+    | Ok (Program [FunctionDef fnDef]) ->
+        match fnDef.ReturnType with
+        | TSum ("Stdlib.Result.Result", [AST.TInt64; AST.TVar "err"]) ->
+            Ok ()
+        | other ->
+            Error $"Unexpected return type for apostrophe type var annotation: {typeToString other}"
+    | Ok other ->
+        Error $"Unexpected AST for interpreter apostrophe type var annotation: {other}"
+
 let testInterpreterParserParsesCurriedTopLevelLetFunctionDef () : TestResult =
     let source = "let addCurried (x: Int64) (y: Int64) : Int64 = x + y"
     match InterpreterParser.parseString false source with
@@ -253,6 +269,7 @@ let tests = [
     ("parse compiler apostrophe type argument call site", testCompilerParserParsesApostropheTypeArgAtCallSite)
     ("parse compiler apostrophe type argument space call site", testCompilerParserParsesApostropheTypeArgSpaceCallSite)
     ("parse interpreter apostrophe type params in function def", testInterpreterParserParsesApostropheTypeParamsInFunctionDef)
+    ("parse interpreter apostrophe type var in annotation", testInterpreterParserParsesApostropheTypeVarInTypeAnnotation)
     ("parse interpreter curried top-level let function def", testInterpreterParserParsesCurriedTopLevelLetFunctionDef)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)

@@ -595,6 +595,10 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
     | TIdent "RawPtr" :: rest -> Ok (AST.TRawPtr, rest)  // Internal raw pointer type
     | TIdent typeName :: rest when Set.contains typeName typeParams ->
         Ok (TVar typeName, rest)
+    | TIdent typeName :: rest when System.Char.IsLower(typeName.[0]) || typeName.[0] = '_' ->
+        // Interpreter syntax allows apostrophe-prefixed type variables in type annotations
+        // without requiring explicit generic binders on function/type definitions.
+        Ok (TVar typeName, rest)
     | TIdent "List" :: TLt :: rest ->
         // List type: List<ElementType>
         parseTypeWithContext typeParams rest
