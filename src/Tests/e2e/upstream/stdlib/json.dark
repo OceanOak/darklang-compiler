@@ -184,7 +184,7 @@ module UInt64 =
       Result.Error "Can't parse JSON `18446744073709551616` as type `UInt64` at path: `root`"
 
     // This is a float that is a valid uint64
-    // Stdlib.Json.parse<UInt64> "1.8446744073709551615E19" =  Result.Ok 18446744073709551615UL
+    Stdlib.Json.parse<UInt64> "1.8446744073709551615E19" =  Result.Ok 18446744073709551615UL
 
     // This is a float that is slightly above the uint64 max
     (Stdlib.Json.parse<UInt64> "1.9E19") |> err = Result.Error
