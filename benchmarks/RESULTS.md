@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 21:01:15
-**Commit:** `83b6f87a` - Remove one nested tuple-pattern TInt64 fallback in ANF
+**Last Updated:** 2026-02-20 21:05:04
+**Commit:** `81c36607` - Remove one TInt64 list-pattern fallback in ANF match lowering
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
