@@ -408,6 +408,10 @@ match [1, 2, 4] with | [1, x, 3] -> x | _ -> 0 = 0
 // Literal pattern in list cons - match
 match [1, 2, 3] with | [1, ...rest] -> 42 | _ -> 0 = 42
 
+// List cons should preserve string element typing even when scrutinee type comes from an if-expression
+// with an unreachable runtime-error branch.
+match (if false then Option.None |> Builtin.unwrap else ["a", "b"]) with | [h, ...t] -> if h == "a" then 1 else 0 | _ -> 0 = 1
+
 // Literal pattern in list cons - no match
 match [2, 2, 3] with | [1, ...rest] -> 42 | _ -> 0 = 0
 

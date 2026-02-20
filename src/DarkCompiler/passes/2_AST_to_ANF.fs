@@ -2154,9 +2154,14 @@ type LiftStateWithFuncs = {
 }
 
 /// Generate a wrapper for a named function used as a value
-let generateFuncWrapper (origFuncName: string) (funcParams: Map<string, (string * AST.Type) list>) (stateWithFuncs: LiftStateWithFuncs) : Result<(AST.FunctionDef * LiftStateWithFuncs), string> =
-    match Map.tryFind origFuncName funcParams with
-    | Some parameters ->
+let generateFuncWrapper
+    (origFuncName: string)
+    (funcParams: Map<string, (string * AST.Type) list>)
+    (funcReturnTypes: Map<string, AST.Type>)
+    (stateWithFuncs: LiftStateWithFuncs)
+    : Result<(AST.FunctionDef * LiftStateWithFuncs), string> =
+    match Map.tryFind origFuncName funcParams, Map.tryFind origFuncName funcReturnTypes with
+    | Some parameters, Some returnType ->
         // Create wrapper: __funcref_wrapper_N(__closure, ...params) = origFunc(...params)
         let wrapperName = $"__funcref_wrapper_{stateWithFuncs.State.Counter}"
         let closureParam = ("__closure", AST.TTuple [AST.TInt64])
@@ -2165,7 +2170,7 @@ let generateFuncWrapper (origFuncName: string) (funcParams: Map<string, (string 
             Name = wrapperName
             TypeParams = []
             Params = closureParam :: parameters
-            ReturnType = AST.TInt64  // Simplified
+            ReturnType = returnType
             Body = wrapperBody
         }
         let newState = {
@@ -2174,8 +2179,10 @@ let generateFuncWrapper (origFuncName: string) (funcParams: Map<string, (string 
                 GeneratedWrappers = Map.add origFuncName wrapperName stateWithFuncs.GeneratedWrappers
         }
         Ok (wrapperDef, newState)
-    | None ->
+    | None, _ ->
         Error $"Cannot find parameters for function '{origFuncName}'"
+    | _, None ->
+        Error $"Cannot find return type for function '{origFuncName}'"
 
 /// Lift lambdas in a program, generating new top-level functions
 let rec liftLambdasInProgram
@@ -2323,7 +2330,7 @@ let rec liftLambdasInProgram
             match funcNames with
             | [] -> Ok (wrapperAcc, st)
             | name :: rest ->
-                generateFuncWrapper name funcParams st
+                generateFuncWrapper name funcParams funcReturnTypes st
                 |> Result.bind (fun (wrapperDef, st') ->
                     generateWrappers rest st' (wrapperDef :: wrapperAcc))
 
@@ -2988,9 +2995,42 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         |> Result.bind (fun valueType ->
             let typeEnv' = Map.add name valueType typeEnv
             inferType body typeEnv' typeReg variantLookup funcReg moduleRegistry)
-    | AST.If (_, thenExpr, _) ->
-        // Both branches should have same type, just infer from then branch
-        inferType thenExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+    | AST.If (_, thenExpr, elseExpr) ->
+        let inferBranchType (branchExpr: AST.Expr) : Result<AST.Type, string> =
+            inferType branchExpr typeEnv typeReg variantLookup funcReg moduleRegistry
+
+        let resolveBranchType (preferred: AST.Type) (other: AST.Type) : Result<AST.Type, string> =
+            match matchTypePattern preferred other with
+            | Error _ -> Error "Branch type mismatch"
+            | Ok bindings ->
+                match consolidateTypeBindings bindings with
+                | Error e -> Error e
+                | Ok subst -> Ok (applySubstToType subst preferred)
+
+        inferBranchType thenExpr
+        |> Result.bind (fun thenType ->
+            inferBranchType elseExpr
+            |> Result.bind (fun elseType ->
+                if thenType = elseType then
+                    Ok thenType
+                elif thenType = AST.TRuntimeError then
+                    Ok elseType
+                elif elseType = AST.TRuntimeError then
+                    Ok thenType
+                else
+                    match resolveBranchType thenType elseType, resolveBranchType elseType thenType with
+                    | Ok resolvedThen, Ok resolvedElse ->
+                        if containsTypeVar resolvedThen && not (containsTypeVar resolvedElse) then
+                            Ok resolvedElse
+                        elif containsTypeVar resolvedElse && not (containsTypeVar resolvedThen) then
+                            Ok resolvedThen
+                        else
+                            Ok resolvedThen
+                    | Ok resolvedThen, Error _ -> Ok resolvedThen
+                    | Error _, Ok resolvedElse -> Ok resolvedElse
+                    | Error _, Error _ ->
+                        Error
+                            $"If branches have incompatible types: then={typeToString thenType}, else={typeToString elseType}"))
     | AST.BinOp (op, left, right) ->
         let ensureSameType () =
             inferType left typeEnv typeReg variantLookup funcReg moduleRegistry
@@ -5904,13 +5944,16 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 : Result<ANF.AExpr * ANF.VarGen, string> =
 
                 // Extract element type from list type
-                let elemType =
+                let elemTypeResult : Result<AST.Type, string> =
                     match listType with
-                    | AST.TList t -> t
-                    | _ -> AST.TInt64  // Fallback
+                    | AST.TList t -> Ok t
+                    | _ ->
+                        Error $"List cons pattern expects TList scrutinee, got {typeToString listType}"
 
-                // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
-                // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
+                elemTypeResult
+                |> Result.bind (fun elemType ->
+                    // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
+                    // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
 
                 // Helper to unwrap a LEAF node and get the value
                 let unwrapLeaf (leafTaggedPtr: ANF.Atom) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -6343,7 +6386,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let ifExpr = ANF.If (ANF.Var lengthCheckVar, withExtractBindings, elseExpr)
                                 let withLengthCheck = ANF.Let (lengthCheckVar, lengthCheckExpr, ifExpr)
                                 let finalExpr = ANF.Let (lengthVar, lengthExpr, withLengthCheck)
-                                (finalExpr, vg7))))
+                                (finalExpr, vg7)))))
 
             // Build OR of multiple pattern conditions for pattern grouping
             // Returns: combined condition atom, all bindings, updated vargen

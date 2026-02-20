@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 16:06:55
-**Commit:** `cee18a4e` - Handle interpreter pipe operator sections for +/-
+**Last Updated:** 2026-02-20 16:46:37
+**Commit:** `f5d0abf3` - Remove one incorrect TInt64 fallback in list-cons tuple pattern lowering
 
 | Benchmark     |           Dark (4.22x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
