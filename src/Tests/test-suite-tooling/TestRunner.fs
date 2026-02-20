@@ -8,6 +8,7 @@ open System
 open System.IO
 open System.Diagnostics
 open System.Globalization
+open System.Threading.Tasks
 open Output
 open TestDSL.PassTestRunner
 open TestDSL.E2EFormat
@@ -241,6 +242,23 @@ let main args =
     let recordResults = TestFramework.recordResults runState
     let recordPassTiming = TestFramework.recordPassTiming runState
     let passTimingTotal () = TestFramework.calculatePassTimingsTotalForOverhead runState.PassTimings
+    let mergeRunState (target: TestRunState) (source: TestRunState) : unit =
+        target.Passed <- target.Passed + source.Passed
+        target.Failed <- target.Failed + source.Failed
+        for failedTest in source.FailedTests do
+            target.FailedTests.Add failedTest
+        for timing in source.Timings do
+            target.Timings.Add timing
+        for passName in source.PassTimingOrder do
+            match Map.tryFind passName source.PassTimings with
+            | Some elapsed ->
+                if not (Map.containsKey passName target.PassTimings) then
+                    target.PassTimingOrder.Add passName
+                let existing =
+                    Map.tryFind passName target.PassTimings
+                    |> Option.defaultValue TimeSpan.Zero
+                target.PassTimings <- Map.add passName (existing + elapsed) target.PassTimings
+            | None -> ()
     let recordNonPassTiming (name: string) (elapsed: TimeSpan) : unit =
         if elapsed > TimeSpan.Zero then
             recordPassTiming { Pass = name; Elapsed = elapsed }
@@ -815,11 +833,17 @@ let main args =
                 println $"  {Colors.gray}└─ Completed in {formatTime sectionTimer.Elapsed}{Colors.reset}"
                 println ""
 
-    // Keep suite timing for accounting consistency, but hide it from overhead display.
-    runSuiteWithExecutionTiming
-        "Unit Test Suite Execution"
-        (fun () -> runUnitTestSuites runState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered)
+    let runUnitSuitesInParallel () : Task<TestRunState> =
+        Task.Run(fun () ->
+            let unitState = TestFramework.createState ()
+            runUnitTestSuites unitState symbols "🔧 Unit Tests" "Unit" unitTestsOrdered
+            unitState)
+
+    println $"{Colors.gray}  Unit and E2E suites: running in parallel{Colors.reset}"
+    let unitTask = runUnitSuitesInParallel ()
     runE2EAndVerification stdlib
+    let unitState = unitTask.GetAwaiter().GetResult()
+    mergeRunState runState unitState
 
     // Compute stdlib coverage only if --coverage flag is set
     let coveragePercent =
