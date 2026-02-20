@@ -203,6 +203,11 @@ match (for example `[(a, b, c), ...rest]` against a list of 2-tuples), the
 pattern is treated as a non-match and falls through to later cases. The ANF
 lowering does not default missing tuple element types to `Int64`.
 
+When list element type is still unresolved (for example `TVar "t"` from match
+inference), tuple head bindings must still be created with unresolved per-slot
+types. Dropping those bindings causes false `undefined variable` errors in
+branch bodies.
+
 The same non-match behavior applies when tuple destructuring appears inside
 guarded list patterns (`when ...`): mismatched tuple arity must fall through
 instead of binding extra elements as `Int64`.

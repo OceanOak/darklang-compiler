@@ -3119,8 +3119,25 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
             | AST.PChar _
             | AST.PFloat _ -> Map.empty
             | AST.PTuple innerPats ->
-                match scrutType with
-                | AST.TTuple elemTypes when List.length elemTypes = List.length innerPats ->
+                let tupleElemTypesOpt =
+                    match scrutType with
+                    | AST.TTuple elemTypes when List.length elemTypes = List.length innerPats ->
+                        Some elemTypes
+                    | AST.TVar tupleTypeVar ->
+                        // Preserve unresolved tuple element types rather than dropping bindings
+                        // or defaulting to a concrete numeric type.
+                        innerPats
+                        |> List.mapi (fun idx _ -> AST.TVar $"__tuple_elem_{tupleTypeVar}_{idx}")
+                        |> Some
+                    | AST.TRuntimeError ->
+                        innerPats
+                        |> List.mapi (fun idx _ -> AST.TVar $"__tuple_elem_runtime_error_{idx}")
+                        |> Some
+                    | _ ->
+                        None
+
+                match tupleElemTypesOpt with
+                | Some elemTypes when List.length elemTypes = List.length innerPats ->
                     List.zip innerPats elemTypes
                     |> List.fold (fun acc (pat, typ) -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat typ)) Map.empty
                 | _ ->
@@ -4933,7 +4950,18 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let tupleElemTypes =
                                     match elemType with
                                     | AST.TTuple types -> types
-                                    | _ -> List.replicate (List.length innerPatterns) AST.TInt64
+                                    | AST.TVar tupleTypeVar ->
+                                        innerPatterns
+                                        |> List.mapi (fun idx _ ->
+                                            AST.TVar $"__tuple_elem_{tupleTypeVar}_{idx}")
+                                    | AST.TRuntimeError ->
+                                        innerPatterns
+                                        |> List.mapi (fun idx _ ->
+                                            AST.TVar $"__tuple_elem_runtime_error_{idx}")
+                                    | _ ->
+                                        innerPatterns
+                                        |> List.mapi (fun idx _ ->
+                                            AST.TVar $"__tuple_elem_unknown_{idx}")
                                 let rec collectTupleBindings (tupPats: AST.Pattern list) (types: AST.Type list) (tupleAtom: ANF.Atom) (idx: int) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                                     match tupPats with
                                     | [] -> Ok (env, bindings, vg)
@@ -4942,7 +4970,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         let (rawElemVar, vg1) = ANF.freshVar vg
                                         let rawElemExpr = ANF.TupleGet (tupleAtom, idx)
                                         let rawElemBinding = (rawElemVar, rawElemExpr)
-                                        let elemT = if idx < List.length types then List.item idx types else AST.TInt64
+                                        let elemT =
+                                            if idx < List.length types then
+                                                List.item idx types
+                                            else
+                                                AST.TVar $"__tuple_elem_missing_{idx}"
                                         // Wrap with TypedAtom to preserve correct element type
                                         let (elemVar, vg1') = ANF.freshVar vg1
                                         let elemExpr = ANF.TypedAtom (ANF.Var rawElemVar, elemT)
@@ -6249,10 +6281,27 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | _ ->
                             Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 
-                let tupleHeadPatternCanMatch (tupleType: AST.Type) (patterns: AST.Pattern list) : bool =
-                    match tupleType with
-                    | AST.TTuple elemTypes -> List.length elemTypes = List.length patterns
-                    | _ -> false
+                let tupleHeadPatternType
+                    (candidateElemType: AST.Type)
+                    (patterns: AST.Pattern list)
+                    : AST.Type option =
+                    match candidateElemType with
+                    | AST.TTuple elemTypes when List.length elemTypes = List.length patterns ->
+                        Some candidateElemType
+                    | AST.TVar tupleTypeVar ->
+                        let unresolvedElemTypes =
+                            patterns
+                            |> List.mapi (fun idx _ ->
+                                AST.TVar $"__tuple_elem_{tupleTypeVar}_{idx}")
+                        Some (AST.TTuple unresolvedElemTypes)
+                    | AST.TRuntimeError ->
+                        let unresolvedElemTypes =
+                            patterns
+                            |> List.mapi (fun idx _ ->
+                                AST.TVar $"__tuple_elem_runtime_error_{idx}")
+                        Some (AST.TTuple unresolvedElemTypes)
+                    | _ ->
+                        None
 
                 match headPatterns with
                 | [] ->
@@ -6317,10 +6366,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PVar name -> Ok (Map.add name (typedHeadVar, elemType) currentEnv, [], vg3', None)  // Use typed head var with element type
                             | AST.PWildcard -> Ok (currentEnv, [], vg3', None)
                             | AST.PTuple innerPatterns ->
-                                if tupleHeadPatternCanMatch elemType innerPatterns then
-                                    extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
+                                match tupleHeadPatternType elemType innerPatterns with
+                                | Some tupleType ->
+                                    extractTupleBindings innerPatterns typedHeadAtom tupleType 0 currentEnv [] vg3'
                                     |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                                else
+                                | None ->
                                     let (guardVar, vg4) = ANF.freshVar vg3'
                                     Ok (currentEnv, [], vg4, Some (guardVar, ANF.Atom (ANF.BoolLiteral false)))
                             | (AST.PInt64 _ as pat)
@@ -6400,10 +6450,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PVar name -> Ok (Map.add name (typedHeadVar, elemType) currentEnv, [], vg3', None)  // Use typed head var with element type
                             | AST.PWildcard -> Ok (currentEnv, [], vg3', None)
                             | AST.PTuple innerPatterns ->
-                                if tupleHeadPatternCanMatch elemType innerPatterns then
-                                    extractTupleBindings innerPatterns typedHeadAtom elemType 0 currentEnv [] vg3'  // Pass tuple type
+                                match tupleHeadPatternType elemType innerPatterns with
+                                | Some tupleType ->
+                                    extractTupleBindings innerPatterns typedHeadAtom tupleType 0 currentEnv [] vg3'
                                     |> Result.map (fun (env, bindings, vg') -> (env, bindings, vg', None))
-                                else
+                                | None ->
                                     let (guardVar, vg4) = ANF.freshVar vg3'
                                     Ok (currentEnv, [], vg4, Some (guardVar, ANF.Atom (ANF.BoolLiteral false)))
                             | (AST.PInt64 _ as pat)
