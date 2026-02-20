@@ -98,6 +98,11 @@ from alternatives that can structurally match the scrutinee type. If an
 alternative is impossible (for example tuple arity mismatch), it must not add
 fabricated bindings with default types such as `Int64`.
 
+The same applies to record alternatives: when the scrutinee is statically
+non-record, guarded and unguarded record alternatives in grouped cases must
+fall through as non-matches. Lowering must not fabricate record field bindings
+with `Int64` defaults.
+
 ### List Pattern
 ```dark
 | [] -> 0

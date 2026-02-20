@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 18:23:36
-**Commit:** `e1214e09` - Remove grouped tuple fallback to TInt64 in match type inference
+**Last Updated:** 2026-02-20 19:47:13
+**Commit:** `ba08f333` - Remove one nested tuple-pattern TInt64 fallback in ANF list-pattern extraction
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

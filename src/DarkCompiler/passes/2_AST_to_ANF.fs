@@ -5011,6 +5011,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             || patternDefinitelyCannotMatchType tailPattern patType
                         | AST.TVar _ -> false
                         | _ -> true
+                    | AST.PRecord _ ->
+                        match patType with
+                        | AST.TRecord _ -> false
+                        | AST.TVar _ -> false
+                        | _ -> true
                     | _ -> false
 
                 // Helper to collect pattern variable bindings (simplified version for common patterns)
@@ -5109,13 +5114,16 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                         ((payloadVar, payloadExpr) :: bindings)
                                         vg1)
                     | AST.PRecord (_, fieldPatterns) ->
-                        let fieldTypes =
+                        let fieldTypesResult =
                             match sourceType with
                             | AST.TRecord (recordName, _) ->
                                 match Map.tryFind recordName typeReg with
-                                | Some fields -> fields |> List.map snd
-                                | None -> List.replicate (List.length fieldPatterns) AST.TInt64
-                            | _ -> List.replicate (List.length fieldPatterns) AST.TInt64
+                                | Some fields -> Ok (fields |> List.map snd)
+                                | None ->
+                                    Error $"collectBindings(PRecord): unknown record type '{recordName}'"
+                            | _ ->
+                                Error
+                                    $"collectBindings(PRecord): expected record source type, got {typeToString sourceType}"
                         let rec collectFromRecord fields types idx env bindings vg =
                             match fields, types with
                             | [], _ -> Ok (env, bindings, vg)
@@ -5125,13 +5133,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 collectBindings p (ANF.Var fieldVar) t env ((fieldVar, fieldExpr) :: bindings) vg1
                                 |> Result.bind (fun (env', bindings', vg') ->
                                     collectFromRecord rest restTypes (idx + 1) env' bindings' vg')
-                            | (_, p) :: rest, [] ->
-                                let (fieldVar, vg1) = ANF.freshVar vg
-                                let fieldExpr = ANF.TupleGet (sourceAtom, idx)
-                                collectBindings p (ANF.Var fieldVar) AST.TInt64 env ((fieldVar, fieldExpr) :: bindings) vg1
-                                |> Result.bind (fun (env', bindings', vg') ->
-                                    collectFromRecord rest [] (idx + 1) env' bindings' vg')
-                        collectFromRecord fieldPatterns fieldTypes 0 env bindings vg
+                            | (_, _) :: _, [] ->
+                                Error $"collectBindings(PRecord): missing field type at index {idx}"
+                        fieldTypesResult
+                        |> Result.bind (fun fieldTypes ->
+                            collectFromRecord fieldPatterns fieldTypes 0 env bindings vg)
                     | AST.PList innerPatterns ->
                         let elemType =
                             match sourceType with
