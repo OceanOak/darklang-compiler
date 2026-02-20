@@ -93,8 +93,8 @@ module InvalidFnCalls =
   fnWithTypeArgAndOneParam 1L =
     error="fnWithTypeArgAndOneParam expects 1 type argument, but got 0 type arguments"
 
-  fnWithTypeArgAndOneParam<Int64, String> 1L = Builtin.testDerrorMessage
-    "fnWithTypeArgAndOneParam expects 1 type argument, but got 2 type arguments"
+  fnWithTypeArgAndOneParam<Int64, String> 1L =
+    error="fnWithTypeArgAndOneParam expects 1 type argument, but got 2 type arguments"
 
 
   // errors around args
