@@ -5475,6 +5475,113 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     (headPatterns |> List.exists patternBindsVariables) || patternBindsVariables tailPattern
                 | _ -> false
 
+            let rec substituteTypeForStaticPatternCheck (subst: Map<string, AST.Type>) (typ: AST.Type) : AST.Type =
+                match typ with
+                | AST.TVar name -> Map.tryFind name subst |> Option.defaultValue typ
+                | AST.TTuple elems -> AST.TTuple (List.map (substituteTypeForStaticPatternCheck subst) elems)
+                | AST.TRecord (name, args) -> AST.TRecord (name, List.map (substituteTypeForStaticPatternCheck subst) args)
+                | AST.TList elem -> AST.TList (substituteTypeForStaticPatternCheck subst elem)
+                | AST.TDict (k, v) ->
+                    AST.TDict (substituteTypeForStaticPatternCheck subst k, substituteTypeForStaticPatternCheck subst v)
+                | AST.TSum (name, args) -> AST.TSum (name, List.map (substituteTypeForStaticPatternCheck subst) args)
+                | AST.TFunction (args, ret) ->
+                    AST.TFunction (
+                        List.map (substituteTypeForStaticPatternCheck subst) args,
+                        substituteTypeForStaticPatternCheck subst ret
+                    )
+                | _ -> typ
+
+            let resolvePayloadTypeForStaticPatternCheck
+                (constructorName: string)
+                (scrutineeType: AST.Type)
+                : AST.Type option option =
+                match Map.tryFind constructorName variantLookup with
+                | None -> None
+                | Some (sumTypeName, typeParams, _, payloadTypeTemplateOpt) ->
+                    let payloadTypeOpt =
+                        match payloadTypeTemplateOpt with
+                        | None -> None
+                        | Some payloadTypeTemplate ->
+                            let payloadType =
+                                match scrutineeType with
+                                | AST.TSum (scrutineeSumTypeName, typeArgs)
+                                    when scrutineeSumTypeName = sumTypeName
+                                         && List.length typeParams = List.length typeArgs ->
+                                    let subst = List.zip typeParams typeArgs |> Map.ofList
+                                    substituteTypeForStaticPatternCheck subst payloadTypeTemplate
+                                | _ ->
+                                    payloadTypeTemplate
+                            Some payloadType
+                    Some payloadTypeOpt
+
+            let rec patternStaticallyCannotMatchType (pattern: AST.Pattern) (sourceType: AST.Type) : bool =
+                match pattern with
+                | AST.PTuple innerPatterns ->
+                    match sourceType with
+                    | AST.TTuple elemTypes ->
+                        if List.length elemTypes <> List.length innerPatterns then
+                            true
+                        else
+                            List.zip innerPatterns elemTypes
+                            |> List.exists (fun (innerPattern, elemType) ->
+                                patternStaticallyCannotMatchType innerPattern elemType)
+                    | AST.TVar _
+                    | AST.TRuntimeError -> false
+                    | _ -> true
+                | AST.PRecord _ ->
+                    match sourceType with
+                    | AST.TRecord _
+                    | AST.TVar _
+                    | AST.TRuntimeError -> false
+                    | _ -> true
+                | AST.PConstructor (constructorName, payloadPatternOpt) ->
+                    match sourceType with
+                    | AST.TVar _
+                    | AST.TRuntimeError -> false
+                    | AST.TSum (sumTypeName, _) ->
+                        match Map.tryFind constructorName variantLookup with
+                        | Some (constructorSumTypeName, _, _, _) when constructorSumTypeName <> sumTypeName ->
+                            true
+                        | Some _ ->
+                            match resolvePayloadTypeForStaticPatternCheck constructorName sourceType with
+                            | Some payloadTypeOpt ->
+                                match payloadPatternOpt, payloadTypeOpt with
+                                | None, None -> false
+                                | Some payloadPattern, Some payloadType ->
+                                    patternStaticallyCannotMatchType payloadPattern payloadType
+                                | _ -> true
+                            | None -> false
+                        | None -> false
+                    | _ -> true
+                | AST.PList innerPatterns ->
+                    match sourceType with
+                    | AST.TList elemType ->
+                        innerPatterns
+                        |> List.exists (fun innerPattern ->
+                            patternStaticallyCannotMatchType innerPattern elemType)
+                    | AST.TVar _
+                    | AST.TRuntimeError -> false
+                    | _ -> true
+                | AST.PListCons (headPatterns, tailPattern) ->
+                    match sourceType with
+                    | AST.TList elemType ->
+                        (headPatterns
+                         |> List.exists (fun headPattern ->
+                            patternStaticallyCannotMatchType headPattern elemType))
+                        || patternStaticallyCannotMatchType tailPattern sourceType
+                    | AST.TVar _
+                    | AST.TRuntimeError -> false
+                    | _ -> true
+                | _ ->
+                    false
+
+            let makeFalsePatternCondition
+                (vg: ANF.VarGen)
+                : ANF.Atom * (ANF.TempId * ANF.CExpr) list * ANF.VarGen =
+                let (cmpVar, vg1) = ANF.freshVar vg
+                let cmpExpr = ANF.Atom (ANF.BoolLiteral false)
+                (ANF.Var cmpVar, [ (cmpVar, cmpExpr) ], vg1)
+
             // Collect variable bindings for nested patterns under a value that is already known to match.
             // This is used by list/list-cons lowering where structural checks are emitted separately.
             let rec collectNestedPatternBindings
@@ -5506,33 +5613,35 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let binding = (tempId, ANF.TypedAtom (sourceAtom, sourceType))
                     Ok (Map.add name (tempId, sourceType) env, bindings @ [binding], vg1)
                 | AST.PTuple patterns ->
-                    let elemTypes =
+                    let tupleElemTypesOpt =
                         match sourceType with
-                        | AST.TTuple types -> types
-                        | _ -> List.replicate (List.length patterns) AST.TInt64
-                    let rec loop
-                        (remaining: AST.Pattern list)
-                        (types: AST.Type list)
-                        (idx: int)
-                        (currentEnv: VarEnv)
-                        (currentBindings: (ANF.TempId * ANF.CExpr) list)
-                        (currentVg: ANF.VarGen)
-                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-                        match remaining, types with
-                        | [], _ -> Ok (currentEnv, currentBindings, currentVg)
-                        | pat :: rest, elemType :: restTypes ->
-                            let (elemVar, vg1) = ANF.freshVar currentVg
-                            let elemExpr = ANF.TupleGet (sourceAtom, idx)
-                            collectNestedPatternBindings pat (ANF.Var elemVar) elemType currentEnv (currentBindings @ [(elemVar, elemExpr)]) vg1
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                loop rest restTypes (idx + 1) env' bindings' vg')
-                        | pat :: rest, [] ->
-                            let (elemVar, vg1) = ANF.freshVar currentVg
-                            let elemExpr = ANF.TupleGet (sourceAtom, idx)
-                            collectNestedPatternBindings pat (ANF.Var elemVar) AST.TInt64 currentEnv (currentBindings @ [(elemVar, elemExpr)]) vg1
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                loop rest [] (idx + 1) env' bindings' vg')
-                    loop patterns elemTypes 0 env bindings vg
+                        | AST.TTuple types when List.length types = List.length patterns ->
+                            Some types
+                        | _ ->
+                            None
+
+                    match tupleElemTypesOpt with
+                    | None ->
+                        Ok (env, bindings, vg)
+                    | Some elemTypes ->
+                        let rec loop
+                            (remaining: (AST.Pattern * AST.Type) list)
+                            (idx: int)
+                            (currentEnv: VarEnv)
+                            (currentBindings: (ANF.TempId * ANF.CExpr) list)
+                            (currentVg: ANF.VarGen)
+                            : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+                            match remaining with
+                            | [] ->
+                                Ok (currentEnv, currentBindings, currentVg)
+                            | (pat, elemType) :: rest ->
+                                let (elemVar, vg1) = ANF.freshVar currentVg
+                                let elemExpr = ANF.TupleGet (sourceAtom, idx)
+                                collectNestedPatternBindings pat (ANF.Var elemVar) elemType currentEnv (currentBindings @ [ (elemVar, elemExpr) ]) vg1
+                                |> Result.bind (fun (env', bindings', vg') ->
+                                    loop rest (idx + 1) env' bindings' vg')
+
+                        loop (List.zip patterns elemTypes) 0 env bindings vg
                 | AST.PRecord (recordName, fieldPatterns) ->
                     let fieldTypes =
                         match sourceType with
@@ -5914,14 +6023,21 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let bindingsWithLiteral = newBindings @ [(litCheckVar, litCheckExpr)]
                                 extractElements rest (idx + 1) env bindingsWithLiteral (condAtoms @ [ANF.Var litCheckVar]) vg3
                             | AST.PList _ | AST.PListCons _ | AST.PConstructor _ ->
-                                buildPatternComparison pat (ANF.Var valueVar) vg2'
+                                let staticallyCannotMatch = patternStaticallyCannotMatchType pat elemType
+                                let cmpResult =
+                                    if staticallyCannotMatch then
+                                        let (condAtom, bindings', vg3) = makeFalsePatternCondition vg2'
+                                        Ok (Some (condAtom, bindings', vg3))
+                                    else
+                                        buildPatternComparison pat (ANF.Var valueVar) vg2'
+                                cmpResult
                                 |> Result.bind (fun cmpOpt ->
                                     let (cmpCondOpt, cmpBindings, vg3) =
                                         match cmpOpt with
                                         | None -> (None, [], vg2')
                                         | Some (condAtom, bindings', vg') -> (Some condAtom, bindings', vg')
                                     let nestedBindingsResult =
-                                        if patternBindsVariables pat then
+                                        if patternBindsVariables pat && not staticallyCannotMatch then
                                             collectNestedPatternBindings pat (ANF.Var valueVar) elemType env [] vg3
                                         else
                                             Ok (env, [], vg3)
@@ -6353,14 +6469,21 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 let bindingsWithCheck = newBindings @ [(litCheckVar, litCheckExpr)]
                                 extractElements rest typedTailVar env bindingsWithCheck (condAtoms @ [ANF.Var litCheckVar]) vg3
                             | AST.PConstructor _ | AST.PList _ | AST.PListCons _ ->
-                                buildPatternComparison pat (ANF.Var typedHeadVar) vg2''
+                                let staticallyCannotMatch = patternStaticallyCannotMatchType pat elemType
+                                let cmpResult =
+                                    if staticallyCannotMatch then
+                                        let (condAtom, bindings', vg3) = makeFalsePatternCondition vg2''
+                                        Ok (Some (condAtom, bindings', vg3))
+                                    else
+                                        buildPatternComparison pat (ANF.Var typedHeadVar) vg2''
+                                cmpResult
                                 |> Result.bind (fun cmpOpt ->
                                     let (cmpCondOpt, cmpBindings, vg3) =
                                         match cmpOpt with
                                         | None -> (None, [], vg2'')
                                         | Some (condAtom, bindings', vg') -> (Some condAtom, bindings', vg')
                                     let nestedBindingsResult =
-                                        if patternBindsVariables pat then
+                                        if patternBindsVariables pat && not staticallyCannotMatch then
                                             collectNestedPatternBindings pat (ANF.Var typedHeadVar) elemType env [] vg3
                                         else
                                             Ok (env, [], vg3)

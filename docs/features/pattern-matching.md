@@ -197,6 +197,11 @@ The same non-match behavior applies when tuple destructuring appears inside
 guarded list patterns (`when ...`): mismatched tuple arity must fall through
 instead of binding extra elements as `Int64`.
 
+This also applies to constructor payloads inside list patterns. For example,
+`[Some((x, y)), ...rest]` against `List<Option<Int64>>` is statically
+impossible and must compile as a non-match, rather than matching `Some` and
+binding tuple payload fields with a default `Int64` type.
+
 ## Constructor Pattern Compilation
 
 ```dark

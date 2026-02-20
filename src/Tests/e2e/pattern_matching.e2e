@@ -431,6 +431,10 @@ match [(1, 2)] with | [(a, b, c), ...rest] -> 1 | _ -> 2 = 2
 // Regression: this previously matched and evaluated the branch body instead of surfacing the tuple arity issue.
 type TupleListBox = TupleListBox of List<(Int64, Int64)> match TupleListBox([(1, 2)]) with | TupleListBox([(a, b, c)]) -> 1 | _ -> 2 = error="Tuple pattern expects 3 elements but got 2"
 
+// Constructor payload tuple pattern on non-tuple payload type must not match in list patterns.
+// Regression: this previously matched due nested tuple bindings defaulting to TInt64.
+match [Some(5), Some(6)] with | [None, _] -> 1 | [Some((x, _)), _] -> 2 | _ -> 3 = 3
+
 // Single literal pattern
 match [13] with | [13] -> 1 | _ -> 0 = 1
 
