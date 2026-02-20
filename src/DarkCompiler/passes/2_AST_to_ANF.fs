@@ -3145,31 +3145,41 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     // Type checking treats these as non-matching alternatives.
                     Map.empty
             | AST.PRecord (patternRecordName, fieldPats) ->
-                // Preserve concrete field types from the matched record.
-                // Falling back to Int64 here causes downstream mis-lowering (e.g. string == uses pointer eq).
-                let recordFields =
-                    match scrutType with
-                    | AST.TRecord (scrutRecordName, _) ->
+                let collectRecordFieldBindings (fieldTypeForName: string -> AST.Type) : Map<string, AST.Type> =
+                    fieldPats
+                    |> List.fold (fun acc (fieldName, pat) ->
+                        let fieldType = fieldTypeForName fieldName
+                        Map.fold
+                            (fun m k v -> Map.add k v m)
+                            acc
+                            (extractPatternBindings pat fieldType))
+                        Map.empty
+
+                match scrutType with
+                | AST.TRecord (scrutRecordName, _) ->
+                    // Preserve concrete field types from the matched record.
+                    // Falling back to Int64 here causes downstream mis-lowering (e.g. string == uses pointer eq).
+                    let recordFields =
                         if Map.containsKey scrutRecordName typeReg then
                             Map.find scrutRecordName typeReg
                         elif Map.containsKey patternRecordName typeReg then
                             Map.find patternRecordName typeReg
                         else
                             Crash.crash $"PRecord pattern could not find record type '{scrutRecordName}' (pattern: '{patternRecordName}')"
-                    | _ ->
-                        Crash.crash $"PRecord pattern expects TRecord scrutinee, got {scrutType}"
 
-                fieldPats
-                |> List.fold (fun acc (fieldName, pat) ->
-                    let fieldType =
+                    collectRecordFieldBindings (fun fieldName ->
                         match List.tryFind (fun (name, _) -> name = fieldName) recordFields with
                         | Some (_, typ) -> typ
-                        | None -> Crash.crash $"PRecord pattern field '{fieldName}' not found on record '{patternRecordName}'"
-
-                    Map.fold
-                        (fun m k v -> Map.add k v m)
-                        acc
-                        (extractPatternBindings pat fieldType))
+                        | None -> Crash.crash $"PRecord pattern field '{fieldName}' not found on record '{patternRecordName}'")
+                | AST.TVar recordTypeVar ->
+                    // Keep unresolved record field types unresolved instead of defaulting to Int64.
+                    collectRecordFieldBindings (fun fieldName -> AST.TVar $"__record_field_{recordTypeVar}_{fieldName}")
+                | AST.TRuntimeError ->
+                    collectRecordFieldBindings (fun fieldName -> AST.TVar $"__record_field_runtime_error_{fieldName}")
+                | _ ->
+                    // Grouped alternatives may include impossible record branches
+                    // (for example `(x, 2) | MyRecord { x = x }`). Treat those
+                    // as contributing no bindings rather than crashing.
                     Map.empty
             | AST.PConstructor (variantName, payloadPat) ->
                 match payloadPat with
@@ -3221,20 +3231,62 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     let tailBindings = extractPatternBindings tailPat scrutType
                     Map.fold (fun m k v -> Map.add k v m) headBindings tailBindings
 
-        match cases with
-        | mc :: _ ->
-            let patternType =
-                match scrutineeTypeResult with
-                | Ok t -> t
-                | Error msg -> Crash.crash $"Pattern match: Could not determine scrutinee type: {msg}"
-            // Get bindings from first pattern (cases can have multiple patterns, use first)
+        let resolveCaseType (preferred: AST.Type) (other: AST.Type) : Result<AST.Type, string> =
+            match matchTypePattern preferred other with
+            | Error _ -> Error "Match case type mismatch"
+            | Ok bindings ->
+                match consolidateTypeBindings bindings with
+                | Error e -> Error e
+                | Ok subst -> Ok (applySubstToType subst preferred)
+
+        let mergeCaseTypes (accType: AST.Type) (nextType: AST.Type) : Result<AST.Type, string> =
+            if accType = nextType then
+                Ok accType
+            elif accType = AST.TRuntimeError then
+                Ok nextType
+            elif nextType = AST.TRuntimeError then
+                Ok accType
+            else
+                match resolveCaseType accType nextType, resolveCaseType nextType accType with
+                | Ok resolvedAcc, Ok resolvedNext ->
+                    if containsTypeVar resolvedAcc && not (containsTypeVar resolvedNext) then
+                        Ok resolvedNext
+                    elif containsTypeVar resolvedNext && not (containsTypeVar resolvedAcc) then
+                        Ok resolvedAcc
+                    else
+                        Ok resolvedAcc
+                | Ok resolvedAcc, Error _ -> Ok resolvedAcc
+                | Error _, Ok resolvedNext -> Ok resolvedNext
+                | Error _, Error _ ->
+                    Error
+                        $"Match cases have incompatible types: {typeToString accType} vs {typeToString nextType}"
+
+        let inferCaseType (patternType: AST.Type) (mc: AST.MatchCase) : Result<AST.Type, string> =
             let patBindings =
                 mc.Patterns
                 |> AST.NonEmptyList.toList
                 |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat patternType)) Map.empty
             let typeEnv' = Map.fold (fun m k v -> Map.add k v m) typeEnv patBindings
             inferType mc.Body typeEnv' typeReg variantLookup funcReg moduleRegistry
+
+        let patternType =
+            match scrutineeTypeResult with
+            | Ok t -> t
+            | Error msg -> Crash.crash $"Pattern match: Could not determine scrutinee type: {msg}"
+
+        match cases with
         | [] -> Error "Empty match expression"
+        | firstCase :: restCases ->
+            inferCaseType patternType firstCase
+            |> Result.bind (fun firstCaseType ->
+                restCases
+                |> List.fold
+                    (fun accResult mc ->
+                        accResult
+                        |> Result.bind (fun accType ->
+                            inferCaseType patternType mc
+                            |> Result.bind (fun nextType -> mergeCaseTypes accType nextType)))
+                    (Ok firstCaseType))
     | AST.Call (funcName, args) ->
         if isBuiltinUnwrapName funcName then
             match args with
@@ -5824,6 +5876,10 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         match sourceType with
                         | AST.TList t -> t
                         | _ -> AST.TInt64
+                    let headFuncName =
+                        match elemType with
+                        | AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
+                        | _ -> "Stdlib.__FingerTree.headUnsafe_i64"
                     let rec loop
                         (remaining: AST.Pattern list)
                         (currentList: ANF.Atom)
@@ -5835,7 +5891,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | [] -> Ok (currentEnv, currentBindings, currentVg)
                         | pat :: rest ->
                             let (headVar, vg1) = ANF.freshVar currentVg
-                            let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
+                            let headExpr = ANF.Call (headFuncName, [currentList])
                             collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr)]) vg1
                             |> Result.bind (fun (env', bindings', vg') ->
                                 if List.isEmpty rest then
@@ -5846,30 +5902,41 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     loop rest (ANF.Var tailVar) env' (bindings' @ [(tailVar, tailExpr)]) vg2)
                     loop patterns sourceAtom env bindings vg
                 | AST.PListCons (headPatterns, tailPattern) ->
-                    let elemType =
+                    let elemTypeResult =
                         match sourceType with
-                        | AST.TList t -> t
-                        | _ -> AST.TInt64
-                    let rec collectHeads
-                        (remaining: AST.Pattern list)
-                        (currentList: ANF.Atom)
-                        (currentEnv: VarEnv)
-                        (currentBindings: (ANF.TempId * ANF.CExpr) list)
-                        (currentVg: ANF.VarGen)
-                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen, string> =
-                        match remaining with
-                        | [] -> Ok (currentEnv, currentBindings, currentList, currentVg)
-                        | pat :: rest ->
-                            let (headVar, vg1) = ANF.freshVar currentVg
-                            let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
-                            let (tailVar, vg2) = ANF.freshVar vg1
-                            let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
-                            collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr); (tailVar, tailExpr)]) vg2
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                collectHeads rest (ANF.Var tailVar) env' bindings' vg')
-                    collectHeads headPatterns sourceAtom env bindings vg
-                    |> Result.bind (fun (envAfterHeads, bindingsAfterHeads, tailAtom, vg1) ->
-                        collectNestedPatternBindings tailPattern tailAtom sourceType envAfterHeads bindingsAfterHeads vg1)
+                        | AST.TList t -> Ok t
+                        | AST.TVar sourceTypeVar ->
+                            Ok (AST.TVar $"__list_elem_{sourceTypeVar}")
+                        | AST.TRuntimeError ->
+                            Ok (AST.TVar "__list_elem_runtime_error")
+                        | _ ->
+                            Error $"PListCons nested binding expects list source type, got {typeToString sourceType}"
+                    elemTypeResult
+                    |> Result.bind (fun elemType ->
+                        let headFuncName =
+                            match elemType with
+                            | AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
+                            | _ -> "Stdlib.__FingerTree.headUnsafe_i64"
+                        let rec collectHeads
+                            (remaining: AST.Pattern list)
+                            (currentList: ANF.Atom)
+                            (currentEnv: VarEnv)
+                            (currentBindings: (ANF.TempId * ANF.CExpr) list)
+                            (currentVg: ANF.VarGen)
+                            : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.Atom * ANF.VarGen, string> =
+                            match remaining with
+                            | [] -> Ok (currentEnv, currentBindings, currentList, currentVg)
+                            | pat :: rest ->
+                                let (headVar, vg1) = ANF.freshVar currentVg
+                                let headExpr = ANF.Call (headFuncName, [currentList])
+                                let (tailVar, vg2) = ANF.freshVar vg1
+                                let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
+                                collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr); (tailVar, tailExpr)]) vg2
+                                |> Result.bind (fun (env', bindings', vg') ->
+                                    collectHeads rest (ANF.Var tailVar) env' bindings' vg')
+                        collectHeads headPatterns sourceAtom env bindings vg
+                        |> Result.bind (fun (envAfterHeads, bindingsAfterHeads, tailAtom, vg1) ->
+                            collectNestedPatternBindings tailPattern tailAtom sourceType envAfterHeads bindingsAfterHeads vg1))
 
             // Compile a list pattern for FingerTree with proper length validation.
             // FingerTree layout:
@@ -6551,7 +6618,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Call head to get current element
                             let (headResultVar, vg1) = ANF.freshVar vg
-                            let headCallExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [ANF.Var currentListVar])
+                            let headCallName =
+                                match elemType with
+                                | AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
+                                | _ -> "Stdlib.__FingerTree.headUnsafe_i64"
+                            let headCallExpr = ANF.Call (headCallName, [ANF.Var currentListVar])
                             // Call tail to get rest
                             let (tailResultVar, vg2) = ANF.freshVar vg1
                             let tailCallExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [ANF.Var currentListVar])

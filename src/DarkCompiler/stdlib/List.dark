@@ -123,6 +123,10 @@ def Stdlib.List.head<a>(list: List<a>) : Stdlib.Option.Option<a> =
 def Stdlib.List.__headUnsafeInt64(list: List<Int64>) : Int64 =
     Stdlib.__FingerTree.headUnsafe<Int64>(list)
 
+// Internal: get head without option wrapper for Float lists
+def Stdlib.List.__headUnsafeFloat(list: List<Float>) : Float =
+    Stdlib.__FingerTree.headUnsafe<Float>(list)
+
 // Internal: get element at index (forces monomorphization for pattern matching)
 def Stdlib.List.__getAtInt64(list: List<Int64>, idx: Int64) : Stdlib.Option.Option<Int64> =
     Stdlib.__FingerTree.getAt<Int64>(list, idx)

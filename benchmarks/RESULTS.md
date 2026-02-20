@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-20 22:35:32
-**Commit:** `5266cedd` - Remove nested-record TInt64 fallback in match binding extraction
+**Last Updated:** 2026-02-20 23:01:33
+**Commit:** `d98a25c7` - Remove one TInt64 tuple fallback in list-cons tuple typing
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
