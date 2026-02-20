@@ -3172,19 +3172,37 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                             Crash.crash $"Unknown constructor '{variantName}' in pattern"
                     extractPatternBindings payloadPattern payloadType
             | AST.PList innerPats ->
-                let elemType =
+                let elemTypeOpt =
                     match scrutType with
-                    | AST.TList t -> t
-                    | _ -> Crash.crash $"PList pattern expects TList scrutinee, got {scrutType}"
-                innerPats |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
+                    | AST.TList t -> Some t
+                    | AST.TVar _
+                    | AST.TRuntimeError -> Some (AST.TVar "__list_elem_unknown")
+                    | _ -> None
+                match elemTypeOpt with
+                | None ->
+                    // Grouped alternatives may include impossible list branches (for example `0 | [_]`).
+                    // Treat those as contributing no bindings rather than crashing.
+                    Map.empty
+                | Some elemType ->
+                    innerPats
+                    |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
             | AST.PListCons (headPats, tailPat) ->
-                let elemType =
+                let elemTypeOpt =
                     match scrutType with
-                    | AST.TList t -> t
-                    | _ -> Crash.crash $"PListCons pattern expects TList scrutinee, got {scrutType}"
-                let headBindings = headPats |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
-                let tailBindings = extractPatternBindings tailPat scrutType
-                Map.fold (fun m k v -> Map.add k v m) headBindings tailBindings
+                    | AST.TList t -> Some t
+                    | AST.TVar _
+                    | AST.TRuntimeError -> Some (AST.TVar "__list_elem_unknown")
+                    | _ -> None
+                match elemTypeOpt with
+                | None ->
+                    // Impossible list-cons alternatives must not fabricate bindings.
+                    Map.empty
+                | Some elemType ->
+                    let headBindings =
+                        headPats
+                        |> List.fold (fun acc pat -> Map.fold (fun m k v -> Map.add k v m) acc (extractPatternBindings pat elemType)) Map.empty
+                    let tailBindings = extractPatternBindings tailPat scrutType
+                    Map.fold (fun m k v -> Map.add k v m) headBindings tailBindings
 
         match cases with
         | mc :: _ ->
@@ -3296,8 +3314,10 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                         tryParseMangledType variantLookup suffix
                         |> Result.map AST.TList
                     elif funcName.StartsWith("__list_empty_") then
-                        // __list_empty<a> returns List<a> - but at ANF level it's Int64 (null ptr)
-                        Ok AST.TInt64
+                        // Preserve the semantic list type for match/type inference.
+                        let suffix = funcName.Substring("__list_empty_".Length)
+                        tryParseMangledType variantLookup suffix
+                        |> Result.map AST.TList
                     else
                         Error $"Unknown function: '{funcName}'"
     | AST.TypeApp (_funcName, _typeArgs, _args) ->
@@ -5139,57 +5159,81 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         |> Result.bind (fun fieldTypes ->
                             collectFromRecord fieldPatterns fieldTypes 0 env bindings vg)
                     | AST.PList innerPatterns ->
-                        let elemType =
+                        let elemTypeResult =
                             match sourceType with
-                            | AST.TList t -> t
-                            | _ -> AST.TInt64
-                        // For list patterns, extract head elements using FingerTree operations
-                        // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
-                        // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
-                        let rec collectFromList (pats: AST.Pattern list) (currentList: ANF.Atom) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) =
-                            match pats with
-                            | [] -> Ok (env, bindings, vg)
-                            | p :: rest ->
-                                // Lists are FingerTrees - use headUnsafe/tail to extract
-                                let (headVar, vg1) = ANF.freshVar vg
-                                let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
-                                let headBinding = (headVar, headExpr)
-                                collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
-                                |> Result.bind (fun (env', bindings', vg') ->
-                                    if List.isEmpty rest then
-                                        Ok (env', bindings', vg')
-                                    else
-                                        // Get tail for next iteration
+                            | AST.TList t -> Ok t
+                            | AST.TVar _
+                            | AST.TRuntimeError -> Ok (AST.TVar "__list_elem_unknown")
+                            | _ ->
+                                Error
+                                    $"collectBindings(PList): expected list-compatible source type, got {typeToString sourceType}"
+                        elemTypeResult
+                        |> Result.bind (fun elemType ->
+                            // For list patterns, extract head elements using FingerTree operations
+                            // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
+                            // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
+                            let rec collectFromList
+                                (pats: AST.Pattern list)
+                                (currentList: ANF.Atom)
+                                (env: VarEnv)
+                                (bindings: (ANF.TempId * ANF.CExpr) list)
+                                (vg: ANF.VarGen)
+                                =
+                                match pats with
+                                | [] -> Ok (env, bindings, vg)
+                                | p :: rest ->
+                                    // Lists are FingerTrees - use headUnsafe/tail to extract
+                                    let (headVar, vg1) = ANF.freshVar vg
+                                    let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
+                                    let headBinding = (headVar, headExpr)
+                                    collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
+                                    |> Result.bind (fun (env', bindings', vg') ->
+                                        if List.isEmpty rest then
+                                            Ok (env', bindings', vg')
+                                        else
+                                            // Get tail for next iteration
+                                            let (tailVar, vg2) = ANF.freshVar vg'
+                                            let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
+                                            let tailBinding = (tailVar, tailExpr)
+                                            collectFromList rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
+                            collectFromList innerPatterns sourceAtom env bindings vg)
+                    | AST.PListCons (headPatterns, tailPattern) ->
+                        let elemTypeResult =
+                            match sourceType with
+                            | AST.TList t -> Ok t
+                            | AST.TVar _
+                            | AST.TRuntimeError -> Ok (AST.TVar "__list_elem_unknown")
+                            | _ ->
+                                Error
+                                    $"collectBindings(PListCons): expected list-compatible source type, got {typeToString sourceType}"
+                        elemTypeResult
+                        |> Result.bind (fun elemType ->
+                            // Extract head elements then bind tail using FingerTree operations
+                            // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
+                            // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
+                            let rec collectHeads
+                                (pats: AST.Pattern list)
+                                (currentList: ANF.Atom)
+                                (env: VarEnv)
+                                (bindings: (ANF.TempId * ANF.CExpr) list)
+                                (vg: ANF.VarGen)
+                                =
+                                match pats with
+                                | [] ->
+                                    // Bind the remaining list to tail pattern (tail has same type as source)
+                                    collectBindings tailPattern currentList sourceType env bindings vg
+                                | p :: rest ->
+                                    // Lists are FingerTrees - use headUnsafe/tail to extract
+                                    let (headVar, vg1) = ANF.freshVar vg
+                                    let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
+                                    let headBinding = (headVar, headExpr)
+                                    collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
+                                    |> Result.bind (fun (env', bindings', vg') ->
                                         let (tailVar, vg2) = ANF.freshVar vg'
                                         let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
                                         let tailBinding = (tailVar, tailExpr)
-                                        collectFromList rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
-                        collectFromList innerPatterns sourceAtom env bindings vg
-                    | AST.PListCons (headPatterns, tailPattern) ->
-                        let elemType =
-                            match sourceType with
-                            | AST.TList t -> t
-                            | _ -> AST.TInt64
-                        // Extract head elements then bind tail using FingerTree operations
-                        // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
-                        // The correct element type is tracked in the VarEnv/TypeMap, not in the function name
-                        let rec collectHeads (pats: AST.Pattern list) (currentList: ANF.Atom) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) =
-                            match pats with
-                            | [] ->
-                                // Bind the remaining list to tail pattern (tail has same type as source)
-                                collectBindings tailPattern currentList sourceType env bindings vg
-                            | p :: rest ->
-                                // Lists are FingerTrees - use headUnsafe/tail to extract
-                                let (headVar, vg1) = ANF.freshVar vg
-                                let headExpr = ANF.Call ("Stdlib.__FingerTree.headUnsafe_i64", [currentList])
-                                let headBinding = (headVar, headExpr)
-                                collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
-                                |> Result.bind (fun (env', bindings', vg') ->
-                                    let (tailVar, vg2) = ANF.freshVar vg'
-                                    let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
-                                    let tailBinding = (tailVar, tailExpr)
-                                    collectHeads rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
-                        collectHeads headPatterns sourceAtom env bindings vg
+                                        collectHeads rest (ANF.Var tailVar) env' (tailBinding :: bindings') vg2)
+                            collectHeads headPatterns sourceAtom env bindings vg)
 
                 if patternDefinitelyCannotMatchType pattern scrutType then
                     Ok (elseExpr, vg)
@@ -5787,11 +5831,15 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 (vg: ANF.VarGen)
                 : Result<ANF.AExpr * ANF.VarGen, string> =
 
-                // Extract element type from list type
-                let elemType =
+                // List patterns on non-list scrutinees are definite non-matches.
+                // This can happen after grouped-pattern desugaring where non-first alternatives
+                // were not type-checked against the scrutinee shape.
+                let elemTypeOpt =
                     match listType with
-                    | AST.TList t -> t
-                    | _ -> AST.TInt64  // Fallback
+                    | AST.TList t -> Some t
+                    | _ -> None
+                let elemType = elemTypeOpt |> Option.defaultValue (AST.TVar "__list_elem_unknown")
+                let isKnownListScrutinee = elemTypeOpt.IsSome
 
                 let patternLen = List.length patterns
 
@@ -5857,7 +5905,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | AST.PList _ | AST.PListCons _ ->
                                 Error $"Nested pattern in tuple element not yet supported: {tupPat}"
 
-                if patternLen = 0 then
+                if not isKnownListScrutinee then
+                    Ok (elseExpr, vg)
+                elif patternLen = 0 then
                     // Empty list: check scrutinee == 0 (EMPTY)
                     let (checkVar, vg1) = ANF.freshVar vg
                     let checkExpr = ANF.Prim (ANF.Eq, listAtom, ANF.IntLiteral (ANF.Int64 0L))
