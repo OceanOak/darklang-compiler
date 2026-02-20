@@ -2,7 +2,7 @@
   error="Uncaught exception: a"
 
 (let x = Builtin.testRuntimeError "a" in Builtin.testRuntimeError "b") =
-  Builtin.testDerrorMessage "Uncaught exception: a"
+  error="Uncaught exception: a"
 
 module Variables =
   (let x = 5L in x) = 5L
