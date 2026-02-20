@@ -82,6 +82,42 @@ let inferAtomType (ctx: TypeContext) (atom: Atom) : AST.Type option =
     | Var tid -> tryGetType ctx tid
     | FuncRef funcName -> Map.tryFind funcName ctx.FuncReg
 
+let private isIntegerType (typ: AST.Type) : bool =
+    match typ with
+    | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64
+    | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 -> true
+    | _ -> false
+
+let private inferArithmeticType (leftType: AST.Type option) (rightType: AST.Type option) : AST.Type option =
+    match leftType, rightType with
+    | Some AST.TFloat64, _
+    | _, Some AST.TFloat64 ->
+        Some AST.TFloat64
+    | Some left, Some right when left = right && isIntegerType left ->
+        Some left
+    | Some left, None when isIntegerType left ->
+        Some left
+    | None, Some right when isIntegerType right ->
+        Some right
+    | _ ->
+        None
+
+/// Return types for monomorphized intrinsics that are not always present in FuncReg
+let private tryGetMonomorphizedIntrinsicReturnType (funcName: string) : AST.Type option =
+    if funcName.StartsWith("__raw_get_") then Some AST.TInt64
+    elif funcName.StartsWith("__raw_set_") then Some AST.TUnit
+    elif funcName.StartsWith("__hash_") then Some AST.TInt64
+    elif funcName.StartsWith("__key_eq_") then Some AST.TBool
+    elif funcName.StartsWith("__empty_dict_") then Some AST.TInt64
+    elif funcName.StartsWith("__dict_is_null_") then Some AST.TBool
+    elif funcName.StartsWith("__dict_get_tag_") then Some AST.TInt64
+    elif funcName.StartsWith("__dict_to_rawptr_") then Some AST.TInt64
+    elif funcName.StartsWith("__rawptr_to_dict_") then Some AST.TInt64
+    elif funcName.StartsWith("__list_is_null_") then Some AST.TBool
+    elif funcName.StartsWith("__list_get_tag_") then Some AST.TInt64
+    elif funcName.StartsWith("__list_to_rawptr_") then Some AST.TInt64
+    else None
+
 /// Infer the type of a CExpr in the given context
 let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     match cexpr with
@@ -99,12 +135,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
         | Add | Sub | Mul | Div ->
             let leftType = inferAtomType ctx left
             let rightType = inferAtomType ctx right
-            match leftType, rightType with
-            | Some AST.TFloat64, _ -> Some AST.TFloat64
-            | _, Some AST.TFloat64 -> Some AST.TFloat64
-            | Some _, _ -> Some AST.TInt64
-            | _, Some _ -> Some AST.TInt64
-            | None, None -> None
+            inferArithmeticType leftType rightType
         | Mod | Shl | Shr | BitAnd | BitOr | BitXor -> Some AST.TInt64
         | Eq | Neq | Lt | Gt | Lte | Gte | And | Or -> Some AST.TBool
     | UnaryPrim (op, atom) ->
@@ -178,7 +209,9 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
                 | Some (AST.TTuple (_ :: secondType :: _)) -> Some secondType
                 | _ -> None
         | _ ->
-            Map.tryFind funcName ctx.FuncReg
+            match Map.tryFind funcName ctx.FuncReg with
+            | Some t -> Some t
+            | None -> tryGetMonomorphizedIntrinsicReturnType funcName
     | TailCall (funcName, _) ->
         // Tail calls have same return type as regular calls
         Map.tryFind funcName ctx.FuncReg
@@ -738,21 +771,22 @@ let private insertRCInProgramInternal
         (vg: VarGen)
         (accFuncs: Function list)
         (accTypes: Map<TempId, AST.Type>)
-        (accTypeCache: CExprTypeCache)
-        : Function list * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
+        : Function list * VarGen * Map<TempId, AST.Type> =
         match funcs with
-        | [] -> (List.rev accFuncs, vg, accTypes, accTypeCache)
+        | [] -> (List.rev accFuncs, vg, accTypes)
         | f :: rest ->
-            let (f', vg', types, typeCache) =
-                insertRCInFunctionInternal ctx f vg accTypes accTypeCache
-            processFuncs rest vg' (f' :: accFuncs) types typeCache
+            // Cache keys use TempIds from the current function body, so sharing
+            // across functions can reuse stale types for unrelated TempIds.
+            let (f', vg', types, _typeCache) =
+                insertRCInFunctionInternal ctx f vg accTypes emptyCExprTypeCache
+            processFuncs rest vg' (f' :: accFuncs) types
 
-    let (functions', varGen1, typesFromFuncs, typeCacheFromFuncs) =
-        processFuncs functions varGen [] Map.empty emptyCExprTypeCache
+    let (functions', varGen1, typesFromFuncs) =
+        processFuncs functions varGen [] Map.empty
 
     // Process main expression
     let (mainExpr', _, finalTypeMap, _typeCache) =
-        insertRCInternal ctx mainExpr varGen1 typesFromFuncs typeCacheFromFuncs
+        insertRCInternal ctx mainExpr varGen1 typesFromFuncs emptyCExprTypeCache
 
     // Verify TypeMap completeness - all defined TempIds should have types
     let program' = ANF.Program (functions', mainExpr')

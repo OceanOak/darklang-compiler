@@ -63,6 +63,14 @@ This means:
 
 The `2.5_RefCountInsertion.fs` pass inserts RC operations into ANF:
 
+### Type Inference Constraints
+
+This pass also produces the `TempId -> Type` map consumed by later MIR/LIR passes, so inference must avoid unsafe defaults:
+
+- Arithmetic inference (`+`, `-`, `*`, `/`) preserves concrete integer width (`Int8`/`Int16`/`Int32`/`Int64` and unsigned variants) instead of widening to `Int64`.
+- When a type cannot be inferred, the pass keeps an unresolved type variable (`TVar`) rather than guessing `Int64`.
+- Monomorphized intrinsics (for example `__hash_*`, `__key_eq_*`) use explicit return-type mappings so known intrinsic results do not degrade to unknown types.
+
 ### When RefCountDec is Inserted
 
 A `RefCountDec` is inserted for a binding when:
