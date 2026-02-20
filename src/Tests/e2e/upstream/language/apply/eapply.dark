@@ -99,8 +99,7 @@ module InvalidFnCalls =
 
   // errors around args
   stringFn "str1" "str2" =
-    Builtin.testDerrorMessage
-      "stringFn expects 1 argument, but got 2 arguments"
+    error="stringFn expects 1 argument, but got 2 arguments"
 
   stringFn 5L =
     (Builtin.testDerrorMessage "stringFn's 1st parameter `key` expects String, but got Int64 (5)")
