@@ -516,18 +516,18 @@ module TokenizeExpression =
 
   // TODO bring this back - an RTE pops up when trying to access a .range field, somewhere in impl
   // (seems to be in both of these tests, so probably relevant to _record_ stuff, not field access)
-  // ("MyRecord {fieldOne = 1L; fieldTwo = 2L} " |> tokenize) =
-  //   [ (TokenType.TypeName, (0L, 0L),  (0L, 8L))
-  //     (TokenType.Symbol,   (0L, 9L),  (0L, 10L))
-  //     (TokenType.Property, (0L, 10L), (0L, 18L))
-  //     (TokenType.Symbol,   (0L, 19L), (0L, 20L))
-  //     (TokenType.Number,   (0L, 21L), (0L, 22L))
-  //     (TokenType.Symbol,   (0L, 22L), (0L, 23L))
-  //     (TokenType.Property, (0L, 25L), (0L, 33L))
-  //     (TokenType.Symbol,   (0L, 34L), (0L, 35L))
-  //     (TokenType.Number,   (0L, 36L), (0L, 37L))
-  //     (TokenType.Symbol,   (0L, 37L), (0L, 38L))
-  //     (TokenType.Symbol,   (0L, 38L), (0L, 39L)) ]
+  ("MyRecord {fieldOne = 1L; fieldTwo = 2L} " |> tokenize) =
+    [ (TokenType.TypeName, (0L, 0L),  (0L, 8L))
+      (TokenType.Symbol,   (0L, 9L),  (0L, 10L))
+      (TokenType.Property, (0L, 10L), (0L, 18L))
+      (TokenType.Symbol,   (0L, 19L), (0L, 20L))
+      (TokenType.Number,   (0L, 21L), (0L, 22L))
+      (TokenType.Symbol,   (0L, 22L), (0L, 23L))
+      (TokenType.Property, (0L, 25L), (0L, 33L))
+      (TokenType.Symbol,   (0L, 34L), (0L, 35L))
+      (TokenType.Number,   (0L, 36L), (0L, 37L))
+      (TokenType.Symbol,   (0L, 37L), (0L, 38L))
+      (TokenType.Symbol,   (0L, 38L), (0L, 39L)) ]
 
   // ("{ RecordForUpdate { x = true; y = false } with y = true }" |> tokenize) =
   //   [ (TokenType.TypeName, (0L, 2L),  (0L, 17L))
