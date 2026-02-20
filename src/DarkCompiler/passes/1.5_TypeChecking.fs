@@ -1221,214 +1221,234 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | Gte -> ">="
                 | _ -> "?"
 
-            // Check left operand to determine type
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-            |> Result.bind (fun (leftType, left') ->
-                match op with
-                | Eq | Neq ->
+            let lambdaLiteralFastPath : Result<Type * Expr, TypeError> option =
+                match (op, left, right) with
+                | Eq, Lambda (leftParams, _), Lambda (rightParams, _)
+                | Neq, Lambda (leftParams, _), Lambda (rightParams, _) ->
+                    if List.length leftParams <> List.length rightParams then
+                        None
+                    else
+                        let comparisonResult = if op = Eq then true else false
+                        match expectedType with
+                        | Some TBool | None ->
+                            Some (Ok (TBool, BoolLiteral comparisonResult))
+                        | Some other ->
+                            Some (Error (TypeMismatch (other, TBool, $"result of {opName}")))
+                | _ ->
+                    None
+
+            match lambdaLiteralFastPath with
+            | Some result ->
+                result
+            | None ->
+                // Check left operand to determine type
+                checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                |> Result.bind (fun (leftType, left') ->
+                    match op with
+                    | Eq | Neq ->
                     // Equality works on any type - both operands must be same type
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
-                    |> Result.bind (fun (rightType, right') ->
-                        // Check types are compatible (same structure)
-                        if rightType <> leftType then
-                            Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
-                        else
-                            let comparisonExpr =
-                                let makeCase pattern body : MatchCase =
-                                    { Patterns = NonEmptyList.singleton pattern
-                                      Guard = None
-                                      Body = body }
-
-                                let chainAnd (exprs: Expr list) : Expr =
-                                    match exprs with
-                                    | [] -> BoolLiteral true
-                                    | first :: rest -> List.fold (fun acc e -> BinOp (And, acc, e)) first rest
-
-                                let rec buildEqExpr (seen: Set<string>) (counter: int) (typ: Type) (leftExpr: Expr) (rightExpr: Expr) : Expr * int =
-                                    let typeKey = typeToString typ
-                                    if Set.contains typeKey seen then
-                                        // Avoid infinite expansion for recursive type definitions.
-                                        (BinOp (Eq, leftExpr, rightExpr), counter)
-                                    else
-                                        let seen' = Set.add typeKey seen
-                                        match typ with
-                                        | TFunction _ ->
-                                            // Upstream contract treats function values as equal for ==.
-                                            // Still evaluate both sides so any side effects/runtime errors are preserved.
-                                            let leftFnVar = $"__fn_eq_left_{counter}"
-                                            let rightFnVar = $"__fn_eq_right_{counter}"
-                                            let functionEqExpr =
-                                                Let (
-                                                    leftFnVar,
-                                                    leftExpr,
-                                                    Let (rightFnVar, rightExpr, BoolLiteral true)
-                                                )
-                                            (functionEqExpr, counter + 1)
-
-                                        | TList elemType ->
-                                            match elemType with
-                                            | TFunction _ ->
-                                                // Function-value equality is normalized to true for ==, so list equality
-                                                // for function elements is equivalent to both lists having the same length.
-                                                // Evaluate both sides exactly once to preserve side effects/runtime errors.
-                                                let leftListVar = $"__list_eq_left_{counter}"
-                                                let rightListVar = $"__list_eq_right_{counter}"
-                                                let lengthsEqual =
-                                                    BinOp (
-                                                        Eq,
-                                                        TypeApp ("Stdlib.List.length", [elemType], [Var leftListVar]),
-                                                        TypeApp ("Stdlib.List.length", [elemType], [Var rightListVar])
-                                                    )
-                                                (Let (leftListVar, leftExpr, Let (rightListVar, rightExpr, lengthsEqual)), counter + 1)
-                                            | _ ->
-                                                (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
-
-                                        | TTuple elemTypes ->
-                                            let leftTupleVar = $"__tuple_eq_left_{counter}"
-                                            let rightTupleVar = $"__tuple_eq_right_{counter}"
-
-                                            let (elementComparisons, nextCounter) =
-                                                elemTypes
-                                                |> List.indexed
-                                                |> List.fold
-                                                    (fun (acc, c) (index, elemType) ->
-                                                        let (elemEq, c') =
-                                                            buildEqExpr
-                                                                seen'
-                                                                c
-                                                                elemType
-                                                                (TupleAccess (Var leftTupleVar, index))
-                                                                (TupleAccess (Var rightTupleVar, index))
-                                                        (acc @ [elemEq], c'))
-                                                    ([], counter + 1)
-
-                                            let tupleBody = chainAnd elementComparisons
-                                            (Let (leftTupleVar, leftExpr, Let (rightTupleVar, rightExpr, tupleBody)), nextCounter)
-
-                                        | TRecord (recordTypeName, typeArgs) ->
-                                            match Map.tryFind recordTypeName typeReg with
-                                            | None ->
-                                                (BinOp (Eq, leftExpr, rightExpr), counter)
-                                            | Some fields ->
-                                                let concreteFields =
-                                                    match buildRecordFieldSubstitution fields typeArgs with
-                                                    | Ok subst ->
-                                                        fields |> List.map (fun (name, fieldType) -> (name, applySubst subst fieldType))
-                                                    | Error _ ->
-                                                        fields
-
-                                                let leftRecordVar = $"__record_eq_left_{counter}"
-                                                let rightRecordVar = $"__record_eq_right_{counter}"
-
-                                                let (fieldComparisons, nextCounter) =
-                                                    concreteFields
-                                                    |> List.fold
-                                                        (fun (acc, c) (fieldName, fieldType) ->
-                                                            let (fieldEq, c') =
-                                                                buildEqExpr
-                                                                    seen'
-                                                                    c
-                                                                    fieldType
-                                                                    (RecordAccess (Var leftRecordVar, fieldName))
-                                                                    (RecordAccess (Var rightRecordVar, fieldName))
-                                                            (acc @ [fieldEq], c'))
-                                                        ([], counter + 1)
-
-                                                let recordBody = chainAnd fieldComparisons
-                                                (Let (leftRecordVar, leftExpr, Let (rightRecordVar, rightExpr, recordBody)), nextCounter)
-
-                                        | TSum (sumTypeName, sumTypeArgs) ->
-                                            let leftSumVar = $"__sum_eq_left_{counter}"
-                                            let rightSumVar = $"__sum_eq_right_{counter}"
-
-                                            let variantsForType =
-                                                variantLookup
-                                                |> Map.toList
-                                                |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
-                                                    if variantTypeName = sumTypeName then
-                                                        let concretePayloadOpt =
-                                                            match payloadOpt with
-                                                            | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
-                                                                let subst = List.zip typeParams sumTypeArgs |> Map.ofList
-                                                                Some (applySubst subst payloadType)
-                                                            | Some payloadType ->
-                                                                Some payloadType
-                                                            | None ->
-                                                                None
-                                                        Some (variantName, tag, concretePayloadOpt)
-                                                    else
-                                                        None)
-                                                |> List.sortBy (fun (_, tag, _) -> tag)
-
-                                            let rec buildVariantCases
-                                                (variants: (string * int * Type option) list)
-                                                (c: int)
-                                                (acc: MatchCase list)
-                                                : MatchCase list * int =
-                                                match variants with
-                                                | [] -> (List.rev acc, c)
-                                                | (variantName, tag, payloadTypeOpt) :: rest ->
-                                                    match payloadTypeOpt with
-                                                    | None ->
-                                                        let rightWhenSameVariant =
-                                                            makeCase (PConstructor (variantName, None)) (BoolLiteral true)
-                                                        let rightNoMatch =
-                                                            makeCase PWildcard (BoolLiteral false)
-                                                        let rightMatchExpr =
-                                                            Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
-                                                        let leftCase =
-                                                            makeCase (PConstructor (variantName, None)) rightMatchExpr
-                                                        buildVariantCases rest c (leftCase :: acc)
-                                                    | Some payloadType ->
-                                                        let leftPayloadVar = $"__sum_eq_left_payload_{tag}_{c}"
-                                                        let rightPayloadVar = $"__sum_eq_right_payload_{tag}_{c}"
-                                                        let (payloadEqExpr, c') =
-                                                            buildEqExpr seen' (c + 1) payloadType (Var leftPayloadVar) (Var rightPayloadVar)
-                                                        let rightWhenSameVariant =
-                                                            makeCase
-                                                                (PConstructor (variantName, Some (PVar rightPayloadVar)))
-                                                                payloadEqExpr
-                                                        let rightNoMatch =
-                                                            makeCase PWildcard (BoolLiteral false)
-                                                        let rightMatchExpr =
-                                                            Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
-                                                        let leftCase =
-                                                            makeCase
-                                                                (PConstructor (variantName, Some (PVar leftPayloadVar)))
-                                                                rightMatchExpr
-                                                        buildVariantCases rest c' (leftCase :: acc)
-
-                                            let (variantCases, nextCounter) =
-                                                buildVariantCases variantsForType (counter + 1) []
-
-                                            let defaultCase = makeCase PWildcard (BoolLiteral false)
-                                            let sumBody = Match (Var leftSumVar, variantCases @ [defaultCase])
-                                            (Let (leftSumVar, leftExpr, Let (rightSumVar, rightExpr, sumBody)), nextCounter)
-
-                                        | _ ->
-                                            (BinOp (Eq, leftExpr, rightExpr), counter)
-
-                                let (eqExpr, _) = buildEqExpr Set.empty 0 leftType left' right'
-                                if op = Neq then If (eqExpr, BoolLiteral false, BoolLiteral true) else eqExpr
-                            match expectedType with
-                            | Some TBool | None -> Ok (TBool, comparisonExpr)
-                            | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
-                | Lt | Gt | Lte | Gte ->
-                    // Ordering only works on numeric types
-                    match leftType with
-                    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
                         checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
                         |> Result.bind (fun (rightType, right') ->
+                            // Check types are compatible (same structure)
                             if rightType <> leftType then
                                 Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
                             else
+                                let comparisonExpr =
+                                    let makeCase pattern body : MatchCase =
+                                        { Patterns = NonEmptyList.singleton pattern
+                                          Guard = None
+                                          Body = body }
+
+                                    let chainAnd (exprs: Expr list) : Expr =
+                                        match exprs with
+                                        | [] -> BoolLiteral true
+                                        | first :: rest -> List.fold (fun acc e -> BinOp (And, acc, e)) first rest
+
+                                    let rec buildEqExpr (seen: Set<string>) (counter: int) (typ: Type) (leftExpr: Expr) (rightExpr: Expr) : Expr * int =
+                                        let typeKey = typeToString typ
+                                        if Set.contains typeKey seen then
+                                            // Avoid infinite expansion for recursive type definitions.
+                                            (BinOp (Eq, leftExpr, rightExpr), counter)
+                                        else
+                                            let seen' = Set.add typeKey seen
+                                            match typ with
+                                            | TFunction _ ->
+                                                // Upstream contract treats function values as equal for ==.
+                                                // Still evaluate both sides so any side effects/runtime errors are preserved.
+                                                let leftFnVar = $"__fn_eq_left_{counter}"
+                                                let rightFnVar = $"__fn_eq_right_{counter}"
+                                                let functionEqExpr =
+                                                    Let (
+                                                        leftFnVar,
+                                                        leftExpr,
+                                                        Let (rightFnVar, rightExpr, BoolLiteral true)
+                                                    )
+                                                (functionEqExpr, counter + 1)
+
+                                            | TList elemType ->
+                                                match elemType with
+                                                | TFunction _ ->
+                                                    // Function-value equality is normalized to true for ==, so list equality
+                                                    // for function elements is equivalent to both lists having the same length.
+                                                    // Evaluate both sides exactly once to preserve side effects/runtime errors.
+                                                    let leftListVar = $"__list_eq_left_{counter}"
+                                                    let rightListVar = $"__list_eq_right_{counter}"
+                                                    let lengthsEqual =
+                                                        BinOp (
+                                                            Eq,
+                                                            TypeApp ("Stdlib.List.length", [elemType], [Var leftListVar]),
+                                                            TypeApp ("Stdlib.List.length", [elemType], [Var rightListVar])
+                                                        )
+                                                    (Let (leftListVar, leftExpr, Let (rightListVar, rightExpr, lengthsEqual)), counter + 1)
+                                                | _ ->
+                                                    (TypeApp ("Stdlib.List.equals", [elemType], [leftExpr; rightExpr]), counter)
+
+                                            | TTuple elemTypes ->
+                                                let leftTupleVar = $"__tuple_eq_left_{counter}"
+                                                let rightTupleVar = $"__tuple_eq_right_{counter}"
+
+                                                let (elementComparisons, nextCounter) =
+                                                    elemTypes
+                                                    |> List.indexed
+                                                    |> List.fold
+                                                        (fun (acc, c) (index, elemType) ->
+                                                            let (elemEq, c') =
+                                                                buildEqExpr
+                                                                    seen'
+                                                                    c
+                                                                    elemType
+                                                                    (TupleAccess (Var leftTupleVar, index))
+                                                                    (TupleAccess (Var rightTupleVar, index))
+                                                            (acc @ [elemEq], c'))
+                                                        ([], counter + 1)
+
+                                                let tupleBody = chainAnd elementComparisons
+                                                (Let (leftTupleVar, leftExpr, Let (rightTupleVar, rightExpr, tupleBody)), nextCounter)
+
+                                            | TRecord (recordTypeName, typeArgs) ->
+                                                match Map.tryFind recordTypeName typeReg with
+                                                | None ->
+                                                    (BinOp (Eq, leftExpr, rightExpr), counter)
+                                                | Some fields ->
+                                                    let concreteFields =
+                                                        match buildRecordFieldSubstitution fields typeArgs with
+                                                        | Ok subst ->
+                                                            fields |> List.map (fun (name, fieldType) -> (name, applySubst subst fieldType))
+                                                        | Error _ ->
+                                                            fields
+
+                                                    let leftRecordVar = $"__record_eq_left_{counter}"
+                                                    let rightRecordVar = $"__record_eq_right_{counter}"
+
+                                                    let (fieldComparisons, nextCounter) =
+                                                        concreteFields
+                                                        |> List.fold
+                                                            (fun (acc, c) (fieldName, fieldType) ->
+                                                                let (fieldEq, c') =
+                                                                    buildEqExpr
+                                                                        seen'
+                                                                        c
+                                                                        fieldType
+                                                                        (RecordAccess (Var leftRecordVar, fieldName))
+                                                                        (RecordAccess (Var rightRecordVar, fieldName))
+                                                                (acc @ [fieldEq], c'))
+                                                            ([], counter + 1)
+
+                                                    let recordBody = chainAnd fieldComparisons
+                                                    (Let (leftRecordVar, leftExpr, Let (rightRecordVar, rightExpr, recordBody)), nextCounter)
+
+                                            | TSum (sumTypeName, sumTypeArgs) ->
+                                                let leftSumVar = $"__sum_eq_left_{counter}"
+                                                let rightSumVar = $"__sum_eq_right_{counter}"
+
+                                                let variantsForType =
+                                                    variantLookup
+                                                    |> Map.toList
+                                                    |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
+                                                        if variantTypeName = sumTypeName then
+                                                            let concretePayloadOpt =
+                                                                match payloadOpt with
+                                                                | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
+                                                                    let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+                                                                    Some (applySubst subst payloadType)
+                                                                | Some payloadType ->
+                                                                    Some payloadType
+                                                                | None ->
+                                                                    None
+                                                            Some (variantName, tag, concretePayloadOpt)
+                                                        else
+                                                            None)
+                                                    |> List.sortBy (fun (_, tag, _) -> tag)
+
+                                                let rec buildVariantCases
+                                                    (variants: (string * int * Type option) list)
+                                                    (c: int)
+                                                    (acc: MatchCase list)
+                                                    : MatchCase list * int =
+                                                    match variants with
+                                                    | [] -> (List.rev acc, c)
+                                                    | (variantName, tag, payloadTypeOpt) :: rest ->
+                                                        match payloadTypeOpt with
+                                                        | None ->
+                                                            let rightWhenSameVariant =
+                                                                makeCase (PConstructor (variantName, None)) (BoolLiteral true)
+                                                            let rightNoMatch =
+                                                                makeCase PWildcard (BoolLiteral false)
+                                                            let rightMatchExpr =
+                                                                Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
+                                                            let leftCase =
+                                                                makeCase (PConstructor (variantName, None)) rightMatchExpr
+                                                            buildVariantCases rest c (leftCase :: acc)
+                                                        | Some payloadType ->
+                                                            let leftPayloadVar = $"__sum_eq_left_payload_{tag}_{c}"
+                                                            let rightPayloadVar = $"__sum_eq_right_payload_{tag}_{c}"
+                                                            let (payloadEqExpr, c') =
+                                                                buildEqExpr seen' (c + 1) payloadType (Var leftPayloadVar) (Var rightPayloadVar)
+                                                            let rightWhenSameVariant =
+                                                                makeCase
+                                                                    (PConstructor (variantName, Some (PVar rightPayloadVar)))
+                                                                    payloadEqExpr
+                                                            let rightNoMatch =
+                                                                makeCase PWildcard (BoolLiteral false)
+                                                            let rightMatchExpr =
+                                                                Match (Var rightSumVar, [rightWhenSameVariant; rightNoMatch])
+                                                            let leftCase =
+                                                                makeCase
+                                                                    (PConstructor (variantName, Some (PVar leftPayloadVar)))
+                                                                    rightMatchExpr
+                                                            buildVariantCases rest c' (leftCase :: acc)
+
+                                                let (variantCases, nextCounter) =
+                                                    buildVariantCases variantsForType (counter + 1) []
+
+                                                let defaultCase = makeCase PWildcard (BoolLiteral false)
+                                                let sumBody = Match (Var leftSumVar, variantCases @ [defaultCase])
+                                                (Let (leftSumVar, leftExpr, Let (rightSumVar, rightExpr, sumBody)), nextCounter)
+
+                                            | _ ->
+                                                (BinOp (Eq, leftExpr, rightExpr), counter)
+
+                                    let (eqExpr, _) = buildEqExpr Set.empty 0 leftType left' right'
+                                    if op = Neq then If (eqExpr, BoolLiteral false, BoolLiteral true) else eqExpr
                                 match expectedType with
-                                | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
+                                | Some TBool | None -> Ok (TBool, comparisonExpr)
                                 | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
-                    | other ->
-                        Error (InvalidOperation (opName, [other]))
-                | _ ->
-                    Error (GenericError $"Unexpected comparison operator: {opName}"))
+                    | Lt | Gt | Lte | Gte ->
+                        // Ordering only works on numeric types
+                        match leftType with
+                        | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
+                            checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
+                            |> Result.bind (fun (rightType, right') ->
+                                if rightType <> leftType then
+                                    Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
+                                else
+                                    match expectedType with
+                                    | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
+                                    | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
+                        | other ->
+                            Error (InvalidOperation (opName, [other]))
+                    | _ ->
+                        Error (GenericError $"Unexpected comparison operator: {opName}"))
 
         // Boolean operators: bool -> bool -> bool
         | And | Or ->

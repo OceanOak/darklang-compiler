@@ -131,7 +131,7 @@ module Equals =
    != Stdlib.Uuid.parse_v0 "3700adbc-7a46-4ff4-81d3-45afb03f6e2d") = true
 
   // TODO revisit these
-  //(fun x -> y) = (fun x -> y)
+  (fun x -> y) = (fun x -> y)
   ((fun x -> let y = 1Q in y) == (fun x -> let y = 1Q in y)) = true
   ((fun x -> let y = 1Q in y) != (fun x -> let y = 2Q in x)) = false
 
