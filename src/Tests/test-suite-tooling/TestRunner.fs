@@ -110,6 +110,8 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "flow-control", "ematch.dark")
     let eapplyUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "apply", "eapply.dark")
+    let aliasesUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "language", "custom-data", "aliases.dark")
     let einfixUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "apply", "einfix.dark")
     let eandUpstreamDarkPath =
@@ -136,6 +138,7 @@ let main args =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
            eapplyUpstreamDarkPath
+           aliasesUpstreamDarkPath
            einfixUpstreamDarkPath
            eandUpstreamDarkPath
            eorUpstreamDarkPath
@@ -312,7 +315,8 @@ let main args =
     let upstreamEnablementLineAllowlist : Map<string, Set<int>> =
         Map.ofList
             [
-                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65 ])
+                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65; 66 ])
+                ("src/Tests/e2e/upstream/language/custom-data/aliases.dark", Set.ofList [ 6 ])
             ]
 
     let normalizePath (path: string) : string =
