@@ -2775,7 +2775,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             |> List.exists (fun pattern ->
                                 match pattern with
                                 | PUnit -> isKnownMismatch TUnit
-                                | PInt64 _
+                                | PInt64 _ -> isKnownMismatch TInt64
                                 | PInt128Literal _ -> isKnownMismatch TInt128
                                 | PInt8Literal _ -> isKnownMismatch TInt8
                                 | PInt16Literal _ -> isKnownMismatch TInt16
@@ -2783,7 +2783,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | PUInt8Literal _ -> isKnownMismatch TUInt8
                                 | PUInt16Literal _ -> isKnownMismatch TUInt16
                                 | PUInt32Literal _ -> isKnownMismatch TUInt32
-                                | PUInt64Literal _
+                                | PUInt64Literal _ -> isKnownMismatch TUInt64
                                 | PUInt128Literal _ -> isKnownMismatch TUInt128
                                 | PBool _ -> isKnownMismatch TBool
                                 | PString _ -> isKnownStringPatternMismatch ()

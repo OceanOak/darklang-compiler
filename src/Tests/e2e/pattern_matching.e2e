@@ -598,3 +598,25 @@ let computed = 6 * 7 in match computed with | 42 -> 1 | 0 -> 2 | _ -> 3 = 1
 // Int128/UInt128 literal patterns must not use UInt64/Int64 modulo behavior.
 match 18446744073709551616Q with | 0Q -> true | _ -> false = false
 match 18446744073709551616Z with | 0Z -> true | _ -> false = false
+
+// Regression: list mismatch checks must not treat 64-bit literal patterns as 128-bit.
+// These should fail at runtime as non-exhaustive matches, not type-check as known no-match.
+match [1L] with | [1L, 2L] -> 0L = error="Non-exhaustive match: No matching case found for value <unknown> in match expression"
+match [1UL] with | [1UL, 2UL] -> 0UL = error="Non-exhaustive match: No matching case found for value <unknown> in match expression"
+
+// Int128/UInt128 list literal length mismatch should behave consistently with other int types.
+match [1Q] with | [1Q, 2Q] -> 0Q = error="Non-exhaustive match: No matching case found for value <unknown> in match expression"
+match [1Z] with | [1Z, 2Z] -> 0Z = error="Non-exhaustive match: No matching case found for value <unknown> in match expression"
+
+// Int128/UInt128 pattern coverage parity with other integer literal patterns.
+type I128Wrap = I128Wrap of Int128 | I128None
+type U128Wrap = U128Wrap of UInt128 | U128None
+
+match I128Wrap(170141183460469231731687303715884105727Q) with | I128Wrap(170141183460469231731687303715884105727Q) -> true | _ -> false = true
+match U128Wrap(340282366920938463463374607431768211455Z) with | U128Wrap(340282366920938463463374607431768211455Z) -> true | _ -> false = true
+
+match [170141183460469231731687303715884105727Q, 1Q] with | [170141183460469231731687303715884105727Q, ...tail] -> Stdlib.List.length<Int128>(tail) | _ -> 0 = 1
+match [340282366920938463463374607431768211455Z, 1Z] with | [340282366920938463463374607431768211455Z, ...tail] -> Stdlib.List.length<UInt128>(tail) | _ -> 0 = 1
+
+match 5Q with | 4Q | 5Q -> 1 | _ -> 0 = 1
+match 5Z with | 4Z | 5Z -> 1 | _ -> 0 = 1

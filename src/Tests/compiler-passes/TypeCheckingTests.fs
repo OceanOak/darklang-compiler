@@ -29,6 +29,14 @@ let expectType (expr: Expr) (expectedType: Type) : TestResult =
 let testInt64Literal () : TestResult =
     expectType (Int64Literal 42L) TInt64
 
+/// Test that Int128 literals have type TInt128
+let testInt128Literal () : TestResult =
+    expectType (Int128Literal (System.Int128.Parse "42")) TInt128
+
+/// Test that UInt128 literals have type TUInt128
+let testUInt128Literal () : TestResult =
+    expectType (UInt128Literal (System.UInt128.Parse "42")) TUInt128
+
 let rec countMatches (expr: Expr) : int =
     let childMatches =
         match expr with
@@ -193,6 +201,8 @@ let testComplexExpression () : TestResult =
 
 let tests = [
     ("Integer literal", testInt64Literal)
+    ("Int128 literal", testInt128Literal)
+    ("UInt128 literal", testUInt128Literal)
     ("Sum equality uses single pair match", testSumEqualityUsesSinglePairMatch)
     ("Addition", testAddition)
     ("Subtraction", testSubtraction)
