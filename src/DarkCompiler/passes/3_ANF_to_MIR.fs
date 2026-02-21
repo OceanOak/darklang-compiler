@@ -799,9 +799,23 @@ let rec convertExpr
                         |> Result.map (fun rightOp ->
                             [MIR.BinOp (destReg, convertBinOp op, leftOp, rightOp, opType)]))
                 | ANF.UnaryPrim (op, atom) ->
+                    let atomTy = atomType builder atom
+                    let resultType =
+                        match op with
+                        | ANF.Not -> AST.TBool
+                        | _ -> atomTy
+                    destType := resultType
                     atomToOperand builder atom
                     |> Result.map (fun operand ->
-                        [MIR.UnaryOp (destReg, convertUnaryOp op, operand)])
+                        match op with
+                        | ANF.Not ->
+                            [MIR.UnaryOp (destReg, convertUnaryOp op, operand)]
+                        | ANF.Neg ->
+                            // Use typed subtraction so sized integers are truncated correctly downstream.
+                            [MIR.BinOp (destReg, MIR.Sub, MIR.Int64Const 0L, operand, atomTy)]
+                        | ANF.BitNot ->
+                            // x XOR -1 is equivalent to bitwise-not and preserves integer width via operandType.
+                            [MIR.BinOp (destReg, MIR.BitXor, operand, MIR.Int64Const -1L, atomTy)])
                 | ANF.Call (funcName, args) ->
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =
@@ -1413,9 +1427,23 @@ and convertExprToOperand
                         |> Result.map (fun rightOp ->
                             [MIR.BinOp (destReg, convertBinOp op, leftOp, rightOp, opType)]))
                 | ANF.UnaryPrim (op, atom) ->
+                    let atomTy = atomType builder atom
+                    let resultType =
+                        match op with
+                        | ANF.Not -> AST.TBool
+                        | _ -> atomTy
+                    destType := resultType
                     atomToOperand builder atom
                     |> Result.map (fun operand ->
-                        [MIR.UnaryOp (destReg, convertUnaryOp op, operand)])
+                        match op with
+                        | ANF.Not ->
+                            [MIR.UnaryOp (destReg, convertUnaryOp op, operand)]
+                        | ANF.Neg ->
+                            // Use typed subtraction so sized integers are truncated correctly downstream.
+                            [MIR.BinOp (destReg, MIR.Sub, MIR.Int64Const 0L, operand, atomTy)]
+                        | ANF.BitNot ->
+                            // x XOR -1 is equivalent to bitwise-not and preserves integer width via operandType.
+                            [MIR.BinOp (destReg, MIR.BitXor, operand, MIR.Int64Const -1L, atomTy)])
                 | ANF.Call (funcName, args) ->
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =

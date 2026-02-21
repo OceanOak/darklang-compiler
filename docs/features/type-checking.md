@@ -91,6 +91,14 @@ a + b
 3. Verify compatible types for operator
 4. Return result type
 
+### Unary Operations
+```dark
+~~~x
+```
+1. Check operand type
+2. Verify the operator is valid for that type
+3. Preserve the operand integer width for sized integer unary operators (for example `UInt8`)
+
 ### Function Calls
 ```dark
 add(1, 2)

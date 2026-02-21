@@ -213,6 +213,8 @@ let z = 0 in ~~~z = -1
 5y << 1y = 10y
 5y >> 1y = 2y
 ~~~1y = -2y
+// Regression: unsigned bitwise-not must preserve UInt8, not widen via TInt64 fallback.
+~~~1uy = 254uy
 
 
 // ===================================================================

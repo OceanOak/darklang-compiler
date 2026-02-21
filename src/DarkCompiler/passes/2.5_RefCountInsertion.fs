@@ -146,7 +146,10 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             | Some _ -> Some AST.TInt64
             | None -> None
         | Not -> Some AST.TBool
-        | BitNot -> Some AST.TInt64
+        | BitNot ->
+            // Preserve the operand type instead of assuming Int64.
+            // This keeps sized integer semantics (e.g. UInt8) intact.
+            inferAtomType ctx atom
     // Float intrinsics
     | FloatSqrt _ -> Some AST.TFloat64
     | FloatAbs _ -> Some AST.TFloat64
