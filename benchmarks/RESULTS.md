@@ -2,7 +2,7 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-21 11:15:29
+**Last Updated:** 2026-02-21 11:17:33
 **Commit:** `cded50c2` - Type checking/ANF: remove one TInt64 fallback for list-cons patterns
 
 | Benchmark     |           Dark (4.20x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
