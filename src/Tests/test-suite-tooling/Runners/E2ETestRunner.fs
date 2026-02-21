@@ -236,6 +236,371 @@ let private collectTypeAppsFromProgram (program: Program) : Set<SpecKey> =
 let private filterSpecsByDefs (genericDefs: GenericFuncDefs) (specs: Set<SpecKey>) : Set<SpecKey> =
     specs |> Set.filter (fun (funcName, _) -> Map.containsKey funcName genericDefs)
 
+let private isUpstreamDarkTestFile (sourceFile: string) : bool =
+    let normalized = sourceFile.Replace('\\', '/')
+    normalized.Contains("/e2e/upstream/")
+    && normalized.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
+
+let rec private collectPatternBoundNames (pattern: Pattern) : Set<string> =
+    match pattern with
+    | PVar name ->
+        Set.singleton name
+    | PConstructor (_, payloadOpt) ->
+        payloadOpt
+        |> Option.map collectPatternBoundNames
+        |> Option.defaultValue Set.empty
+    | PTuple patterns ->
+        patterns
+        |> List.map collectPatternBoundNames
+        |> List.fold Set.union Set.empty
+    | PRecord (_, fields) ->
+        fields
+        |> List.map snd
+        |> List.map collectPatternBoundNames
+        |> List.fold Set.union Set.empty
+    | PList patterns ->
+        patterns
+        |> List.map collectPatternBoundNames
+        |> List.fold Set.union Set.empty
+    | PListCons (headPatterns, tailPattern) ->
+        let headBound =
+            headPatterns
+            |> List.map collectPatternBoundNames
+            |> List.fold Set.union Set.empty
+        Set.union headBound (collectPatternBoundNames tailPattern)
+    | _ ->
+        Set.empty
+
+let rec private collectExprReferencedPreambleFuncsWithBound
+    (knownPreambleFunctions: Set<string>)
+    (boundVars: Set<string>)
+    (expr: Expr)
+    : Set<string> =
+    let combineMany (sets: Set<string> list) : Set<string> =
+        sets |> List.fold Set.union Set.empty
+
+    let collectCallLike (funcName: string) (args: Expr list) : Set<string> =
+        let fromFuncName =
+            if Set.contains funcName knownPreambleFunctions
+               && not (Set.contains funcName boundVars) then
+                Set.singleton funcName
+            else
+                Set.empty
+        let fromArgs =
+            args
+            |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+            |> combineMany
+        Set.union fromFuncName fromArgs
+
+    match expr with
+    | UnitLiteral
+    | Int64Literal _
+    | Int128CompatLiteral _
+    | Int8Literal _
+    | Int16Literal _
+    | Int32Literal _
+    | UInt8Literal _
+    | UInt16Literal _
+    | UInt32Literal _
+    | UInt64Literal _
+    | UInt128CompatLiteral _
+    | BoolLiteral _
+    | StringLiteral _
+    | CharLiteral _
+    | FloatLiteral _ ->
+        Set.empty
+    | InterpolatedString parts ->
+        parts
+        |> List.map (function
+            | StringText _ -> Set.empty
+            | StringExpr partExpr ->
+                collectExprReferencedPreambleFuncsWithBound
+                    knownPreambleFunctions
+                    boundVars
+                    partExpr)
+        |> combineMany
+    | BinOp (_, left, right) ->
+        Set.union
+            (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars left)
+            (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars right)
+    | UnaryOp (_, inner) ->
+        collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars inner
+    | Let (name, valueExpr, bodyExpr) ->
+        let valueRefs =
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars valueExpr
+        let bodyRefs =
+            collectExprReferencedPreambleFuncsWithBound
+                knownPreambleFunctions
+                (Set.add name boundVars)
+                bodyExpr
+        Set.union valueRefs bodyRefs
+    | Var name ->
+        if Set.contains name knownPreambleFunctions
+           && not (Set.contains name boundVars) then
+            Set.singleton name
+        else
+            Set.empty
+    | If (condExpr, thenExpr, elseExpr) ->
+        combineMany [
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars condExpr
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars thenExpr
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars elseExpr
+        ]
+    | Call (funcName, args) ->
+        collectCallLike funcName args
+    | TypeApp (funcName, _typeArgs, args) ->
+        collectCallLike funcName args
+    | TupleLiteral elements ->
+        elements
+        |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+        |> combineMany
+    | TupleAccess (tupleExpr, _index) ->
+        collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars tupleExpr
+    | RecordLiteral (_typeName, fields) ->
+        fields
+        |> List.map snd
+        |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+        |> combineMany
+    | RecordUpdate (recordExpr, updates) ->
+        let recordRefs =
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars recordExpr
+        let updateRefs =
+            updates
+            |> List.map snd
+            |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+            |> combineMany
+        Set.union recordRefs updateRefs
+    | RecordAccess (recordExpr, _fieldName) ->
+        collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars recordExpr
+    | Constructor (_typeName, _variantName, payloadOpt) ->
+        payloadOpt
+        |> Option.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+        |> Option.defaultValue Set.empty
+    | Match (scrutineeExpr, cases) ->
+        let scrutineeRefs =
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars scrutineeExpr
+        let caseRefs =
+            cases
+            |> List.map (fun case ->
+                let caseBoundNames =
+                    case.Patterns
+                    |> NonEmptyList.toList
+                    |> List.map collectPatternBoundNames
+                    |> List.fold Set.union Set.empty
+                let guardRefs =
+                    case.Guard
+                    |> Option.map (
+                        collectExprReferencedPreambleFuncsWithBound
+                            knownPreambleFunctions
+                            boundVars
+                    )
+                    |> Option.defaultValue Set.empty
+                let bodyRefs =
+                    collectExprReferencedPreambleFuncsWithBound
+                        knownPreambleFunctions
+                        (Set.union boundVars caseBoundNames)
+                        case.Body
+                Set.union guardRefs bodyRefs)
+            |> combineMany
+        Set.union scrutineeRefs caseRefs
+    | ListLiteral elements ->
+        elements
+        |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+        |> combineMany
+    | ListCons (headElements, tailExpr) ->
+        let headRefs =
+            headElements
+            |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+            |> combineMany
+        let tailRefs =
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars tailExpr
+        Set.union headRefs tailRefs
+    | Lambda (parameters, bodyExpr) ->
+        let lambdaBoundVars =
+            parameters
+            |> List.map fst
+            |> Set.ofList
+            |> Set.union boundVars
+        collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions lambdaBoundVars bodyExpr
+    | Apply (funcExpr, args) ->
+        let funcRefs =
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars funcExpr
+        let argRefs =
+            args
+            |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+            |> combineMany
+        Set.union funcRefs argRefs
+    | FuncRef funcName ->
+        if Set.contains funcName knownPreambleFunctions
+           && not (Set.contains funcName boundVars) then
+            Set.singleton funcName
+        else
+            Set.empty
+    | Closure (funcName, captures) ->
+        let fromFunc =
+            if Set.contains funcName knownPreambleFunctions
+               && not (Set.contains funcName boundVars) then
+                Set.singleton funcName
+            else
+                Set.empty
+        let fromCaptures =
+            captures
+            |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
+            |> combineMany
+        Set.union fromFunc fromCaptures
+
+let private collectExprReferencedPreambleFuncs
+    (knownPreambleFunctions: Set<string>)
+    (expr: Expr)
+    : Set<string> =
+    collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions Set.empty expr
+
+let private collectProgramReferencedPreambleFuncs
+    (knownPreambleFunctions: Set<string>)
+    (program: Program)
+    : Set<string> =
+    let (Program topLevels) = program
+    topLevels
+    |> List.map (function
+        | FunctionDef funcDef ->
+            let paramBoundVars =
+                funcDef.Params
+                |> List.map fst
+                |> Set.ofList
+            collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions paramBoundVars funcDef.Body
+        | Expression expr ->
+            collectExprReferencedPreambleFuncs knownPreambleFunctions expr
+        | TypeDef _ ->
+            Set.empty)
+    |> List.fold Set.union Set.empty
+
+let private expandRequiredPreambleFunctions
+    (dependencyMap: Map<string, Set<string>>)
+    (initial: Set<string>)
+    : Set<string> =
+    let rec loop (pending: Set<string>) (required: Set<string>) : Set<string> =
+        if Set.isEmpty pending then
+            required
+        else
+            let discovered =
+                pending
+                |> Set.fold
+                    (fun acc funcName ->
+                        let deps = Map.tryFind funcName dependencyMap |> Option.defaultValue Set.empty
+                        Set.union acc deps)
+                    Set.empty
+                |> Set.filter (fun name -> not (Set.contains name required))
+            loop discovered (Set.union required discovered)
+    loop initial initial
+
+let private parsePreambleAsProgram
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (allowInternal: bool)
+    (preamble: string)
+    : Result<Program, string> =
+    let preambleTerminator =
+        match sourceSyntax with
+        | CompilerLibrary.CompilerSyntax -> "0"
+        | CompilerLibrary.InterpreterSyntax -> "0L"
+
+    let preambleSource = preamble + $"\n{preambleTerminator}"
+    CompilerLibrary.parseProgram sourceSyntax allowInternal preambleSource
+
+let private analyzePreambleWithReducedFunctionSet
+    (stdlib: CompilerLibrary.StdlibResult)
+    (spec: PreambleBuildSpec)
+    (tests: E2ETest list)
+    : Result<CompilerLibrary.PreambleAnalysis, string> =
+    parsePreambleAsProgram spec.SourceSyntax spec.AllowInternal spec.Preamble
+    |> Result.bind (fun preambleProgram ->
+        let (Program preambleTopLevels) = preambleProgram
+        let preambleFunctionDefs =
+            preambleTopLevels
+            |> List.choose (function
+                | FunctionDef funcDef -> Some funcDef
+                | _ -> None)
+        let preambleFunctionNames =
+            preambleFunctionDefs
+            |> List.map (fun funcDef -> funcDef.Name)
+            |> Set.ofList
+        let dependencyMap =
+            preambleFunctionDefs
+            |> List.map (fun funcDef ->
+                let paramBoundVars =
+                    funcDef.Params
+                    |> List.map fst
+                    |> Set.ofList
+                let deps =
+                    collectExprReferencedPreambleFuncsWithBound
+                        preambleFunctionNames
+                        paramBoundVars
+                        funcDef.Body
+                (funcDef.Name, deps))
+            |> Map.ofList
+
+        let hasUnparsableTestSource =
+            tests
+            |> List.exists (fun test ->
+                CompilerLibrary.parseProgram spec.SourceSyntax spec.AllowInternal test.Source
+                |> Result.isError)
+
+        let seedFunctions =
+            if hasUnparsableTestSource then
+                preambleFunctionNames
+            else
+                tests
+                |> List.map (fun test ->
+                    CompilerLibrary.parseProgram spec.SourceSyntax spec.AllowInternal test.Source
+                    |> Result.map (collectProgramReferencedPreambleFuncs preambleFunctionNames))
+                |> List.choose Result.toOption
+                |> List.fold Set.union Set.empty
+
+        let requiredFunctions =
+            seedFunctions
+            |> Set.filter (fun name -> Set.contains name preambleFunctionNames)
+            |> expandRequiredPreambleFunctions dependencyMap
+
+        let reducedTopLevels =
+            preambleTopLevels
+            |> List.filter (function
+                | TypeDef _ -> true
+                | FunctionDef funcDef -> Set.contains funcDef.Name requiredFunctions
+                | Expression _ -> false)
+
+        let reducedProgram =
+            Program (reducedTopLevels @ [Expression (Int64Literal 0L)])
+
+        TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv reducedProgram
+        |> Result.mapError TypeChecking.typeErrorToString
+        |> Result.map (fun (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
+            let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
+            {
+                TypedAST = typedPreambleAst
+                TypeCheckEnv = preambleTypeCheckEnv
+                GenericFuncDefs = preambleGenericDefs
+            }))
+
+let private analyzePreambleForPlan
+    (stdlib: CompilerLibrary.StdlibResult)
+    (spec: PreambleBuildSpec)
+    (tests: E2ETest list)
+    : Result<CompilerLibrary.PreambleAnalysis option, string> =
+    if String.IsNullOrWhiteSpace spec.Preamble then
+        Ok None
+    else
+        match CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble with
+        | Ok analysis ->
+            Ok (Some analysis)
+        | Error primaryErr when
+            spec.SourceSyntax = CompilerLibrary.InterpreterSyntax
+            && isUpstreamDarkTestFile spec.SourceFile ->
+            analyzePreambleWithReducedFunctionSet stdlib spec tests
+            |> Result.map Some
+            |> Result.mapError (fun reducedErr ->
+                $"Preamble parse error in {spec.SourceFile}: {primaryErr}\nReduced preamble fallback failed: {reducedErr}")
+        | Error primaryErr ->
+            Error $"Preamble parse error in {spec.SourceFile}: {primaryErr}"
+
 let private collectSpecsFromTests
     (allowInternal: bool)
     (sourceSyntax: CompilerLibrary.SourceSyntax)
@@ -276,14 +641,7 @@ let private buildPreamblePlan
     (spec: PreambleBuildSpec)
     (tests: E2ETest list)
     : Result<PreamblePlan * Set<SpecKey>, string> =
-    let preambleIsEmpty = String.IsNullOrWhiteSpace spec.Preamble
-    let analysisResult =
-        if preambleIsEmpty then
-            Ok None
-        else
-            CompilerLibrary.analyzePreamble spec.SourceSyntax spec.AllowInternal stdlib spec.Preamble
-            |> Result.mapError (fun err -> $"Preamble parse error in {spec.SourceFile}: {err}")
-            |> Result.map Some
+    let analysisResult = analyzePreambleForPlan stdlib spec tests
 
     analysisResult
     |> Result.bind (fun analysisOpt ->
