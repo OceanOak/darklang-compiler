@@ -374,6 +374,9 @@ let rec applyTypeVarRenaming (subst: Map<string, string>) (t: Type) : Type =
 /// Type environment - maps variable names to their types
 type TypeEnv = Map<string, Type>
 
+/// Function parameter-name registry - maps function names to ordered parameter names
+type FuncParamNameRegistry = Map<string, string list>
+
 /// Type registry - maps record type names to their field definitions
 type TypeRegistry = Map<string, (string * Type) list>
 
@@ -404,6 +407,7 @@ type TypeCheckEnv = {
     TypeReg: TypeRegistry
     VariantLookup: VariantLookup
     FuncEnv: TypeEnv
+    FuncParamNames: FuncParamNameRegistry
     GenericFuncReg: GenericFuncRegistry
     ModuleRegistry: ModuleRegistry
     AliasReg: AliasRegistry
@@ -417,6 +421,7 @@ let mergeTypeCheckEnv (baseEnv: TypeCheckEnv) (overlay: TypeCheckEnv) : TypeChec
         TypeReg = mergeMap baseEnv.TypeReg overlay.TypeReg
         VariantLookup = mergeMap baseEnv.VariantLookup overlay.VariantLookup
         FuncEnv = mergeMap baseEnv.FuncEnv overlay.FuncEnv
+        FuncParamNames = mergeMap baseEnv.FuncParamNames overlay.FuncParamNames
         GenericFuncReg = {
             Functions = mergeMap baseEnv.GenericFuncReg.Functions overlay.GenericFuncReg.Functions
             RequireExplicitTypeArgsForBareCalls =
@@ -1225,6 +1230,30 @@ let tryLookupWithFallback (name: string) (m: Map<string, 'a>) : ('a * string) op
         | Some v -> Some (v, candidate)
         | None -> None)
 
+let private paramNameForLegacyError
+    (funcParamNameReg: Map<string, string list>)
+    (funcName: string)
+    (paramIndex: int)
+    : string =
+    let zeroBasedParamIndex = paramIndex - 1
+
+    let rec tryGetAtIndex (index: int) (remaining: string list) : string option =
+        match remaining with
+        | [] -> None
+        | item :: rest ->
+            if index = 0 then Some item else tryGetAtIndex (index - 1) rest
+
+    let resolvedParamName =
+        if zeroBasedParamIndex < 0 then
+            None
+        else
+            tryLookupWithFallback funcName funcParamNameReg
+            |> Option.bind (fun (paramNames, _resolvedName) -> tryGetAtIndex zeroBasedParamIndex paramNames)
+
+    match resolvedParamName with
+    | Some paramName -> paramName
+    | None -> $"arg{paramIndex}"
+
 /// Check expression type top-down, potentially transforming the expression.
 /// Parameters:
 ///   - expr: Expression to type-check
@@ -1236,7 +1265,38 @@ let tryLookupWithFallback (name: string) (m: Map<string, 'a>) : ('a * string) op
 /// Returns: Result<Type * Expr, TypeError>
 ///   - Type: The type of the expression
 ///   - Expr: The (possibly transformed) expression
-let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (genericFuncReg: GenericFuncRegistry) (moduleRegistry: ModuleRegistry) (aliasReg: AliasRegistry) (expectedType: Type option) : Result<Type * Expr, TypeError> =
+let rec checkExprWithParamNames
+    (funcParamNameReg: Map<string, string list>)
+    (expr: Expr)
+    (env: TypeEnv)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (genericFuncReg: GenericFuncRegistry)
+    (moduleRegistry: ModuleRegistry)
+    (aliasReg: AliasRegistry)
+    (expectedType: Type option)
+    : Result<Type * Expr, TypeError> =
+    let checkExpr
+        (innerExpr: Expr)
+        (innerEnv: TypeEnv)
+        (innerTypeReg: TypeRegistry)
+        (innerVariantLookup: VariantLookup)
+        (innerGenericFuncReg: GenericFuncRegistry)
+        (innerModuleRegistry: ModuleRegistry)
+        (innerAliasReg: AliasRegistry)
+        (innerExpectedType: Type option)
+        : Result<Type * Expr, TypeError> =
+        checkExprWithParamNames
+            funcParamNameReg
+            innerExpr
+            innerEnv
+            innerTypeReg
+            innerVariantLookup
+            innerGenericFuncReg
+            innerModuleRegistry
+            innerAliasReg
+            innerExpectedType
+
     match expr with
     | UnitLiteral ->
         // Unit literal is always TUnit
@@ -2055,19 +2115,44 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | _ -> Ok (partialType, lambdaExpr))
                 else
                     // Check each argument type and collect transformed args
-                    let rec checkArgsWithTypes remaining paramTys accArgs =
+                    let rec checkArgsWithTypes remaining paramTys paramIndex accArgs =
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accArgs)
                         | arg :: restArgs, paramT :: restParams ->
+                            let paramName =
+                                paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
+
                             checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            |> Result.mapError (fun err ->
+                                match err with
+                                | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                    GenericError
+                                        (formatLegacyParamTypeError
+                                            funcName
+                                            paramIndex
+                                            paramName
+                                            paramT
+                                            actualType
+                                            arg)
+                                | _ ->
+                                    err)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesCompatibleWithAliases aliasReg paramT argType then
-                                    checkArgsWithTypes restArgs restParams (arg' :: accArgs)
+                                    checkArgsWithTypes restArgs restParams (paramIndex + 1) (arg' :: accArgs)
                                 else
-                                    Error (TypeMismatch (paramT, argType, $"argument to {funcName}")))
+                                    Error (
+                                        GenericError
+                                            (formatLegacyParamTypeError
+                                                funcName
+                                                paramIndex
+                                                paramName
+                                                paramT
+                                                argType
+                                                arg)
+                                    ))
                         | _ -> Error (GenericError "Internal error: argument/param length mismatch")
 
-                    checkArgsWithTypes args origParamTypes []
+                    checkArgsWithTypes args origParamTypes 1 []
                     |> Result.bind (fun args' ->
                                 match expectedType with
                                 | Some expected when not (typesCompatibleWithAliases aliasReg expected origReturnType) ->
@@ -4009,14 +4094,32 @@ let private materializeEqHelpersInTopLevels
 
 /// Type-check a function definition
 /// Returns the transformed function body (with Call -> TypeApp transformations)
-let checkFunctionDef (funcDef: FunctionDef) (env: TypeEnv) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (genericFuncReg: GenericFuncRegistry) (moduleRegistry: ModuleRegistry) (aliasReg: AliasRegistry) : Result<FunctionDef, TypeError> =
+let checkFunctionDef
+    (funcParamNameReg: Map<string, string list>)
+    (funcDef: FunctionDef)
+    (env: TypeEnv)
+    (typeReg: TypeRegistry)
+    (variantLookup: VariantLookup)
+    (genericFuncReg: GenericFuncRegistry)
+    (moduleRegistry: ModuleRegistry)
+    (aliasReg: AliasRegistry)
+    : Result<FunctionDef, TypeError> =
     // Build environment with parameters
     let paramEnv =
         funcDef.Params
         |> List.fold (fun e (name, ty) -> Map.add name ty e) env
 
     // Check body has return type
-    checkExpr funcDef.Body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some funcDef.ReturnType)
+    checkExprWithParamNames
+        funcParamNameReg
+        funcDef.Body
+        paramEnv
+        typeReg
+        variantLookup
+        genericFuncReg
+        moduleRegistry
+        aliasReg
+        (Some funcDef.ReturnType)
     |> Result.bind (fun (bodyType, body') ->
         if typesCompatibleWithAliases aliasReg funcDef.ReturnType bodyType then
             Ok { funcDef with Body = body' }
@@ -4073,6 +4176,15 @@ let private checkProgramInternal
             | _ -> None)
         |> Map.ofList
 
+    let programFuncParamNameReg : Map<string, string list> =
+        topLevels
+        |> List.choose (function
+            | FunctionDef funcDef ->
+                Some (funcDef.Name, funcDef.Params |> List.map fst)
+            | _ ->
+                None)
+        |> Map.ofList
+
     // Build environment with function signatures from THIS program
     let programFuncEnv =
         funcSigs
@@ -4103,6 +4215,7 @@ let private checkProgramInternal
         TypeReg = programTypeReg
         VariantLookup = programVariantLookup
         FuncEnv = programFuncEnv
+        FuncParamNames = programFuncParamNameReg
         GenericFuncReg = programGenericFuncReg
         ModuleRegistry = moduleRegistry
         AliasReg = aliasReg
@@ -4118,6 +4231,7 @@ let private checkProgramInternal
     let typeReg = typeCheckEnv.TypeReg
     let variantLookup = typeCheckEnv.VariantLookup
     let funcEnv = typeCheckEnv.FuncEnv
+    let funcParamNameReg = typeCheckEnv.FuncParamNames
     let genericFuncReg = typeCheckEnv.GenericFuncReg
     let mergedAliasReg = typeCheckEnv.AliasReg
 
@@ -4129,13 +4243,30 @@ let private checkProgramInternal
         | topLevel :: rest ->
             match topLevel with
             | FunctionDef funcDef ->
-                checkFunctionDef funcDef funcEnv typeReg variantLookup genericFuncReg moduleRegistry mergedAliasReg
+                checkFunctionDef
+                    funcParamNameReg
+                    funcDef
+                    funcEnv
+                    typeReg
+                    variantLookup
+                    genericFuncReg
+                    moduleRegistry
+                    mergedAliasReg
                 |> Result.bind (fun funcDef' ->
                     checkAllTopLevelsWithTypes rest ((None, FunctionDef funcDef') :: accTopLevels))
             | TypeDef _ ->
                 checkAllTopLevelsWithTypes rest ((None, topLevel) :: accTopLevels)
             | Expression expr ->
-                checkExpr expr funcEnv typeReg variantLookup genericFuncReg moduleRegistry mergedAliasReg None
+                checkExprWithParamNames
+                    funcParamNameReg
+                    expr
+                    funcEnv
+                    typeReg
+                    variantLookup
+                    genericFuncReg
+                    moduleRegistry
+                    mergedAliasReg
+                    None
                 |> Result.bind (fun (exprType, expr') ->
                     checkAllTopLevelsWithTypes rest ((Some exprType, Expression expr') :: accTopLevels))
 

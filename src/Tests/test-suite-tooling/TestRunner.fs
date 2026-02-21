@@ -318,7 +318,7 @@ let main args =
     let upstreamEnablementLineAllowlist : Map<string, Set<int>> =
         Map.ofList
             [
-                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65; 66; 67; 68; 69; 70; 71; 72; 73; 75; 76; 78; 79; 88; 93; 96; 101 ])
+                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65; 66; 67; 68; 69; 70; 71; 72; 73; 75; 76; 78; 79; 88; 93; 96; 101; 104 ])
                 ("src/Tests/e2e/upstream/language/custom-data/aliases.dark", Set.ofList [ 6; 9 ])
                 ("src/Tests/e2e/upstream/stdlib/date.dark", Set.ofList [ 216 ])
             ]
