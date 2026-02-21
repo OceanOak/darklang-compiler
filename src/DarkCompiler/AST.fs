@@ -24,11 +24,13 @@ type Type =
     | TInt16
     | TInt32
     | TInt64
+    | TInt128
     // Unsigned integers
     | TUInt8
     | TUInt16
     | TUInt32
     | TUInt64
+    | TUInt128
     // Other primitives
     | TBool
     | TFloat64
@@ -103,7 +105,7 @@ type Pattern =
     | PVar of string                                       // x (binds value to variable)
     | PConstructor of variantName:string * payload:Pattern option  // Red, Some(x)
     | PInt64 of int64                                      // 42 (Int64 literal)
-    | PInt128CompatLiteral of int64                        // 42Q (kept as Int64-compatible value)
+    | PInt128Literal of System.Int128                      // 42Q
     | PInt8Literal of sbyte                                // 1y
     | PInt16Literal of int16                               // 1s
     | PInt32Literal of int32                               // 1l
@@ -111,7 +113,7 @@ type Pattern =
     | PUInt16Literal of uint16                             // 1us
     | PUInt32Literal of uint32                             // 1ul
     | PUInt64Literal of uint64                             // 1UL
-    | PUInt128CompatLiteral of uint64                      // 42Z (kept as UInt64-compatible value)
+    | PUInt128Literal of System.UInt128                    // 42Z
     | PBool of bool                                        // true, false
     | PString of string                                    // "hello"
     | PChar of string                                      // 'x'
@@ -130,7 +132,7 @@ type StringPart =
 and Expr =
     | UnitLiteral                           // Unit value: ()
     | Int64Literal of int64                 // 64-bit signed (default): 42, 42L
-    | Int128CompatLiteral of int64          // Interpreter 42Q, represented in Int64-compatible space
+    | Int128Literal of System.Int128        // 42Q
     | Int8Literal of sbyte                  // 8-bit signed: 42y
     | Int16Literal of int16                 // 16-bit signed: 42s
     | Int32Literal of int32                 // 32-bit signed: 42l
@@ -138,7 +140,7 @@ and Expr =
     | UInt16Literal of uint16               // 16-bit unsigned: 42us
     | UInt32Literal of uint32               // 32-bit unsigned: 42ul
     | UInt64Literal of uint64               // 64-bit unsigned: 42UL
-    | UInt128CompatLiteral of uint64        // Interpreter 42Z, represented in UInt64-compatible space
+    | UInt128Literal of System.UInt128      // 42Z
     | BoolLiteral of bool
     | StringLiteral of string
     | CharLiteral of string   // Single Extended Grapheme Cluster stored as UTF-8 string

@@ -930,9 +930,10 @@ let selectInstr
                      LIR.PrintFloat (LIR.FPhysical LIR.D0)], state)
             | _ ->
                 Error "Internal error: unexpected operand type for float print"
-        | AST.TString | AST.TChar ->
-            // String/Char printing uses PrintString for pool strings, PrintHeapString for heap strings
-            // Char is stored as a string at runtime (single EGC)
+        | AST.TString | AST.TChar | AST.TInt128 | AST.TUInt128 ->
+            // String/Char printing uses PrintString for pool strings, PrintHeapString for heap strings.
+            // Char is stored as a string at runtime (single EGC).
+            // Int128/UInt128 are lowered as canonical decimal strings.
             match src with
             | MIR.StringSymbol value ->
                 Ok ([LIR.PrintString value], state)
@@ -966,6 +967,9 @@ let selectInstr
                     [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
                      LIR.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
                      LIR.PrintFloat (LIR.FPhysical LIR.D0)]
+                | AST.TInt128 | AST.TUInt128 ->
+                    [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
+                     LIR.PrintHeapString (LIR.Physical LIR.X0)]
                 | _ ->
                     // Other types: print address for now
                     [LIR.Mov (LIR.Physical LIR.X0, LIR.Reg valueReg)
@@ -992,7 +996,7 @@ let selectInstr
                             // Float is in X0 as raw bits, move to D0 for printing
                             [LIR.GpToFp (LIR.FPhysical LIR.D0, LIR.Physical LIR.X0)
                              LIR.PrintFloatNoNewline (LIR.FPhysical LIR.D0)]
-                        | AST.TString | AST.TChar ->
+                        | AST.TString | AST.TChar | AST.TInt128 | AST.TUInt128 ->
                             [LIR.PrintHeapStringNoNewline (LIR.Physical LIR.X0)]
                         | AST.TList _ ->
                             // Fallback: print list address in tuple contexts for now.
@@ -1006,6 +1010,16 @@ let selectInstr
             let openParen = [LIR.PrintChars [byte '(']]
             let closeParenNewline = [LIR.PrintChars [byte ')'; byte '\n']]
             Ok (saveTupleAddr @ openParen @ elemInstrs @ closeParenNewline, state)
+
+        | AST.TList elemType when elemType = AST.TInt128 || elemType = AST.TUInt128 ->
+            // Current list pretty-printer path does not support Int128/UInt128 element decoding yet.
+            // Fallback to printing the list pointer to avoid runtime crashes.
+            let lirSrc = convertOperand src
+            let moveToX0 =
+                match lirSrc with
+                | LIR.Reg (LIR.Physical LIR.X0) -> []
+                | _ -> [LIR.Mov (LIR.Physical LIR.X0, lirSrc)]
+            Ok (moveToX0 @ [LIR.PrintInt64 (LIR.Physical LIR.X0)], state)
 
         | AST.TList elemType ->
             // Print list as [elem1, elem2, ...]

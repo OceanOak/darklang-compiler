@@ -594,3 +594,7 @@ let scrutineeOnly = 42 in match scrutineeOnly with | 42 -> 100 | _ -> 0 = 100
 
 // Variable in scrutinee with complex expression
 let computed = 6 * 7 in match computed with | 42 -> 1 | 0 -> 2 | _ -> 3 = 1
+
+// Int128/UInt128 literal patterns must not use UInt64/Int64 modulo behavior.
+match 18446744073709551616Q with | 0Q -> true | _ -> false = false
+match 18446744073709551616Z with | 0Z -> true | _ -> false = false

@@ -340,3 +340,14 @@ let x = 1y in -x = -1y// neg int8 var
 let x = 1s in -x = -1s// neg int16 var
 let x = 1l in -x = -1l// neg int32 var
 let x = 1L in -x = -1// neg int64 var
+
+
+// ===================================================================
+// Int128/UInt128 Literal Identity Tests
+// ===================================================================
+
+// These literals are > 64-bit and must not wrap into Int64/UInt64 space.
+(18446744073709551616Q == 0Q) = false
+(18446744073709551617Q == 1Q) = false
+(18446744073709551616Z == 0Z) = false
+(18446744073709551617Z == 1Z) = false

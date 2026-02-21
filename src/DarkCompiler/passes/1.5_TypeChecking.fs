@@ -42,10 +42,12 @@ let rec typeToString (t: Type) : string =
     | TInt16 -> "Int16"
     | TInt32 -> "Int32"
     | TInt64 -> "Int64"
+    | TInt128 -> "Int128"
     | TUInt8 -> "UInt8"
     | TUInt16 -> "UInt16"
     | TUInt32 -> "UInt32"
     | TUInt64 -> "UInt64"
+    | TUInt128 -> "UInt128"
     | TBool -> "Bool"
     | TFloat64 -> "Float"
     | TString -> "String"
@@ -103,7 +105,7 @@ let private describeIfConditionActual (expr: Expr) (actualType: Type) : string =
     match expr with
     | UnitLiteral -> "Unit (())"
     | Int64Literal i -> $"Int64 ({i})"
-    | Int128CompatLiteral i -> $"Int128 ({i})"
+    | Int128Literal i -> $"Int128 ({i})"
     | Int8Literal i -> $"Int8 ({i})"
     | Int16Literal i -> $"Int16 ({i})"
     | Int32Literal i -> $"Int32 ({i})"
@@ -111,7 +113,7 @@ let private describeIfConditionActual (expr: Expr) (actualType: Type) : string =
     | UInt16Literal i -> $"UInt16 ({i})"
     | UInt32Literal i -> $"UInt32 ({i})"
     | UInt64Literal i -> $"UInt64 ({i})"
-    | UInt128CompatLiteral i -> $"UInt128 ({i})"
+    | UInt128Literal i -> $"UInt128 ({i})"
     | StringLiteral s -> $"String (\"{s}\")"
     | CharLiteral s -> $"Char (\"{s}\")"
     | FloatLiteral f -> $"Float ({f})"
@@ -222,7 +224,7 @@ let private tryFormatLiteralValue (expr: Expr) : string option =
     match expr with
     | UnitLiteral -> Some "()"
     | Int64Literal i -> Some (string i)
-    | Int128CompatLiteral i -> Some (string i)
+    | Int128Literal i -> Some (string i)
     | Int8Literal i -> Some (string i)
     | Int16Literal i -> Some (string i)
     | Int32Literal i -> Some (string i)
@@ -230,7 +232,7 @@ let private tryFormatLiteralValue (expr: Expr) : string option =
     | UInt16Literal i -> Some (string i)
     | UInt32Literal i -> Some (string i)
     | UInt64Literal i -> Some (string i)
-    | UInt128CompatLiteral i -> Some (string i)
+    | UInt128Literal i -> Some (string i)
     | BoolLiteral true -> Some "true"
     | BoolLiteral false -> Some "false"
     | StringLiteral s -> Some $"\"{s}\""
@@ -297,11 +299,8 @@ let rec private narrowPatternMismatchExprByType (actualType: Type) (expr: Expr) 
     | _, TupleLiteral (first :: _) -> narrowPatternMismatchExprByType actualType first
     | _, _ -> expr
 
-let private patternMismatchActualTypeText (actualType: Type) (scrutineeExpr: Expr) : string =
-    match actualType, scrutineeExpr with
-    | TInt64, Int128CompatLiteral _ -> "Int128"
-    | TUInt64, UInt128CompatLiteral _ -> "UInt128"
-    | _ -> typeToString actualType
+let private patternMismatchActualTypeText (actualType: Type) (_scrutineeExpr: Expr) : string =
+    typeToString actualType
 
 let private formatPatternMismatchError
     (scrutineeExpr: Expr)
@@ -365,7 +364,8 @@ let rec applyTypeVarRenaming (subst: Map<string, string>) (t: Type) : Type =
     | TTuple elems -> TTuple (List.map (applyTypeVarRenaming subst) elems)
     | TSum (name, args) -> TSum (name, List.map (applyTypeVarRenaming subst) args)
     | TRecord (name, args) -> TRecord (name, List.map (applyTypeVarRenaming subst) args)
-    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TInt8 | TInt16 | TInt32 | TInt64 | TInt128
+    | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TUInt128
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr -> t
 
 /// Type environment - maps variable names to their types
@@ -442,7 +442,8 @@ let rec applySubst (subst: Substitution) (typ: Type) : Type =
         TSum (name, List.map (applySubst subst) typeArgs)
     | TDict (keyType, valueType) ->
         TDict (applySubst subst keyType, applySubst subst valueType)
-    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TInt8 | TInt16 | TInt32 | TInt64 | TInt128
+    | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TUInt128
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         typ  // Concrete types are unchanged
 
@@ -467,7 +468,8 @@ let rec collectTypeVarsInType (typ: Type) (acc: string list) : string list =
     | TDict (keyType, valueType) ->
         let withKey = collectTypeVarsInType keyType acc
         collectTypeVarsInType valueType withKey
-    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TInt8 | TInt16 | TInt32 | TInt64 | TInt128
+    | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TUInt128
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         acc
 
@@ -496,8 +498,8 @@ let buildSubstitution (typeParams: string list) (typeArgs: Type list) : Result<S
 /// This is used to propagate concrete types through nested TypeApp nodes
 let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
     match expr with
-    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
-    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | UnitLiteral | Int64Literal _ | Int128Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ -> expr
     | BinOp (op, left, right) ->
         BinOp (op, applySubstToExpr subst left, applySubstToExpr subst right)
@@ -591,7 +593,8 @@ let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
         TList (resolveType aliasReg elemType)
     | TDict (keyType, valueType) ->
         TDict (resolveType aliasReg keyType, resolveType aliasReg valueType)
-    | TVar _ | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64
+    | TVar _ | TInt8 | TInt16 | TInt32 | TInt64 | TInt128
+    | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TUInt128
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         typ  // Primitive types and type variables are unchanged
 
@@ -738,8 +741,8 @@ let private buildEqExprForType
 /// bound: Set of names that are currently in scope (not free)
 let rec collectFreeVars (expr: Expr) (bound: Set<string>) : Set<string> =
     match expr with
-    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
-    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | UnitLiteral | Int64Literal _ | Int128Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ ->
         Set.empty
     | Var name ->
@@ -826,7 +829,7 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
     | PWildcard -> Set.empty
     | PVar name -> Set.singleton name
     | PInt64 _
-    | PInt128CompatLiteral _
+    | PInt128Literal _
     | PInt8Literal _
     | PInt16Literal _
     | PInt32Literal _
@@ -834,7 +837,7 @@ and collectPatternBindings (pattern: Pattern) : Set<string> =
     | PUInt16Literal _
     | PUInt32Literal _
     | PUInt64Literal _
-    | PUInt128CompatLiteral _
+    | PUInt128Literal _
     | PBool _
     | PString _
     | PChar _
@@ -885,10 +888,12 @@ let rec matchTypes (pattern: Type) (actual: Type) : Result<(string * Type) list,
     | TInt16 -> matchConcrete TInt16 actual
     | TInt32 -> matchConcrete TInt32 actual
     | TInt64 -> matchConcrete TInt64 actual
+    | TInt128 -> matchConcrete TInt128 actual
     | TUInt8 -> matchConcrete TUInt8 actual
     | TUInt16 -> matchConcrete TUInt16 actual
     | TUInt32 -> matchConcrete TUInt32 actual
     | TUInt64 -> matchConcrete TUInt64 actual
+    | TUInt128 -> matchConcrete TUInt128 actual
     | TBool -> matchConcrete TBool actual
     | TFloat64 -> matchConcrete TFloat64 actual
     | TString ->
@@ -1180,13 +1185,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | Some TInt64 -> Ok (TInt64, expr)
             | _ -> Error (TypeMismatch (other, TInt64, "integer literal"))
 
-    | Int128CompatLiteral _ ->
+    | Int128Literal _ ->
         match expectedType with
-        | Some TInt64 | None -> Ok (TInt64, expr)
+        | Some TInt128 | None -> Ok (TInt128, expr)
         | Some other ->
-            match reconcileTypes (Some aliasReg) other TInt64 with
-            | Some TInt64 -> Ok (TInt64, expr)
-            | _ -> Error (TypeMismatch (other, TInt64, "integer literal"))
+            match reconcileTypes (Some aliasReg) other TInt128 with
+            | Some TInt128 -> Ok (TInt128, expr)
+            | _ -> Error (TypeMismatch (other, TInt128, "integer literal"))
 
     | Int8Literal _ ->
         match expectedType with
@@ -1230,11 +1235,11 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             Error (TypeMismatch (expected, TUInt64, "UInt64 literal"))
         | _ -> Ok (TUInt64, expr)
 
-    | UInt128CompatLiteral _ ->
+    | UInt128Literal _ ->
         match expectedType with
-        | Some expected when not (typesCompatible expected TUInt64) ->
-            Error (TypeMismatch (expected, TUInt64, "UInt64 literal"))
-        | _ -> Ok (TUInt64, expr)
+        | Some expected when not (typesCompatible expected TUInt128) ->
+            Error (TypeMismatch (expected, TUInt128, "UInt128 literal"))
+        | _ -> Ok (TUInt128, expr)
 
     | BoolLiteral _ ->
         // Boolean literals are always TBool
@@ -2581,18 +2586,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let ensureLiteralType
                     (expectedType: Type)
                     : Result<(string * Type) list, TypeError> =
-                    let expectedPatternTypeTextOverride =
-                        match expectedType with
-                        | TInt64 ->
-                            match pattern with
-                            | PInt128CompatLiteral _ -> Some "Int128"
-                            | _ -> None
-                        | TUInt64 ->
-                            match pattern with
-                            | PUInt128CompatLiteral _ -> Some "UInt128"
-                            | _ -> None
-                        | _ ->
-                            None
+                    let expectedPatternTypeTextOverride = None
                     let resolvedPatternType = resolveType aliasReg patternType
                     match resolvedPatternType with
                     | t when isRuntimeErrorType t ->
@@ -2634,7 +2628,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUnit -> ensureLiteralType TUnit
                 | PWildcard -> Ok []
                 | PInt64 _ -> ensureLiteralType TInt64
-                | PInt128CompatLiteral _ -> ensureLiteralType TInt64
+                | PInt128Literal _ -> ensureLiteralType TInt128
                 | PInt8Literal _ -> ensureLiteralType TInt8
                 | PInt16Literal _ -> ensureLiteralType TInt16
                 | PInt32Literal _ -> ensureLiteralType TInt32
@@ -2642,7 +2636,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUInt16Literal _ -> ensureLiteralType TUInt16
                 | PUInt32Literal _ -> ensureLiteralType TUInt32
                 | PUInt64Literal _ -> ensureLiteralType TUInt64
-                | PUInt128CompatLiteral _ -> ensureLiteralType TUInt64
+                | PUInt128Literal _ -> ensureLiteralType TUInt128
                 | PBool _ -> ensureLiteralType TBool
                 | PString _ -> ensureStringOrCharPatternType ()
                 | PChar _ -> ensureLiteralType TChar
@@ -2782,7 +2776,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 match pattern with
                                 | PUnit -> isKnownMismatch TUnit
                                 | PInt64 _
-                                | PInt128CompatLiteral _ -> isKnownMismatch TInt64
+                                | PInt128Literal _ -> isKnownMismatch TInt128
                                 | PInt8Literal _ -> isKnownMismatch TInt8
                                 | PInt16Literal _ -> isKnownMismatch TInt16
                                 | PInt32Literal _ -> isKnownMismatch TInt32
@@ -2790,7 +2784,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | PUInt16Literal _ -> isKnownMismatch TUInt16
                                 | PUInt32Literal _ -> isKnownMismatch TUInt32
                                 | PUInt64Literal _
-                                | PUInt128CompatLiteral _ -> isKnownMismatch TUInt64
+                                | PUInt128Literal _ -> isKnownMismatch TUInt128
                                 | PBool _ -> isKnownMismatch TBool
                                 | PString _ -> isKnownStringPatternMismatch ()
                                 | PChar _ -> isKnownMismatch TChar
@@ -2919,7 +2913,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUnit
                 | PWildcard
                 | PInt64 _
-                | PInt128CompatLiteral _
+                | PInt128Literal _
                 | PInt8Literal _
                 | PInt16Literal _
                 | PInt32Literal _
@@ -2927,7 +2921,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | PUInt16Literal _
                 | PUInt32Literal _
                 | PUInt64Literal _
-                | PUInt128CompatLiteral _
+                | PUInt128Literal _
                 | PBool _
                 | PString _
                 | PChar _
@@ -3540,8 +3534,8 @@ let rec private collectEqHelperTypesFromExpr (aliasReg: AliasRegistry) (expr: Ex
         |> List.fold Set.union Set.empty
 
     match expr with
-    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
-    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | UnitLiteral | Int64Literal _ | Int128Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ ->
         Set.empty
     | BinOp (_, left, right) ->
@@ -3615,8 +3609,8 @@ let rec private materializeEqHelperCallsInExpr (aliasReg: AliasRegistry) (expr: 
     let recurse = materializeEqHelperCallsInExpr aliasReg
 
     match expr with
-    | UnitLiteral | Int64Literal _ | Int128CompatLiteral _ | Int8Literal _ | Int16Literal _ | Int32Literal _
-    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128CompatLiteral _
+    | UnitLiteral | Int64Literal _ | Int128Literal _ | Int8Literal _ | Int16Literal _ | Int32Literal _
+    | UInt8Literal _ | UInt16Literal _ | UInt32Literal _ | UInt64Literal _ | UInt128Literal _
     | BoolLiteral _ | StringLiteral _ | CharLiteral _ | FloatLiteral _ | Var _ | FuncRef _ ->
         expr
     | BinOp (op, left, right) ->

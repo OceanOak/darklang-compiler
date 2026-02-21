@@ -491,7 +491,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
             | AST.TFloat64 ->
                 // Need to move from X0 to D0 for float
                 [ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D0, ARM64Symbolic.X0)] @ runtimeInstrs (Runtime.generatePrintFloatNoNewline ())
-            | AST.TString ->
+            | AST.TString | AST.TChar ->
                 // X0 has string address, load len/data and print
                 [ARM64Symbolic.LDR (ARM64Symbolic.X10, ARM64Symbolic.X0, 0s); ARM64Symbolic.ADD_imm (ARM64Symbolic.X9, ARM64Symbolic.X0, 8us)] @
                 runtimeInstrs (Runtime.generatePrintStringNoNewline ())
@@ -539,7 +539,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                             | AST.TBool -> runtimeInstrs (Runtime.generatePrintBoolNoNewline ())
                             | AST.TFloat64 ->
                                 [ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D0, ARM64Symbolic.X0)] @ runtimeInstrs (Runtime.generatePrintFloatNoNewline ())
-                            | AST.TString ->
+                            | AST.TString | AST.TChar ->
                                 [ARM64Symbolic.LDR (ARM64Symbolic.X10, ARM64Symbolic.X0, 0s); ARM64Symbolic.ADD_imm (ARM64Symbolic.X9, ARM64Symbolic.X0, 8us)] @
                                 runtimeInstrs (Runtime.generatePrintStringNoNewline ())
                             | _ -> runtimeInstrs (Runtime.generatePrintInt64NoNewline ())
@@ -1128,7 +1128,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                                 | AST.TBool -> runtimeInstrs (Runtime.generatePrintBoolNoNewline ())
                                 | AST.TFloat64 ->
                                     [ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D0, ARM64Symbolic.X0)] @ runtimeInstrs (Runtime.generatePrintFloatNoNewline ())
-                                | AST.TString ->
+                                | AST.TString | AST.TChar | AST.TInt128 | AST.TUInt128 ->
                                     [ARM64Symbolic.LDR (ARM64Symbolic.X10, ARM64Symbolic.X0, 0s); ARM64Symbolic.ADD_imm (ARM64Symbolic.X9, ARM64Symbolic.X0, 8us)] @
                                     runtimeInstrs (Runtime.generatePrintStringNoNewline ())
                                 | AST.TList elemType ->
@@ -1237,7 +1237,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                         | AST.TBool -> runtimeInstrs (Runtime.generatePrintBoolNoNewline ())
                         | AST.TFloat64 ->
                             [ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D0, ARM64Symbolic.X0)] @ runtimeInstrs (Runtime.generatePrintFloatNoNewline ())
-                        | AST.TString ->
+                        | AST.TString | AST.TChar | AST.TInt128 | AST.TUInt128 ->
                             // String is a pointer: load length, compute data ptr, print
                             [ARM64Symbolic.LDR (ARM64Symbolic.X10, ARM64Symbolic.X0, 0s); ARM64Symbolic.ADD_imm (ARM64Symbolic.X9, ARM64Symbolic.X0, 8us)] @
                             runtimeInstrs (Runtime.generatePrintStringNoNewline ())
