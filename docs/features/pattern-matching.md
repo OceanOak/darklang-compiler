@@ -205,6 +205,11 @@ For top-level list patterns, unresolved scrutinee types (`TVar`) must preserve
 unresolved element types in ANF lowering (`__list_elem_*`) instead of
 defaulting to `Int64`.
 
+For top-level tuple patterns on unresolved scrutinee types (`TVar`), type
+checking must preserve per-slot unresolved element types (`__tuple_elem_*`)
+when extracting bindings. Dropping those bindings causes false `undefined
+variable` errors in match bodies.
+
 Tuple destructuring inside list-cons heads (for example, `[(a, b), ...rest]`)
 uses the tuple element type from the list element type. If tuple arity does not
 match (for example `[(a, b, c), ...rest]` against a list of 2-tuples), the

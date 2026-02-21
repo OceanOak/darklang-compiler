@@ -4687,7 +4687,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let elemType =
                                 match sourceType with
                                 | AST.TList t -> t
-                                | _ -> AST.TInt64
+                                | _ -> AST.TVar "__list_elem_unknown"
                             // Extract head elements then bind tail using FingerTree operations
                             // Use _i64 versions which work for any element type at runtime (all values are 64-bit)
                             // The correct element type is tracked in the VarEnv/TypeMap, not in the function name

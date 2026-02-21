@@ -2693,10 +2693,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             || containsVariableBinding tailPattern
                         | _ -> false
 
-                    // Resolve type alias before matching (e.g., Pair<Int64> -> (Int64, Int64))
-                    let resolvedPatternType = resolveType aliasReg patternType
-                    match resolvedPatternType with
-                    | TTuple elementTypes when List.length patterns = List.length elementTypes ->
+                    let collectTupleBindingsWithTypes (elementTypes: Type list) : Result<(string * Type) list, TypeError> =
                         List.zip patterns elementTypes
                         |> List.map (fun (p, t) ->
                             extractPatternBindings p t allowNoMatchForKnownListLengthMismatch)
@@ -2705,6 +2702,17 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
                             | Error e, _ -> Error e
                             | _, Error e -> Error e) (Ok [])
+
+                    // Resolve type alias before matching (e.g., Pair<Int64> -> (Int64, Int64))
+                    let resolvedPatternType = resolveType aliasReg patternType
+                    match resolvedPatternType with
+                    | TTuple elementTypes when List.length patterns = List.length elementTypes ->
+                        collectTupleBindingsWithTypes elementTypes
+                    | TVar tupleTypeVar ->
+                        let unresolvedElementTypes =
+                            patterns
+                            |> List.mapi (fun idx _ -> TVar $"__tuple_elem_{tupleTypeVar}_{idx}")
+                        collectTupleBindingsWithTypes unresolvedElementTypes
                     | TTuple _ ->
                         // Tuple arity mismatch in pattern should be treated as a non-match.
                         // Match lowering emits a false condition for this pattern shape.

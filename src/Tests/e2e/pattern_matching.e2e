@@ -472,6 +472,9 @@ def genericPayloadTupleBinding(v: Stdlib.Option.Option<(String, Int64)>) : Strin
 // Regression: type checking rejected list-pattern bindings on TVar scrutinees before lowering.
 def genericTopLevelListMatch<t>(v: t) : Float = match v with | [a, b] -> 4.0 | _ -> 0.0 genericTopLevelListMatch([1.5, 2.5]) = 4.0
 
+// Generic tuple/list-cons patterns should preserve unresolved element bindings.
+def genericTupleListConsBinding<t>(v: t) : String = match v with | ([x, ..._], _) -> x | _ -> "" genericTupleListConsBinding((["a" ++ ""], 1)) = "a"
+
 // Single literal pattern
 match [13] with | [13] -> 1 | _ -> 0 = 1
 
