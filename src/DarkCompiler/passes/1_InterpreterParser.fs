@@ -1535,23 +1535,48 @@ let parse (tokens: Token list) : Result<Program, string> =
                         //   let x = <value>
                         //   <body>
                         // but lexer discards newlines. Recover this by trying all prefix/suffix
-                        // splits after '=' and selecting the first split where both sides parse.
-                        let rec trySplits (valueTokensRev: Token list) (remainingTokens: Token list) : Result<Expr * Token list, string> =
+                        // splits after '=' and choosing the split that leaves the smallest
+                        // remaining token tail after parsing the body.
+                        let betterSplit
+                            (currentBest: (Expr * Token list) option)
+                            (candidate: Expr * Token list)
+                            : (Expr * Token list) option =
+                            match currentBest with
+                            | None ->
+                                Some candidate
+                            | Some (_, bestRemaining) ->
+                                let (_, candidateRemaining) = candidate
+                                if List.length candidateRemaining < List.length bestRemaining then
+                                    Some candidate
+                                else
+                                    currentBest
+
+                        let rec trySplits
+                            (valueTokensRev: Token list)
+                            (remainingTokens: Token list)
+                            (bestCandidate: (Expr * Token list) option)
+                            : Result<Expr * Token list, string> =
                             match remainingTokens with
                             | [] ->
-                                Error "Expected expression"
+                                match bestCandidate with
+                                | Some best -> Ok best
+                                | None -> Error "Expected expression"
                             | nextToken :: restTokens ->
                                 let candidateValueTokens = List.rev (nextToken :: valueTokensRev)
-                                match parseExpr candidateValueTokens with
-                                | Ok (candidateValue, []) ->
-                                    match parseExpr restTokens with
-                                    | Ok (candidateBody, remainingAfterBody) ->
-                                        Ok (buildLetExpression candidateValue candidateBody remainingAfterBody)
-                                    | Error _ ->
-                                        trySplits (nextToken :: valueTokensRev) restTokens
-                                | _ ->
-                                    trySplits (nextToken :: valueTokensRev) restTokens
-                        trySplits [] rest'
+                                let updatedBest =
+                                    match parseExpr candidateValueTokens with
+                                    | Ok (candidateValue, []) ->
+                                        match parseExpr restTokens with
+                                        | Ok (candidateBody, remainingAfterBody) ->
+                                            buildLetExpression candidateValue candidateBody remainingAfterBody
+                                            |> betterSplit bestCandidate
+                                        | Error _ ->
+                                            bestCandidate
+                                    | _ ->
+                                        bestCandidate
+
+                                trySplits (nextToken :: valueTokensRev) restTokens updatedBest
+                        trySplits [] rest' None
 
                     match parseExpr rest' with
                     | Ok (value, remaining') ->

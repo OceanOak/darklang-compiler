@@ -165,6 +165,18 @@ let testParseInterpreterNewlineDelimitedLetBody () : TestResult =
     | Ok other ->
         Error $"Unexpected AST for newline-delimited let body: {other}"
 
+let testParseInterpreterNewlineDelimitedLetBodyAfterAppliedCallValue () : TestResult =
+    let source =
+        "let _ = Builtin.testSetExpectedExceptionCount 1L\n"
+        + " Builtin.darkInternalInfraSchedulingRuleList ()"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on newline-delimited let body after applied call value: {err}"
+    | Ok (Program [Expression _]) ->
+        Ok ()
+    | Ok other ->
+        Error $"Expected single expression program, got: {other}"
+
 let testInterpreterParserDoesNotTreatTupleBodyAsCallableAcrossTopLevelBoundary () : TestResult =
     let source =
         "let tupleValue () : (Int64, List<Int64>) =\n"
@@ -292,6 +304,7 @@ let tests = [
     ("parse interpreter curried top-level let function def", testInterpreterParserParsesCurriedTopLevelLetFunctionDef)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)
+    ("parse interpreter newline-delimited let body after applied call value", testParseInterpreterNewlineDelimitedLetBodyAfterAppliedCallValue)
     ("parse interpreter tuple-body top-level boundary", testInterpreterParserDoesNotTreatTupleBodyAsCallableAcrossTopLevelBoundary)
     ("typecheck interpreter record-function-field lambda", testTypeCheckInterpreterRecordFunctionFieldLambda)
     ("stdlib registry excludes non-intrinsic float multiply", testStdlibRegistryExcludesNonIntrinsicFloatMultiply)
