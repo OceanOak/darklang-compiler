@@ -165,6 +165,25 @@ let testParseInterpreterNewlineDelimitedLetBody () : TestResult =
     | Ok other ->
         Error $"Unexpected AST for newline-delimited let body: {other}"
 
+let testInterpreterParserDoesNotTreatTupleBodyAsCallableAcrossTopLevelBoundary () : TestResult =
+    let source =
+        "let tupleValue () : (Int64, List<Int64>) =\n"
+        + "  (0L, [])\n"
+        + "0L"
+    match InterpreterParser.parseString false source with
+    | Error err ->
+        Error $"Interpreter parser failed on tuple-body top-level boundary: {err}"
+    | Ok (Program [FunctionDef fnDef; Expression (Int64Literal 0L)]) ->
+        match fnDef.Body with
+        | TupleLiteral [Int64Literal 0L; ListLiteral []] ->
+            Ok ()
+        | other ->
+            Error $"Expected tuple literal body, got: {other}"
+    | Ok (Program [FunctionDef fnDef]) ->
+        Error $"Expected trailing top-level expression after function body, got function-only program with body: {fnDef.Body}"
+    | Ok other ->
+        Error $"Unexpected AST for tuple-body top-level boundary: {other}"
+
 let testTypeCheckInterpreterRecordFunctionFieldLambda () : TestResult =
     let source =
         "type RecordWithFn = { fn: Int64 -> Int64 }\n"
@@ -273,6 +292,7 @@ let tests = [
     ("parse interpreter curried top-level let function def", testInterpreterParserParsesCurriedTopLevelLetFunctionDef)
     ("parse interpreter record function field type", testParseInterpreterRecordFunctionFieldType)
     ("parse interpreter newline-delimited let body", testParseInterpreterNewlineDelimitedLetBody)
+    ("parse interpreter tuple-body top-level boundary", testInterpreterParserDoesNotTreatTupleBodyAsCallableAcrossTopLevelBoundary)
     ("typecheck interpreter record-function-field lambda", testTypeCheckInterpreterRecordFunctionFieldLambda)
     ("stdlib registry excludes non-intrinsic float multiply", testStdlibRegistryExcludesNonIntrinsicFloatMultiply)
     ("stdlib registry includes intrinsic float sqrt", testStdlibRegistryIncludesIntrinsicFloatSqrt)

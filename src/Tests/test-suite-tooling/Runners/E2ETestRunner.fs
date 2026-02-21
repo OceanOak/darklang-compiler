@@ -171,6 +171,10 @@ type E2EFailure = {
 }
 
 type E2ETestResult = Result<E2ERun, E2EFailure>
+type PreambleContextKey = string * string
+
+let preambleContextKeyForTest (test: E2ETest) : PreambleContextKey =
+    (test.SourceFile, test.Preamble)
 
 type private PreambleBuildSpec = {
     SourceFile: string
@@ -180,8 +184,8 @@ type private PreambleBuildSpec = {
     SourceSyntax: CompilerLibrary.SourceSyntax
 }
 
-/// Map of built preamble contexts keyed by source file
-type PreambleContextMap = Map<string, CompilerLibrary.PreambleContext>
+/// Map of built preamble contexts keyed by source file + preamble text
+type PreambleContextMap = Map<PreambleContextKey, CompilerLibrary.PreambleContext>
 
 type SuiteContext = {
     Stdlib: CompilerLibrary.StdlibResult
@@ -319,7 +323,7 @@ let private buildPreamblePlan
             }
             Ok (plan, stdlibSpecs)))
 
-/// Build suite stdlib specializations and per-file preamble contexts
+/// Build suite stdlib specializations and per-file/per-preamble contexts
 let buildSuiteContexts
     (stdlib: CompilerLibrary.StdlibResult)
     (tests: E2ETest array)
@@ -328,19 +332,20 @@ let buildSuiteContexts
     let groupedTests =
         tests
         |> Array.toList
-        |> List.groupBy (fun test -> test.SourceFile)
+        |> List.groupBy preambleContextKeyForTest
 
     let plansResult =
         groupedTests
         |> List.fold
-            (fun acc (sourceFile, group) ->
+            (fun acc (contextKey, group) ->
                 acc
                 |> Result.bind (fun (plans, stdlibSpecs) ->
+                    let (sourceFile, _) = contextKey
                     buildPreambleBuildSpec sourceFile group
                     |> Result.bind (fun spec ->
                         buildPreamblePlan stdlib spec group
                         |> Result.map (fun (plan, specs) ->
-                            (plan :: plans, Set.union stdlibSpecs specs)))))
+                            ((contextKey, plan) :: plans, Set.union stdlibSpecs specs)))))
             (Ok ([], Set.empty))
 
     plansResult
@@ -357,7 +362,7 @@ let buildSuiteContexts
             let contextsResult =
                 plans
                 |> List.fold
-                    (fun acc plan ->
+                    (fun acc (contextKey, plan) ->
                         acc
                         |> Result.bind (fun (currentStdlib, contexts) ->
                             let ctxResult =
@@ -375,7 +380,7 @@ let buildSuiteContexts
                                         $"Preamble build error ({plan.Spec.SourceFile}): {err}")
                             ctxResult
                             |> Result.map (fun (updatedStdlib, ctx) ->
-                                (updatedStdlib, Map.add plan.Spec.SourceFile ctx contexts))))
+                                (updatedStdlib, Map.add contextKey ctx contexts))))
                     (Ok (stdlibWithSpecs, Map.empty))
             contextsResult
             |> Result.map (fun (updatedStdlib, contexts) ->

@@ -424,28 +424,38 @@ let rec resolveTypeName (aliasReg: AliasRegistry) (typeName: string) : string =
     | _ -> typeName
 
 /// Apply a substitution to a type, replacing type variables with concrete types
-let rec applySubst (subst: Substitution) (typ: Type) : Type =
+let rec private applySubstWithSeen (seen: Set<string>) (subst: Substitution) (typ: Type) : Type =
     match typ with
     | TVar name ->
-        match Map.tryFind name subst with
-        | Some concreteType -> concreteType
-        | None -> typ  // Unbound type variable remains as-is
+        if Set.contains name seen then
+            typ
+        else
+            let seen' = Set.add name seen
+            match Map.tryFind name subst with
+            | Some concreteType ->
+                applySubstWithSeen seen' subst concreteType
+            | None ->
+                typ  // Unbound type variable remains as-is
     | TFunction (paramTypes, returnType) ->
-        TFunction (List.map (applySubst subst) paramTypes, applySubst subst returnType)
+        TFunction (List.map (applySubstWithSeen seen subst) paramTypes, applySubstWithSeen seen subst returnType)
     | TTuple elemTypes ->
-        TTuple (List.map (applySubst subst) elemTypes)
+        TTuple (List.map (applySubstWithSeen seen subst) elemTypes)
     | TRecord (name, typeArgs) ->
-        TRecord (name, List.map (applySubst subst) typeArgs)
+        TRecord (name, List.map (applySubstWithSeen seen subst) typeArgs)
     | TList elemType ->
-        TList (applySubst subst elemType)
+        TList (applySubstWithSeen seen subst elemType)
     | TSum (name, typeArgs) ->
-        TSum (name, List.map (applySubst subst) typeArgs)
+        TSum (name, List.map (applySubstWithSeen seen subst) typeArgs)
     | TDict (keyType, valueType) ->
-        TDict (applySubst subst keyType, applySubst subst valueType)
+        TDict (applySubstWithSeen seen subst keyType, applySubstWithSeen seen subst valueType)
     | TInt8 | TInt16 | TInt32 | TInt64 | TInt128
     | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TUInt128
     | TBool | TFloat64 | TString | TBytes | TChar | TUnit | TRuntimeError | TRawPtr ->
         typ  // Concrete types are unchanged
+
+/// Apply a substitution to a type, replacing type variables with concrete types
+let applySubst (subst: Substitution) (typ: Type) : Type =
+    applySubstWithSeen Set.empty subst typ
 
 /// Collect type variable names in first-seen order.
 let rec collectTypeVarsInType (typ: Type) (acc: string list) : string list =
@@ -536,7 +546,11 @@ let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
     | ListCons (heads, tail) ->
         ListCons (List.map (applySubstToExpr subst) heads, applySubstToExpr subst tail)
     | Lambda (params', body) ->
-        Lambda (params', applySubstToExpr subst body)
+        let concreteParams =
+            params'
+            |> List.map (fun (paramName, paramType) ->
+                (paramName, applySubst subst paramType))
+        Lambda (concreteParams, applySubstToExpr subst body)
     | Apply (func, args) ->
         Apply (applySubstToExpr subst func, List.map (applySubstToExpr subst) args)
     | Closure (funcName, captures) ->
@@ -1304,6 +1318,15 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 | Mod -> "%"
                 | _ -> "?"
 
+            let tryAsNumericType (typ: Type) : Type option =
+                match resolveType aliasReg typ with
+                | TInt8 | TInt16 | TInt32 | TInt64
+                | TUInt8 | TUInt16 | TUInt32 | TUInt64
+                | TFloat64 as numeric ->
+                    Some numeric
+                | _ ->
+                    None
+
             match tryExtractKnownTestRuntimeErrorMessage Map.empty left with
             | Some msg ->
                 Error (GenericError $"Uncaught exception: {msg}")
@@ -1311,12 +1334,12 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 // Check left operand to determine numeric type
                 checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
                 |> Result.bind (fun (leftType, left') ->
-                    match leftType with
-                    | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
+                    match tryAsNumericType leftType with
+                    | Some leftNumericType ->
                         // Right operand must be same type
-                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
+                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftNumericType)
                         |> Result.mapError (fun err ->
-                            match op, leftType, err with
+                            match op, leftNumericType, err with
                             | Add, TInt64, TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
                                 GenericError
                                     (formatLegacyParamTypeError
@@ -1338,15 +1361,43 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | _ ->
                                 err)
                         |> Result.bind (fun (rightType, right') ->
-                            if rightType <> leftType then
-                                Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
+                            if rightType <> leftNumericType then
+                                Error (TypeMismatch (leftNumericType, rightType, $"right operand of {opName}"))
                             else
                                 match expectedType with
-                                | Some expected when expected <> leftType ->
-                                    Error (TypeMismatch (expected, leftType, $"result of {opName}"))
-                                | _ -> Ok (leftType, BinOp (op, left', right')))
-                    | other ->
-                        Error (InvalidOperation (opName, [other])))
+                                | Some expected when expected <> leftNumericType ->
+                                    Error (TypeMismatch (expected, leftNumericType, $"result of {opName}"))
+                                | _ -> Ok (leftNumericType, BinOp (op, left', right')))
+                    | None ->
+                        match leftType with
+                        | TVar _ ->
+                            let rightExpectedType =
+                                match expectedType with
+                                | Some expected ->
+                                    match tryAsNumericType expected with
+                                    | Some numericExpected -> Some numericExpected
+                                    | None -> None
+                                | None ->
+                                    None
+                            checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg rightExpectedType
+                            |> Result.bind (fun (rightType, right') ->
+                                let inferredNumericType =
+                                    match rightExpectedType with
+                                    | Some numericExpected ->
+                                        Some numericExpected
+                                    | None ->
+                                        tryAsNumericType rightType
+                                match inferredNumericType with
+                                | Some numericType ->
+                                    match expectedType with
+                                    | Some expected when not (typesCompatible expected numericType) ->
+                                        Error (TypeMismatch (expected, numericType, $"result of {opName}"))
+                                    | _ ->
+                                        Ok (numericType, BinOp (op, left', right'))
+                                | None ->
+                                    Error (InvalidOperation (opName, [leftType])))
+                        | other ->
+                            Error (InvalidOperation (opName, [other])))
 
         // Comparison operators: T -> T -> bool
         // Eq and Neq: work on any type (structural equality for complex types)
@@ -1796,18 +1847,46 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                     Error (TypeMismatch (expected, partialType, $"partial application of {funcName}"))
                                 | _ -> Ok (partialType, lambdaExpr))))
                 else
-                    // Full application - type-check all arguments
-                    let rec checkArgs remaining remainingParamTypes accTypes accExprs =
+                    // Full application - type-check arguments left-to-right while propagating bindings.
+                    let rec checkArgsWithBindings remaining remainingParamTypes accTypes accExprs accBindings =
                         match remaining, remainingParamTypes with
-                        | [], [] -> Ok (List.rev accTypes, List.rev accExprs)
-                        | arg :: rest, paramT :: restParamTypes ->
-                            // Pass the parameter type as expected type to help infer nested generics
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
-                            |> Result.bind (fun (argType, arg') ->
-                                checkArgs rest restParamTypes (argType :: accTypes) (arg' :: accExprs))
-                        | _ -> Error (GenericError "Argument count mismatch")
+                        | [], [] ->
+                            Ok (List.rev accTypes, List.rev accExprs)
+                        | arg :: restArgs, paramT :: restParams ->
+                            consolidateBindings accBindings
+                            |> Result.mapError GenericError
+                            |> Result.bind (fun bindingMap ->
+                                let concreteParamType = applySubst bindingMap paramT
+                                checkExpr
+                                    arg
+                                    env
+                                    typeReg
+                                    variantLookup
+                                    genericFuncReg
+                                    moduleRegistry
+                                    aliasReg
+                                    (Some concreteParamType)
+                                |> Result.bind (fun (argType, arg') ->
+                                    match matchTypes concreteParamType argType with
+                                    | Ok newBindings ->
+                                        let combinedBindings = accBindings @ newBindings
+                                        consolidateBindings combinedBindings
+                                        |> Result.mapError GenericError
+                                        |> Result.bind (fun combinedBindingMap ->
+                                            let concreteArgType = applySubst combinedBindingMap argType
+                                            checkArgsWithBindings
+                                                restArgs
+                                                restParams
+                                                (concreteArgType :: accTypes)
+                                                (arg' :: accExprs)
+                                                combinedBindings)
+                                    | Error msg ->
+                                        Error (TypeMismatch (concreteParamType, argType, $"argument to {funcName}: {msg}")))
+                            )
+                        | _ ->
+                            Error (GenericError "Argument count mismatch")
 
-                    checkArgs args paramTypes [] []
+                    checkArgsWithBindings args paramTypes [] [] []
                     |> Result.bind (fun (argTypes, args') ->
                         // Infer type arguments from parameter types, argument types, and expected return type
                         inferTypeArgs typeParams paramTypes argTypes (Some returnType) expectedType
@@ -1893,6 +1972,25 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                     Error (TypeMismatch (expected, origReturnType, $"result of call to {funcName}"))
                                 | _ -> Ok (origReturnType, Call (resolvedFuncName, args')))
                 )
+            | Some (TVar funcTypeVar, resolvedFuncName) ->
+                // In interpreter syntax, higher-order generic parameters may reach call sites
+                // before their function shape is concretized (for example in nested List.map).
+                // Keep the call typable and let surrounding generic reconciliation specialize it.
+                let rec checkArgsWithUnknownCallableType remaining accArgs =
+                    match remaining with
+                    | [] -> Ok (List.rev accArgs)
+                    | arg :: restArgs ->
+                        checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                        |> Result.bind (fun (_argType, arg') ->
+                            checkArgsWithUnknownCallableType restArgs (arg' :: accArgs))
+
+                checkArgsWithUnknownCallableType args []
+                |> Result.map (fun args' ->
+                    let inferredReturnType =
+                        match expectedType with
+                        | Some expected -> expected
+                        | None -> TVar $"__call_result_{funcTypeVar}"
+                    (inferredReturnType, Call (resolvedFuncName, args')))
             | Some (other, _) ->
                 Error (GenericError $"{funcName} is not a function (has type {typeToString other})")
             | None ->
@@ -2009,18 +2107,47 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | _ -> Ok (partialType, lambdaExpr)))
                 else if not (List.isEmpty typeParams) then
                     // Generic module function: infer type arguments from actual argument types
-                    // First, type-check all arguments with expected parameter types
-                    let rec checkArgs remaining remainingParamTypes accTypes accExprs =
+                    // Type-check arguments left-to-right while propagating inferred bindings.
+                    // This lets later args see concrete expectations inferred from earlier args.
+                    let rec checkArgsWithBindings remaining remainingParamTypes accTypes accExprs accBindings =
                         match remaining, remainingParamTypes with
-                        | [], [] -> Ok (List.rev accTypes, List.rev accExprs)
-                        | arg :: rest, paramT :: restParamTypes ->
-                            // Pass the parameter type as expected type to help infer nested generics
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
-                            |> Result.bind (fun (argType, arg') ->
-                                checkArgs rest restParamTypes (argType :: accTypes) (arg' :: accExprs))
-                        | _ -> Error (GenericError "Argument count mismatch")
+                        | [], [] ->
+                            Ok (List.rev accTypes, List.rev accExprs)
+                        | arg :: restArgs, paramT :: restParams ->
+                            consolidateBindings accBindings
+                            |> Result.mapError GenericError
+                            |> Result.bind (fun bindingMap ->
+                                let concreteParamType = applySubst bindingMap paramT
+                                checkExpr
+                                    arg
+                                    env
+                                    typeReg
+                                    variantLookup
+                                    genericFuncReg
+                                    moduleRegistry
+                                    aliasReg
+                                    (Some concreteParamType)
+                                |> Result.bind (fun (argType, arg') ->
+                                    match matchTypes concreteParamType argType with
+                                    | Ok newBindings ->
+                                        let combinedBindings = accBindings @ newBindings
+                                        consolidateBindings combinedBindings
+                                        |> Result.mapError GenericError
+                                        |> Result.bind (fun combinedBindingMap ->
+                                            let concreteArgType = applySubst combinedBindingMap argType
+                                            checkArgsWithBindings
+                                                restArgs
+                                                restParams
+                                                (concreteArgType :: accTypes)
+                                                (arg' :: accExprs)
+                                                combinedBindings)
+                                    | Error msg ->
+                                        Error (TypeMismatch (concreteParamType, argType, $"argument to {funcName}: {msg}")))
+                            )
+                        | _ ->
+                            Error (GenericError "Argument count mismatch")
 
-                    checkArgs args paramTypes [] []
+                    checkArgsWithBindings args paramTypes [] [] []
                     |> Result.bind (fun (argTypes, args') ->
                         // Infer type arguments from parameter types, argument types, and expected return type
                         inferTypeArgs typeParams paramTypes argTypes (Some returnType) expectedType

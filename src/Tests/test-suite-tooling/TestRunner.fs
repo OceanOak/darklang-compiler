@@ -312,7 +312,7 @@ let main args =
     let upstreamEnablementLineAllowlist : Map<string, Set<int>> =
         Map.ofList
             [
-                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7 ])
+                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10 ])
             ]
 
     let normalizePath (path: string) : string =
@@ -470,7 +470,7 @@ let main args =
                         | None ->
                             preambleFailureResult "Missing built suite contexts", TimeSpan.Zero
                         | Some currentSuiteContexts ->
-                            let contextKey = test.SourceFile
+                            let contextKey = TestDSL.E2ETestRunner.preambleContextKeyForTest test
                             match Map.tryFind contextKey currentSuiteContexts.PreambleContexts with
                             | None ->
                                 preambleFailureResult $"Missing built preamble context for {test.SourceFile}", TimeSpan.Zero

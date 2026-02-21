@@ -894,10 +894,17 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                         // else: continue accumulating
                     else
                         let lineWithoutComment = stripComment trimmedLine
+                        let lineIndent = countLeadingSpaces line
+                        let rec popCompletedModules (stack: int list) : int list =
+                            match stack with
+                            // When indentation returns to or above a module declaration's
+                            // indent level, that module block has ended.
+                            | top :: rest when lineIndent <= top -> popCompletedModules rest
+                            | _ -> stack
+                        moduleIndentStack <- popCompletedModules moduleIndentStack
 
                         // Check if this starts a multi-line expression: starts with ( but isn't a complete test
                         let isTopLevel = line.Length > 0 && not (Char.IsWhiteSpace(line.[0]))
-                        let lineIndent = countLeadingSpaces line
                         let moduleShift = moduleIndentStack.Length * 2
                         let isModuleLevelIndented = allowIndentedTests && lineIndent = moduleShift
                         let mayStartOrBeTest = isTopLevel || isModuleLevelIndented
@@ -1002,13 +1009,20 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
         else
             let fullPreamble = String.concat "\n" (List.rev preambleLines)
             let fullFunctionLineMap = functionLineMap
+            let normalizedPath = path.Replace('\\', '/')
+            let keepPerTestPreamble =
+                allowIndentedTests
+                && normalizedPath.Contains("/e2e/upstream/")
             let normalizedTests =
                 tests
                 |> List.rev
                 |> List.map (fun test ->
-                    { test with
-                        Preamble = fullPreamble
-                        FunctionLineMap = fullFunctionLineMap })
+                    if keepPerTestPreamble then
+                        test
+                    else
+                        { test with
+                            Preamble = fullPreamble
+                            FunctionLineMap = fullFunctionLineMap })
             Ok normalizedTests
 
 /// Parse E2E test from old-format file (for backward compatibility during transition)

@@ -1543,6 +1543,9 @@ let rec simpleInferType
         | AST.TUInt128 -> true
         | _ -> false
 
+    let isNumericType (typ: AST.Type) : bool =
+        isIntType typ || typ = AST.TFloat64
+
     let mergeBindings (bindings: Map<string, AST.Type>) (extra: Map<string, AST.Type>) : Map<string, AST.Type> =
         Map.fold (fun acc name typ -> Map.add name typ acc) bindings extra
 
@@ -1734,7 +1737,9 @@ let rec simpleInferType
         match op with
         | AST.Add | AST.Sub | AST.Mul | AST.Div | AST.Mod ->
             match leftType, rightType with
-            | Some lt, Some rt when lt = rt && (isIntType lt || lt = AST.TFloat64) -> Some lt
+            | Some lt, Some rt when lt = rt && isNumericType lt -> Some lt
+            | Some (AST.TVar _), Some rt when isNumericType rt -> Some rt
+            | Some lt, Some (AST.TVar _) when isNumericType lt -> Some lt
             | _ -> None
         | AST.Shl | AST.Shr | AST.BitAnd | AST.BitOr | AST.BitXor ->
             match leftType, rightType with
@@ -1754,6 +1759,10 @@ let rec simpleInferType
                 Some (AST.TFunction (paramTypes |> List.skip argCount, returnType))
             else
                 None
+        | Some (AST.TVar funcTypeVar) ->
+            // Higher-order generic values can remain unresolved in interpreter syntax.
+            // Keep lambda lifting moving by modeling a symbolic return type.
+            Some (AST.TVar $"__call_result_{funcTypeVar}")
         | _ ->
             Map.tryFind funcName funcReturnTypes
     | AST.TypeApp (funcName, typeArgs, _) ->
@@ -3942,6 +3951,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             | Some (tempId, AST.TFunction (_, _)) ->
                 // Variable with function type - use closure call
                 // All function values are now closures (even non-capturing ones)
+                let callExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
+                let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
+                Ok (withArgSetups finalExpr, varGen2)
+            | Some (tempId, AST.TVar _) ->
+                // Higher-order generic values can remain unresolved (TVar) until
+                // surrounding inference finalizes concrete shapes.
                 let callExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
                 let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
                 Ok (withArgSetups finalExpr, varGen2)
@@ -7602,6 +7617,11 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                 | Some (tempId, AST.TFunction (_, _)) ->
                     // Variable with function type - use closure call
                     // All function values are now closures (even non-capturing ones)
+                    let callCExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
+                    let allBindings = argBindings @ [(tempVar, callCExpr)]
+                    Ok (ANF.Var tempVar, allBindings, varGen2)
+                | Some (tempId, AST.TVar _) ->
+                    // Keep unresolved higher-order generic values callable in atom position.
                     let callCExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
                     let allBindings = argBindings @ [(tempVar, callCExpr)]
                     Ok (ANF.Var tempVar, allBindings, varGen2)

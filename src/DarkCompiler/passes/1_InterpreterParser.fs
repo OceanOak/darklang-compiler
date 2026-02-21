@@ -1477,6 +1477,15 @@ let parse (tokens: Token list) : Result<Program, string> =
             | Call _ | TypeApp _ | Apply _ | Constructor (_, _, None) -> true
             | _ -> false
 
+    let rec canAcceptSpaceApplication (expr: Expr) : bool =
+        match expr with
+        | Var _ | Call _ | TypeApp _ | Lambda _ | FuncRef _ | Closure _ -> true
+        | Constructor (_, _, None) -> true
+        | Apply _ -> true
+        // Allow values that can evaluate to callable values, such as `record.fn`.
+        | RecordAccess _ | TupleAccess _ -> true
+        | _ -> false
+
     let appendCallArg (callee: Expr) (argExpr: Expr) : Expr =
         match callee with
         | Var funcName -> Call (funcName, [argExpr])
@@ -1803,7 +1812,8 @@ let parse (tokens: Token list) : Result<Program, string> =
 
     and parseApplication (callee: Expr) (toks: Token list) : Result<Expr * Token list, string> =
         let negativeNumericArg = canStartNegativeNumericApplicationArg callee toks
-        if negativeNumericArg || canStartApplicationArg toks then
+        let hasCallableCallee = canAcceptSpaceApplication callee
+        if hasCallableCallee && (negativeNumericArg || canStartApplicationArg toks) then
             // Parse exactly one argument, then continue left-associatively.
             // Negative numeric literals are tokenized as `-` + literal.
             // Parse those with unary parsing so expressions like `f -1.0` become
@@ -1905,7 +1915,33 @@ let parse (tokens: Token list) : Result<Program, string> =
             |> Result.bind (fun (parameters, bodyStart) ->
                 parseExpr bodyStart
                 |> Result.map (fun (body, remaining) ->
-                    (Lambda (parameters, body), remaining)))
+                    // Preserve typed lambdas as multi-parameter AST for stable
+                    // parser/pretty roundtrips. Curry fully-untyped interpreter
+                    // lambdas (`fun x y -> ...`) to match upstream behavior for
+                    // partial application.
+                    let isImplicitInterpreterParamType (ty: Type) : bool =
+                        match ty with
+                        | TVar typeVarName -> typeVarName.StartsWith "__interp_lambda_"
+                        | _ -> false
+
+                    let shouldCurry =
+                        parameters
+                        |> List.map snd
+                        |> List.forall isImplicitInterpreterParamType
+
+                    if shouldCurry then
+                        let rec buildCurriedLambda
+                            (remainingParams: (string * Type) list)
+                            (innerBody: Expr)
+                            : Expr =
+                            match remainingParams with
+                            | [] -> innerBody
+                            | param :: restParams ->
+                                Lambda ([param], buildCurriedLambda restParams innerBody)
+
+                        (buildCurriedLambda parameters body, remaining)
+                    else
+                        (Lambda (parameters, body), remaining)))
         // Qualified identifier: Stdlib.Int64.add, Module.func, or Stdlib.Result.Result.Ok
         | TIdent name :: TDot :: TIdent nextName :: rest when System.Char.IsUpper(name.[0]) ->
             // Parse the full qualified name
