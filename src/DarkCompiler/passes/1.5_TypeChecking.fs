@@ -31,6 +31,7 @@ let private makePartialParams (funcName: string) (types: Type list) : (string * 
 type TypeError =
     | TypeMismatch of expected:Type * actual:Type * context:string
     | UndefinedVariable of name:string
+    | UndefinedCallTarget of name:string
     | MissingTypeAnnotation of context:string
     | InvalidOperation of op:string * types:Type list
     | GenericError of string
@@ -81,6 +82,8 @@ let typeErrorToString (err: TypeError) : string =
         $"Type mismatch in {context}: expected {typeToString expected}, got {typeToString actual}"
     | UndefinedVariable name ->
         $"Undefined variable: {name}"
+    | UndefinedCallTarget name ->
+        $"There is no variable named: {name}"
     | MissingTypeAnnotation context ->
         $"Missing type annotation: {context}"
     | InvalidOperation (op, types) ->
@@ -2187,7 +2190,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         | _ -> Ok (returnType, Call (resolvedFuncName, args')))
                     )
                 | None ->
-                    Error (UndefinedVariable funcName)
+                    Error (UndefinedCallTarget funcName)
 
     | TypeApp (funcName, typeArgs, args) ->
         // Generic function call with explicit type arguments: func<Type1, Type2>(args)
@@ -2359,7 +2362,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | Some (_, _) ->
                 Error (GenericError $"Function {funcName} is not generic, use regular call syntax")
             | None ->
-                Error (UndefinedVariable funcName)
+                Error (UndefinedCallTarget funcName)
 
     | TupleLiteral elements ->
         // Type-check each element and build tuple type
