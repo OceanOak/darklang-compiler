@@ -134,6 +134,8 @@ let main args =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "elambda.dark")
     let dtupleUpstreamDarkPath =
         Path.Combine(testDataRoot, "e2e", "upstream", "language", "collections", "dtuple.dark")
+    let dateUpstreamDarkPath =
+        Path.Combine(testDataRoot, "e2e", "upstream", "stdlib", "date.dark")
     let upstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
@@ -149,7 +151,8 @@ let main args =
            epipeUpstreamDarkPath
            derrorUpstreamDarkPath
            elambdaUpstreamDarkPath
-           dtupleUpstreamDarkPath |]
+           dtupleUpstreamDarkPath
+           dateUpstreamDarkPath |]
     let defaultUpstreamDarkPaths =
         [| eifUpstreamDarkPath
            ematchUpstreamDarkPath
@@ -315,8 +318,9 @@ let main args =
     let upstreamEnablementLineAllowlist : Map<string, Set<int>> =
         Map.ofList
             [
-                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65; 66; 67; 68; 69; 70; 71; 72; 73; 75; 79; 88 ])
+                ("src/Tests/e2e/upstream/language/apply/eapply.dark", Set.ofList [ 1; 4; 7; 10; 19; 62; 63; 64; 65; 66; 67; 68; 69; 70; 71; 72; 73; 75; 76; 78; 79; 88 ])
                 ("src/Tests/e2e/upstream/language/custom-data/aliases.dark", Set.ofList [ 6 ])
+                ("src/Tests/e2e/upstream/stdlib/date.dark", Set.ofList [ 216 ])
             ]
 
     let normalizePath (path: string) : string =

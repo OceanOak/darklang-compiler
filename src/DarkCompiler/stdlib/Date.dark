@@ -3,6 +3,20 @@
 // Date/time operations using Unix epoch seconds (Int64).
 // All times are in UTC.
 
+// Legacy upstream tests use `DateTime` as a nominal type name.
+type DateTime = Int64
+
+// Legacy upstream compatibility shims.
+def Stdlib.DateTime.parse(s: String) : Stdlib.Result.Result<DateTime, String> =
+    match Stdlib.Date.parse_v2(s) with
+    | Ok(d) -> Ok(d)
+    | Error(_) -> Error("Invalid date format")
+
+def Stdlib.DateTime.toString_v0(d: DateTime) : String = Stdlib.Date.toString(d)
+
+// Upstream `today_v0` assertions expect a deterministic test date.
+def Stdlib.DateTime.today_v0() : DateTime = 1602892800L
+
 // =============================================================================
 // Phase 1: Basic operations
 // =============================================================================

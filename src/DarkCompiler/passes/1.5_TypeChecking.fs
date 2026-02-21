@@ -721,6 +721,8 @@ let private buildEqExprForType
     | TFunction _ ->
         // Preserve side effects/runtime errors by evaluating both sides.
         Let ("__dark_eq_fn_pair", TupleLiteral [leftExpr; rightExpr], BoolLiteral true)
+    | TString ->
+        Call ("Stdlib.String.equals", [leftExpr; rightExpr])
     | TList elemType ->
         let resolvedElemType = resolveType aliasReg elemType
         match resolvedElemType with
@@ -1268,7 +1270,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
     | StringLiteral _ ->
         // String literals are always TString
         match expectedType with
-        | Some expected when not (typesCompatible expected TString) ->
+        | Some expected when not (typesCompatibleWithAliases aliasReg expected TString) ->
             Error (TypeMismatch (expected, TString, "string literal"))
         | _ -> Ok (TString, expr)
 
@@ -1444,11 +1446,13 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     // Equality works on any type - both operands must be same type
                         checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
                         |> Result.bind (fun (rightType, right') ->
-                            // Check types are compatible (same structure)
-                            if rightType <> leftType then
+                            // In generic contexts, one side can still contain type variables
+                            // while the other side has become concrete.
+                            match reconcileTypes (Some aliasReg) leftType rightType with
+                            | None ->
                                 Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
-                            else
-                                let eqExpr = buildEqExprForType aliasReg variantLookup leftType left' right'
+                            | Some comparableType ->
+                                let eqExpr = buildEqExprForType aliasReg variantLookup comparableType left' right'
                                 let comparisonExpr =
                                     if op = Neq then
                                         UnaryOp (Not, eqExpr)
@@ -1627,10 +1631,32 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             | Some (varType, resolvedName) ->
                 match expectedType with
                 | Some expected ->
-                    // Use reconcileTypes to handle type variables and type aliases
-                    match reconcileTypes (Some aliasReg) expected varType with
-                    | Some reconciledType -> Ok (reconciledType, Var resolvedName)
-                    | None -> Error (TypeMismatch (expected, varType, $"variable {name}"))
+                    // Legacy upstream compatibility: a nullary function used in a
+                    // value position should evaluate to its return value.
+                    let nullaryAutoCallResult =
+                        match varType with
+                        | TFunction ([], returnType) ->
+                            match reconcileTypes (Some aliasReg) expected returnType with
+                            | Some reconciledType ->
+                                let autoCallExpr =
+                                    if resolvedName.Contains(".") then
+                                        Call (resolvedName, [])
+                                    else
+                                        Apply (Var resolvedName, [])
+                                Some (Ok (reconciledType, autoCallExpr))
+                            | None ->
+                                None
+                        | _ ->
+                            None
+
+                    match nullaryAutoCallResult with
+                    | Some result ->
+                        result
+                    | None ->
+                        // Use reconcileTypes to handle type variables and type aliases
+                        match reconcileTypes (Some aliasReg) expected varType with
+                        | Some reconciledType -> Ok (reconciledType, Var resolvedName)
+                        | None -> Error (TypeMismatch (expected, varType, $"variable {name}"))
                 | None -> Ok (varType, Var resolvedName)
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
@@ -1640,9 +1666,24 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                     let funcType = Stdlib.getFunctionType moduleFunc
                     match expectedType with
                     | Some expected ->
-                        match reconcileTypes (Some aliasReg) expected funcType with
-                        | Some reconciledType -> Ok (reconciledType, Var resolvedName)
-                        | None -> Error (TypeMismatch (expected, funcType, $"variable {name}"))
+                        let nullaryAutoCallResult =
+                            match funcType with
+                            | TFunction ([], returnType) ->
+                                match reconcileTypes (Some aliasReg) expected returnType with
+                                | Some reconciledType ->
+                                    Some (Ok (reconciledType, Call (resolvedName, [])))
+                                | None ->
+                                    None
+                            | _ ->
+                                None
+
+                        match nullaryAutoCallResult with
+                        | Some result ->
+                            result
+                        | None ->
+                            match reconcileTypes (Some aliasReg) expected funcType with
+                            | Some reconciledType -> Ok (reconciledType, Var resolvedName)
+                            | None -> Error (TypeMismatch (expected, funcType, $"variable {name}"))
                     | None -> Ok (funcType, Var resolvedName)
                 | None ->
                     Error (UndefinedVariable name)
@@ -2488,7 +2529,9 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | Some fieldExpr ->
                                     checkExpr fieldExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedFieldType)
                                     |> Result.bind (fun (actualType, fieldExpr') ->
-                                        match matchTypes expectedFieldType actualType with
+                                        let resolvedExpectedFieldType = resolveType aliasReg expectedFieldType
+                                        let resolvedActualType = resolveType aliasReg actualType
+                                        match matchTypes resolvedExpectedFieldType resolvedActualType with
                                         | Ok newBindings ->
                                             checkFieldsInOrder
                                                 rest
@@ -3456,6 +3499,9 @@ let rec private buildEqHelperExpr
             )
         | _ ->
             TypeApp ("Stdlib.List.equals", [resolvedElemType], [leftExpr; rightExpr])
+
+    | _, TString ->
+        Call ("Stdlib.String.equals", [leftExpr; rightExpr])
 
     | ExpandCurrent, TTuple elemTypes ->
         let leftTupleVar = "__dark_eq_helper_tuple_left"

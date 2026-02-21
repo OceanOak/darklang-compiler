@@ -18,8 +18,11 @@ let private isInternalTestFile (sourceFile: string) : bool =
 // Choose parser syntax from the test suite directory.
 let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.SourceSyntax =
     let normalized = sourceFile.Replace('\\', '/')
-    if normalized.Contains("/interpreter/")
-       || normalized.Contains("/e2e/upstream/language/") then
+    let isUpstreamDark =
+        normalized.Contains("/e2e/upstream/")
+        && normalized.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
+
+    if normalized.Contains("/interpreter/") || isUpstreamDark then
         CompilerLibrary.InterpreterSyntax
     else
         CompilerLibrary.CompilerSyntax
@@ -506,12 +509,65 @@ let private parsePreambleAsProgram
     let preambleSource = preamble + $"\n{preambleTerminator}"
     CompilerLibrary.parseProgram sourceSyntax allowInternal preambleSource
 
+let private countLeadingSpaces (lineText: string) : int =
+    let mutable idx = 0
+    while idx < lineText.Length && lineText.[idx] = ' ' do
+        idx <- idx + 1
+    idx
+
+let private isTopLevelPreambleDefinitionStart (trimmedLine: string) : bool =
+    trimmedLine.StartsWith("let ")
+    || trimmedLine.StartsWith("type ")
+    || trimmedLine.StartsWith("def ")
+
+/// Keep only top-level definitions and their continuation lines.
+/// This is used by upstream reduced-preamble fallback when the raw per-test
+/// preamble includes non-definition noise that cannot be parsed standalone.
+let private sanitizePreambleForReducedFallback (preamble: string) : string =
+    let lines = preamble.Split([| '\n' |], StringSplitOptions.None) |> Array.toList
+
+    let rec loop
+        (activeDefIndent: int option)
+        (acc: string list)
+        (remaining: string list)
+        : string list =
+        match remaining with
+        | [] -> List.rev acc
+        | line :: rest ->
+            let trimmed = line.Trim()
+            let indent = countLeadingSpaces line
+
+            match activeDefIndent with
+            | Some defIndent when trimmed = "" ->
+                loop activeDefIndent (line :: acc) rest
+            | Some defIndent when indent > defIndent ->
+                loop activeDefIndent (line :: acc) rest
+            | _ ->
+                if indent = 0 && isTopLevelPreambleDefinitionStart trimmed then
+                    loop (Some indent) (line :: acc) rest
+                else
+                    loop None acc rest
+
+    loop None [] lines |> String.concat "\n"
+
 let private analyzePreambleWithReducedFunctionSet
     (stdlib: CompilerLibrary.StdlibResult)
     (spec: PreambleBuildSpec)
     (tests: E2ETest list)
     : Result<CompilerLibrary.PreambleAnalysis, string> =
-    parsePreambleAsProgram spec.SourceSyntax spec.AllowInternal spec.Preamble
+    let parseResult =
+        match parsePreambleAsProgram spec.SourceSyntax spec.AllowInternal spec.Preamble with
+        | Ok program -> Ok program
+        | Error primaryErr ->
+            let sanitizedPreamble = sanitizePreambleForReducedFallback spec.Preamble
+            if sanitizedPreamble = spec.Preamble then
+                Error primaryErr
+            else
+                parsePreambleAsProgram spec.SourceSyntax spec.AllowInternal sanitizedPreamble
+                |> Result.mapError (fun reducedParseErr ->
+                    $"{primaryErr}\nSanitized preamble parse failed: {reducedParseErr}")
+
+    parseResult
     |> Result.bind (fun preambleProgram ->
         let (Program preambleTopLevels) = preambleProgram
         let preambleFunctionDefs =

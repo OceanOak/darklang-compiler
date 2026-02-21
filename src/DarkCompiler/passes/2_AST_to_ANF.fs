@@ -3524,19 +3524,43 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-                | Some (_, resolvedName) ->
-                    // Module function reference - wrap in closure for uniform calling convention
-                    let (closureId, varGen') = ANF.freshVar varGen
-                    let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
-                    Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
-                | None ->
-                    // Check if it's a function reference (function name used as value)
-                    match tryLookupWithFallback name funcReg with
-                    | Some (_, resolvedName) ->
-                        // Wrap in closure for uniform calling convention
+                | Some (moduleFunc, resolvedName) ->
+                    if List.isEmpty moduleFunc.ParamTypes then
+                        // Legacy upstream compatibility: nullary stdlib functions are
+                        // commonly used as values (without `()`), expecting evaluation.
+                        toANF
+                            (AST.Call (resolvedName, []))
+                            varGen
+                            env
+                            typeReg
+                            variantLookup
+                            funcReg
+                            moduleRegistry
+                    else
+                        // Module function reference - wrap in closure for uniform calling convention
                         let (closureId, varGen') = ANF.freshVar varGen
                         let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                         Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
+                | None ->
+                    // Check if it's a function reference (function name used as value)
+                    match tryLookupWithFallback name funcReg with
+                    | Some (funcType, resolvedName) ->
+                        match funcType with
+                        | AST.TFunction (paramTypes, _) when List.isEmpty paramTypes ->
+                            // Legacy upstream compatibility for nullary functions.
+                            toANF
+                                (AST.Call (resolvedName, []))
+                                varGen
+                                env
+                                typeReg
+                                variantLookup
+                                funcReg
+                                moduleRegistry
+                        | _ ->
+                            // Wrap in closure for uniform calling convention
+                            let (closureId, varGen') = ANF.freshVar varGen
+                            let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
+                            Ok (ANF.Let (closureId, closureAlloc, ANF.Return (ANF.Var closureId)), varGen')
                     | None ->
                         Error $"Undefined variable: {name}"
 
@@ -7391,19 +7415,43 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             | None ->
                 // Check if it's a module function (e.g., Stdlib.Int64.add)
                 match Stdlib.tryGetFunctionWithFallback moduleRegistry name with
-                | Some (_, resolvedName) ->
-                    // Module function reference - wrap in closure for uniform calling convention
-                    let (closureId, varGen') = ANF.freshVar varGen
-                    let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
-                    Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
-                | None ->
-                    // Check if it's a function reference (function name used as value)
-                    match tryLookupWithFallback name funcReg with
-                    | Some (_, resolvedName) ->
-                        // Wrap in closure for uniform calling convention
+                | Some (moduleFunc, resolvedName) ->
+                    if List.isEmpty moduleFunc.ParamTypes then
+                        // Legacy upstream compatibility: nullary stdlib functions are
+                        // commonly used as values (without `()`), expecting evaluation.
+                        toAtom
+                            (AST.Call (resolvedName, []))
+                            varGen
+                            env
+                            typeReg
+                            variantLookup
+                            funcReg
+                            moduleRegistry
+                    else
+                        // Module function reference - wrap in closure for uniform calling convention
                         let (closureId, varGen') = ANF.freshVar varGen
                         let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
                         Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
+                | None ->
+                    // Check if it's a function reference (function name used as value)
+                    match tryLookupWithFallback name funcReg with
+                    | Some (funcType, resolvedName) ->
+                        match funcType with
+                        | AST.TFunction (paramTypes, _) when List.isEmpty paramTypes ->
+                            // Legacy upstream compatibility for nullary functions.
+                            toAtom
+                                (AST.Call (resolvedName, []))
+                                varGen
+                                env
+                                typeReg
+                                variantLookup
+                                funcReg
+                                moduleRegistry
+                        | _ ->
+                            // Wrap in closure for uniform calling convention
+                            let (closureId, varGen') = ANF.freshVar varGen
+                            let closureAlloc = ANF.ClosureAlloc (resolvedName, [])
+                            Ok (ANF.Var closureId, [(closureId, closureAlloc)], varGen')
                     | None ->
                         Error $"Undefined variable: {name}"
 
