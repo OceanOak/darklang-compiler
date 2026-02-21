@@ -136,7 +136,16 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             let leftType = inferAtomType ctx left
             let rightType = inferAtomType ctx right
             inferArithmeticType leftType rightType
-        | Mod | Shl | Shr | BitAnd | BitOr | BitXor -> Some AST.TInt64
+        | Mod | Shl | Shr | BitAnd | BitOr | BitXor ->
+            let leftType = inferAtomType ctx left
+            let rightType = inferAtomType ctx right
+            match leftType, rightType with
+            // Internal lowerings may mix pointer-ish values with Int64 masks/counts.
+            // Preserve the left operand type (the computed value's type) instead of defaulting.
+            | Some l, Some _ -> Some l
+            | Some l, None -> Some l
+            | None, Some r -> Some r
+            | None, None -> None
         | Eq | Neq | Lt | Gt | Lte | Gte | And | Or -> Some AST.TBool
     | UnaryPrim (op, atom) ->
         match op with

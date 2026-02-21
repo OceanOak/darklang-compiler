@@ -470,14 +470,10 @@ let main args =
                         | None ->
                             preambleFailureResult "Missing built suite contexts", TimeSpan.Zero
                         | Some currentSuiteContexts ->
-                            let contextKey = TestDSL.E2ETestRunner.preambleContextKeyForTest test
+                            let contextKey = test.SourceFile
                             match Map.tryFind contextKey currentSuiteContexts.PreambleContexts with
                             | None ->
-                                match Map.tryFind contextKey currentSuiteContexts.PreambleErrors with
-                                | Some err ->
-                                    preambleFailureResult $"Preamble build failed: {err}", TimeSpan.Zero
-                                | None ->
-                                    preambleFailureResult $"Missing built preamble context for {test.SourceFile}", TimeSpan.Zero
+                                preambleFailureResult $"Missing built preamble context for {test.SourceFile}", TimeSpan.Zero
                             | Some ctx ->
                                 let passTimingStart = passTimingTotal ()
                                 let testResult =

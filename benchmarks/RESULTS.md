@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-21 11:17:33
-**Commit:** `cded50c2` - Type checking/ANF: remove one TInt64 fallback for list-cons patterns
+**Last Updated:** 2026-02-21 11:27:05
+**Commit:** `acc59ce1` - Benchmarks: update RESULTS and HISTORY after full run
 
 | Benchmark     |           Dark (4.20x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|
@@ -18,7 +18,7 @@ Latest Dark compiler performance vs other languages (instruction counts).
 | leibniz       |  1,200,000,148 (1.71x) |   700,256,039 | 2,504,990,630 (3.58x) |                      - |   388,457,894 (0.55x) |
 | mandelbrot    |     26,883,115 (2.14x) |    12,553,096 |    23,390,326 (1.86x) |   1,299,960,761 (104x) |   435,644,625 (34.7x) |
 | matmul        |                      - |    16,956,533 |    34,895,082 (2.06x) |    894,891,413 (52.8x) |   487,674,868 (28.8x) |
-| merkletrees   |    743,823,797 (6.56x) |   113,304,119 | 1,004,581,199 (8.87x) |                      - |                     - |
+| merkletrees   |    743,823,697 (6.56x) |   113,304,119 | 1,004,581,199 (8.87x) |                      - |                     - |
 | nbody         |                      - |   208,254,521 |   659,530,997 (3.17x) |  41,766,944,942 (201x) |   997,799,106 (4.79x) |
 | nqueen        |    780,780,304 (4.75x) |   164,529,075 |   297,970,462 (1.81x) |  17,205,881,478 (105x) |   804,233,231 (4.89x) |
 | nsieve        |                      - |   234,163,043 |   559,365,264 (2.39x) | 16,683,353,450 (71.2x) | 1,229,182,783 (5.25x) |
