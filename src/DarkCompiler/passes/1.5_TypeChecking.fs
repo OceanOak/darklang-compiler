@@ -384,9 +384,12 @@ type SumTypeRegistry = Map<string, (string * int * Type option) list>
 /// Type params are the generic type parameters of the containing sum type
 type VariantLookup = Map<string, (string * string list * int * Type option)>
 
-/// Generic function registry - maps function names to their type parameters
-/// Only contains entries for functions that have type parameters
-type GenericFuncRegistry = Map<string, string list>
+/// Generic function registry and call-site policy controls.
+/// `Functions` contains entries only for functions that have type parameters.
+type GenericFuncRegistry = {
+    Functions: Map<string, string list>
+    RequireExplicitTypeArgsForBareCalls: bool
+}
 
 /// Alias registry - maps type alias names to (type params, target type)
 /// Example: type Id = String -> ("Id", ([], TString))
@@ -414,7 +417,12 @@ let mergeTypeCheckEnv (baseEnv: TypeCheckEnv) (overlay: TypeCheckEnv) : TypeChec
         TypeReg = mergeMap baseEnv.TypeReg overlay.TypeReg
         VariantLookup = mergeMap baseEnv.VariantLookup overlay.VariantLookup
         FuncEnv = mergeMap baseEnv.FuncEnv overlay.FuncEnv
-        GenericFuncReg = mergeMap baseEnv.GenericFuncReg overlay.GenericFuncReg
+        GenericFuncReg = {
+            Functions = mergeMap baseEnv.GenericFuncReg.Functions overlay.GenericFuncReg.Functions
+            RequireExplicitTypeArgsForBareCalls =
+                baseEnv.GenericFuncReg.RequireExplicitTypeArgsForBareCalls
+                || overlay.GenericFuncReg.RequireExplicitTypeArgsForBareCalls
+        }
         ModuleRegistry = baseEnv.ModuleRegistry  // Module registry is constant, use base
         AliasReg = mergeMap baseEnv.AliasReg overlay.AliasReg
     }
@@ -1863,8 +1871,16 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
             match tryLookupWithFallback funcName env with
             | Some (TFunction (origParamTypes, origReturnType), resolvedFuncName) ->
                 (
-            // Check if this is a generic function - if so, infer type arguments
-            match tryLookupWithFallback resolvedFuncName genericFuncReg with
+            // Check if this is a generic function.
+            match tryLookupWithFallback resolvedFuncName genericFuncReg.Functions with
+            | Some (origTypeParams, _) when
+                genericFuncReg.RequireExplicitTypeArgsForBareCalls
+                && Option.isNone expectedType
+                && not (resolvedFuncName.Contains(".")) ->
+                // Bare user-defined generic calls must provide explicit type arguments.
+                // Module-scoped names (for example Stdlib.List.map) still infer type args.
+                let expectedTypeArgCount = List.length origTypeParams
+                Error (GenericError (formatTypeArgumentArityError funcName expectedTypeArgCount 0))
             | Some (origTypeParams, _) ->
                 // Freshen type params to avoid name clashes with caller's scope
                 let (freshTypeParams, renaming) = freshenTypeParams origTypeParams
@@ -2272,7 +2288,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
         match tryLookupWithFallback funcName env with
         | Some (TFunction (paramTypes, returnType), resolvedFuncName) ->
             // 2. Look up type parameters
-            match tryLookupWithFallback resolvedFuncName genericFuncReg with
+            match tryLookupWithFallback resolvedFuncName genericFuncReg.Functions with
             | Some (typeParams, _) ->
                 let expectedTypeArgCount = List.length typeParams
                 let actualTypeArgCount = List.length typeArgs
@@ -4001,7 +4017,11 @@ let checkFunctionDef (funcDef: FunctionDef) (env: TypeEnv) (typeReg: TypeRegistr
 /// Internal: Type-check a program and return the type checking environment
 /// This is the core implementation used by checkProgram, checkProgramWithEnv, and checkProgramWithBaseEnv
 /// When baseEnv is provided, registries are merged with it (for separate compilation)
-let private checkProgramInternal (baseEnv: TypeCheckEnv option) (program: Program) : Result<Type * Program * TypeCheckEnv, TypeError> =
+let private checkProgramInternal
+    (baseEnv: TypeCheckEnv option)
+    (requireExplicitTypeArgsForBareCalls: bool)
+    (program: Program)
+    : Result<Type * Program * TypeCheckEnv, TypeError> =
     let (Program topLevels) = program
 
     // First pass: collect all type definitions (records) from THIS program
@@ -4050,13 +4070,18 @@ let private checkProgramInternal (baseEnv: TypeCheckEnv option) (program: Progra
         |> Map.map (fun _ (paramTypes, returnType) -> TFunction (paramTypes, returnType))
 
     // Build generic function registry from THIS program - maps function names to type parameters
-    let programGenericFuncReg : GenericFuncRegistry =
+    let programGenericFuncMap : Map<string, string list> =
         topLevels
         |> List.choose (function
             | FunctionDef funcDef when not (List.isEmpty funcDef.TypeParams) ->
                 Some (funcDef.Name, funcDef.TypeParams)
             | _ -> None)
         |> Map.ofList
+
+    let programGenericFuncReg : GenericFuncRegistry = {
+        Functions = programGenericFuncMap
+        RequireExplicitTypeArgsForBareCalls = requireExplicitTypeArgsForBareCalls
+    }
 
     // Build module registry once (or reuse from base environment)
     let moduleRegistry =
@@ -4130,16 +4155,24 @@ let private checkProgramInternal (baseEnv: TypeCheckEnv option) (program: Progra
 /// Returns the type of the main expression and the transformed program
 /// The transformed program has Call nodes converted to TypeApp where type inference was applied
 let checkProgram (program: Program) : Result<Type * Program, TypeError> =
-    checkProgramInternal None program
+    checkProgramInternal None false program
     |> Result.map (fun (typ, prog, _env) -> (typ, prog))
 
 /// Type-check a program and return the type checking environment
 /// Use this when you need to reuse the environment (e.g., for stdlib caching)
 let checkProgramWithEnv (program: Program) : Result<Type * Program * TypeCheckEnv, TypeError> =
-    checkProgramInternal None program
+    checkProgramInternal None false program
 
 /// Type-check a program with a pre-populated base environment (for separate compilation)
 /// The program's definitions are merged with the base environment, allowing lookups
 /// of types/functions from both the base (e.g., stdlib) and the program (e.g., user code)
 let checkProgramWithBaseEnv (baseEnv: TypeCheckEnv) (program: Program) : Result<Type * Program * TypeCheckEnv, TypeError> =
-    checkProgramInternal (Some baseEnv) program
+    checkProgramInternal (Some baseEnv) false program
+
+/// Type-check a program with a pre-populated base environment and a generic-call policy override.
+let checkProgramWithBaseEnvAndGenericCallPolicy
+    (baseEnv: TypeCheckEnv)
+    (requireExplicitTypeArgsForBareCalls: bool)
+    (program: Program)
+    : Result<Type * Program * TypeCheckEnv, TypeError> =
+    checkProgramInternal (Some baseEnv) requireExplicitTypeArgsForBareCalls program

@@ -834,6 +834,17 @@ let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     try Ok (Process.Start(info))
     with ex -> Error ex.Message
 
+let private checkProgramWithBaseEnvForSyntax
+    (sourceSyntax: SourceSyntax)
+    (baseEnv: TypeChecking.TypeCheckEnv)
+    (program: AST.Program)
+    : Result<AST.Type * AST.Program * TypeChecking.TypeCheckEnv, TypeChecking.TypeError> =
+    match sourceSyntax with
+    | InterpreterSyntax ->
+        TypeChecking.checkProgramWithBaseEnvAndGenericCallPolicy baseEnv true program
+    | CompilerSyntax ->
+        TypeChecking.checkProgramWithBaseEnv baseEnv program
+
 /// Parse and typecheck a preamble, returning typed AST + preamble typecheck env
 let analyzePreamble
     (sourceSyntax: SourceSyntax)
@@ -851,7 +862,7 @@ let analyzePreamble
      | InterpreterSyntax -> InterpreterParser.parseString allowInternal preambleSource)
     |> Result.mapError (fun err -> $"Preamble parse error: {err}")
     |> Result.bind (fun preambleAst ->
-        TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv preambleAst
+        checkProgramWithBaseEnvForSyntax sourceSyntax stdlib.Context.TypeCheckEnv preambleAst
         |> Result.mapError (fun typeErr -> $"Preamble type error: {TypeChecking.typeErrorToString typeErr}")
         |> Result.map (fun (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
             let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
@@ -1170,7 +1181,11 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
             | Ok userAst ->
                 // Pass 1.5: Type Checking (user code with base TypeCheckEnv)
                 if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
-                let typeCheckResult = TypeChecking.checkProgramWithBaseEnv plan.BaseContext.TypeCheckEnv userAst
+                let typeCheckResult =
+                    checkProgramWithBaseEnvForSyntax
+                        plan.SourceSyntax
+                        plan.BaseContext.TypeCheckEnv
+                        userAst
                 let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime
                 recordPassTiming plan.PassTimingRecorder "Type Checking" typeCheckTime
                 if plan.Verbosity >= 2 then

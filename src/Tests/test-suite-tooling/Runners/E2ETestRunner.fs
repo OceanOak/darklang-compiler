@@ -27,6 +27,17 @@ let private sourceSyntaxForTestFile (sourceFile: string) : CompilerLibrary.Sourc
     else
         CompilerLibrary.CompilerSyntax
 
+let private typeCheckProgramForSourceSyntax
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (typeCheckEnv: TypeCheckEnv)
+    (program: Program)
+    : Result<Type * Program * TypeCheckEnv, TypeError> =
+    match sourceSyntax with
+    | CompilerLibrary.InterpreterSyntax ->
+        TypeChecking.checkProgramWithBaseEnvAndGenericCallPolicy typeCheckEnv true program
+    | CompilerLibrary.CompilerSyntax ->
+        TypeChecking.checkProgramWithBaseEnv typeCheckEnv program
+
 // Build the source expression to execute for a test.
 // For `lhs = rhs` value tests, run a synthesized equality assertion.
 
@@ -626,7 +637,7 @@ let private analyzePreambleWithReducedFunctionSet
         let reducedProgram =
             Program (reducedTopLevels @ [Expression (Int64Literal 0L)])
 
-        TypeChecking.checkProgramWithBaseEnv stdlib.Context.TypeCheckEnv reducedProgram
+        typeCheckProgramForSourceSyntax spec.SourceSyntax stdlib.Context.TypeCheckEnv reducedProgram
         |> Result.mapError TypeChecking.typeErrorToString
         |> Result.map (fun (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
             let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
@@ -679,7 +690,7 @@ let private collectSpecsFromTests
                 let specsResult =
                     CompilerLibrary.parseProgram sourceSyntax allowInternal source
                     |> Result.bind (fun testAst ->
-                        checkProgramWithBaseEnv typeCheckEnv testAst
+                        typeCheckProgramForSourceSyntax sourceSyntax typeCheckEnv testAst
                         |> Result.mapError typeErrorToString
                         |> Result.map (fun (_programType, typedAst, _) -> collectTypeAppsFromProgram typedAst))
 
