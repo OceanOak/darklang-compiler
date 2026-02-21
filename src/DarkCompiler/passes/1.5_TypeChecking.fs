@@ -521,8 +521,17 @@ let private typeArgumentLabel (count: int) : string =
     else
         "type arguments"
 
+let private argumentLabel (count: int) : string =
+    if count = 1 then
+        "argument"
+    else
+        "arguments"
+
 let private formatTypeArgumentArityError (funcName: string) (expectedCount: int) (actualCount: int) : string =
     $"{funcName} expects {expectedCount} {typeArgumentLabel expectedCount}, but got {actualCount} {typeArgumentLabel actualCount}"
+
+let private formatValueArgumentArityError (funcName: string) (expectedCount: int) (actualCount: int) : string =
+    $"{funcName} expects {expectedCount} {argumentLabel expectedCount}, but got {actualCount} {argumentLabel actualCount}"
 
 /// Apply a type substitution to an expression
 /// This is used to propagate concrete types through nested TypeApp nodes
@@ -1892,7 +1901,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let numParams = List.length paramTypes
 
                 if numArgs > numParams then
-                    Error (GenericError $"Function {funcName} expects {numParams} arguments, got {numArgs}")
+                    Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                 else if numArgs < numParams then
                     // Partial application of generic function
                     let providedParamTypes = List.take numArgs paramTypes
@@ -2006,7 +2015,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let numArgs = List.length args
                 let numParams = List.length origParamTypes
                 if numArgs > numParams then
-                    Error (GenericError $"Function {funcName} expects {numParams} arguments, got {numArgs}")
+                    Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                 else if numArgs < numParams then
                     // Partial application: type-check provided args, then create lambda for remaining
                     let providedParamTypes = List.take numArgs origParamTypes
@@ -2101,7 +2110,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                 let numParams = List.length moduleFunc.ParamTypes
                 // Check argument count - allow partial application
                 if numArgs > numParams then
-                    Error (GenericError $"Function {funcName} expects {numParams} arguments, got {numArgs}")
+                    Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                 else if numArgs < numParams && List.isEmpty typeParams then
                     // Partial application of non-generic module function
                     let providedParamTypes = List.take numArgs paramTypes
@@ -2311,7 +2320,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         let numArgs = List.length args
                         let numParams = List.length concreteParamTypes
                         if numArgs > numParams then
-                            Error (GenericError $"Function {funcName} expects {numParams} arguments, got {numArgs}")
+                            Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                         else if numArgs < numParams then
                             // Partial application with explicit type args
                             let providedParamTypes = List.take numArgs concreteParamTypes
@@ -2406,7 +2415,7 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                         let numArgs = List.length args
                         let numParams = List.length concreteParamTypes
                         if numArgs > numParams then
-                            Error (GenericError $"Function {funcName} expects {numParams} arguments, got {numArgs}")
+                            Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                         else if numArgs < numParams then
                             // Partial application with explicit type args
                             let providedParamTypes = List.take numArgs concreteParamTypes
