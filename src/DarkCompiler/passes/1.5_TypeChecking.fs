@@ -3865,13 +3865,7 @@ let checkFunctionDef (funcDef: FunctionDef) (env: TypeEnv) (typeReg: TypeRegistr
     // Check body has return type
     checkExpr funcDef.Body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some funcDef.ReturnType)
     |> Result.bind (fun (bodyType, body') ->
-        // Resolve both types through alias registry for comparison
-        // This allows "Vec" and "Point" to be considered equal when Vec aliases Point
-        let resolvedBodyType = resolveType aliasReg bodyType
-        let resolvedReturnType = resolveType aliasReg funcDef.ReturnType
-        // For generic functions, we need to compare types considering type variables
-        // For now, if the body type contains type variables, just check structural equality
-        if resolvedBodyType = resolvedReturnType then
+        if typesCompatibleWithAliases aliasReg funcDef.ReturnType bodyType then
             Ok { funcDef with Body = body' }
         else
             Error (TypeMismatch (funcDef.ReturnType, bodyType, $"function {funcDef.Name} body")))
