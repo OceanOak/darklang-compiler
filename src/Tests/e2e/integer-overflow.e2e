@@ -13,6 +13,7 @@
 -127y - 2y = 127y// MIN - 1 wraps to MAX (use -127-2 instead of -128-1)
 100y + 100y = -56y// 200 wraps to -56 (200 - 256)
 let f = (a: Int8, b: Int8, c: Int8) => a + b + c in f(60y, 60y, 120y) = -16y// chained Int8 addition must not widen to Int64
+let x = 120y in x + 120y = -16y// let-bound Int8 literals must not widen to Int64
 
 // Int16: range -32768 to 32767
 32767s + 1s = -32767s - 1s // MAX + 1 wraps to MIN
@@ -41,7 +42,6 @@ let f = (a: Int8, b: Int8, c: Int8) => a + b + c in f(60y, 60y, 120y) = -16y// c
 // UInt32: range 0 to 4294967295
 4294967295ul + 1ul = 0ul// MAX + 1 wraps to 0
 0ul - 1ul = 4294967295ul// 0 - 1 wraps to MAX
-
 
 // ===================================================================
 // Multiplication Overflow Tests

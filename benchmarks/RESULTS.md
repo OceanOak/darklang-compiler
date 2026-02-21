@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-21 08:34:18
-**Commit:** `53730676` - Enable one more eapply upstream case (L7)
+**Last Updated:** 2026-02-21 09:15:53
+**Commit:** `25a62878` - Remove one grouped-record TInt64 fallback in ANF match lowering
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

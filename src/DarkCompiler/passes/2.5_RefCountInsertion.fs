@@ -75,7 +75,7 @@ let tryGetFuncReturnTypeFromReg (ctx: TypeContext) (funcName: string) : AST.Type
 let inferAtomType (ctx: TypeContext) (atom: Atom) : AST.Type option =
     match atom with
     | UnitLiteral -> Some AST.TUnit
-    | IntLiteral _ -> Some AST.TInt64
+    | IntLiteral n -> Some (ANF.sizedIntToType n)
     | BoolLiteral _ -> Some AST.TBool
     | StringLiteral _ -> Some AST.TString
     | FloatLiteral _ -> Some AST.TFloat64
@@ -122,7 +122,7 @@ let private tryGetMonomorphizedIntrinsicReturnType (funcName: string) : AST.Type
 let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
     match cexpr with
     | Atom (UnitLiteral) -> Some AST.TUnit
-    | Atom (IntLiteral _) -> Some AST.TInt64
+    | Atom (IntLiteral n) -> Some (ANF.sizedIntToType n)
     | Atom (BoolLiteral _) -> Some AST.TBool
     | Atom (StringLiteral _) -> Some AST.TString
     | Atom (FloatLiteral _) -> Some AST.TFloat64
@@ -162,7 +162,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
         match thenAtom with
         | Var tid -> tryGetType ctx tid
         | UnitLiteral -> Some AST.TUnit
-        | IntLiteral _ -> Some AST.TInt64
+        | IntLiteral n -> Some (ANF.sizedIntToType n)
         | BoolLiteral _ -> Some AST.TBool
         | StringLiteral _ -> Some AST.TString
         | FloatLiteral _ -> Some AST.TFloat64
@@ -271,7 +271,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             elems
             |> List.map (function
                 | UnitLiteral -> AST.TUnit
-                | IntLiteral _ -> AST.TInt64
+                | IntLiteral n -> ANF.sizedIntToType n
                 | BoolLiteral _ -> AST.TBool
                 | StringLiteral _ -> AST.TString
                 | FloatLiteral _ -> AST.TFloat64
