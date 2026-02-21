@@ -2,8 +2,8 @@
 
 Latest Dark compiler performance vs other languages (instruction counts).
 
-**Last Updated:** 2026-02-21 09:50:12
-**Commit:** `71954e28` - RefCountInsertion: remove one TInt64 default for IntLiteral inference
+**Last Updated:** 2026-02-21 10:41:25
+**Commit:** `a18c5d83` - ANF match lowering: remove one nested-pattern TInt64 default
 
 | Benchmark     |           Dark (4.21x) |          Rust |         Ocaml (3.81x) |          Python (114x) |          Node (19.5x) |
 |---------------|------------------------|---------------|-----------------------|------------------------|-----------------------|

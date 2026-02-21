@@ -4810,7 +4810,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     let elemType =
                         match scrutType with
                         | AST.TList t -> t
-                        | _ -> AST.TInt64
+                        | AST.TVar scrutTypeVar -> AST.TVar $"__list_elem_{scrutTypeVar}"
+                        | AST.TRuntimeError -> AST.TVar "__list_elem_runtime_error"
+                        | _ -> AST.TVar "__list_elem_unknown"
 
                     // Helper to unwrap a LEAF node and get the value
                     let unwrapLeaf (leafTaggedPtr: ANF.Atom) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =

@@ -201,6 +201,10 @@ When the scrutinee is inferred from an `if` expression, branch type inference
 must reconcile both branches so list element types are preserved for pattern
 bindings.
 
+For top-level list patterns, unresolved scrutinee types (`TVar`) must preserve
+unresolved element types in ANF lowering (`__list_elem_*`) instead of
+defaulting to `Int64`.
+
 Tuple destructuring inside list-cons heads (for example, `[(a, b), ...rest]`)
 uses the tuple element type from the list element type. If tuple arity does not
 match (for example `[(a, b, c), ...rest]` against a list of 2-tuples), the

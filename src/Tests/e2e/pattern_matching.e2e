@@ -468,6 +468,10 @@ match [Some(5), Some(6)] with | [None, _] -> 1 | [Some((x, _)), _] -> 2 | _ -> 3
 // Regression: lowering dropped tuple bindings for `TVar` payloads and failed with `Undefined variable: x`.
 def genericPayloadTupleBinding(v: Stdlib.Option.Option<(String, Int64)>) : String = match v with | Some((x, _)) -> x | _ -> "" genericPayloadTupleBinding(Some(("a" ++ "", 1))) = "a"
 
+// Generic top-level list patterns should allow unresolved scrutinee TVars.
+// Regression: type checking rejected list-pattern bindings on TVar scrutinees before lowering.
+def genericTopLevelListMatch<t>(v: t) : Float = match v with | [a, b] -> 4.0 | _ -> 0.0 genericTopLevelListMatch([1.5, 2.5]) = 4.0
+
 // Single literal pattern
 match [13] with | [13] -> 1 | _ -> 0 = 1
 

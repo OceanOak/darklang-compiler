@@ -2805,6 +2805,26 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                 | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
                                 | Error e, _ -> Error e
                                 | _, Error e -> Error e) (Ok [])
+                    | TVar patternTypeVar ->
+                        let unresolvedElemType = TVar $"__list_elem_{patternTypeVar}"
+                        patterns
+                        |> List.map (fun p ->
+                            extractPatternBindings p unresolvedElemType allowNoMatchForKnownListLengthMismatch)
+                        |> List.fold (fun acc res ->
+                            match acc, res with
+                            | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                            | Error e, _ -> Error e
+                            | _, Error e -> Error e) (Ok [])
+                    | TRuntimeError ->
+                        let unresolvedElemType = TVar "__list_elem_runtime_error"
+                        patterns
+                        |> List.map (fun p ->
+                            extractPatternBindings p unresolvedElemType allowNoMatchForKnownListLengthMismatch)
+                        |> List.fold (fun acc res ->
+                            match acc, res with
+                            | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                            | Error e, _ -> Error e
+                            | _, Error e -> Error e) (Ok [])
                     | _ ->
                         let valueText =
                             match formatPatternMismatchValue scrutinee' with
@@ -2832,6 +2852,46 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             extractPatternBindings
                                 tailPattern
                                 (TList elemType)
+                                allowNoMatchForKnownListLengthMismatch
+                        match headBindings, tailBindings with
+                        | Ok hb, Ok tb -> Ok (hb @ tb)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e
+                    | TVar patternTypeVar ->
+                        let unresolvedElemType = TVar $"__list_elem_{patternTypeVar}"
+                        let headBindings =
+                            headPatterns
+                            |> List.map (fun p ->
+                                extractPatternBindings p unresolvedElemType allowNoMatchForKnownListLengthMismatch)
+                            |> List.fold (fun acc res ->
+                                match acc, res with
+                                | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                                | Error e, _ -> Error e
+                                | _, Error e -> Error e) (Ok [])
+                        let tailBindings =
+                            extractPatternBindings
+                                tailPattern
+                                (TList unresolvedElemType)
+                                allowNoMatchForKnownListLengthMismatch
+                        match headBindings, tailBindings with
+                        | Ok hb, Ok tb -> Ok (hb @ tb)
+                        | Error e, _ -> Error e
+                        | _, Error e -> Error e
+                    | TRuntimeError ->
+                        let unresolvedElemType = TVar "__list_elem_runtime_error"
+                        let headBindings =
+                            headPatterns
+                            |> List.map (fun p ->
+                                extractPatternBindings p unresolvedElemType allowNoMatchForKnownListLengthMismatch)
+                            |> List.fold (fun acc res ->
+                                match acc, res with
+                                | Ok bindings, Ok newBindings -> Ok (bindings @ newBindings)
+                                | Error e, _ -> Error e
+                                | _, Error e -> Error e) (Ok [])
+                        let tailBindings =
+                            extractPatternBindings
+                                tailPattern
+                                (TList unresolvedElemType)
                                 allowNoMatchForKnownListLengthMismatch
                         match headBindings, tailBindings with
                         | Ok hb, Ok tb -> Ok (hb @ tb)
