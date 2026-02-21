@@ -383,6 +383,12 @@ match (1, 2) with | (x, 0) | ([x], _) -> x | _ -> 99 = 99
 type GuardedRecordGroup = { x: Int64 }
 match ("a" ++ "b", 1) with | ("z", 0) -> 10 | (x, 2) | GuardedRecordGroup { x = x } when true -> 20 | _ -> 30 = 30
 
+// Impossible grouped record alternatives must not be lowered with TInt64 field defaults.
+// Regression: this failed ANF conversion by compiling `x` as Int64 in the impossible record branch.
+type GroupedRecordPerson = { name: String }
+type GroupedRecordImpossible = { x: Int64 }
+match (GroupedRecordPerson { name = "a" ++ "b" }, 1) with | (x, 2) | GroupedRecordImpossible { x = x } -> x.name == ("a" ++ "b") | _ -> false = false
+
 // Integer literal pattern on non-int scrutinee should be rejected
 match true with | 1 -> 42 | _ -> 0 = error="Cannot match Bool value true with an Int64 pattern"
 

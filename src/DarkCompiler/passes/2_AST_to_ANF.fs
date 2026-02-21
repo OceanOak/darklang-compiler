@@ -4726,13 +4726,28 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             (finalExpr, vg2)))
                 | AST.PRecord (_, fieldPatterns) ->
                     // Extract field types from record type
-                    let fieldTypes =
+                    let fieldTypesResult : Result<AST.Type list, string> =
                         match scrutType with
                         | AST.TRecord (recordName, _) ->
                             match Map.tryFind recordName typeReg with
-                            | Some fields -> fields |> List.map snd
-                            | None -> List.replicate (List.length fieldPatterns) AST.TInt64
-                        | _ -> List.replicate (List.length fieldPatterns) AST.TInt64
+                            | Some fields ->
+                                Ok (fields |> List.map snd)
+                            | None ->
+                                Error $"Unknown record type: {recordName}"
+                        | AST.TVar sourceTypeVar ->
+                            Ok (
+                                fieldPatterns
+                                |> List.mapi (fun idx _ ->
+                                    AST.TVar $"__record_field_{sourceTypeVar}_{idx}")
+                            )
+                        | AST.TRuntimeError ->
+                            Ok (
+                                fieldPatterns
+                                |> List.mapi (fun idx _ ->
+                                    AST.TVar $"__record_field_runtime_error_{idx}")
+                            )
+                        | _ ->
+                            Error $"Record pattern used on non-record type {typeToString scrutType}"
                     // Extract each field and bind pattern variables
                     let rec collectRecordBindings (fields: (string * AST.Pattern) list) (types: AST.Type list) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) (fieldIdx: int) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                         match fields, types with
@@ -4769,13 +4784,16 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             let binding = (fieldVar, fieldExpr)
                             match pat with
                             | AST.PVar name ->
-                                let newEnv = Map.add name (fieldVar, AST.TInt64) env
+                                let unresolvedFieldType = AST.TVar $"__record_field_missing_{fieldIdx}"
+                                let newEnv = Map.add name (fieldVar, unresolvedFieldType) env
                                 collectRecordBindings rest [] newEnv (binding :: bindings) vg1 (fieldIdx + 1)
                             | AST.PWildcard ->
                                 collectRecordBindings rest [] env bindings vg1 (fieldIdx + 1)
                             | _ ->
                                 Error $"Nested pattern in record field not yet supported: {pat}"
-                    collectRecordBindings fieldPatterns fieldTypes currentEnv [] vg 0
+                    fieldTypesResult
+                    |> Result.bind (fun fieldTypes ->
+                        collectRecordBindings fieldPatterns fieldTypes currentEnv [] vg 0)
                     |> Result.bind (fun (newEnv, bindings, vg1) ->
                         toANF body vg1 newEnv typeReg variantLookup funcReg moduleRegistry
                         |> Result.map (fun (bodyExpr, vg2) ->
@@ -6876,9 +6894,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     // cases so bindings come from the pattern that actually matched.
                     let expandedCases =
                         AST.NonEmptyList.toList mc.Patterns
+                        |> List.filter (fun pattern -> not (patternStaticallyCannotMatchScrutinee pattern))
                         |> List.map (fun pattern ->
                             { mc with Patterns = AST.NonEmptyList.singleton pattern })
-                    buildChain (expandedCases @ rest) vg
+                    if List.isEmpty expandedCases then
+                        buildChain rest vg
+                    else
+                        buildChain (expandedCases @ rest) vg
                 | [mc] ->
                     let pattern = AST.NonEmptyList.head mc.Patterns
                     let body = mc.Body
