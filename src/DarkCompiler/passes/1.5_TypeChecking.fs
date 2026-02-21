@@ -629,6 +629,30 @@ let rec resolveType (aliasReg: AliasRegistry) (typ: Type) : Type =
 let typesEqual (aliasReg: AliasRegistry) (t1: Type) (t2: Type) : bool =
     resolveType aliasReg t1 = resolveType aliasReg t2
 
+let private truncateLegacyRecordValueText (text: string) : string =
+    if text.Length > 10 then
+        $"{text.Substring(0, 10)}..."
+    else
+        text
+
+let private formatLegacyRecordFieldTypeError
+    (aliasReg: AliasRegistry)
+    (fieldName: string)
+    (expectedType: Type)
+    (actualType: Type)
+    (actualExpr: Expr)
+    : string =
+    let expectedText = expectedType |> resolveType aliasReg |> typeToString
+    let actualText = actualType |> resolveType aliasReg |> typeToString
+    let valueText =
+        match tryFormatLiteralValue actualExpr with
+        | Some value ->
+            truncateLegacyRecordValueText value
+        | None ->
+            actualText
+
+    $"Failed to create record. Expected {expectedText} for field `{fieldName}`, but got {valueText} ({withIndefiniteArticle actualText})"
+
 /// Internal type-app markers emitted during type checking.
 /// These markers are materialized to direct calls before leaving this pass.
 type private InternalTypeAppMarker =
@@ -2554,8 +2578,29 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                             | (fname, expectedFieldType) :: rest ->
                                 match Map.tryFind fname fieldMap with
                                 | Some fieldExpr ->
-                                    checkExpr fieldExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedFieldType)
-                                    |> Result.bind (fun (actualType, fieldExpr') ->
+                                    match
+                                        checkExpr
+                                            fieldExpr
+                                            env
+                                            typeReg
+                                            variantLookup
+                                            genericFuncReg
+                                            moduleRegistry
+                                            aliasReg
+                                            (Some expectedFieldType)
+                                    with
+                                    | Error (TypeMismatch (_, actualType, _)) ->
+                                        Error
+                                            (GenericError
+                                                (formatLegacyRecordFieldTypeError
+                                                    aliasReg
+                                                    fname
+                                                    expectedFieldType
+                                                    actualType
+                                                    fieldExpr))
+                                    | Error err ->
+                                        Error err
+                                    | Ok (actualType, fieldExpr') ->
                                         let resolvedExpectedFieldType = resolveType aliasReg expectedFieldType
                                         let resolvedActualType = resolveType aliasReg actualType
                                         match matchTypes resolvedExpectedFieldType resolvedActualType with
@@ -2565,7 +2610,14 @@ let rec checkExpr (expr: Expr) (env: TypeEnv) (typeReg: TypeRegistry) (variantLo
                                                 ((fname, fieldExpr') :: accFields)
                                                 (accBindings @ newBindings)
                                         | Error _ ->
-                                            Error (TypeMismatch (expectedFieldType, actualType, $"field {fname}")))
+                                            Error
+                                                (GenericError
+                                                    (formatLegacyRecordFieldTypeError
+                                                        aliasReg
+                                                        fname
+                                                        expectedFieldType
+                                                        actualType
+                                                        fieldExpr))
                                 | None ->
                                     checkFieldsInOrder rest accFields accBindings // Already checked for missing fields
 
