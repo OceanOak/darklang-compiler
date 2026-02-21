@@ -212,6 +212,11 @@ inference), tuple head bindings must still be created with unresolved per-slot
 types. Dropping those bindings causes false `undefined variable` errors in
 branch bodies.
 
+The same rule applies to nested list/list-cons bindings in constructor payloads.
+If the payload source type is unresolved (`TVar`) or runtime-error-typed, ANF
+lowering must propagate unresolved list element types instead of defaulting to
+`Int64`.
+
 The same non-match behavior applies when tuple destructuring appears inside
 guarded list patterns (`when ...`): mismatched tuple arity must fall through
 instead of binding extra elements as `Int64`.

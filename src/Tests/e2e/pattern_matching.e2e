@@ -464,6 +464,10 @@ type TupleListBox = TupleListBox of List<(Int64, Int64)> match TupleListBox([(1,
 // Regression: this previously matched due nested tuple bindings defaulting to TInt64.
 match [Some(5), Some(6)] with | [None, _] -> 1 | [Some((x, _)), _] -> 2 | _ -> 3 = 3
 
+// Generic constructor payload tuple destructuring must preserve unresolved tuple element bindings.
+// Regression: lowering dropped tuple bindings for `TVar` payloads and failed with `Undefined variable: x`.
+def genericPayloadTupleBinding(v: Stdlib.Option.Option<(String, Int64)>) : String = match v with | Some((x, _)) -> x | _ -> "" genericPayloadTupleBinding(Some(("a" ++ "", 1))) = "a"
+
 // Single literal pattern
 match [13] with | [13] -> 1 | _ -> 0 = 1
 

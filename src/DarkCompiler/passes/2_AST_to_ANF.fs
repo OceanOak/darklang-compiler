@@ -5777,6 +5777,18 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         match sourceType with
                         | AST.TTuple types when List.length types = List.length patterns ->
                             Some types
+                        | AST.TVar sourceTypeVar ->
+                            Some (
+                                patterns
+                                |> List.mapi (fun idx _ ->
+                                    AST.TVar $"__tuple_elem_{sourceTypeVar}_{idx}")
+                            )
+                        | AST.TRuntimeError ->
+                            Some (
+                                patterns
+                                |> List.mapi (fun idx _ ->
+                                    AST.TVar $"__tuple_elem_runtime_error_{idx}")
+                            )
                         | _ ->
                             None
 
@@ -5892,35 +5904,42 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     (bindings @ [ (payloadVar, payloadExpr) ])
                                     vg1)
                 | AST.PList patterns ->
-                    let elemType =
+                    let elemTypeResult =
                         match sourceType with
-                        | AST.TList t -> t
-                        | _ -> AST.TInt64
-                    let headFuncName =
-                        match elemType with
-                        | AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
-                        | _ -> "Stdlib.__FingerTree.headUnsafe_i64"
-                    let rec loop
-                        (remaining: AST.Pattern list)
-                        (currentList: ANF.Atom)
-                        (currentEnv: VarEnv)
-                        (currentBindings: (ANF.TempId * ANF.CExpr) list)
-                        (currentVg: ANF.VarGen)
-                        : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
-                        match remaining with
-                        | [] -> Ok (currentEnv, currentBindings, currentVg)
-                        | pat :: rest ->
-                            let (headVar, vg1) = ANF.freshVar currentVg
-                            let headExpr = ANF.Call (headFuncName, [currentList])
-                            collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr)]) vg1
-                            |> Result.bind (fun (env', bindings', vg') ->
-                                if List.isEmpty rest then
-                                    Ok (env', bindings', vg')
-                                else
-                                    let (tailVar, vg2) = ANF.freshVar vg'
-                                    let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
-                                    loop rest (ANF.Var tailVar) env' (bindings' @ [(tailVar, tailExpr)]) vg2)
-                    loop patterns sourceAtom env bindings vg
+                        | AST.TList t -> Ok t
+                        | AST.TVar sourceTypeVar ->
+                            Ok (AST.TVar $"__list_elem_{sourceTypeVar}")
+                        | AST.TRuntimeError ->
+                            Ok (AST.TVar "__list_elem_runtime_error")
+                        | _ ->
+                            Error $"PList nested binding expects list source type, got {typeToString sourceType}"
+                    elemTypeResult
+                    |> Result.bind (fun elemType ->
+                        let headFuncName =
+                            match elemType with
+                            | AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
+                            | _ -> "Stdlib.__FingerTree.headUnsafe_i64"
+                        let rec loop
+                            (remaining: AST.Pattern list)
+                            (currentList: ANF.Atom)
+                            (currentEnv: VarEnv)
+                            (currentBindings: (ANF.TempId * ANF.CExpr) list)
+                            (currentVg: ANF.VarGen)
+                            : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
+                            match remaining with
+                            | [] -> Ok (currentEnv, currentBindings, currentVg)
+                            | pat :: rest ->
+                                let (headVar, vg1) = ANF.freshVar currentVg
+                                let headExpr = ANF.Call (headFuncName, [currentList])
+                                collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr)]) vg1
+                                |> Result.bind (fun (env', bindings', vg') ->
+                                    if List.isEmpty rest then
+                                        Ok (env', bindings', vg')
+                                    else
+                                        let (tailVar, vg2) = ANF.freshVar vg'
+                                        let tailExpr = ANF.Call ("Stdlib.__FingerTree.tail_i64", [currentList])
+                                        loop rest (ANF.Var tailVar) env' (bindings' @ [(tailVar, tailExpr)]) vg2)
+                        loop patterns sourceAtom env bindings vg)
                 | AST.PListCons (headPatterns, tailPattern) ->
                     let elemTypeResult =
                         match sourceType with
