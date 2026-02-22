@@ -866,7 +866,7 @@ let rec parseRecordFieldsWithContext
         parseTypeWithContext typeParams rest
         |> Result.bind (fun (ty, remaining) ->
             match remaining with
-            | TComma :: rest' ->
+            | (TComma | TSemicolon) :: rest' ->
                 // More fields
                 parseRecordFieldsWithContext typeParams rest' ((name, ty) :: acc)
             | TRBrace :: rest' ->
@@ -1343,7 +1343,7 @@ and parseRecordPatternWithTypeName (typeName: string) (tokens: Token list) (acc:
                 // End of record pattern
                 let fields = List.rev (field :: acc)
                 Ok (PRecord (typeName, fields), rest')
-            | TComma :: rest' ->
+            | (TComma | TSemicolon) :: rest' ->
                 // More fields
                 parseRecordPatternWithTypeName typeName rest' (field :: acc)
             | _ -> Error "Expected ',' or '}' in record pattern")
@@ -2134,7 +2134,7 @@ let parse (tokens: Token list) : Result<Program, string> =
             parseExpr rest
             |> Result.bind (fun (value, remaining) ->
                 match remaining with
-                | TComma :: rest' ->
+                | (TComma | TSemicolon) :: rest' ->
                     // More fields
                     parseRecordLiteralFieldsWithTypeName typeName rest' ((fieldName, value) :: acc)
                 | TRBrace :: rest' ->
@@ -2153,7 +2153,7 @@ let parse (tokens: Token list) : Result<Program, string> =
             parseExpr rest
             |> Result.bind (fun (value, remaining) ->
                 match remaining with
-                | TComma :: rest' ->
+                | (TComma | TSemicolon) :: rest' ->
                     // More fields
                     parseRecordUpdateFields rest' ((fieldName, value) :: acc)
                 | TRBrace :: rest' ->
