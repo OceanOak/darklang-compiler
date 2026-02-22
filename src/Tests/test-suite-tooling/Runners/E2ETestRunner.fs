@@ -309,7 +309,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
     match expr with
     | UnitLiteral
     | Int64Literal _
-    | Int128CompatLiteral _
+    | Int128Literal _
     | Int8Literal _
     | Int16Literal _
     | Int32Literal _
@@ -317,7 +317,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
     | UInt16Literal _
     | UInt32Literal _
     | UInt64Literal _
-    | UInt128CompatLiteral _
+    | UInt128Literal _
     | BoolLiteral _
     | StringLiteral _
     | CharLiteral _
