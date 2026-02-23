@@ -17,6 +17,9 @@
 
 module AST
 
+/// A list guaranteed to have at least one element (makes invalid states unrepresentable)
+type NonEmptyList<'a> = { Head: 'a; Tail: 'a list }
+
 /// Type system - will be used for type checking in Phase 0+
 type Type =
     // Signed integers
@@ -81,15 +84,15 @@ type UnaryOp =
     | Not     // Boolean not: !expr
     | BitNot  // Bitwise not: ~~~expr
 
-/// A list guaranteed to have at least one element (makes invalid states unrepresentable)
-type NonEmptyList<'a> = { Head: 'a; Tail: 'a list }
-
 /// NonEmptyList helper functions
 module NonEmptyList =
     let singleton x = { Head = x; Tail = [] }
     let cons x nel = { Head = x; Tail = nel.Head :: nel.Tail }
     let toList nel = nel.Head :: nel.Tail
     let map f nel = { Head = f nel.Head; Tail = List.map f nel.Tail }
+    let length nel = 1 + List.length nel.Tail
+    let appendList nel items = { Head = nel.Head; Tail = nel.Tail @ items }
+    let snoc nel item = { Head = nel.Head; Tail = nel.Tail @ [item] }
     let head nel = nel.Head
     let tryFromList = function
         | [] -> None
@@ -151,8 +154,8 @@ and Expr =
     | Let of name:string * value:Expr * body:Expr  // Let binding: let name = value in body
     | Var of string  // Variable reference
     | If of cond:Expr * thenBranch:Expr * elseBranch:Expr  // If expression: if cond then thenBranch else elseBranch
-    | Call of funcName:string * args:Expr list  // Function call: funcName(arg1, arg2, ...)
-    | TypeApp of funcName:string * typeArgs:Type list * args:Expr list  // Generic call: funcName<T, U>(args)
+    | Call of funcName:string * args:NonEmptyList<Expr>  // Function call: funcName(arg1, arg2, ...)
+    | TypeApp of funcName:string * typeArgs:Type list * args:NonEmptyList<Expr>  // Generic call: funcName<T, U>(args)
     | TupleLiteral of Expr list              // Tuple literal: (1, 2, 3)
     | TupleAccess of tuple:Expr * index:int  // Tuple access: t.0, t.1, etc.
     | RecordLiteral of typeName:string * fields:(string * Expr) list  // { x = 1, y = 2 }
@@ -162,8 +165,8 @@ and Expr =
     | Match of scrutinee:Expr * cases:MatchCase list  // match e with | p1 when g -> e1 | p2 -> e2
     | ListLiteral of Expr list                               // [1, 2, 3]
     | ListCons of head:Expr list * tail:Expr                 // [a, b, ...rest]
-    | Lambda of parameters:(string * Type) list * body:Expr  // (x: int) => x + 1
-    | Apply of func:Expr * args:Expr list                    // Apply function expr: f(x) where f is expression
+    | Lambda of parameters:NonEmptyList<(string * Type)> * body:Expr  // (x: int) => x + 1
+    | Apply of func:Expr * args:NonEmptyList<Expr>                    // Apply function expr: f(x) where f is expression
     | FuncRef of funcName:string                             // Reference to a function (for passing as value)
     | Closure of funcName:string * captures:Expr list        // Closure: function + captured values
 
@@ -179,7 +182,7 @@ and MatchCase = {
 type FunctionDef = {
     Name: string
     TypeParams: string list           // Type parameters for generics: ["T", "U", etc.], empty for non-generic
-    Params: (string * Type) list      // Parameter names with REQUIRED type annotations
+    Params: NonEmptyList<(string * Type)>  // Parameter names with REQUIRED type annotations
     ReturnType: Type                  // REQUIRED return type annotation
     Body: Expr
 }

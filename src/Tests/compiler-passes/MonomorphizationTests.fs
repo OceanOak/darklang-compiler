@@ -13,14 +13,14 @@ let testPreservesTypeVarsInSpecialization () : TestResult =
     let funcDef : FunctionDef =
         { Name = "id"
           TypeParams = ["t"]
-          Params = [("x", TVar "t")]
+          Params = NonEmptyList.singleton ("x", TVar "t")
           ReturnType = TVar "t"
           Body = Var "x" }
 
     let program =
         Program [
             FunctionDef funcDef
-            Expression (TypeApp ("id", [TVar "t"], [Int64Literal 1L]))
+            Expression (TypeApp ("id", [TVar "t"], NonEmptyList.singleton (Int64Literal 1L)))
         ]
 
     let (Program topLevels) = monomorphize program
@@ -36,15 +36,17 @@ let testPreservesTypeVarsInSpecialization () : TestResult =
         Error "Expected monomorphized function id_t without defaulting to id_i64"
 
 let testReplaceTypeAppsWithRegistry () : TestResult =
-    let expr = TypeApp ("id", [TInt64], [Int64Literal 1L])
+    let expr = TypeApp ("id", [TInt64], NonEmptyList.singleton (Int64Literal 1L))
     let registry : SpecRegistry = Map.ofList [ (("id", [TInt64]), "id_i64") ]
     match replaceTypeAppsWithRegistry registry expr with
-    | Ok (Call (name, [Int64Literal 1L])) when name = "id_i64" -> Ok ()
+    | Ok (Call (name, args))
+        when name = "id_i64"
+             && NonEmptyList.toList args = [Int64Literal 1L] -> Ok ()
     | Ok result -> Error $"Unexpected replacement result: {result}"
     | Error msg -> Error $"Unexpected error: {msg}"
 
 let testReplaceTypeAppsWithRegistryMissingSpec () : TestResult =
-    let expr = TypeApp ("id", [TInt64], [Int64Literal 1L])
+    let expr = TypeApp ("id", [TInt64], NonEmptyList.singleton (Int64Literal 1L))
     let registry : SpecRegistry = Map.empty
     match replaceTypeAppsWithRegistry registry expr with
     | Ok _ -> Error "Expected missing specialization error"
@@ -54,7 +56,7 @@ let testSpecializeFromSpecs () : TestResult =
     let funcDef : FunctionDef =
         { Name = "id"
           TypeParams = ["t"]
-          Params = [("x", TVar "t")]
+          Params = NonEmptyList.singleton ("x", TVar "t")
           ReturnType = TVar "t"
           Body = Var "x" }
 

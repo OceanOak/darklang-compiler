@@ -72,7 +72,8 @@ let rec countMatches (expr: Expr) : int =
         | If (cond, thenBranch, elseBranch) ->
             [cond; thenBranch; elseBranch]
         | Call (_, args)
-        | TypeApp (_, _, args)
+        | TypeApp (_, _, args) ->
+            NonEmptyList.toList args
         | TupleLiteral args
         | ListLiteral args ->
             args
@@ -93,7 +94,7 @@ let rec countMatches (expr: Expr) : int =
         | Lambda (_, body) ->
             [body]
         | Apply (func, args) ->
-            func :: args
+            func :: NonEmptyList.toList args
         | Closure (_, captures) ->
             captures
 

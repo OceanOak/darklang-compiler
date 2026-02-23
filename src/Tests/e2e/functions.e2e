@@ -41,6 +41,9 @@ if true then if false then 0 else 42 else 0 = 42
 // Test 11: Simple function call - double
 def double(x: Int64) : Int64 = x + x double(21) = 42
 
+// Test 11b: Unit-argument call sugar
+def unitIdentity(u: Unit) : Int64 = 42 unitIdentity() = 42
+
 // Test 12: Function with two parameters
 def add(a: Int64, b: Int64) : Int64 = a + b add(20, 22) = 42
 

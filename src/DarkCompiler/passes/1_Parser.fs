@@ -1008,6 +1008,12 @@ let rec parseQualifiedFuncName (firstName: string) (tokens: Token list) : string
     | _ ->
         (firstName, tokens)
 
+let private generatedUnitParam (index: int) : string * Type =
+    ($"$unit{index}", TUnit)
+
+let private ensureParamGroupNonEmpty (paramIndex: int) (parameters: (string * Type) list) : (string * Type) list =
+    if List.isEmpty parameters then [generatedUnitParam paramIndex] else parameters
+
 /// Parse a function definition: def name<T, U>(params) : type = body
 /// Type parameters are optional: def name(params) : type = body is also valid
 /// Qualified names supported: def Stdlib.Int64.add(params) : type = body
@@ -1036,6 +1042,7 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
 
                     paramsResult
                     |> Result.bind (fun (parameters, remaining) ->
+                        let normalizedParameters = ensureParamGroupNonEmpty 0 parameters
                         match remaining with
                         | TRParen :: TColon :: rest'' ->
                             // Parse return type with type params in scope
@@ -1049,7 +1056,7 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
                                         let funcDef = {
                                             Name = name
                                             TypeParams = typeParams
-                                            Params = parameters
+                                            Params = NonEmptyList.fromList normalizedParameters
                                             ReturnType = returnType
                                             Body = body
                                         }
@@ -1066,6 +1073,7 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
 
             paramsResult
             |> Result.bind (fun (parameters, remaining) ->
+                let normalizedParameters = ensureParamGroupNonEmpty 0 parameters
                 match remaining with
                 | TRParen :: TColon :: rest'' ->
                     // Parse return type
@@ -1079,7 +1087,7 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
                                 let funcDef = {
                                     Name = name
                                     TypeParams = []
-                                    Params = parameters
+                                    Params = NonEmptyList.fromList normalizedParameters
                                     ReturnType = returnType
                                     Body = body
                                 }
@@ -1290,12 +1298,14 @@ let parseCase (tokens: Token list) (parseExprFn: Token list -> Result<Expr * Tok
 
 /// Try to parse lambda parameters: (ident : type, ident : type, ...)
 /// Returns Some (params, remaining) if successful, None otherwise
-let tryParseLambdaParams (tokens: Token list) : ((string * Type) list * Token list) option =
-    let rec parseParams (toks: Token list) (acc: (string * Type) list) : ((string * Type) list * Token list) option =
+let tryParseLambdaParams (tokens: Token list) : (NonEmptyList<string * Type> * Token list) option =
+    let rec parseParams (toks: Token list) (acc: (string * Type) list) : (NonEmptyList<string * Type> * Token list) option =
         match toks with
         | TRParen :: rest ->
             // End of parameters
-            Some (List.rev acc, rest)
+            match List.rev acc with
+            | [] -> Some (NonEmptyList.singleton (generatedUnitParam 0), rest)
+            | parameters -> Some (NonEmptyList.fromList parameters, rest)
         | TIdent name :: TColon :: rest when not (System.Char.IsUpper(name.[0])) ->
             // Parameter: name : type
             match parseType rest with
@@ -1306,7 +1316,7 @@ let tryParseLambdaParams (tokens: Token list) : ((string * Type) list * Token li
                     parseParams rest' ((name, ty) :: acc)
                 | TRParen :: rest' ->
                     // End of parameters
-                    Some (List.rev ((name, ty) :: acc), rest')
+                    Some (NonEmptyList.fromList (List.rev ((name, ty) :: acc)), rest')
                 | _ -> None  // Not a valid lambda
             | Error _ -> None  // Type parse failed
         | _ -> None  // Not a valid lambda parameter
@@ -1426,16 +1436,26 @@ let parse (tokens: Token list) : Result<Program, string> =
                             match right with
                             | Var funcName ->
                                 // Simple function reference: f becomes f(left)
-                                Call (funcName, [leftExpr])
+                                Call (funcName, NonEmptyList.singleton leftExpr)
                             | Call (funcName, args) ->
                                 // Partial application: f(a) becomes f(left, a)
-                                Call (funcName, leftExpr :: args)
+                                match NonEmptyList.toList args with
+                                | [UnitLiteral] ->
+                                    // Zero-arg call placeholder: f() |> g() => g(f())
+                                    Call (funcName, NonEmptyList.singleton leftExpr)
+                                | _ ->
+                                    Call (funcName, NonEmptyList.cons leftExpr args)
                             | TypeApp (funcName, typeArgs, args) ->
                                 // Generic partial application: f<T>(a) becomes f<T>(left, a)
-                                TypeApp (funcName, typeArgs, leftExpr :: args)
+                                match NonEmptyList.toList args with
+                                | [UnitLiteral] ->
+                                    // Zero-arg call placeholder: f() |> g<T>() => g<T>(f())
+                                    TypeApp (funcName, typeArgs, NonEmptyList.singleton leftExpr)
+                                | _ ->
+                                    TypeApp (funcName, typeArgs, NonEmptyList.cons leftExpr args)
                             | _ ->
                                 // Lambda or other expression: apply left to it
-                                Apply (right, [leftExpr])
+                                Apply (right, NonEmptyList.singleton leftExpr)
                         parsePipeRest pipedExpr remaining')
                 | _ -> Ok (leftExpr, toks)
             parsePipeRest left remaining)
@@ -1713,7 +1733,7 @@ let parse (tokens: Token list) : Result<Program, string> =
                         | _ when canStartSpaceApplicationArg afterTypes ->
                             parseSpaceApplicationArgs afterTypes []
                             |> Result.map (fun (args, remaining) ->
-                                (TypeApp (fullName, typeArgs, args), remaining))
+                                (TypeApp (fullName, typeArgs, NonEmptyList.fromList args), remaining))
                         | _ ->
                             Error $"Expected '(' or space-applied argument after type arguments in generic call to {fullName}")
                 else
@@ -1833,13 +1853,15 @@ let parse (tokens: Token list) : Result<Program, string> =
                 parseUnary afterOp
                 |> Result.map (fun (rightArg, remaining) ->
                     // Create lambda: \$x -> $x && rightArg
-                    let lambda = Lambda ([("$pipe_arg", TBool)], BinOp (And, Var "$pipe_arg", rightArg))
+                    let lambda =
+                        Lambda (NonEmptyList.singleton ("$pipe_arg", TBool), BinOp (And, Var "$pipe_arg", rightArg))
                     (lambda, remaining))
             | TOr :: TRParen :: afterOp ->
                 // (||) - operator section
                 parseUnary afterOp
                 |> Result.map (fun (rightArg, remaining) ->
-                    let lambda = Lambda ([("$pipe_arg", TBool)], BinOp (Or, Var "$pipe_arg", rightArg))
+                    let lambda =
+                        Lambda (NonEmptyList.singleton ("$pipe_arg", TBool), BinOp (Or, Var "$pipe_arg", rightArg))
                     (lambda, remaining))
             | _ ->
                 // Check if it looks like lambda params: (ident : type, ...) =>
@@ -2007,11 +2029,16 @@ let parse (tokens: Token list) : Result<Program, string> =
         else
             Ok (List.rev acc, toks)
 
-    and parseCallArgs (toks: Token list) (acc: Expr list) : Result<Expr list * Token list, string> =
+    and parseCallArgs (toks: Token list) (acc: Expr list) : Result<NonEmptyList<Expr> * Token list, string> =
         match toks with
         | TRParen :: rest ->
             // End of arguments
-            Ok (List.rev acc, rest)
+            let reversed = List.rev acc
+            let normalizedArgs =
+                match reversed with
+                | [] -> NonEmptyList.singleton UnitLiteral
+                | _ -> NonEmptyList.fromList reversed
+            Ok (normalizedArgs, rest)
         | _ ->
             // Parse an argument expression
             parseExpr toks
@@ -2022,7 +2049,7 @@ let parse (tokens: Token list) : Result<Program, string> =
                     parseCallArgs rest (expr :: acc)
                 | TRParen :: rest ->
                     // End of arguments
-                    Ok (List.rev (expr :: acc), rest)
+                    Ok (NonEmptyList.fromList (List.rev (expr :: acc)), rest)
                 | _ -> Error "Expected ',' or ')' after function argument")
 
     // Parse top-level elements (functions or expressions)
@@ -2117,11 +2144,15 @@ let rec private validateExpr (expr: Expr) : Result<unit, string> =
     | Call (funcName, args) ->
         validateNoInternalIdentifier funcName
         |> Result.bind (fun () ->
-            args |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
+            args
+            |> NonEmptyList.toList
+            |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
     | TypeApp (funcName, _, args) ->
         validateNoInternalIdentifier funcName
         |> Result.bind (fun () ->
-            args |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
+            args
+            |> NonEmptyList.toList
+            |> List.fold (fun acc arg -> Result.bind (fun () -> validateExpr arg) acc) (Ok ()))
     | InterpolatedString parts ->
         parts
         |> List.fold (fun acc part ->
@@ -2171,12 +2202,15 @@ let rec private validateExpr (expr: Expr) : Result<unit, string> =
         Result.bind (fun () -> validateExpr tail) headResult
     | Lambda (parameters, body) ->
         parameters
+        |> NonEmptyList.toList
         |> List.fold (fun acc (name, _) -> Result.bind (fun () -> validateNoInternalIdentifier name) acc) (Ok ())
         |> Result.bind (fun () -> validateExpr body)
     | Apply (funcExpr, args) ->
         validateExpr funcExpr
         |> Result.bind (fun () ->
-            args |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
+            args
+            |> NonEmptyList.toList
+            |> List.fold (fun acc e -> Result.bind (fun () -> validateExpr e) acc) (Ok ()))
     | FuncRef funcName -> validateNoInternalIdentifier funcName
     | Closure (funcName, captures) ->
         validateNoInternalIdentifier funcName
@@ -2193,6 +2227,7 @@ let private validateNoInternalIdentifiers (Program items) : Result<Program, stri
             validateNoInternalIdentifier def.Name
             |> Result.bind (fun () ->
                 def.Params
+                |> NonEmptyList.toList
                 |> List.fold (fun acc (name, _) -> Result.bind (fun () -> validateNoInternalIdentifier name) acc) (Ok ()))
             |> Result.bind (fun () -> validateExpr def.Body)
         | TypeDef _ -> Ok ()

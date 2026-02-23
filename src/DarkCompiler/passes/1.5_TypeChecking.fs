@@ -27,6 +27,22 @@ let private makePartialParams (funcName: string) (types: Type list) : (string * 
     let safeName = funcName.Replace('.', '_')
     types |> List.mapi (fun i t -> ($"__partial_{safeName}_{i}", t))
 
+let private toCallArgs (args: Expr list) : NonEmptyList<Expr> =
+    match args with
+    | [] -> NonEmptyList.singleton UnitLiteral
+    | _ -> NonEmptyList.fromList args
+
+let private normalizeNullaryCallArgs (expectedParamCount: int) (args: Expr list) : Expr list =
+    if expectedParamCount = 0 && args = [UnitLiteral] then
+        []
+    else
+        args
+
+let private toLambdaParams (parameters: (string * Type) list) : NonEmptyList<string * Type> =
+    match NonEmptyList.tryFromList parameters with
+    | Some nel -> nel
+    | None -> Crash.crash "Type checker attempted to construct a lambda with zero parameters"
+
 /// Type errors
 type TypeError =
     | TypeMismatch of expected:Type * actual:Type * context:string
@@ -170,7 +186,7 @@ let rec private isKnownUnwrapFailureExpr (boundExprs: Map<string, Expr>) (expr: 
                 false
 
     match expr with
-    | Call (funcName, [argExpr]) when isBuiltinUnwrapName funcName ->
+    | Call (funcName, { Head = argExpr; Tail = [] }) when isBuiltinUnwrapName funcName ->
         argIsKnownFailure argExpr
     | Let (name, valueExpr, bodyExpr) ->
         isKnownUnwrapFailureExpr (Map.add name valueExpr boundExprs) bodyExpr
@@ -180,7 +196,7 @@ let rec private isKnownUnwrapFailureExpr (boundExprs: Map<string, Expr>) (expr: 
 /// Detect known runtime-failing testRuntimeError expressions, including let-bound forms.
 let rec private isKnownTestRuntimeErrorExpr (boundExprs: Map<string, Expr>) (expr: Expr) : bool =
     match expr with
-    | Call (funcName, [_]) when isBuiltinTestRuntimeErrorName funcName ->
+    | Call (funcName, { Head = _; Tail = [] }) when isBuiltinTestRuntimeErrorName funcName ->
         true
     | Let (name, valueExpr, bodyExpr) ->
         isKnownTestRuntimeErrorExpr (Map.add name valueExpr boundExprs) bodyExpr
@@ -211,7 +227,7 @@ let rec private tryExtractKnownTestRuntimeErrorMessage
     (expr: Expr)
     : string option =
     match expr with
-    | Call (funcName, [argExpr]) when isBuiltinTestRuntimeErrorName funcName ->
+    | Call (funcName, { Head = argExpr; Tail = [] }) when isBuiltinTestRuntimeErrorName funcName ->
         tryExtractStringLiteral boundExprs argExpr
     | Let (name, valueExpr, bodyExpr) ->
         let boundExprs' = Map.add name valueExpr boundExprs
@@ -554,10 +570,10 @@ let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
     | If (cond, thenBr, elseBr) ->
         If (applySubstToExpr subst cond, applySubstToExpr subst thenBr, applySubstToExpr subst elseBr)
     | Call (funcName, args) ->
-        Call (funcName, List.map (applySubstToExpr subst) args)
+        Call (funcName, NonEmptyList.map (applySubstToExpr subst) args)
     | TypeApp (funcName, typeArgs, args) ->
         // Apply substitution to both type arguments and value arguments
-        TypeApp (funcName, List.map (applySubst subst) typeArgs, List.map (applySubstToExpr subst) args)
+        TypeApp (funcName, List.map (applySubst subst) typeArgs, NonEmptyList.map (applySubstToExpr subst) args)
     | TupleLiteral elements ->
         TupleLiteral (List.map (applySubstToExpr subst) elements)
     | TupleAccess (tuple, index) ->
@@ -582,11 +598,11 @@ let rec applySubstToExpr (subst: Substitution) (expr: Expr) : Expr =
     | Lambda (params', body) ->
         let concreteParams =
             params'
-            |> List.map (fun (paramName, paramType) ->
+            |> NonEmptyList.map (fun (paramName, paramType) ->
                 (paramName, applySubst subst paramType))
         Lambda (concreteParams, applySubstToExpr subst body)
     | Apply (func, args) ->
-        Apply (applySubstToExpr subst func, List.map (applySubstToExpr subst) args)
+        Apply (applySubstToExpr subst func, NonEmptyList.map (applySubstToExpr subst) args)
     | Closure (funcName, captures) ->
         Closure (funcName, List.map (applySubstToExpr subst) captures)
     | InterpolatedString parts ->
@@ -698,11 +714,15 @@ let private tryParseInternalTypeAppMarker (funcName: string) : InternalTypeAppMa
 let private makeInternalTypeApp (internalTypeApp: InternalTypeApp) : Expr =
     match internalTypeApp with
     | EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr) ->
-        TypeApp (internalTypeAppMarkerName EqHelperDispatch, [targetType], [leftExpr; rightExpr])
+        TypeApp (
+            internalTypeAppMarkerName EqHelperDispatch,
+            [targetType],
+            NonEmptyList.fromList [leftExpr; rightExpr]
+        )
 
 let private tryDecodeInternalTypeApp (expr: Expr) : InternalTypeApp option =
     match expr with
-    | TypeApp (funcName, [targetType], [leftExpr; rightExpr]) ->
+    | TypeApp (funcName, [targetType], { Head = leftExpr; Tail = [rightExpr] }) ->
         match tryParseInternalTypeAppMarker funcName with
         | Some EqHelperDispatch ->
             Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr))
@@ -777,7 +797,7 @@ let private buildEqExprForType
         // Preserve side effects/runtime errors by evaluating both sides.
         Let ("__dark_eq_fn_pair", TupleLiteral [leftExpr; rightExpr], BoolLiteral true)
     | TString ->
-        Call ("Stdlib.String.equals", [leftExpr; rightExpr])
+        Call ("Stdlib.String.equals", NonEmptyList.fromList [leftExpr; rightExpr])
     | TList elemType ->
         let resolvedElemType = resolveType aliasReg elemType
         match resolvedElemType with
@@ -792,12 +812,12 @@ let private buildEqExprForType
                 TupleLiteral [leftExpr; rightExpr],
                 BinOp (
                     Eq,
-                    TypeApp ("Stdlib.List.length", [resolvedElemType], [leftListExpr]),
-                    TypeApp ("Stdlib.List.length", [resolvedElemType], [rightListExpr])
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], NonEmptyList.singleton leftListExpr),
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], NonEmptyList.singleton rightListExpr)
                 )
             )
         | _ ->
-            TypeApp ("Stdlib.List.equals", [resolvedElemType], [leftExpr; rightExpr])
+            TypeApp ("Stdlib.List.equals", [resolvedElemType], NonEmptyList.fromList [leftExpr; rightExpr])
     | _ when needsEqHelperForResolvedType variantLookup resolvedType ->
         makeInternalTypeApp (EqHelperDispatchTypeApp (resolvedType, leftExpr, rightExpr))
     | _ ->
@@ -838,9 +858,15 @@ let rec collectFreeVars (expr: Expr) (bound: Set<string>) : Set<string> =
         let elseFree = collectFreeVars elseBranch bound
         Set.union condFree (Set.union thenFree elseFree)
     | Call (_, args) ->
-        args |> List.map (fun e -> collectFreeVars e bound) |> List.fold Set.union Set.empty
+        args
+        |> NonEmptyList.toList
+        |> List.map (fun e -> collectFreeVars e bound)
+        |> List.fold Set.union Set.empty
     | TypeApp (_, _, args) ->
-        args |> List.map (fun e -> collectFreeVars e bound) |> List.fold Set.union Set.empty
+        args
+        |> NonEmptyList.toList
+        |> List.map (fun e -> collectFreeVars e bound)
+        |> List.fold Set.union Set.empty
     | TupleLiteral elements ->
         elements |> List.map (fun e -> collectFreeVars e bound) |> List.fold Set.union Set.empty
     | TupleAccess (tuple, _) ->
@@ -877,11 +903,15 @@ let rec collectFreeVars (expr: Expr) (bound: Set<string>) : Set<string> =
         let tailFree = collectFreeVars tail bound
         Set.union headsFree tailFree
     | Lambda (parameters, body) ->
-        let paramNames = parameters |> List.map fst |> Set.ofList
+        let paramNames = parameters |> NonEmptyList.toList |> List.map fst |> Set.ofList
         collectFreeVars body (Set.union bound paramNames)
     | Apply (func, args) ->
         let funcFree = collectFreeVars func bound
-        let argsFree = args |> List.map (fun e -> collectFreeVars e bound) |> List.fold Set.union Set.empty
+        let argsFree =
+            args
+            |> NonEmptyList.toList
+            |> List.map (fun e -> collectFreeVars e bound)
+            |> List.fold Set.union Set.empty
         Set.union funcFree argsFree
     | FuncRef _ ->
         // Function references don't contribute free variables
@@ -1532,7 +1562,7 @@ let rec checkExprWithParamNames
                 match (op, left, right) with
                 | Eq, Lambda (leftParams, _), Lambda (rightParams, _)
                 | Neq, Lambda (leftParams, _), Lambda (rightParams, _) ->
-                    if List.length leftParams <> List.length rightParams then
+                    if NonEmptyList.length leftParams <> NonEmptyList.length rightParams then
                         None
                     else
                         let comparisonResult = if op = Eq then true else false
@@ -1745,14 +1775,15 @@ let rec checkExprWithParamNames
                     // value position should evaluate to its return value.
                     let nullaryAutoCallResult =
                         match varType with
+                        | TFunction ([TUnit], returnType)
                         | TFunction ([], returnType) ->
                             match reconcileTypes (Some aliasReg) expected returnType with
                             | Some reconciledType ->
                                 let autoCallExpr =
                                     if resolvedName.Contains(".") then
-                                        Call (resolvedName, [])
+                                        Call (resolvedName, NonEmptyList.singleton UnitLiteral)
                                     else
-                                        Apply (Var resolvedName, [])
+                                        Apply (Var resolvedName, NonEmptyList.singleton UnitLiteral)
                                 Some (Ok (reconciledType, autoCallExpr))
                             | None ->
                                 None
@@ -1778,10 +1809,11 @@ let rec checkExprWithParamNames
                     | Some expected ->
                         let nullaryAutoCallResult =
                             match funcType with
+                            | TFunction ([TUnit], returnType)
                             | TFunction ([], returnType) ->
                                 match reconcileTypes (Some aliasReg) expected returnType with
                                 | Some reconciledType ->
-                                    Some (Ok (reconciledType, Call (resolvedName, [])))
+                                    Some (Ok (reconciledType, Call (resolvedName, NonEmptyList.singleton UnitLiteral)))
                                 | None ->
                                     None
                             | _ ->
@@ -1885,6 +1917,7 @@ let rec checkExprWithParamNames
     | Call (funcName, args) ->
         // Function call: look up function signature, check arguments match
         // Use fallback to resolve short names like Option.isSome to Stdlib.Option.isSome
+        let args = NonEmptyList.toList args
         if isBuiltinUnwrapName funcName then
             match args with
             | [argExpr] ->
@@ -1917,11 +1950,11 @@ let rec checkExprWithParamNames
                         | Some expected ->
                             match reconcileTypes (Some aliasReg) expected normalizedOutputType with
                             | Some reconciledType ->
-                                Ok (reconciledType, Call ("Builtin.unwrap", [argExpr']))
+                                Ok (reconciledType, Call ("Builtin.unwrap", NonEmptyList.singleton argExpr'))
                             | None ->
                                 Error (TypeMismatch (expected, normalizedOutputType, $"result of call to {funcName}"))
                         | None ->
-                            Ok (normalizedOutputType, Call ("Builtin.unwrap", [argExpr']))))
+                            Ok (normalizedOutputType, Call ("Builtin.unwrap", NonEmptyList.singleton argExpr'))))
             | _ ->
                 Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
         elif isBuiltinTestRuntimeErrorName funcName then
@@ -1933,7 +1966,7 @@ let rec checkExprWithParamNames
                         match expectedType with
                         | Some expected -> expected
                         | None -> TRuntimeError
-                    Ok (outputType, Call ("Builtin.testRuntimeError", [argExpr'])))
+                    Ok (outputType, Call ("Builtin.testRuntimeError", NonEmptyList.singleton argExpr')))
             | _ ->
                 Error (GenericError $"Function {funcName} expects 1 arguments, got {List.length args}")
         else
@@ -1957,8 +1990,9 @@ let rec checkExprWithParamNames
                 let returnType = applyTypeVarRenaming renaming origReturnType
                 let typeParams = freshTypeParams
                 // Generic function called without explicit type args: infer them
-                let numArgs = List.length args
                 let numParams = List.length paramTypes
+                let args = normalizeNullaryCallArgs numParams args
+                let numArgs = List.length args
 
                 if numArgs > numParams then
                     Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
@@ -1996,10 +2030,10 @@ let rec checkExprWithParamNames
 
                                 // Create the lambda body: TypeApp with all args
                                 let allArgs = concreteArgs @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                                let lambdaBody = TypeApp (resolvedFuncName, inferredTypeArgs, allArgs)
+                                let lambdaBody = TypeApp (resolvedFuncName, inferredTypeArgs, toCallArgs allArgs)
 
                                 // Create the lambda: (p0, p1, ...) => funcName<types>(providedArgs, p0, p1, ...)
-                                let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                                let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                                 // The resulting type is a function from remaining params to return type
                                 let partialType = TFunction (concreteRemainingParamTypes, concreteReturnType)
@@ -2068,12 +2102,16 @@ let rec checkExprWithParamNames
                                     Error (TypeMismatch (expected, concreteReturnType, $"result of call to {funcName}"))
                                 | _ ->
                                     // Transform Call to TypeApp with inferred type arguments (using resolved name)
-                                    Ok (concreteReturnType, TypeApp (resolvedFuncName, inferredTypeArgs, concreteArgs)))))
+                                    Ok (
+                                        concreteReturnType,
+                                        TypeApp (resolvedFuncName, inferredTypeArgs, toCallArgs concreteArgs)
+                                    ))))
 
             | None ->
                 // Non-generic function: regular call or partial application
-                let numArgs = List.length args
                 let numParams = List.length origParamTypes
+                let args = normalizeNullaryCallArgs numParams args
+                let numArgs = List.length args
                 if numArgs > numParams then
                     Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                 else if numArgs < numParams then
@@ -2101,10 +2139,10 @@ let rec checkExprWithParamNames
 
                         // Create the lambda body: call the original function with all args (using resolved name)
                         let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                        let lambdaBody = Call (resolvedFuncName, allArgs)
+                        let lambdaBody = Call (resolvedFuncName, toCallArgs allArgs)
 
                         // Create the lambda: (p0, p1, ...) => funcName(providedArgs, p0, p1, ...)
-                        let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                        let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                         // The resulting type is a function from remaining params to return type
                         let partialType = TFunction (remainingParamTypes, origReturnType)
@@ -2157,7 +2195,7 @@ let rec checkExprWithParamNames
                                 match expectedType with
                                 | Some expected when not (typesCompatibleWithAliases aliasReg expected origReturnType) ->
                                     Error (TypeMismatch (expected, origReturnType, $"result of call to {funcName}"))
-                                | _ -> Ok (origReturnType, Call (resolvedFuncName, args')))
+                                | _ -> Ok (origReturnType, Call (resolvedFuncName, toCallArgs args')))
                 )
             | Some (TVar funcTypeVar, resolvedFuncName) ->
                 // In interpreter syntax, higher-order generic parameters may reach call sites
@@ -2177,7 +2215,7 @@ let rec checkExprWithParamNames
                         match expectedType with
                         | Some expected -> expected
                         | None -> TVar $"__call_result_{funcTypeVar}"
-                    (inferredReturnType, Call (resolvedFuncName, args')))
+                    (inferredReturnType, Call (resolvedFuncName, toCallArgs args')))
             | Some (other, _) ->
                 Error (GenericError $"{funcName} is not a function (has type {typeToString other})")
             | None ->
@@ -2191,8 +2229,9 @@ let rec checkExprWithParamNames
                 let paramTypes = moduleFunc.ParamTypes |> List.map (applyTypeVarRenaming renaming)
                 let returnType = applyTypeVarRenaming renaming moduleFunc.ReturnType
                 let typeParams = freshTypeParams
-                let numArgs = List.length args
                 let numParams = List.length moduleFunc.ParamTypes
+                let args = normalizeNullaryCallArgs numParams args
+                let numArgs = List.length args
                 // Check argument count - allow partial application
                 if numArgs > numParams then
                     Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
@@ -2221,10 +2260,10 @@ let rec checkExprWithParamNames
 
                         // Create the lambda body: call the original function with all args (using resolved name)
                         let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                        let lambdaBody = Call (resolvedFuncName, allArgs)
+                        let lambdaBody = Call (resolvedFuncName, toCallArgs allArgs)
 
                         // Create the lambda: (p0, p1, ...) => funcName(providedArgs, p0, p1, ...)
-                        let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                        let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                         // The resulting type is a function from remaining params to return type
                         let partialType = TFunction (remainingParamTypes, returnType)
@@ -2280,10 +2319,10 @@ let rec checkExprWithParamNames
 
                             // Create the lambda body: TypeApp call with all args (using resolved name)
                             let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                            let lambdaBody = TypeApp (resolvedFuncName, inferredTypeArgs, allArgs)
+                            let lambdaBody = TypeApp (resolvedFuncName, inferredTypeArgs, toCallArgs allArgs)
 
                             // Create the lambda
-                            let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                            let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                             // The resulting type is a function from remaining params to return type
                             let partialType = TFunction (concreteRemainingTypes, concreteReturnType)
@@ -2350,7 +2389,10 @@ let rec checkExprWithParamNames
                                     Error (TypeMismatch (expected, concreteReturnType, $"result of call to {funcName}"))
                                 | _ ->
                                     // Transform Call to TypeApp with inferred type arguments (using resolved name)
-                                    Ok (concreteReturnType, TypeApp (resolvedFuncName, inferredTypeArgs, args')))))
+                                    Ok (
+                                        concreteReturnType,
+                                        TypeApp (resolvedFuncName, inferredTypeArgs, toCallArgs args')
+                                    ))))
                 else
                     // Non-generic module function: regular call
                     // Check each argument type and collect transformed args
@@ -2371,7 +2413,7 @@ let rec checkExprWithParamNames
                         match expectedType with
                         | Some expected when not (typesCompatibleWithAliases aliasReg expected returnType) ->
                             Error (TypeMismatch (expected, returnType, $"result of call to {funcName}"))
-                        | _ -> Ok (returnType, Call (resolvedFuncName, args')))
+                        | _ -> Ok (returnType, Call (resolvedFuncName, toCallArgs args')))
                     )
                 | None ->
                     Error (UndefinedCallTarget funcName)
@@ -2379,6 +2421,7 @@ let rec checkExprWithParamNames
     | TypeApp (funcName, typeArgs, args) ->
         // Generic function call with explicit type arguments: func<Type1, Type2>(args)
         // 1. Look up function signature with fallback to Stdlib prefix
+        let args = NonEmptyList.toList args
         match tryLookupWithFallback funcName env with
         | Some (TFunction (paramTypes, returnType), resolvedFuncName) ->
             // 2. Look up type parameters
@@ -2402,8 +2445,9 @@ let rec checkExprWithParamNames
                         let concreteReturnType = applySubst subst returnType
 
                         // 5. Check argument count - allow partial application
-                        let numArgs = List.length args
                         let numParams = List.length concreteParamTypes
+                        let args = normalizeNullaryCallArgs numParams args
+                        let numArgs = List.length args
                         if numArgs > numParams then
                             Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                         else if numArgs < numParams then
@@ -2432,10 +2476,10 @@ let rec checkExprWithParamNames
 
                                 // Create the lambda body: TypeApp call with all args (using resolved name)
                                 let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                                let lambdaBody = TypeApp (resolvedFuncName, typeArgs, allArgs)
+                                let lambdaBody = TypeApp (resolvedFuncName, typeArgs, toCallArgs allArgs)
 
                                 // Create the lambda
-                                let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                                let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                                 // The resulting type is a function from remaining params to return type
                                 let partialType = TFunction (remainingParamTypes, concreteReturnType)
@@ -2466,7 +2510,11 @@ let rec checkExprWithParamNames
                                 match expectedType with
                                 | Some expected when not (typesCompatible expected concreteReturnType) ->
                                     Error (TypeMismatch (expected, concreteReturnType, $"result of call to {funcName}"))
-                                | _ -> Ok (concreteReturnType, TypeApp (resolvedFuncName, typeArgs, args'))))
+                                | _ ->
+                                    Ok (
+                                        concreteReturnType,
+                                        TypeApp (resolvedFuncName, typeArgs, toCallArgs args')
+                                    )))
             | None ->
                 Error (GenericError $"Function {funcName} is not generic, use regular call syntax")
         | Some (other, _) ->
@@ -2497,8 +2545,9 @@ let rec checkExprWithParamNames
                         let concreteReturnType = applySubst subst returnType
 
                         // Check argument count - allow partial application
-                        let numArgs = List.length args
                         let numParams = List.length concreteParamTypes
+                        let args = normalizeNullaryCallArgs numParams args
+                        let numArgs = List.length args
                         if numArgs > numParams then
                             Error (GenericError (formatValueArgumentArityError funcName numParams numArgs))
                         else if numArgs < numParams then
@@ -2527,10 +2576,10 @@ let rec checkExprWithParamNames
 
                                 // Create the lambda body: TypeApp call with all args (using resolved name)
                                 let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                                let lambdaBody = TypeApp (resolvedFuncName, typeArgs, allArgs)
+                                let lambdaBody = TypeApp (resolvedFuncName, typeArgs, toCallArgs allArgs)
 
                                 // Create the lambda
-                                let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                                let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                                 // The resulting type is a function from remaining params to return type
                                 let partialType = TFunction (remainingParamTypes, concreteReturnType)
@@ -2560,7 +2609,11 @@ let rec checkExprWithParamNames
                                 match expectedType with
                                 | Some expected when not (typesCompatible expected concreteReturnType) ->
                                     Error (TypeMismatch (expected, concreteReturnType, $"result of call to {funcName}"))
-                                | _ -> Ok (concreteReturnType, TypeApp (resolvedFuncName, typeArgs, args'))))
+                                | _ ->
+                                    Ok (
+                                        concreteReturnType,
+                                        TypeApp (resolvedFuncName, typeArgs, toCallArgs args')
+                                    )))
             | Some (_, _) ->
                 Error (GenericError $"Function {funcName} is not generic, use regular call syntax")
             | None ->
@@ -2603,12 +2656,16 @@ let rec checkExprWithParamNames
 
                 let runtimeErrCall =
                     match runtimeErrExpr with
-                    | Call (funcName, [argExpr]) when isBuiltinTestRuntimeErrorName funcName ->
-                        Call ("Builtin.testRuntimeError", [argExpr])
+                    | Call (funcName, { Head = argExpr; Tail = [] }) when isBuiltinTestRuntimeErrorName funcName ->
+                        Call ("Builtin.testRuntimeError", NonEmptyList.singleton argExpr)
                     | _ ->
                         match tryExtractKnownTestRuntimeErrorMessage Map.empty runtimeErrExpr with
-                        | Some msg -> Call ("Builtin.testRuntimeError", [StringLiteral msg])
-                        | None -> Call ("Builtin.testRuntimeError", [StringLiteral "<runtime error>"])
+                        | Some msg -> Call ("Builtin.testRuntimeError", NonEmptyList.singleton (StringLiteral msg))
+                        | None ->
+                            Call (
+                                "Builtin.testRuntimeError",
+                                NonEmptyList.singleton (StringLiteral "<runtime error>")
+                            )
 
                 Ok (outputType, runtimeErrCall)
             | None ->
@@ -3473,6 +3530,7 @@ let rec checkExprWithParamNames
             | other -> Error (TypeMismatch (TList (TVar "t"), other, "list cons tail must be a list")))
 
     | Lambda (parameters, body) ->
+        let parametersList = NonEmptyList.toList parameters
         let typeCheckLambdaWithParams
             (resolvedParams: (string * Type) list)
             (bodyExpectedType: Type option)
@@ -3483,12 +3541,12 @@ let rec checkExprWithParamNames
             checkExpr body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg bodyExpectedType
             |> Result.map (fun (bodyType, body') ->
                 let paramTypes = resolvedParams |> List.map snd
-                (TFunction (paramTypes, bodyType), Lambda (resolvedParams, body')))
+                (TFunction (paramTypes, bodyType), Lambda (toLambdaParams resolvedParams, body')))
 
         match expectedType with
         | Some (TFunction (expectedParams, expectedRet)) ->
-            if List.length expectedParams <> List.length parameters then
-                let declaredParamTypes = parameters |> List.map snd
+            if List.length expectedParams <> List.length parametersList then
+                let declaredParamTypes = parametersList |> List.map snd
                 let declaredFuncType = TFunction (declaredParamTypes, TVar "r")
                 Error (TypeMismatch (TFunction (expectedParams, expectedRet), declaredFuncType, "lambda parameter count"))
             else
@@ -3505,7 +3563,7 @@ let rec checkExprWithParamNames
                         | None ->
                             Error (TypeMismatch (expectedParamType, declaredParamType, "lambda parameter type"))
 
-                reconcileParamTypes (List.zip parameters expectedParams) []
+                reconcileParamTypes (List.zip parametersList expectedParams) []
                 |> Result.bind (fun reconciledParams ->
                     let bodyExpectedType =
                         if containsTVar expectedRet then
@@ -3524,22 +3582,24 @@ let rec checkExprWithParamNames
                         | _ ->
                             Error (GenericError "Internal error: lambda did not type-check to a function")))
         | Some other ->
-            typeCheckLambdaWithParams parameters None
+            typeCheckLambdaWithParams parametersList None
             |> Result.bind (fun (funcType, lambdaExpr) ->
                 match reconcileTypes (Some aliasReg) other funcType with
                 | Some reconciledType -> Ok (reconciledType, lambdaExpr)
                 | None -> Error (TypeMismatch (other, funcType, "lambda")))
         | None ->
-            typeCheckLambdaWithParams parameters None
+            typeCheckLambdaWithParams parametersList None
 
     | Apply (func, args) ->
+        let argsList = NonEmptyList.toList args
         // Type-check the function expression
         checkExpr func env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
         |> Result.bind (fun (funcType, func') ->
             match funcType with
             | TFunction (paramTypes, returnType) ->
-                let numArgs = List.length args
                 let numParams = List.length paramTypes
+                let argsList = normalizeNullaryCallArgs numParams argsList
+                let numArgs = List.length argsList
                 // Check argument count - allow partial application
                 if numArgs > numParams then
                     Error (GenericError $"Function expects {numParams} arguments, got {numArgs}")
@@ -3561,7 +3621,7 @@ let rec checkExprWithParamNames
                                     Error (TypeMismatch (paramTy, argType, "function argument")))
                         | _ -> Error (GenericError "Argument count mismatch")
 
-                    checkProvidedArgs args providedParamTypes []
+                    checkProvidedArgs argsList providedParamTypes []
                     |> Result.bind (fun args' ->
                         // Create fresh parameter names for the remaining parameters
                         // Use "lambda" as identifier since we're applying a function value, not a named function
@@ -3569,10 +3629,10 @@ let rec checkExprWithParamNames
 
                         // Create the lambda body: apply the original function with all args
                         let allArgs = args' @ (remainingParams |> List.map (fun (name, _) -> Var name))
-                        let lambdaBody = Apply (func', allArgs)
+                        let lambdaBody = Apply (func', toCallArgs allArgs)
 
                         // Create the lambda: (p0, p1, ...) => func(providedArgs, p0, p1, ...)
-                        let lambdaExpr = Lambda (remainingParams, lambdaBody)
+                        let lambdaExpr = Lambda (toLambdaParams remainingParams, lambdaBody)
 
                         // The resulting type is a function from remaining params to return type
                         let partialType = TFunction (remainingParamTypes, returnType)
@@ -3594,12 +3654,12 @@ let rec checkExprWithParamNames
                                 else
                                     Error (TypeMismatch (paramTy, argType, "function argument")))
                         | _ -> Error (GenericError "Argument count mismatch")
-                    checkArgs args paramTypes []
+                    checkArgs argsList paramTypes []
                     |> Result.bind (fun args' ->
                         match expectedType with
                         | Some expected when not (typesEqual aliasReg expected returnType) ->
                             Error (TypeMismatch (expected, returnType, "function application result"))
-                        | _ -> Ok (returnType, Apply (func', args')))
+                        | _ -> Ok (returnType, Apply (func', toCallArgs args')))
             | _ ->
                 Error (GenericError $"Cannot apply non-function type: {typeToString funcType}"))
 
@@ -3662,7 +3722,7 @@ let rec private buildEqHelperExpr
 
     match (mode, resolvedType) with
     | UseHelperCall, helperType when needsEqHelperForResolvedType variantLookup helperType ->
-        Call (eqHelperName helperType, [leftExpr; rightExpr])
+        Call (eqHelperName helperType, NonEmptyList.fromList [leftExpr; rightExpr])
 
     | _, TFunction _ ->
         // Preserve side effects/runtime errors by evaluating both sides.
@@ -3682,15 +3742,15 @@ let rec private buildEqHelperExpr
                 TupleLiteral [leftExpr; rightExpr],
                 BinOp (
                     Eq,
-                    TypeApp ("Stdlib.List.length", [resolvedElemType], [leftListExpr]),
-                    TypeApp ("Stdlib.List.length", [resolvedElemType], [rightListExpr])
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], NonEmptyList.singleton leftListExpr),
+                    TypeApp ("Stdlib.List.length", [resolvedElemType], NonEmptyList.singleton rightListExpr)
                 )
             )
         | _ ->
-            TypeApp ("Stdlib.List.equals", [resolvedElemType], [leftExpr; rightExpr])
+            TypeApp ("Stdlib.List.equals", [resolvedElemType], NonEmptyList.fromList [leftExpr; rightExpr])
 
     | _, TString ->
-        Call ("Stdlib.String.equals", [leftExpr; rightExpr])
+        Call ("Stdlib.String.equals", NonEmptyList.fromList [leftExpr; rightExpr])
 
     | ExpandCurrent, TTuple elemTypes ->
         let leftTupleVar = "__dark_eq_helper_tuple_left"
@@ -3882,7 +3942,7 @@ let rec private ensureEqHelperForType
             let helperDef : FunctionDef = {
                 Name = helper
                 TypeParams = []
-                Params = [ (leftParam, resolvedType); (rightParam, resolvedType) ]
+                Params = NonEmptyList.fromList [ (leftParam, resolvedType); (rightParam, resolvedType) ]
                 ReturnType = TBool
                 Body = helperBody
             }
@@ -3916,7 +3976,7 @@ let rec private collectEqHelperTypesFromExpr (aliasReg: AliasRegistry) (expr: Ex
                 (collectEqHelperTypesFromExpr aliasReg thenBranch)
                 (collectEqHelperTypesFromExpr aliasReg elseBranch))
     | Call (_, args) ->
-        collectFromExprs args
+        collectFromExprs (NonEmptyList.toList args)
     | TypeApp (_, _, args) as typeAppExpr ->
         match tryDecodeInternalTypeApp typeAppExpr with
         | Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr)) ->
@@ -3926,7 +3986,7 @@ let rec private collectEqHelperTypesFromExpr (aliasReg: AliasRegistry) (expr: Ex
                     (collectEqHelperTypesFromExpr aliasReg leftExpr)
                     (collectEqHelperTypesFromExpr aliasReg rightExpr))
         | None ->
-            collectFromExprs args
+            collectFromExprs (NonEmptyList.toList args)
     | TupleLiteral elements ->
         collectFromExprs elements
     | TupleAccess (tupleExpr, _) ->
@@ -3960,7 +4020,7 @@ let rec private collectEqHelperTypesFromExpr (aliasReg: AliasRegistry) (expr: Ex
     | Lambda (_, body) ->
         collectEqHelperTypesFromExpr aliasReg body
     | Apply (funcExpr, args) ->
-        Set.union (collectEqHelperTypesFromExpr aliasReg funcExpr) (collectFromExprs args)
+        Set.union (collectEqHelperTypesFromExpr aliasReg funcExpr) (collectFromExprs (NonEmptyList.toList args))
     | Closure (_, captures) ->
         collectFromExprs captures
     | InterpolatedString parts ->
@@ -3987,14 +4047,14 @@ let rec private materializeEqHelperCallsInExpr (aliasReg: AliasRegistry) (expr: 
     | If (cond, thenBranch, elseBranch) ->
         If (recurse cond, recurse thenBranch, recurse elseBranch)
     | Call (funcName, args) ->
-        Call (funcName, List.map recurse args)
+        Call (funcName, NonEmptyList.map recurse args)
     | TypeApp (funcName, typeArgs, args) as typeAppExpr ->
         match tryDecodeInternalTypeApp typeAppExpr with
         | Some (EqHelperDispatchTypeApp (targetType, leftExpr, rightExpr)) ->
             let helperType = resolveType aliasReg targetType
-            Call (eqHelperName helperType, [recurse leftExpr; recurse rightExpr])
+            Call (eqHelperName helperType, NonEmptyList.fromList [recurse leftExpr; recurse rightExpr])
         | None ->
-            TypeApp (funcName, typeArgs, List.map recurse args)
+            TypeApp (funcName, typeArgs, NonEmptyList.map recurse args)
     | TupleLiteral elements ->
         TupleLiteral (List.map recurse elements)
     | TupleAccess (tupleExpr, index) ->
@@ -4024,7 +4084,7 @@ let rec private materializeEqHelperCallsInExpr (aliasReg: AliasRegistry) (expr: 
     | Lambda (parameters, body) ->
         Lambda (parameters, recurse body)
     | Apply (funcExpr, args) ->
-        Apply (recurse funcExpr, List.map recurse args)
+        Apply (recurse funcExpr, NonEmptyList.map recurse args)
     | Closure (funcName, captures) ->
         Closure (funcName, List.map recurse captures)
     | InterpolatedString parts ->
@@ -4107,6 +4167,7 @@ let checkFunctionDef
     // Build environment with parameters
     let paramEnv =
         funcDef.Params
+        |> NonEmptyList.toList
         |> List.fold (fun e (name, ty) -> Map.add name ty e) env
 
     // Check body has return type
@@ -4121,7 +4182,9 @@ let checkFunctionDef
         aliasReg
         (Some funcDef.ReturnType)
     |> Result.bind (fun (bodyType, body') ->
-        if typesCompatibleWithAliases aliasReg funcDef.ReturnType bodyType then
+        let resolvedReturnType = resolveType aliasReg funcDef.ReturnType
+        let resolvedBodyType = resolveType aliasReg bodyType
+        if resolvedReturnType = resolvedBodyType then
             Ok { funcDef with Body = body' }
         else
             Error (TypeMismatch (funcDef.ReturnType, bodyType, $"function {funcDef.Name} body")))
@@ -4172,7 +4235,10 @@ let private checkProgramInternal
         topLevels
         |> List.choose (function
             | FunctionDef funcDef ->
-                Some (funcDef.Name, (List.map snd funcDef.Params, funcDef.ReturnType))
+                Some (
+                    funcDef.Name,
+                    (funcDef.Params |> NonEmptyList.toList |> List.map snd, funcDef.ReturnType)
+                )
             | _ -> None)
         |> Map.ofList
 
@@ -4180,7 +4246,7 @@ let private checkProgramInternal
         topLevels
         |> List.choose (function
             | FunctionDef funcDef ->
-                Some (funcDef.Name, funcDef.Params |> List.map fst)
+                Some (funcDef.Name, funcDef.Params |> NonEmptyList.toList |> List.map fst)
             | _ ->
                 None)
         |> Map.ofList

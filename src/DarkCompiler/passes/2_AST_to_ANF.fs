@@ -88,6 +88,11 @@ let tryFileIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option
         Some (ANF.FileWriteFromPtr (pathAtom, ptrAtom, lengthAtom))
     | _ -> None
 
+let private normalizeNullaryIntrinsicArgs (args: ANF.Atom list) : ANF.Atom list =
+    match args with
+    | [ANF.UnitLiteral] -> []
+    | _ -> args
+
 /// Try to convert a function call to a Float intrinsic CExpr
 /// Returns Some CExpr if it's a Float intrinsic, None otherwise
 let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
@@ -110,6 +115,7 @@ let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr optio
 /// Try to constant-fold platform/path intrinsics at compile time
 /// Returns Some CExpr if it's a constant-foldable intrinsic, None otherwise
 let tryConstantFoldIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+    let args = normalizeNullaryIntrinsicArgs args
     match funcName, args with
     | "Stdlib.Platform.isMacOS", [] ->
         // Constant-fold based on target platform using .NET runtime detection
@@ -131,6 +137,7 @@ let tryConstantFoldIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExp
 /// Note: __raw_get and __raw_set are generic and become monomorphized names like
 /// __raw_get_i64, __raw_get_str, __raw_set_i64, etc.
 let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+    let args = normalizeNullaryIntrinsicArgs args
     match funcName, args with
     | "__raw_alloc", [numBytesAtom] ->
         Some (ANF.RawAlloc numBytesAtom)
@@ -217,6 +224,7 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
 /// Try to convert a function call to a random intrinsic CExpr
 /// Returns Some CExpr if it's a random intrinsic, None otherwise
 let tryRandomIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+    let args = normalizeNullaryIntrinsicArgs args
     match funcName, args with
     | "Stdlib.Random.int64", [] ->
         Some ANF.RandomInt64
@@ -225,6 +233,7 @@ let tryRandomIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr opti
 /// Try to convert a function call to a date intrinsic CExpr
 /// Returns Some CExpr if it's a date intrinsic, None otherwise
 let tryDateIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+    let args = normalizeNullaryIntrinsicArgs args
     match funcName, args with
     | "Stdlib.Date.now", [] ->
         Some ANF.DateNow
@@ -528,8 +537,27 @@ let specName (funcName: string) (typeArgs: AST.Type list) : string =
 let private isGenericKeyIntrinsicName (funcName: string) : bool =
     funcName = "__hash" || funcName = "__key_eq"
 
+let private exprArgsToList (args: AST.NonEmptyList<AST.Expr>) : AST.Expr list =
+    AST.NonEmptyList.toList args
+
+let private exprArgsFromList (args: AST.Expr list) : AST.NonEmptyList<AST.Expr> =
+    match AST.NonEmptyList.tryFromList args with
+    | Some nonEmptyArgs -> nonEmptyArgs
+    | None -> AST.NonEmptyList.singleton AST.UnitLiteral
+
+let private paramsToList (parameters: AST.NonEmptyList<string * AST.Type>) : (string * AST.Type) list =
+    AST.NonEmptyList.toList parameters
+
+let private paramsFromList (context: string) (parameters: (string * AST.Type) list) : AST.NonEmptyList<string * AST.Type> =
+    match AST.NonEmptyList.tryFromList parameters with
+    | Some nonEmptyParams -> nonEmptyParams
+    | None -> Crash.crash $"Internal error: {context} produced zero parameters"
+
 let private unresolvedKeyIntrinsicTypeArgErrorExpr (funcName: string) : AST.Expr =
-    AST.Call ("Builtin.testRuntimeError", [AST.StringLiteral $"Internal error: unresolved type arguments for {funcName}"])
+    AST.Call (
+        "Builtin.testRuntimeError",
+        AST.NonEmptyList.singleton (AST.StringLiteral $"Internal error: unresolved type arguments for {funcName}")
+    )
 
 /// Preserve left-to-right argument evaluation before forcing a runtime error.
 let private wrapWithIgnoredArgEvaluations (args: AST.Expr list) (body: AST.Expr) : AST.Expr =
@@ -725,10 +753,14 @@ let rec applySubstToExpr (subst: Substitution) (expr: AST.Expr) : AST.Expr =
     | AST.If (cond, thenBranch, elseBranch) ->
         AST.If (applySubstToExpr subst cond, applySubstToExpr subst thenBranch, applySubstToExpr subst elseBranch)
     | AST.Call (funcName, args) ->
-        AST.Call (funcName, List.map (applySubstToExpr subst) args)
+        AST.Call (funcName, AST.NonEmptyList.map (applySubstToExpr subst) args)
     | AST.TypeApp (funcName, typeArgs, args) ->
         // Substitute in type arguments and value arguments
-        AST.TypeApp (funcName, List.map (applySubstToType subst) typeArgs, List.map (applySubstToExpr subst) args)
+        AST.TypeApp (
+            funcName,
+            List.map (applySubstToType subst) typeArgs,
+            AST.NonEmptyList.map (applySubstToExpr subst) args
+        )
     | AST.TupleLiteral elements ->
         AST.TupleLiteral (List.map (applySubstToExpr subst) elements)
     | AST.TupleAccess (tuple, index) ->
@@ -750,10 +782,12 @@ let rec applySubstToExpr (subst: Substitution) (expr: AST.Expr) : AST.Expr =
         AST.ListCons (List.map (applySubstToExpr subst) headElements, applySubstToExpr subst tail)
     | AST.Lambda (parameters, body) ->
         // Substitute types in parameter annotations and body
-        let substParams = parameters |> List.map (fun (name, ty) -> (name, applySubstToType subst ty))
+        let substParams =
+            parameters
+            |> AST.NonEmptyList.map (fun (name, ty) -> (name, applySubstToType subst ty))
         AST.Lambda (substParams, applySubstToExpr subst body)
     | AST.Apply (func, args) ->
-        AST.Apply (applySubstToExpr subst func, List.map (applySubstToExpr subst) args)
+        AST.Apply (applySubstToExpr subst func, AST.NonEmptyList.map (applySubstToExpr subst) args)
     | AST.InterpolatedString parts ->
         let substPart part =
             match part with
@@ -799,7 +833,9 @@ let rec resolveAliasType (aliasReg: AliasRegistry) (typ: AST.Type) : AST.Type =
 
 /// Resolve type aliases within function signatures
 let resolveAliasesInFunction (aliasReg: AliasRegistry) (funcDef: AST.FunctionDef) : AST.FunctionDef =
-    let resolvedParams = funcDef.Params |> List.map (fun (name, typ) -> (name, resolveAliasType aliasReg typ))
+    let resolvedParams =
+        funcDef.Params
+        |> AST.NonEmptyList.map (fun (name, typ) -> (name, resolveAliasType aliasReg typ))
     let resolvedReturnType = resolveAliasType aliasReg funcDef.ReturnType
     { funcDef with Params = resolvedParams; ReturnType = resolvedReturnType }
 
@@ -810,7 +846,9 @@ let specializeFunction (funcDef: AST.FunctionDef) (typeArgs: AST.Type list) : AS
     // Generate specialized name
     let specializedName = specName funcDef.Name typeArgs
     // Apply substitution to parameters, return type, and body
-    let specializedParams = funcDef.Params |> List.map (fun (name, ty) -> (name, applySubstToType subst ty))
+    let specializedParams =
+        funcDef.Params
+        |> AST.NonEmptyList.map (fun (name, ty) -> (name, applySubstToType subst ty))
     let specializedReturnType = applySubstToType subst funcDef.ReturnType
     let specializedBody = applySubstToExpr subst funcDef.Body
     { Name = specializedName
@@ -835,15 +873,15 @@ let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
     | AST.If (cond, thenBranch, elseBranch) ->
         Set.union (collectTypeApps cond) (Set.union (collectTypeApps thenBranch) (collectTypeApps elseBranch))
     | AST.Call (_, args) ->
-        args |> List.map collectTypeApps |> List.fold Set.union Set.empty
+        args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
     | AST.TypeApp (funcName, typeArgs, args) ->
         // This is a generic call - collect this specialization plus any in args
-        let argSpecs = args |> List.map collectTypeApps |> List.fold Set.union Set.empty
+        let argSpecs = args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
         let hasTypeVars = List.exists containsTypeVar typeArgs
         if hasTypeVars && (funcName = "__hash" || funcName = "__key_eq") then
             argSpecs
         elif (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
-             && args = [AST.ListLiteral []]
+             && exprArgsToList args = [AST.ListLiteral []]
              && not hasTypeVars then
             // Optimization: avoid building a Dict from an empty list when types are concrete.
             Set.add ("Stdlib.Dict.empty", typeArgs) argSpecs
@@ -878,7 +916,7 @@ let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
         collectTypeApps body
     | AST.Apply (func, args) ->
         let funcSpecs = collectTypeApps func
-        let argsSpecs = args |> List.map collectTypeApps |> List.fold Set.union Set.empty
+        let argsSpecs = args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
         Set.union funcSpecs argsSpecs
     | AST.InterpolatedString parts ->
         parts |> List.choose (fun part ->
@@ -946,22 +984,22 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
     | AST.If (cond, thenBranch, elseBranch) ->
         AST.If (replaceTypeApps cond, replaceTypeApps thenBranch, replaceTypeApps elseBranch)
     | AST.Call (funcName, args) ->
-        AST.Call (funcName, List.map replaceTypeApps args)
+        AST.Call (funcName, AST.NonEmptyList.map replaceTypeApps args)
     | AST.TypeApp (funcName, typeArgs, args) ->
         // Replace with a regular Call to the specialized name
         let hasTypeVars = List.exists containsTypeVar typeArgs
         if (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
-           && args = [AST.ListLiteral []]
+           && exprArgsToList args = [AST.ListLiteral []]
            && not hasTypeVars then
             // Optimization: avoid building a Dict from an empty list when types are concrete.
             let specializedName = specName "Stdlib.Dict.empty" typeArgs
-            AST.Call (specializedName, [])
+            AST.Call (specializedName, exprArgsFromList [])
         elif isGenericKeyIntrinsicName funcName && hasTypeVars then
-            let replacedArgs = List.map replaceTypeApps args
+            let replacedArgs = args |> exprArgsToList |> List.map replaceTypeApps
             wrapWithIgnoredArgEvaluations replacedArgs (unresolvedKeyIntrinsicTypeArgErrorExpr funcName)
         else
             let specializedName = specName funcName typeArgs
-            AST.Call (specializedName, List.map replaceTypeApps args)
+            AST.Call (specializedName, AST.NonEmptyList.map replaceTypeApps args)
     | AST.TupleLiteral elements ->
         AST.TupleLiteral (List.map replaceTypeApps elements)
     | AST.TupleAccess (tuple, index) ->
@@ -984,7 +1022,7 @@ let rec replaceTypeApps (expr: AST.Expr) : AST.Expr =
     | AST.Lambda (parameters, body) ->
         AST.Lambda (parameters, replaceTypeApps body)
     | AST.Apply (func, args) ->
-        AST.Apply (replaceTypeApps func, List.map replaceTypeApps args)
+        AST.Apply (replaceTypeApps func, AST.NonEmptyList.map replaceTypeApps args)
     | AST.InterpolatedString parts ->
         let replacePart part =
             match part with
@@ -1063,12 +1101,12 @@ let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : 
                     replace elseBranch
                     |> Result.map (fun elseBranch' -> AST.If (cond', thenBranch', elseBranch'))))
         | AST.Call (funcName, args) ->
-            mapResult replace args
-            |> Result.map (fun args' -> AST.Call (funcName, args'))
+            mapResult replace (exprArgsToList args)
+            |> Result.map (fun args' -> AST.Call (funcName, exprArgsFromList args'))
         | AST.TypeApp (funcName, typeArgs, args) ->
             let hasTypeVars = List.exists containsTypeVar typeArgs
             let emptyDictSpec = (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
-                                && args = [AST.ListLiteral []]
+                                && exprArgsToList args = [AST.ListLiteral []]
                                 && not hasTypeVars
             let unresolvedKeyIntrinsicSpec = isGenericKeyIntrinsicName funcName && hasTypeVars
             let resolvedNameResult =
@@ -1087,17 +1125,17 @@ let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : 
                     | None -> Error (missingSpecMessage funcName typeArgs)
 
             if unresolvedKeyIntrinsicSpec then
-                mapResult replace args
+                mapResult replace (exprArgsToList args)
                 |> Result.map (fun args' ->
                     wrapWithIgnoredArgEvaluations args' (unresolvedKeyIntrinsicTypeArgErrorExpr funcName))
             else
                 resolvedNameResult
                 |> Result.bind (fun resolvedName ->
                     if emptyDictSpec then
-                        Ok (AST.Call (resolvedName, []))
+                        Ok (AST.Call (resolvedName, exprArgsFromList []))
                     else
-                        mapResult replace args
-                        |> Result.map (fun args' -> AST.Call (resolvedName, args')))
+                        mapResult replace (exprArgsToList args)
+                        |> Result.map (fun args' -> AST.Call (resolvedName, exprArgsFromList args')))
         | AST.TupleLiteral elements ->
             mapResult replace elements
             |> Result.map AST.TupleLiteral
@@ -1148,7 +1186,8 @@ let replaceTypeAppsWithRegistry (specRegistry: SpecRegistry) (expr: AST.Expr) : 
         | AST.Apply (func, args) ->
             replace func
             |> Result.bind (fun func' ->
-                mapResult replace args |> Result.map (fun args' -> AST.Apply (func', args')))
+                mapResult replace (exprArgsToList args)
+                |> Result.map (fun args' -> AST.Apply (func', exprArgsFromList args')))
         | AST.InterpolatedString parts ->
             parts
             |> mapResult (function
@@ -1211,7 +1250,7 @@ let programNeedsLambdaLowering (knownFuncNames: Set<string>) (program: AST.Progr
             exprNeedsLambdaLowering bound inner
         | AST.Call (_, args)
         | AST.TypeApp (_, _, args) ->
-            args |> List.exists (exprNeedsLambdaLowering bound)
+            args |> exprArgsToList |> List.exists (exprNeedsLambdaLowering bound)
         | AST.TupleLiteral elems
         | AST.ListLiteral elems ->
             elems |> List.exists (exprNeedsLambdaLowering bound)
@@ -1249,7 +1288,7 @@ let programNeedsLambdaLowering (knownFuncNames: Set<string>) (program: AST.Progr
         | tl :: rest ->
             match tl with
             | AST.FunctionDef f ->
-                let paramNames = f.Params |> List.map fst |> Set.ofList
+                let paramNames = f.Params |> paramsToList |> List.map fst |> Set.ofList
                 if exprNeedsLambdaLowering paramNames f.Body then true else loop rest
             | AST.Expression e ->
                 if exprNeedsLambdaLowering Set.empty e then true else loop rest
@@ -1286,8 +1325,8 @@ let rec varOccursInExpr (name: string) (expr: AST.Expr) : bool =
         varOccursInExpr name cond || varOccursInExpr name thenBranch || varOccursInExpr name elseBranch
     | AST.Call (funcName, args) ->
         // funcName could be a lambda variable reference (parser can't distinguish)
-        funcName = name || List.exists (varOccursInExpr name) args
-    | AST.TypeApp (_, _, args) -> List.exists (varOccursInExpr name) args
+        funcName = name || (args |> exprArgsToList |> List.exists (varOccursInExpr name))
+    | AST.TypeApp (_, _, args) -> args |> exprArgsToList |> List.exists (varOccursInExpr name)
     | AST.TupleLiteral elements -> List.exists (varOccursInExpr name) elements
     | AST.TupleAccess (tuple, _) -> varOccursInExpr name tuple
     | AST.RecordLiteral (_, fields) -> List.exists (fun (_, e) -> varOccursInExpr name e) fields
@@ -1305,11 +1344,11 @@ let rec varOccursInExpr (name: string) (expr: AST.Expr) : bool =
         List.exists (varOccursInExpr name) headElements || varOccursInExpr name tail
     | AST.Lambda (parameters, body) ->
         // If name is shadowed by a parameter, it doesn't occur
-        let paramNames = parameters |> List.map fst |> Set.ofList
+        let paramNames = parameters |> paramsToList |> List.map fst |> Set.ofList
         if Set.contains name paramNames then false
         else varOccursInExpr name body
     | AST.Apply (func, args) ->
-        varOccursInExpr name func || List.exists (varOccursInExpr name) args
+        varOccursInExpr name func || (args |> exprArgsToList |> List.exists (varOccursInExpr name))
     | AST.FuncRef _ ->
         false  // Function references don't contain variable references
     | AST.Closure (_, captures) ->
@@ -1350,13 +1389,13 @@ let rec inlineLambdas (expr: AST.Expr) (lambdaEnv: LambdaEnv) : AST.Expr =
     | AST.If (cond, thenBranch, elseBranch) ->
         AST.If (inlineLambdas cond lambdaEnv, inlineLambdas thenBranch lambdaEnv, inlineLambdas elseBranch lambdaEnv)
     | AST.Call (funcName, args) ->
-        let args' = List.map (fun a -> inlineLambdas a lambdaEnv) args
+        let args' = AST.NonEmptyList.map (fun a -> inlineLambdas a lambdaEnv) args
         // Check if funcName is actually a lambda variable (parser can't distinguish)
         match Map.tryFind funcName lambdaEnv with
         | Some lambdaExpr -> AST.Apply (lambdaExpr, args')
         | None -> AST.Call (funcName, args')
     | AST.TypeApp (funcName, typeArgs, args) ->
-        AST.TypeApp (funcName, typeArgs, List.map (fun a -> inlineLambdas a lambdaEnv) args)
+        AST.TypeApp (funcName, typeArgs, AST.NonEmptyList.map (fun a -> inlineLambdas a lambdaEnv) args)
     | AST.TupleLiteral elements ->
         AST.TupleLiteral (List.map (fun e -> inlineLambdas e lambdaEnv) elements)
     | AST.TupleAccess (tuple, index) ->
@@ -1380,7 +1419,7 @@ let rec inlineLambdas (expr: AST.Expr) (lambdaEnv: LambdaEnv) : AST.Expr =
         // Lambdas can reference outer lambdas, so inline in body
         AST.Lambda (parameters, inlineLambdas body lambdaEnv)
     | AST.Apply (func, args) ->
-        let args' = List.map (fun a -> inlineLambdas a lambdaEnv) args
+        let args' = AST.NonEmptyList.map (fun a -> inlineLambdas a lambdaEnv) args
         match func with
         | AST.Var name ->
             // Check if this variable is a known lambda
@@ -1481,10 +1520,14 @@ let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
         // Check if funcName is a local variable (not in bound) - if so, it's a free variable
         // Top-level function names will be filtered out later since they won't be in TypeEnv
         let funcFree = if Set.contains funcName bound then Set.empty else Set.singleton funcName
-        let argsFree = args |> List.map (fun a -> freeVars a bound) |> List.fold Set.union Set.empty
+        let argsFree =
+            args
+            |> exprArgsToList
+            |> List.map (fun a -> freeVars a bound)
+            |> List.fold Set.union Set.empty
         Set.union funcFree argsFree
     | AST.TypeApp (_, _, args) ->
-        args |> List.map (fun a -> freeVars a bound) |> List.fold Set.union Set.empty
+        args |> exprArgsToList |> List.map (fun a -> freeVars a bound) |> List.fold Set.union Set.empty
     | AST.TupleLiteral elems | AST.ListLiteral elems ->
         elems |> List.map (fun e -> freeVars e bound) |> List.fold Set.union Set.empty
     | AST.ListCons (headElements, tail) ->
@@ -1507,11 +1550,11 @@ let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
             Set.union guardVars (freeVars mc.Body bound)) |> List.fold Set.union Set.empty
         Set.union scrutineeVars caseVars
     | AST.Lambda (parameters, body) ->
-        let paramNames = parameters |> List.map fst |> Set.ofList
+        let paramNames = parameters |> paramsToList |> List.map fst |> Set.ofList
         freeVars body (Set.union bound paramNames)
     | AST.Apply (func, args) ->
         let funcVars = freeVars func bound
-        let argVars = args |> List.map (fun a -> freeVars a bound) |> List.fold Set.union Set.empty
+        let argVars = args |> exprArgsToList |> List.map (fun a -> freeVars a bound) |> List.fold Set.union Set.empty
         Set.union funcVars argVars
     | AST.FuncRef _ -> Set.empty
     | AST.Closure (_, captures) ->
@@ -1751,7 +1794,7 @@ let rec simpleInferType
         // Look up the function's return type, checking local bindings first
         match Map.tryFind funcName typeEnv with
         | Some (AST.TFunction (paramTypes, returnType)) ->
-            let argCount = List.length args
+            let argCount = args |> exprArgsToList |> List.length
             let paramCount = List.length paramTypes
             if argCount = paramCount then
                 Some returnType
@@ -1785,7 +1828,7 @@ let rec simpleInferType
         let caseTypes =
             cases
             |> List.map (fun mc ->
-                let patterns = mc.Patterns.Head :: mc.Patterns.Tail
+                let patterns = AST.NonEmptyList.toList mc.Patterns
                 let caseEnv =
                     match scrutineeType with
                     | Some scrutType ->
@@ -1802,8 +1845,8 @@ let rec simpleInferType
         else
             None
     | AST.Lambda (parameters, body) ->
-        let paramTypes = parameters |> List.map snd
-        let lambdaParamTypes = parameters |> Map.ofList
+        let paramTypes = parameters |> paramsToList |> List.map snd
+        let lambdaParamTypes = parameters |> paramsToList |> Map.ofList
         let typeEnv' = Map.fold (fun acc k v -> Map.add k v acc) typeEnv lambdaParamTypes
         match simpleInferType body typeEnv' funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some returnType -> Some (AST.TFunction (paramTypes, returnType))
@@ -1811,7 +1854,7 @@ let rec simpleInferType
     | AST.Apply (funcExpr, args) ->
         match simpleInferType funcExpr typeEnv funcParams funcReturnTypes genericFuncDefs typeReg variantLookup with
         | Some (AST.TFunction (paramTypes, returnType)) ->
-            let argCount = List.length args
+            let argCount = args |> exprArgsToList |> List.length
             let paramCount = List.length paramTypes
             if argCount = paramCount then
                 Some returnType
@@ -1908,13 +1951,13 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
     | AST.Lambda (parameters, body) ->
         // Lambda in expression position - lift it to a closure
         // Add lambda parameters to type environment before processing body
-        let lambdaParamTypes = parameters |> Map.ofList
+        let lambdaParamTypes = parameters |> paramsToList |> Map.ofList
         let stateWithLambdaParams = { state with TypeEnv = Map.fold (fun acc k v -> Map.add k v acc) state.TypeEnv lambdaParamTypes }
         // First, lift any lambdas within the body
         liftLambdasInExpr body stateWithLambdaParams
         |> Result.bind (fun (body', state1) ->
             // Now lift this lambda itself to a closure
-            let paramNames = parameters |> List.map fst |> Set.ofList
+            let paramNames = parameters |> paramsToList |> List.map fst |> Set.ofList
             let freeVarsInBody = freeVars body' paramNames
             // Filter to only include variables actually in TypeEnv (excludes top-level function names)
             let captures = freeVarsInBody |> Set.filter (fun name -> Map.containsKey name state.TypeEnv) |> Set.toList
@@ -1959,7 +2002,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
                     let funcDef : AST.FunctionDef = {
                         Name = funcName
                         TypeParams = []
-                        Params = closureParam :: parameters
+                        Params = AST.NonEmptyList.cons closureParam parameters
                         ReturnType = returnType
                         Body = bodyWithExtractions
                     }
@@ -1997,21 +2040,21 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
 /// Lift lambdas in function arguments, converting all lambdas to Closures
 /// (even non-capturing lambdas become trivial closures for uniform calling convention)
 /// Also wraps FuncRef in closures for uniform calling convention
-and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr list * LiftState, string> =
+and liftLambdasInArgs (args: AST.NonEmptyList<AST.Expr>) (state: LiftState) : Result<AST.NonEmptyList<AST.Expr> * LiftState, string> =
     let rec loop (remaining: AST.Expr list) (state: LiftState) (acc: AST.Expr list) =
         match remaining with
-        | [] -> Ok (List.rev acc, state)
+        | [] -> Ok (exprArgsFromList (List.rev acc), state)
         | arg :: rest ->
             match arg with
             | AST.Lambda (parameters, body) ->
                 // Add lambda parameters to type environment before processing body
-                let lambdaParamTypes = parameters |> Map.ofList
+                let lambdaParamTypes = parameters |> paramsToList |> Map.ofList
                 let stateWithLambdaParams = { state with TypeEnv = Map.fold (fun acc k v -> Map.add k v acc) state.TypeEnv lambdaParamTypes }
                 // First, recursively lift any nested lambdas in the body
                 liftLambdasInExpr body stateWithLambdaParams
                 |> Result.bind (fun (body', state1) ->
                     // Check for free variables (captures)
-                    let paramNames = parameters |> List.map fst |> Set.ofList
+                    let paramNames = parameters |> paramsToList |> List.map fst |> Set.ofList
                     let freeVarsInBody = freeVars body' paramNames
                     // Filter to only include variables actually in TypeEnv (excludes top-level function names)
                     let captures = freeVarsInBody |> Set.filter (fun name -> Map.containsKey name state.TypeEnv) |> Set.toList
@@ -2058,7 +2101,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                             let funcDef : AST.FunctionDef = {
                                 Name = funcName
                                 TypeParams = []
-                                Params = closureParam :: parameters  // Closure is always first param
+                                Params = AST.NonEmptyList.cons closureParam parameters  // Closure is always first param
                                 ReturnType = returnType
                                 Body = bodyWithExtractions
                             }
@@ -2090,11 +2133,11 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
                     // Generate parameter names for wrapper that match original function's parameters
                     let wrapperParams = origParams |> List.mapi (fun i (_, t) -> ($"__arg{i}", t))
                     let wrapperArgs = wrapperParams |> List.map (fun (name, _) -> AST.Var name)
-                    let wrapperBody = AST.Call (origFuncName, wrapperArgs)
+                    let wrapperBody = AST.Call (origFuncName, exprArgsFromList wrapperArgs)
                     let wrapperDef : AST.FunctionDef = {
                         Name = wrapperName
                         TypeParams = []
-                        Params = closureParam :: wrapperParams
+                        Params = paramsFromList "liftLambdasInArgs:wrapperDef" (closureParam :: wrapperParams)
                         ReturnType = origReturnType
                         Body = wrapperBody
                     }
@@ -2124,7 +2167,7 @@ and liftLambdasInArgs (args: AST.Expr list) (state: LiftState) : Result<AST.Expr
             | other ->
                 liftLambdasInExpr other state
                 |> Result.bind (fun (other', state') -> loop rest state' (other' :: acc))
-    loop args state []
+    loop (exprArgsToList args) state []
 
 /// Helper to lift lambdas in a list of expressions
 and liftLambdasInList (exprs: AST.Expr list) (state: LiftState) : Result<AST.Expr list * LiftState, string> =
@@ -2170,7 +2213,7 @@ and liftLambdasInCases (cases: AST.MatchCase list) (state: LiftState) : Result<A
 /// Lift lambdas in a function definition
 let liftLambdasInFunc (funcDef: AST.FunctionDef) (state: LiftState) : Result<AST.FunctionDef * LiftState, string> =
     // Add function parameters to the type environment
-    let paramTypes = funcDef.Params |> List.map (fun (name, typ) -> (name, typ)) |> Map.ofList
+    let paramTypes = funcDef.Params |> paramsToList |> Map.ofList
     let stateWithParams = { state with TypeEnv = Map.fold (fun acc k v -> Map.add k v acc) state.TypeEnv paramTypes }
     liftLambdasInExpr funcDef.Body stateWithParams
     |> Result.map (fun (body', state') ->
@@ -2196,11 +2239,15 @@ let generateFuncWrapper
         // Create wrapper: __funcref_wrapper_N(__closure, ...params) = origFunc(...params)
         let wrapperName = $"__funcref_wrapper_{stateWithFuncs.State.Counter}"
         let closureParam = ("__closure", AST.TTuple [AST.TInt64])
-        let wrapperBody = AST.Call (origFuncName, parameters |> List.map (fun (name, _) -> AST.Var name))
+        let wrapperBody =
+            parameters
+            |> List.map (fun (name, _) -> AST.Var name)
+            |> exprArgsFromList
+            |> fun args -> AST.Call (origFuncName, args)
         let wrapperDef : AST.FunctionDef = {
             Name = wrapperName
             TypeParams = []
-            Params = closureParam :: parameters
+            Params = paramsFromList "generateFuncWrapper" (closureParam :: parameters)
             ReturnType = returnType
             Body = wrapperBody
         }
@@ -2260,7 +2307,7 @@ let rec liftLambdasInProgram
     let userFuncParams : Map<string, (string * AST.Type) list> =
         topLevels
         |> List.choose (function
-            | AST.FunctionDef f -> Some (f.Name, f.Params)
+            | AST.FunctionDef f -> Some (f.Name, paramsToList f.Params)
             | _ -> None)
         |> Map.ofList
 
@@ -2378,7 +2425,7 @@ and collectFuncRefsInExpr (expr: AST.Expr) (knownFuncs: Map<string, (string * AS
     match expr with
     | AST.Call (_, args) ->
         // Check if any arg is a reference to a known function
-        args
+        (exprArgsToList args)
         |> List.collect (fun arg ->
             match arg with
             | AST.Var name when Map.containsKey name knownFuncs -> [name]
@@ -2412,11 +2459,11 @@ and collectFuncRefsInExpr (expr: AST.Expr) (knownFuncs: Map<string, (string * AS
             collectFuncRefsInExpr mc.Body knownFuncs))
     | AST.Lambda (_, body) -> collectFuncRefsInExpr body knownFuncs
     | AST.Apply (f, args) ->
-        collectFuncRefsInExpr f knownFuncs @ (args |> List.collect (fun e -> collectFuncRefsInExpr e knownFuncs))
+        collectFuncRefsInExpr f knownFuncs @ (args |> exprArgsToList |> List.collect (fun e -> collectFuncRefsInExpr e knownFuncs))
     | AST.Closure (_, caps) ->
         caps |> List.collect (fun e -> collectFuncRefsInExpr e knownFuncs)
     | AST.TypeApp (_, _, args) ->
-        args |> List.collect (fun e -> collectFuncRefsInExpr e knownFuncs)
+        args |> exprArgsToList |> List.collect (fun e -> collectFuncRefsInExpr e knownFuncs)
     | _ -> []
 
 /// Replace function references with wrapper references in a TopLevel
@@ -2439,7 +2486,7 @@ and replaceInExpr (wrapperMap: Map<string, string>) (expr: AST.Expr) : AST.Expr 
         let newFuncName = Map.tryFind funcName wrapperMap |> Option.defaultValue funcName
         AST.Closure (newFuncName, caps |> List.map (replaceInExpr wrapperMap))
     | AST.Call (name, args) ->
-        AST.Call (name, args |> List.map (replaceInExpr wrapperMap))
+        AST.Call (name, args |> AST.NonEmptyList.map (replaceInExpr wrapperMap))
     | AST.Let (n, v, b) ->
         AST.Let (n, replaceInExpr wrapperMap v, replaceInExpr wrapperMap b)
     | AST.If (c, t, e) ->
@@ -2468,9 +2515,9 @@ and replaceInExpr (wrapperMap: Map<string, string>) (expr: AST.Expr) : AST.Expr 
     | AST.Lambda (ps, body) ->
         AST.Lambda (ps, replaceInExpr wrapperMap body)
     | AST.Apply (f, args) ->
-        AST.Apply (replaceInExpr wrapperMap f, args |> List.map (replaceInExpr wrapperMap))
+        AST.Apply (replaceInExpr wrapperMap f, args |> AST.NonEmptyList.map (replaceInExpr wrapperMap))
     | AST.TypeApp (n, ts, args) ->
-        AST.TypeApp (n, ts, args |> List.map (replaceInExpr wrapperMap))
+        AST.TypeApp (n, ts, args |> AST.NonEmptyList.map (replaceInExpr wrapperMap))
     | _ -> expr
 
 /// Monomorphize a program: collect all specializations, generate specialized functions, replace TypeApps
@@ -3321,8 +3368,9 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                             |> Result.bind (fun nextType -> mergeCaseTypes accType nextType)))
                     (Ok firstCaseType))
     | AST.Call (funcName, args) ->
+        let argList = exprArgsToList args
         if isBuiltinUnwrapName funcName then
-            match args with
+            match argList with
             | [argExpr] ->
                 inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
                 |> Result.bind (fun argType ->
@@ -3348,13 +3396,13 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
                     | _ ->
                         Error $"Internal error: Builtin.unwrap expects Option/Result argument, got {typeToString argType}")
             | _ ->
-                Error $"Internal error: Builtin.unwrap expects 1 argument, got {List.length args}"
+                Error $"Internal error: Builtin.unwrap expects 1 argument, got {List.length argList}"
         elif isBuiltinTestRuntimeErrorName funcName then
-            match args with
+            match argList with
             // testRuntimeError behaves like bottom, but ANF-level inference must stay concrete.
             | [_] -> Ok AST.TUnit
             | _ ->
-                Error $"Internal error: Builtin.testRuntimeError expects 1 argument, got {List.length args}"
+                Error $"Internal error: Builtin.testRuntimeError expects 1 argument, got {List.length argList}"
         else
             // Look up function return type from the function registry
             match Map.tryFind funcName funcReg with
@@ -3429,8 +3477,8 @@ let rec inferType (expr: AST.Expr) (typeEnv: Map<string, AST.Type>) (typeReg: Ty
         Error "Generic function calls not yet implemented"
     | AST.Lambda (parameters, body) ->
         // Lambda has function type (paramTypes) -> returnType
-        let paramTypes = parameters |> List.map snd
-        let typeEnv' = parameters |> List.fold (fun env (name, ty) -> Map.add name ty env) typeEnv
+        let paramTypes = parameters |> paramsToList |> List.map snd
+        let typeEnv' = parameters |> paramsToList |> List.fold (fun env (name, ty) -> Map.add name ty env) typeEnv
         inferType body typeEnv' typeReg variantLookup funcReg moduleRegistry
         |> Result.map (fun returnType -> AST.TFunction (paramTypes, returnType))
     | AST.Apply (func, _args) ->
@@ -3529,7 +3577,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         // Legacy upstream compatibility: nullary stdlib functions are
                         // commonly used as values (without `()`), expecting evaluation.
                         toANF
-                            (AST.Call (resolvedName, []))
+                            (AST.Call (resolvedName, exprArgsFromList []))
                             varGen
                             env
                             typeReg
@@ -3549,7 +3597,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | AST.TFunction (paramTypes, _) when List.isEmpty paramTypes ->
                             // Legacy upstream compatibility for nullary functions.
                             toANF
-                                (AST.Call (resolvedName, []))
+                                (AST.Call (resolvedName, exprArgsFromList []))
                                 varGen
                                 env
                                 typeReg
@@ -3799,7 +3847,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         (transformReturns condExpr, varGen4))))
 
     | AST.Call (funcName, args) when isBuiltinUnwrapName funcName ->
-        match args with
+        let argList = exprArgsToList args
+        match argList with
         | [argExpr] ->
             let typeEnv = typeEnvFromVarEnv env
             inferType argExpr typeEnv typeReg variantLookup funcReg moduleRegistry
@@ -3914,10 +3963,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 | _ ->
                     Error $"Internal error: Builtin.unwrap should have been typechecked as Option/Result, got {typeToString argType}")
         | _ ->
-            Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length args}"
+            Error $"Internal error: Builtin.unwrap should have exactly 1 argument, got {List.length argList}"
 
     | AST.Call (funcName, args) when isBuiltinTestRuntimeErrorName funcName ->
-        match args with
+        let argList = exprArgsToList args
+        match argList with
         | [messageExpr] ->
             let messageText =
                 match unwrapErrorPayloadToString messageExpr with
@@ -3928,7 +3978,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             let runtimeErrorExpr = ANF.RuntimeError fullMessage
             Ok (ANF.Let (runtimeErrorVar, runtimeErrorExpr, ANF.Return ANF.UnitLiteral), varGen1)
         | _ ->
-            Error $"Internal error: Builtin.testRuntimeError should have exactly 1 argument, got {List.length args}"
+            Error $"Internal error: Builtin.testRuntimeError should have exactly 1 argument, got {List.length argList}"
 
     | AST.Call (funcName, args) ->
         // Function call: convert all arguments to atoms
@@ -3961,7 +4011,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     convertArgs rest vg'' (wrappedExpr :: accExprs) (wrappedAtom :: accAtoms))
 
         // Regular function call (including module functions like Stdlib.Int64.add)
-        convertArgs args varGen [] []
+        convertArgs (exprArgsToList args) varGen [] []
         |> Result.bind (fun (argSetupExprs, argAtoms, varGen1) ->
             // Bind call result to fresh variable
             let (resultVar, varGen2) = ANF.freshVar varGen1
@@ -7191,11 +7241,13 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
     | AST.Apply (func, args) ->
         // Apply a function expression to arguments
         // For now, only support immediate application of lambdas
+        let argsList = exprArgsToList args
         match func with
         | AST.Lambda (parameters, body) ->
             // Immediate application: ((x: int) => x + 1)(5) becomes let x = 5 in x + 1
-            if List.length args <> List.length parameters then
-                Error $"Lambda expects {List.length parameters} arguments, got {List.length args}"
+            let parameterList = paramsToList parameters
+            if List.length argsList <> List.length parameterList then
+                Error $"Lambda expects {List.length parameterList} arguments, got {List.length argsList}"
             else
                 // Build nested let bindings: let p1 = arg1 in let p2 = arg2 in ... body
                 let rec buildLets (ps: (string * AST.Type) list) (as': AST.Expr list) : AST.Expr =
@@ -7204,7 +7256,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | (pName, _) :: restPs, argExpr :: restAs ->
                         AST.Let (pName, argExpr, buildLets restPs restAs)
                     | _ -> body  // Should not happen due to length check
-                let desugared = buildLets parameters args
+                let desugared = buildLets parameterList argsList
                 toANF desugared varGen env typeReg variantLookup funcReg moduleRegistry
         | AST.Var name ->
             // Calling a variable that might hold a closure
@@ -7218,7 +7270,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
-                convertArgs args varGen []
+                convertArgs argsList varGen []
                 |> Result.bind (fun (argResults, varGen1) ->
                     let argAtoms = argResults |> List.map fst
                     let allBindings = argResults |> List.collect snd
@@ -7237,10 +7289,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             // Flatten all nested applies first, then desugar from innermost out
             let rec flattenApplies expr argLists =
                 match expr with
-                | AST.Apply (innerFunc, innerArgs) -> flattenApplies innerFunc (innerArgs :: argLists)
+                | AST.Apply (innerFunc, innerArgs) ->
+                    flattenApplies innerFunc (exprArgsToList innerArgs :: argLists)
                 | other -> (other, argLists)
 
-            let (baseFunc, allArgLists) = flattenApplies func [args]
+            let (baseFunc, allArgLists) = flattenApplies func [argsList]
             // allArgLists is a list of arg lists, from innermost to outermost
             // e.g., for f(1)(2)(3), we get ([1], [2], [3])
 
@@ -7253,9 +7306,10 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | currentArgs :: restArgLists ->
                         match currentFunc with
                         | AST.Lambda (lambdaParams, body) ->
-                            if List.length currentArgs <> List.length lambdaParams then
+                            let lambdaParamList = paramsToList lambdaParams
+                            if List.length currentArgs <> List.length lambdaParamList then
                                 // Will error later, just wrap in Apply for now
-                                desugaAll (AST.Apply (currentFunc, currentArgs)) restArgLists
+                                desugaAll (AST.Apply (currentFunc, exprArgsFromList currentArgs)) restArgLists
                             else
                                 // Desugar: let p1 = a1 in let p2 = a2 in ... body
                                 let rec buildLets (ps: (string * AST.Type) list) (as': AST.Expr list) : AST.Expr =
@@ -7264,14 +7318,14 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                     | (pName, _) :: restPs, argExpr :: restAs ->
                                         AST.Let (pName, argExpr, buildLets restPs restAs)
                                     | _ -> body
-                                let desugared = buildLets lambdaParams currentArgs
+                                let desugared = buildLets lambdaParamList currentArgs
                                 desugaAll desugared restArgLists
                         | AST.Let (name, value, innerBody) ->
                             // Float let out: Apply(let x = v in body, args) → let x = v in Apply(body, args)
                             AST.Let (name, value, desugaAll innerBody (currentArgs :: restArgLists))
                         | _ ->
                             // Non-lambda function - wrap remaining in Apply
-                            let applied = AST.Apply (currentFunc, currentArgs)
+                            let applied = AST.Apply (currentFunc, exprArgsFromList currentArgs)
                             desugaAll applied restArgLists
 
                 let desugared = desugaAll baseFunc allArgLists
@@ -7283,7 +7337,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                 let rec applyAll (currentExpr: AST.Expr) (remainingArgLists: AST.Expr list list) : AST.Expr =
                     match remainingArgLists with
                     | [] -> currentExpr
-                    | currentArgs :: rest -> applyAll (AST.Apply (currentExpr, currentArgs)) rest
+                    | currentArgs :: rest ->
+                        applyAll (AST.Apply (currentExpr, exprArgsFromList currentArgs)) rest
                 let fullApply = applyAll baseFunc allArgLists
 
                 toAtom fullApply varGen env typeReg variantLookup funcReg moduleRegistry
@@ -7320,7 +7375,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
-                convertArgs args varGen2 []
+                convertArgs argsList varGen2 []
                 |> Result.bind (fun (argResults, varGen3) ->
                     let argAtoms = argResults |> List.map fst
                     let argBindings = argResults |> List.collect snd
@@ -7347,7 +7402,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
 
-                convertArgs args varGen1 []
+                convertArgs argsList varGen1 []
                 |> Result.map (fun (argResults, varGen2) ->
                     let argAtoms = argResults |> List.map fst
                     let argBindings = argResults |> List.collect snd
@@ -7420,7 +7475,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         // Legacy upstream compatibility: nullary stdlib functions are
                         // commonly used as values (without `()`), expecting evaluation.
                         toAtom
-                            (AST.Call (resolvedName, []))
+                            (AST.Call (resolvedName, exprArgsFromList []))
                             varGen
                             env
                             typeReg
@@ -7440,7 +7495,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         | AST.TFunction (paramTypes, _) when List.isEmpty paramTypes ->
                             // Legacy upstream compatibility for nullary functions.
                             toAtom
-                                (AST.Call (resolvedName, []))
+                                (AST.Call (resolvedName, exprArgsFromList []))
                                 varGen
                                 env
                                 typeReg
@@ -7656,7 +7711,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     |> Result.bind (fun (argAtom, argBindings, vg') ->
                         convertArgs rest vg' (argAtom :: accAtoms) (accBindings @ argBindings))
 
-            convertArgs args varGen [] []
+            convertArgs (exprArgsToList args) varGen [] []
             |> Result.bind (fun (argAtoms, argBindings, varGen1) ->
                 // Create a temporary for the call result
                 let (tempVar, varGen2) = ANF.freshVar varGen1
@@ -8146,11 +8201,13 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
 
     | AST.Apply (func, args) ->
         // Apply in atom position - convert via toANF and extract result
+        let argsList = exprArgsToList args
         match func with
         | AST.Lambda (parameters, body) ->
             // Immediate application: desugar to let bindings
-            if List.length args <> List.length parameters then
-                Error $"Lambda expects {List.length parameters} arguments, got {List.length args}"
+            let parameterList = paramsToList parameters
+            if List.length argsList <> List.length parameterList then
+                Error $"Lambda expects {List.length parameterList} arguments, got {List.length argsList}"
             else
                 let rec buildLets (ps: (string * AST.Type) list) (as': AST.Expr list) : AST.Expr =
                     match ps, as' with
@@ -8158,15 +8215,17 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     | (pName, _) :: restPs, argExpr :: restAs ->
                         AST.Let (pName, argExpr, buildLets restPs restAs)
                     | _ -> body
-                let desugared = buildLets parameters args
+                let desugared = buildLets parameterList argsList
                 toAtom desugared varGen env typeReg variantLookup funcReg moduleRegistry
 
         | AST.Apply (innerFunc, innerArgs) ->
             // Nested application in atom position: ((x) => (y) => ...)(a)(b)
+            let innerArgsList = exprArgsToList innerArgs
             match innerFunc with
             | AST.Lambda (innerParams, innerBody) ->
-                if List.length innerArgs <> List.length innerParams then
-                    Error $"Inner lambda expects {List.length innerParams} arguments, got {List.length innerArgs}"
+                let innerParamList = paramsToList innerParams
+                if List.length innerArgsList <> List.length innerParamList then
+                    Error $"Inner lambda expects {List.length innerParamList} arguments, got {List.length innerArgsList}"
                 else
                     let rec buildLets (ps: (string * AST.Type) list) (as': AST.Expr list) : AST.Expr =
                         match ps, as' with
@@ -8174,7 +8233,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         | (pName, _) :: restPs, argExpr :: restAs ->
                             AST.Let (pName, argExpr, buildLets restPs restAs)
                         | _ -> innerBody
-                    let desugaredInner = buildLets innerParams innerArgs
+                    let desugaredInner = buildLets innerParamList innerArgsList
                     toAtom (AST.Apply (desugaredInner, args)) varGen env typeReg variantLookup funcReg moduleRegistry
             | _ ->
                 // Inner is complex - evaluate inner, then call as closure
@@ -8187,7 +8246,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                             toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
                             |> Result.bind (fun (argAtom, argBindings, vg') ->
                                 convertArgs rest vg' ((argAtom, argBindings) :: acc))
-                    convertArgs args varGen1 []
+                    convertArgs argsList varGen1 []
                     |> Result.bind (fun (argResults, varGen2) ->
                         let argAtoms = argResults |> List.map fst
                         let argBindings = argResults |> List.collect snd
@@ -8212,7 +8271,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
-                convertArgs args varGen []
+                convertArgs argsList varGen []
                 |> Result.bind (fun (argResults, varGen1) ->
                     let argAtoms = argResults |> List.map fst
                     let allBindings = argResults |> List.collect snd
@@ -8245,7 +8304,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         toAtom arg vg env typeReg variantLookup funcReg moduleRegistry
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
-                convertArgs args varGen2 []
+                convertArgs argsList varGen2 []
                 |> Result.bind (fun (argResults, varGen3) ->
                     let argAtoms = argResults |> List.map fst
                     let argBindings = argResults |> List.collect snd
@@ -8270,7 +8329,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         |> Result.bind (fun (argAtom, argBindings, vg') ->
                             convertArgs rest vg' ((argAtom, argBindings) :: acc))
 
-                convertArgs args varGen1 []
+                convertArgs argsList varGen1 []
                 |> Result.map (fun (argResults, varGen2) ->
                     let argAtoms = argResults |> List.map fst
                     let argBindings = argResults |> List.collect snd
@@ -8324,14 +8383,14 @@ and wrapBindings (bindings: (ANF.TempId * ANF.CExpr) list) (expr: ANF.AExpr) : A
 let convertFunction (funcDef: AST.FunctionDef) (varGen: ANF.VarGen) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (funcReg: FunctionRegistry) (moduleRegistry: AST.ModuleRegistry) : Result<ANF.Function * ANF.VarGen, string> =
     // Allocate TempIds for parameters, bundled with their types
     let (typedParams, varGen1) =
-        funcDef.Params
+        paramsToList funcDef.Params
         |> List.fold (fun (acc, vg) (_, typ) ->
             let (tempId, vg') = ANF.freshVar vg
             (acc @ [{ ANF.TypedParam.Id = tempId; Type = typ }], vg')) ([], varGen)
 
     // Build environment mapping param names to (TempId, Type)
     let paramEnv : VarEnv =
-        List.zip funcDef.Params typedParams
+        List.zip (paramsToList funcDef.Params) typedParams
         |> List.map (fun ((name, _), typedParam) -> (name, (typedParam.Id, typedParam.Type)))
         |> Map.ofList
 
@@ -8439,14 +8498,14 @@ let buildRegistries
     let funcReg : FunctionRegistry =
         functions
         |> List.map (fun f ->
-            let paramTypes = f.Params |> List.map snd
+            let paramTypes = f.Params |> paramsToList |> List.map snd
             let funcType = AST.TFunction (paramTypes, f.ReturnType)
             (f.Name, funcType))
         |> Map.ofList
 
     let userFuncParams : Map<string, (string * AST.Type) list> =
         functions
-        |> List.map (fun f -> (f.Name, f.Params))
+        |> List.map (fun f -> (f.Name, paramsToList f.Params))
         |> Map.ofList
 
     let moduleFuncParams : Map<string, (string * AST.Type) list> =

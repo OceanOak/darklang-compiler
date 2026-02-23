@@ -26,10 +26,16 @@ let testParseInterpreterLambdaApplication () : TestResult =
     | Error err -> Error $"Interpreter parser failed: {err}"
     | Ok (Program [Expression expr]) ->
         match expr with
-        | Let ("inc", Lambda ([(paramName, _)], body), Call ("inc", [Int64Literal 41L])) ->
-            match body with
-            | Call ("Stdlib.Int64.add", [Var "x"; Int64Literal 1L]) when paramName = "x" -> Ok ()
-            | _ -> Error $"Unexpected lambda body AST: {body}"
+        | Let ("inc", Lambda (parameters, body), Call ("inc", callArgs)) ->
+            let paramNames = parameters |> NonEmptyList.toList |> List.map fst
+            let callArgsList = callArgs |> NonEmptyList.toList
+            match paramNames, callArgsList, body with
+            | [paramName], [Int64Literal 41L], Call ("Stdlib.Int64.add", addArgs)
+                when paramName = "x"
+                     && NonEmptyList.toList addArgs = [Var "x"; Int64Literal 1L] ->
+                Ok ()
+            | _ ->
+                Error $"Unexpected lambda application AST: {expr}"
         | _ -> Error $"Unexpected AST shape: {expr}"
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
@@ -49,11 +55,15 @@ let testParseInterpreterNegativeFloatApplicationArgs () : TestResult =
     let source = "Stdlib.Float.multiply -0.0 -1.0"
     match InterpreterParser.parseString false source with
     | Error err -> Error $"Interpreter parser failed: {err}"
-    | Ok (Program [Expression (Call ("Stdlib.Float.multiply", [FloatLiteral left; FloatLiteral right]))]) ->
-        if left = -0.0 && right = -1.0 then
-            Ok ()
-        else
-            Error $"Expected negative float args, got left={left}, right={right}"
+    | Ok (Program [Expression (Call ("Stdlib.Float.multiply", args))]) ->
+        match NonEmptyList.toList args with
+        | [FloatLiteral left; FloatLiteral right] ->
+            if left = -0.0 && right = -1.0 then
+                Ok ()
+            else
+                Error $"Expected negative float args, got left={left}, right={right}"
+        | other ->
+            Error $"Unexpected arguments for multiply: {other}"
     | Ok (Program [Expression expr]) ->
         Error $"Unexpected AST for negative float application args: {expr}"
     | Ok other ->
@@ -64,13 +74,21 @@ let testParseInterpreterPipeMinusOperatorSection () : TestResult =
     match InterpreterParser.parseString false source with
     | Error err ->
         Error $"Interpreter parser failed on pipe minus operator section: {err}"
-    | Ok (Program [Expression (Apply (Lambda ([(paramName, _)], BinOp (Sub, Var leftName, Int64Literal 3L)), [Int64Literal 4L]))]) ->
-        if paramName = "$pipe_arg" && leftName = "$pipe_arg" then
-            Ok ()
-        else
-            Error $"Unexpected pipe operator-section lambda binding: param={paramName}, left={leftName}"
     | Ok (Program [Expression expr]) ->
-        Error $"Unexpected AST for pipe minus operator section: {expr}"
+        match expr with
+        | Apply (Lambda (parameters, BinOp (Sub, Var leftName, Int64Literal 3L)), args) ->
+            let paramNames = parameters |> NonEmptyList.toList |> List.map fst
+            let argList = args |> NonEmptyList.toList
+            match paramNames, argList with
+            | [paramName], [Int64Literal 4L] ->
+                if paramName = "$pipe_arg" && leftName = "$pipe_arg" then
+                    Ok ()
+                else
+                    Error $"Unexpected pipe operator-section lambda binding: param={paramName}, left={leftName}"
+            | _ ->
+                Error $"Unexpected AST for pipe minus operator section: {expr}"
+        | _ ->
+            Error $"Unexpected AST for pipe minus operator section: {expr}"
     | Ok other ->
         Error $"Expected single expression program, got: {other}"
 
@@ -79,8 +97,9 @@ let testCompilerParserParsesApostropheTypeArgAtCallSite () : TestResult =
     match Parser.parseString false source with
     | Error err ->
         Error $"Compiler parser failed on apostrophe type argument call site: {err}"
-    | Ok (Program [Expression (TypeApp ("Stdlib.Json.parse", [TVar "a"], [StringLiteral "5"]))]) ->
-        Ok ()
+    | Ok (Program [Expression (TypeApp ("Stdlib.Json.parse", [TVar "a"], args))]) ->
+        if NonEmptyList.toList args = [StringLiteral "5"] then Ok ()
+        else Error $"Unexpected args for apostrophe type argument call site: {args}"
     | Ok (Program [Expression expr]) ->
         Error $"Unexpected AST for apostrophe type argument call site: {expr}"
     | Ok other ->
@@ -91,8 +110,9 @@ let testCompilerParserParsesApostropheTypeArgSpaceCallSite () : TestResult =
     match Parser.parseString false source with
     | Error err ->
         Error $"Compiler parser failed on apostrophe type argument space call site: {err}"
-    | Ok (Program [Expression (TypeApp ("Stdlib.Json.parse", [TVar "a"], [StringLiteral "5"]))]) ->
-        Ok ()
+    | Ok (Program [Expression (TypeApp ("Stdlib.Json.parse", [TVar "a"], args))]) ->
+        if NonEmptyList.toList args = [StringLiteral "5"] then Ok ()
+        else Error $"Unexpected args for apostrophe type argument space call site: {args}"
     | Ok (Program [Expression expr]) ->
         Error $"Unexpected AST for apostrophe type argument space call site: {expr}"
     | Ok other ->
@@ -133,7 +153,7 @@ let testInterpreterParserParsesCurriedTopLevelLetFunctionDef () : TestResult =
     | Error err ->
         Error $"Interpreter parser failed on curried top-level let function definition: {err}"
     | Ok (Program [FunctionDef fnDef]) ->
-        match fnDef.Params with
+        match NonEmptyList.toList fnDef.Params with
         | [("x", AST.TInt64); ("y", AST.TInt64)] ->
             Ok ()
         | _ ->

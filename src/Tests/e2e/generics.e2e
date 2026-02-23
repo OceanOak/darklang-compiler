@@ -261,3 +261,7 @@ let p = pair218(42, true) in p.0 = 42
 // Type inference where TVar is bound from multiple sources (argument and return)
 def returnFirst218<a, b>(x: a, y: b) : a = x
 returnFirst218(50, "ignored") - 8 = 42
+
+// Generic function body must satisfy declared return type for all type params.
+// This should fail because `x` has type `t`, but return type is unrelated `u`.
+def badReturn<t, u>(x: t): u = x badReturn<Int64, String>(42) = error="Type mismatch in function badReturn body"

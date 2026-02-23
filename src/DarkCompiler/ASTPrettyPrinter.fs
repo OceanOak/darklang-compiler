@@ -193,6 +193,19 @@ let private parenthesizeTupleBaseIfNeeded (expr: Expr) (text: string) : string =
     | TupleAccess _ -> $"({text})"
     | _ -> parenthesizeIfNeeded expr text
 
+let private isSyntheticUnitParam ((paramName, paramType): string * Type) : bool =
+    paramType = TUnit && paramName.StartsWith("$unit")
+
+let private isSyntheticUnitParamList (parameters: NonEmptyList<string * Type>) : bool =
+    match NonEmptyList.toList parameters with
+    | [singleParam] -> isSyntheticUnitParam singleParam
+    | _ -> false
+
+let private isUnitArgumentList (args: NonEmptyList<Expr>) : bool =
+    match NonEmptyList.toList args with
+    | [UnitLiteral] -> true
+    | _ -> false
+
 let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
     match pattern with
     | PUnit -> "()"
@@ -424,28 +437,36 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | If (cond, thenBranch, elseBranch) ->
         $"if {formatExpr syntax cond} then {formatExpr syntax thenBranch} else {formatExpr syntax elseBranch}"
     | Call (funcName, args) ->
+        let argsList = NonEmptyList.toList args
         match syntax with
         | CompilerSyntax ->
-            let argsText = args |> List.map (formatExpr syntax) |> String.concat ", "
-            $"{funcName}({argsText})"
-        | InterpreterSyntax ->
-            if List.isEmpty args then
+            if isUnitArgumentList args then
                 $"{funcName}()"
             else
-                let argsText = args |> formatInterpreterAppArgs |> String.concat " "
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{funcName}({argsText})"
+        | InterpreterSyntax ->
+            if isUnitArgumentList args then
+                $"{funcName}()"
+            else
+                let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
                 $"{funcName} {argsText}"
     | TypeApp (funcName, typeArgs, args) ->
+        let argsList = NonEmptyList.toList args
         let typeArgsText = typeArgs |> List.map formatType |> String.concat ", "
         match syntax with
         | CompilerSyntax ->
-            let argsText = args |> List.map (formatExpr syntax) |> String.concat ", "
-            $"{funcName}<{typeArgsText}>({argsText})"
+            if isUnitArgumentList args then
+                $"{funcName}<{typeArgsText}>()"
+            else
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{funcName}<{typeArgsText}>({argsText})"
         | InterpreterSyntax ->
             let head = $"{funcName}<{typeArgsText}>"
-            match args with
-            | [] -> $"{head}()"
-            | _ ->
-                let argsText = args |> List.map (formatExpr syntax) |> String.concat ", "
+            if isUnitArgumentList args then
+                $"{head}()"
+            else
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
                 $"{head}({argsText})"
     | TupleLiteral elements ->
         let elementsText = elements |> List.map (formatExpr syntax) |> String.concat ", "
@@ -536,31 +557,35 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         else
             $"[{headText}{separator}...{formatExpr syntax tail}]"
     | Lambda (parameters, body) ->
+        let parameterList = NonEmptyList.toList parameters
         match syntax with
         | CompilerSyntax ->
-            match parameters, body with
+            match parameterList, body with
             | [ (paramName, TBool) ], BinOp (And, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
                 $"(&&) {formatAppArg rightArg}"
             | [ (paramName, TBool) ], BinOp (Or, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
                 $"(||) {formatAppArg rightArg}"
             | _ ->
-                let paramsText =
-                    parameters
-                    |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
-                    |> String.concat ", "
-                $"({paramsText}) => {formatExpr syntax body}"
+                if isSyntheticUnitParamList parameters then
+                    $"() => {formatExpr syntax body}"
+                else
+                    let paramsText =
+                        parameterList
+                        |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+                        |> String.concat ", "
+                    $"({paramsText}) => {formatExpr syntax body}"
         | InterpreterSyntax ->
-            if List.isEmpty parameters then
-                Crash.crash "Cannot render zero-argument lambda in interpreter syntax"
+            if isSyntheticUnitParamList parameters then
+                $"fun () -> {formatExpr syntax body}"
             else
-                match parameters, body with
+                match parameterList, body with
                 | [ (paramName, TBool) ], BinOp (And, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
                     $"(&&) {formatAppArg rightArg}"
                 | [ (paramName, TBool) ], BinOp (Or, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
                     $"(||) {formatAppArg rightArg}"
                 | _ ->
                     let paramsText =
-                        parameters
+                        parameterList
                         |> List.map (fun (name, typ) ->
                             match typ with
                             | TVar typeVar when typeVar.StartsWith "__interp_lambda_" -> name
@@ -568,17 +593,21 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                         |> String.concat " "
                     $"fun {paramsText} -> {formatExpr syntax body}"
     | Apply (funcExpr, args) ->
+        let argsList = NonEmptyList.toList args
         match syntax with
         | CompilerSyntax ->
             let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
-            let argsText = args |> List.map (formatExpr syntax) |> String.concat ", "
-            $"{funcText}({argsText})"
+            if isUnitArgumentList args then
+                $"{funcText}()"
+            else
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{funcText}({argsText})"
         | InterpreterSyntax ->
             let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
-            if List.isEmpty args then
-                funcText
+            if isUnitArgumentList args then
+                $"{funcText}()"
             else
-                let argsText = args |> formatInterpreterAppArgs |> String.concat " "
+                let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
                 $"{funcText} {argsText}"
     | FuncRef funcName -> funcName
     | Closure (funcName, captures) ->
@@ -595,8 +624,14 @@ let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
                 $"<{joined}>"
         let paramsText =
             funcDef.Params
-            |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
-            |> String.concat ", "
+            |> NonEmptyList.toList
+            |> (fun parameters ->
+                if isSyntheticUnitParamList funcDef.Params then
+                    ""
+                else
+                    parameters
+                    |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+                    |> String.concat ", ")
         $"def {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
     | InterpreterSyntax ->
         let typeParamsText =
@@ -606,8 +641,14 @@ let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
                 $"<{joined}>"
         let paramsText =
             funcDef.Params
-            |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
-            |> String.concat ", "
+            |> NonEmptyList.toList
+            |> (fun parameters ->
+                if isSyntheticUnitParamList funcDef.Params then
+                    ""
+                else
+                    parameters
+                    |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+                    |> String.concat ", ")
         $"let {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
 
 let private formatTypeDef (typeDef: TypeDef) : string =

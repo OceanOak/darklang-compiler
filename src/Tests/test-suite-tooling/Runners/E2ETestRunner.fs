@@ -64,7 +64,7 @@ let private buildValueComparisonExpr (lhsExpr: Expr) (rhsExpr: Expr) : Expr =
     if isFloatExpectedExpr rhsExpr then
         // For float value tests, compare with epsilon tolerance.
         let absDiff =
-            Call ("Stdlib.Float.abs", [BinOp (Sub, lhsExpr, rhsExpr)])
+            Call ("Stdlib.Float.abs", NonEmptyList.singleton (BinOp (Sub, lhsExpr, rhsExpr)))
         BinOp (Lt, absDiff, FloatLiteral valueFloatEpsilon)
     else
         BinOp (Eq, lhsExpr, rhsExpr)
@@ -130,13 +130,15 @@ let private trySynthesizeValueEqualitySource
                     let valueCheckFuncDef : AST.FunctionDef = {
                         Name = valueCheckFuncName
                         TypeParams = []
-                        Params = []
+                        // Match parser-generated synthetic unit parameter naming so
+                        // pretty-print/parse roundtrips stay structurally stable.
+                        Params = NonEmptyList.singleton ("$unit0", TUnit)
                         ReturnType = TBool
                         Body = comparisonExpr
                     }
                     Program (
                         List.rev (
-                            Expression (Call (valueCheckFuncName, []))
+                            Expression (Call (valueCheckFuncName, NonEmptyList.singleton UnitLiteral))
                             :: FunctionDef valueCheckFuncDef
                             :: sourceRestRev
                         )
@@ -293,7 +295,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
     let combineMany (sets: Set<string> list) : Set<string> =
         sets |> List.fold Set.union Set.empty
 
-    let collectCallLike (funcName: string) (args: Expr list) : Set<string> =
+    let collectCallLike (funcName: string) (args: NonEmptyList<Expr>) : Set<string> =
         let fromFuncName =
             if Set.contains funcName knownPreambleFunctions
                && not (Set.contains funcName boundVars) then
@@ -302,6 +304,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
                 Set.empty
         let fromArgs =
             args
+            |> NonEmptyList.toList
             |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
             |> combineMany
         Set.union fromFuncName fromArgs
@@ -432,6 +435,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
     | Lambda (parameters, bodyExpr) ->
         let lambdaBoundVars =
             parameters
+            |> NonEmptyList.toList
             |> List.map fst
             |> Set.ofList
             |> Set.union boundVars
@@ -441,6 +445,7 @@ let rec private collectExprReferencedPreambleFuncsWithBound
             collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars funcExpr
         let argRefs =
             args
+            |> NonEmptyList.toList
             |> List.map (collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions boundVars)
             |> combineMany
         Set.union funcRefs argRefs
@@ -479,6 +484,7 @@ let private collectProgramReferencedPreambleFuncs
         | FunctionDef funcDef ->
             let paramBoundVars =
                 funcDef.Params
+                |> NonEmptyList.toList
                 |> List.map fst
                 |> Set.ofList
             collectExprReferencedPreambleFuncsWithBound knownPreambleFunctions paramBoundVars funcDef.Body
@@ -595,6 +601,7 @@ let private analyzePreambleWithReducedFunctionSet
             |> List.map (fun funcDef ->
                 let paramBoundVars =
                     funcDef.Params
+                    |> NonEmptyList.toList
                     |> List.map fst
                     |> Set.ofList
                 let deps =

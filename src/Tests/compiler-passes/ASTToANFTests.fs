@@ -47,7 +47,7 @@ let testNeedsLambdaLoweringDetectsFuncValue () : TestResult =
 
 let testNeedsLambdaLoweringDetectsLambda () : TestResult =
     let knownFuncs = Set.empty
-    let expr = AST.Lambda ([("x", AST.TInt64)], AST.Var "x")
+    let expr = AST.Lambda (AST.NonEmptyList.singleton ("x", AST.TInt64), AST.Var "x")
     let program = AST.Program [AST.Expression expr]
     if programNeedsLambdaLowering knownFuncs program then Ok ()
     else Error "Expected lambda to trigger lambda lowering"
