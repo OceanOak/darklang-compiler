@@ -110,18 +110,6 @@ def truncate_plain_label(label, max_width):
         return label
     return label[:max_width]
 
-def format_context_label(context, max_width):
-    """Format the timestamp to fit the branch column width cleanly."""
-    if max_width >= len(context):
-        return context
-    if max_width >= 5:
-        return context[:5]  # HH:MM
-    if max_width >= 4:
-        return context[:2] + context[3:5]  # HHMM
-    if max_width >= 2:
-        return context[:2]  # HH
-    return context[:max_width]
-
 def render_status():
     """Render the full status display."""
     repo_root = run_git(['rev-parse', '--show-toplevel'])
@@ -219,11 +207,12 @@ def render_status():
             log = log_entries[log_idx] if log_idx < len(log_entries) else None
             log_idx += 1
             log_str = build_log_display(log)
-            context_label = format_context_label(context, max_branch)
-            pad_context = max_branch - vislen(context_label)
+            # Keep full HH:MM:SS label and backfill remaining worktree columns with spaces.
+            worktree_prefix_width = max_branch + 3 + 3 + 2 + max_status + 2
+            pad_context = worktree_prefix_width - vislen(context)
             if pad_context < 0:
                 pad_context = 0
-            output_lines.append(f"{DIM}{context_label}{NC}{' ' * pad_context}   {'   '}  {' ' * max_status}  {log_str}")
+            output_lines.append(f"{DIM}{context}{NC}{' ' * pad_context}{log_str}")
         else:
             data_index = (i - 1) if i <= max_visible else (i - 2)
             if data_index < len(rows):
