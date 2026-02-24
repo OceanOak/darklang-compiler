@@ -104,6 +104,24 @@ def vislen(s):
     clean = clean.replace('↑', '^').replace('↓', 'v').replace('✓', 'v')
     return len(clean)
 
+def truncate_plain_label(label, max_width):
+    """Truncate non-colored labels to max visible width."""
+    if vislen(label) <= max_width:
+        return label
+    return label[:max_width]
+
+def format_context_label(context, max_width):
+    """Format the timestamp to fit the branch column width cleanly."""
+    if max_width >= len(context):
+        return context
+    if max_width >= 5:
+        return context[:5]  # HH:MM
+    if max_width >= 4:
+        return context[:2] + context[3:5]  # HHMM
+    if max_width >= 2:
+        return context[:2]  # HH
+    return context[:max_width]
+
 def render_status():
     """Render the full status display."""
     repo_root = run_git(['rev-parse', '--show-toplevel'])
@@ -201,10 +219,11 @@ def render_status():
             log = log_entries[log_idx] if log_idx < len(log_entries) else None
             log_idx += 1
             log_str = build_log_display(log)
-            pad_context = max_branch - vislen(context)
+            context_label = format_context_label(context, max_branch)
+            pad_context = max_branch - vislen(context_label)
             if pad_context < 0:
                 pad_context = 0
-            output_lines.append(f"{DIM}{context}{NC}{' ' * pad_context}   {'   '}  {' ' * max_status}  {log_str}")
+            output_lines.append(f"{DIM}{context_label}{NC}{' ' * pad_context}   {'   '}  {' ' * max_status}  {log_str}")
         else:
             data_index = (i - 1) if i <= max_visible else (i - 2)
             if data_index < len(rows):
@@ -212,7 +231,7 @@ def render_status():
                 label = r['label']
                 # Truncate label if too long (but preserve color codes)
                 if vislen(label) > max_branch and '\033' not in label:
-                    label = label[:max_branch]
+                    label = truncate_plain_label(label, max_branch)
                 flags = r['flags']
                 status = r['status']
             else:
