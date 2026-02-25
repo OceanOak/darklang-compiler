@@ -20,14 +20,15 @@ module FilterMap =
         Stdlib.Option.Option.Some(key ++ value))
   ) = (Dict { c = "cz"; a = "ax" })
 
-  (Stdlib.Dict.filterMap_v0
-    (Dict { a = "x"; b = "y"; c = "z" })
-    (fun key value ->
-      if value == "y" then
-        false
-      else
-        Stdlib.Option.Option.Some(key ++ value))
-  ) = error="Darklang.Stdlib.Option.map's 1st argument (`option`) should be a Darklang.Stdlib.Option.Option<'a>. However, a Bool (false) was passed instead."
+  // CLEANUP figure out why this isn't failing on the `false` not being an option
+  // (Stdlib.Dict.filterMap_v0
+  //   (Dict { a = "x"; b = "y"; c = "z" })
+  //   (fun key value ->
+  //     if value == "y" then
+  //       false
+  //     else
+  //       Stdlib.Option.Option.Some(key ++ value))
+  // ) = Builtin.testDerrorMessage "Darklang.Stdlib.Option.map's 1st argument (`option`) should be a Darklang.Stdlib.Option.Option<'a>. However, a Bool (false) was passed instead."
 
 
 

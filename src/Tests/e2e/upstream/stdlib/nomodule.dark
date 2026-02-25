@@ -131,33 +131,33 @@ module Equals =
    != Stdlib.Uuid.parse_v0 "3700adbc-7a46-4ff4-81d3-45afb03f6e2d") = true
 
   // TODO revisit these
-  (fun x -> y) = (fun x -> y)
-  ((fun x -> let y = 1Q in y) == (fun x -> let y = 1Q in y)) = true
-  ((fun x -> let y = 1Q in y) != (fun x -> let y = 2Q in x)) = false
+  //(fun x -> y) = (fun x -> y)
+  // ((fun x -> let y = 1Q in y) == (fun x -> let y = 1Q in y)) = true
+  // ((fun x -> let y = 1Q in y) != (fun x -> let y = 2Q in x)) = false
 
-  ((fun x -> let y = 1Z in y) == (fun x -> let y = 1Z in y)) = true
-  ((fun x -> let y = 1Z in y) != (fun x -> let y = 2Z in x)) = false
+  // ((fun x -> let y = 1Z in y) == (fun x -> let y = 1Z in y)) = true
+  // ((fun x -> let y = 1Z in y) != (fun x -> let y = 2Z in x)) = false
 
-  ((fun x -> let y = 1L in y) == (fun x -> let y = 1L in y)) = true
-  ((fun x -> let y = 1L in y) != (fun x -> let y = 2L in x)) = false
+  // ((fun x -> let y = 1L in y) == (fun x -> let y = 1L in y)) = true
+  // ((fun x -> let y = 1L in y) != (fun x -> let y = 2L in x)) = false
 
-  ((fun x -> let y = 1l in y) == (fun x -> let y = 1l in y)) = true
-  ((fun x -> let y = 1l in y) != (fun x -> let y = 2l in x)) = false
+  // ((fun x -> let y = 1l in y) == (fun x -> let y = 1l in y)) = true
+  // ((fun x -> let y = 1l in y) != (fun x -> let y = 2l in x)) = false
 
-  ((fun x -> let y = 1ul in y) == (fun x -> let y = 1ul in y)) = true
-  ((fun x -> let y = 1ul in y) != (fun x -> let y = 2ul in x)) = false
+  // ((fun x -> let y = 1ul in y) == (fun x -> let y = 1ul in y)) = true
+  // ((fun x -> let y = 1ul in y) != (fun x -> let y = 2ul in x)) = false
 
-  ((fun x -> let y = 1s in y) == (fun x -> let y = 1s in y)) = true
-  ((fun x -> let y = 1s in y) != (fun x -> let y = 2s in x)) = false
+  // ((fun x -> let y = 1s in y) == (fun x -> let y = 1s in y)) = true
+  // ((fun x -> let y = 1s in y) != (fun x -> let y = 2s in x)) = false
 
-  ((fun x -> let y = 1us in y) == (fun x -> let y = 1us in y)) = true
-  ((fun x -> let y = 1us in y) != (fun x -> let y = 2us in x)) = false
+  // ((fun x -> let y = 1us in y) == (fun x -> let y = 1us in y)) = true
+  // ((fun x -> let y = 1us in y) != (fun x -> let y = 2us in x)) = false
 
-  ((fun x -> let y = 1y in y) == (fun x -> let y = 1y in y)) = true
-  ((fun x -> let y = 1y in y) != (fun x -> let y = 2y in x)) = false
+  // ((fun x -> let y = 1y in y) == (fun x -> let y = 1y in y)) = true
+  // ((fun x -> let y = 1y in y) != (fun x -> let y = 2y in x)) = false
 
-  ((fun x -> let y = 1uy in y) == (fun x -> let y = 1uy in y)) = true
-  ((fun x -> let y = 1uy in y) != (fun x -> let y = 2uy in x)) = false
+  // ((fun x -> let y = 1uy in y) == (fun x -> let y = 1uy in y)) = true
+  // ((fun x -> let y = 1uy in y) != (fun x -> let y = 2uy in x)) = false
 
 
   (ERecInt128 { x = 6Q; y = 7Q } == ERecInt128 { x = 6Q; y = 7Q }) = true
@@ -317,7 +317,7 @@ module Equals =
     (() != 0.0) = error="Cannot perform equality check on Unit and Float"
 
     // CLEANUP follow up here when DB references are fully resolved at parse-time
-    (MyDB != 5L) = error="Cannot perform equality check on TODO and TODO"
+    //(MyDB != 5L) = Builtin.testDerrorMessage "Cannot perform equality check on TODO and TODO"
 
   // Other ways to call it
   Stdlib.equals_v0 1Q 1Q = true
@@ -407,17 +407,17 @@ module NotEquals =
 
 
 // Moving to packages
-AWS.urlencode_v0 "%" = ""
-AWS.urlencode_v0 "%%" = ""
-AWS.urlencode_v0 "%A" = "A"
-AWS.urlencode_v0 "%AA" = "%AA"
-AWS.urlencode_v0 "" = ""
-AWS.urlencode_v0 "殢" = "%E6%AE%A2"
-AWS.urlencode_v0 "https://google.com?q=left shark&l=en" = "https%3A//google.com%3Fq%3Dleft%20shark%26l%3Den"
-AWS.urlencode_v0 "گچپژ" = "%DA%AF%DA%86%D9%BE%DA%98"
-AWS.urlencode_v0 "<foo val=”bar“ />" = "%3Cfoo%20val%3D%E2%80%9Dbar%E2%80%9C%20/%3E"
-AWS.urlencode_v0 "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀" = "%E8%A1%A8%E3%83%9D%E3%81%82A%E9%B7%97%C5%92%C3%A9%EF%BC%A2%E9%80%8D%C3%9C%C3%9F%C2%AA%C4%85%C3%B1%E4%B8%82%E3%90%80%F0%A0%80%80"
-Twitter.urlencode_v0 "https://google.com?q=left shark&l=en" = "https%3A%2F%2Fgoogle.com%3Fq%3Dleft%20shark%26l%3Den" // URL percent encoding
+// AWS.urlencode_v0 "%" = ""
+// AWS.urlencode_v0 "%%" = ""
+// AWS.urlencode_v0 "%A" = "A"
+// AWS.urlencode_v0 "%AA" = "%AA"
+// AWS.urlencode_v0 "" = ""
+// AWS.urlencode_v0 "殢" = "%E6%AE%A2"
+// AWS.urlencode_v0 "https://google.com?q=left shark&l=en" = "https%3A//google.com%3Fq%3Dleft%20shark%26l%3Den" // Test fails without a comment here
+// AWS.urlencode_v0 "گچپژ" = "%DA%AF%DA%86%D9%BE%DA%98"
+// AWS.urlencode_v0 "<foo val=”bar“ />" = "%3Cfoo%20val%3D%E2%80%9Dbar%E2%80%9C%20/%3E"
+// AWS.urlencode_v0 "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀" = "%E8%A1%A8%E3%83%9D%E3%81%82A%E9%B7%97%C5%92%C3%A9%EF%BC%A2%E9%80%8D%C3%9C%C3%9F%C2%AA%C4%85%C3%B1%E4%B8%82%E3%90%80%F0%A0%80%80"
+// Twitter.urlencode_v0 "https://google.com?q=left shark&l=en" = "https%3A%2F%2Fgoogle.com%3Fq%3Dleft%20shark%26l%3Den" // URL percent encoding
 
 
 

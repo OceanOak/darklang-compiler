@@ -213,7 +213,7 @@ module Conversion =
   |> Stdlib.DateTime.toSeconds_v0
   |> Stdlib.DateTime.fromSeconds_v0
   |> Stdlib.DateTime.toString_v0 = "2019-07-28T22:42:36Z"
-Stdlib.DateTime.today_v0 |> Stdlib.DateTime.toString_v0 = "2020-10-17T00:00:00Z"
+// Stdlib.DateTime.today_v0 |> Stdlib.DateTime.toString_v0 = "2020-10-17T00:00:00Z" // todo, how can we test this
 
 module AddingSeconds =
   let a (d1: String) (s: Int64) : DateTime =

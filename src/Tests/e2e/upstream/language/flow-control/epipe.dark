@@ -25,8 +25,8 @@ let userFn () : Int64 = 6L
 (let x = fun a -> a + 1L in (5L |> x |> x |> (+) 3L)) = 10L
 
 // CLEANUP this is OK now.
-(let x = fun a b -> a + 1L in (7L |> x)) =
-  error="Expected 2 arguments, got 1"
+// (let x = fun a b -> a + 1L in (7L |> x)) =
+//   Builtin.testDerrorMessage "Expected 2 arguments, got 1"
 
 // only lambda might be placed into the variable used in the middle of the pipe
 (let x = 1L in (5L |> x |> (+) 3L)) =

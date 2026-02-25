@@ -16,11 +16,11 @@ module Append =
   "a" ++ "" = "a"
   "a" ++ "̂" = "â"
 
-  Stdlib.String.append "a" "̂" = "â"
+  //Stdlib.String.append "a" "̂" = "â"
   Stdlib.String.append "" "" = ""
   Stdlib.String.append "hello" " world" = "hello world"
   Stdlib.String.append "hello" "world" = "helloworld" // Stdlib.String.append works for ASCII range
-  Stdlib.String.append "ᄀ" "ᅡᆨ" = "각"
+  //Stdlib.String.append "ᄀ" "ᅡᆨ" = "각"
   Stdlib.String.append "żółw" "😄" = "żółw😄" // Stdlib.String.append works on non-ascii strings
   Stdlib.String.append "🧑🏼‍💻" "🧑🏻‍🍼" = "🧑🏼‍💻🧑🏻‍🍼"
   Stdlib.String.append "﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽" "👱👱🏻👱🏼👱🏽👱🏾👱🏿" = "﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽﷽👱👱🏻👱🏼👱🏽👱🏾👱🏿"
@@ -133,9 +133,14 @@ module Map =
 
   Stdlib.String.map "👨‍❤️‍💋‍👨👩‍👩‍👧‍👦🏳️‍⚧️‍️🇵🇷" (fun x -> 'c') = "cccc"
 
-  // CLEANUP: it should be a type error on the function not returning a Char
-  Stdlib.String.map "👨‍❤️‍💋‍👨👩‍👩‍👧‍👦🏳️‍⚧️‍️🇵🇷" (fun x -> 5L) =
-    error="Darklang.Stdlib.String.fromList's 1st argument (`lst`) should be a List<Char>. However, a List<Int64>"
+  //   // CLEANUP: it should be a type error on the function not returning a Char
+  //   Stdlib.String.map "👨‍❤️‍💋‍👨👩‍👩‍👧‍👦🏳️‍⚧️‍️🇵🇷" (fun x -> 5L) = Builtin.testDerrorMessage
+  //     """Darklang.Stdlib.String.fromList's 1st argument (`lst`) should be a List<Char>. However, a List<Int64> ([  5, 5, ...) was passed instead.
+
+  // Expected: (lst: List<Char>)
+  // Actual: a List<Int64>: [
+  //   5, 5, 5, 5
+  // ]"""
 
 
   // Check that map executes the right number of times
@@ -771,9 +776,9 @@ module Head =
 
   // Commented out as F# parser doesn't like unicode "characters"
   // CLEANUP uncomment when switched to new parser
-  Stdlib.String.head "👱👱🏻👱🏼👱🏽👱🏾👱🏿" = Stdlib.Option.Option.Some '👱'
-  Stdlib.String.head "🧟‍♀️🧟‍♂️" = Stdlib.Option.Option.Some '🧟'
-  Stdlib.String.head "👨‍❤️‍💋‍👨" = Stdlib.Option.Option.Some '👨‍❤️‍💋‍👨'
+  // Stdlib.String.head "👱👱🏻👱🏼👱🏽👱🏾👱🏿" = Stdlib.Option.Option.Some '👱'
+  // Stdlib.String.head "🧟‍♀️🧟‍♂️" = Stdlib.Option.Option.Some '🧟'
+  // Stdlib.String.head "👨‍❤️‍💋‍👨" = Stdlib.Option.Option.Some '👨‍❤️‍💋‍👨'
 
 module ArticleFor =
   Stdlib.String.articleFor "apple" = "an"

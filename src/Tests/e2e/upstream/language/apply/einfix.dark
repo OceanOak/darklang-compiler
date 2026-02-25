@@ -3,10 +3,14 @@
 (5L + (3L)) = 8L
 Stdlib.Int64.add_v0 5L 3L = 8L
 
-5L + true = exit=1 stderr="Builtin.int64Add's 2nd parameter `b` expects Int64, but got Bool (true)"
+5L + true =
+  error="Builtin.int64Add's 2nd parameter `b` expects Int64, but got Bool (true)"
 
-5L + (Builtin.testRuntimeError "error") = exit=1 stderr="Uncaught exception: error"
+5L + (Builtin.testRuntimeError "error") =
+  error="Uncaught exception: error"
 
-(Builtin.testRuntimeError "error") + 5L = exit=1 stderr="Uncaught exception: error"
+(Builtin.testRuntimeError "error") + 5L =
+  error="Uncaught exception: error"
 
-(Builtin.testRuntimeError "one") + (Builtin.testRuntimeError "two") = exit=1 stderr="Uncaught exception: one"
+(Builtin.testRuntimeError "one") + (Builtin.testRuntimeError "two") =
+  error="Uncaught exception: one"
