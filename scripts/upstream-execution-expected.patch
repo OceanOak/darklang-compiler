@@ -128,7 +128,18 @@
  
  module Variables =
    (let x = 5L in x) = 5L
-@@ -23,10 +23,10 @@
+@@ -14,19 +14,19 @@
+   (let (a, b) = (1L, 2L) in 2L) = 2L
+   (let (a, b) = (1L, 2L) in b) = 2L
+   (let (a, b) = (1L, 2L) in (b, a)) = (2L, 1L)
+-  (let (d, d) = (2L, 1L) in d) = 1L
++  (let (d, d) = (2L, 1L) in d) = 1L warn_on_duplicate_pattern_bindings=false
+   (let (_, _) = (1L, 2L) in 2L) = 2L
+ 
+   (let (a, b, c) = (1L, 2L, 3L) in b) = 2L
+   (let (a, b, c) = (1L, 2L, 3L) in (b, a)) = (2L, 1L)
+-  (let (d, d, d) = (2L, 1L, 3L) in d) = 3L
++  (let (d, d, d) = (2L, 1L, 3L) in d) = 3L warn_on_duplicate_pattern_bindings=false
    (let (_, _, _) = (1L, 2L, 3L) in 2L) = 2L
  
    (let (_, _, _) = (1L, 2L, Builtin.testRuntimeError "test") in 2L) =
@@ -184,11 +195,11 @@
  
  (let one = 1.0 in $"test {one}") =
 -  Builtin.testDerrorMessage "Expected String in string interpolation, got a Float (1.0) instead"
-+  error="Expected String in string interpolation, got a Float (1.0) instead"
++  error="Expected String in string interpolation, got a Float instead"
  
  (let one = 1L in $"test {one}") =
 -  Builtin.testDerrorMessage "Expected String in string interpolation, got an Int64 (1) instead"
-+  error="Expected String in string interpolation, got an Int64 (1) instead"
++  error="Expected String in string interpolation, got an Int64 instead"
  
  (let name = "John"
   let age = "30"
@@ -681,6 +692,24 @@
 
 --- a/language/flow-control/ematch.dark
 +++ b/language/flow-control/ematch.dark
+@@ -376,7 +376,7 @@
+   // duplicate variable name
+   (match [ 1L; 2L; 5L ] with
+    | [ a; a; a ] -> a
+-   | name -> name ++ "var") = 5L
++   | name -> name ++ "var") = 5L warn_on_duplicate_pattern_bindings=false
+ 
+ 
+ 
+@@ -526,7 +526,7 @@
+ 
+    match tpl with
+    | (a, b, (a, b), a) -> (a, b)
+-   | name -> name ++ "var") = (5L, 4L)
++   | name -> name ++ "var") = (5L, 4L) warn_on_duplicate_pattern_bindings=false
+ 
+ 
+ 
 @@ -649,21 +649,21 @@
  
  module Errors =
