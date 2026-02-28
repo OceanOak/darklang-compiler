@@ -20,6 +20,15 @@ module AST
 /// A list guaranteed to have at least one element (makes invalid states unrepresentable)
 type NonEmptyList<'a> = { Head: 'a; Tail: 'a list }
 
+/// Compiler-wide warning settings passed from the driver into compiler passes.
+type WarningSettings = {
+    WarnOnDuplicatePatternBindings: bool
+}
+
+let defaultWarningSettings : WarningSettings = {
+    WarnOnDuplicatePatternBindings = true
+}
+
 /// Type system - will be used for type checking in Phase 0+
 type Type =
     // Signed integers

@@ -289,7 +289,23 @@ let lex (input: string) : Result<Token list, string> =
                         // tuple index context (e.g. .0, .1)
                         parseInt64OrError afterInt
                     | _ ->
-                        Error $"Interpreter syntax requires Int64 literals to end with 'L': {numStr}"
+                        let rec trimLeadingWhitespace (chars: char list) : char list =
+                            match chars with
+                            | c :: rest when System.Char.IsWhiteSpace c -> trimLeadingWhitespace rest
+                            | _ -> chars
+                        let remainingAfterWhitespace = trimLeadingWhitespace afterInt
+                        let isBoolOpContext =
+                            match remainingAfterWhitespace with
+                            | '&' :: '&' :: _
+                            | '|' :: '|' :: _ ->
+                                true
+                            | _ ->
+                                false
+                        if isBoolOpContext then
+                            // Preserve legacy compatibility for forms like `(5 && true)`.
+                            parseInt64OrError afterInt
+                        else
+                            Error $"Interpreter syntax requires Int64 literals to end with 'L': {numStr}"
         | '$' :: '"' :: rest ->
             // Parse interpolated string: $"Hello {name}!"
             // Returns TInterpString token with parts list
@@ -1440,6 +1456,16 @@ let parse (tokens: Token list) : Result<Program, string> =
     // Recursive descent parser with operator precedence
     // Precedence (low to high): or < and < comparison < +/- < */ < unary
 
+    // Stable lambda seed for generated implicit type variables.
+    // Uses parse-order instead of token-list length so pretty-print roundtrips
+    // preserve equivalent lambda variable naming.
+    let mutable lambdaSeedCounter = 0
+
+    let nextLambdaSeed () : int =
+        let current = lambdaSeedCounter
+        lambdaSeedCounter <- lambdaSeedCounter + 1
+        current
+
     let startsWithNegativeNumericLiteral (toks: Token list) : bool =
         match toks with
         | TMinus :: TInt64 _ :: _
@@ -1930,7 +1956,7 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TFalse :: rest -> Ok (BoolLiteral false, rest)
         | TFun :: rest ->
             // Interpreter lambda syntax: fun x y -> body
-            let lambdaSeed = List.length rest
+            let lambdaSeed = nextLambdaSeed ()
 
             let rec parseFunParameters
                 (toks: Token list)

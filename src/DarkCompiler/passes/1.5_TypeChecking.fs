@@ -46,6 +46,7 @@ let private toLambdaParams (parameters: (string * Type) list) : NonEmptyList<str
 /// Type errors
 type TypeError =
     | TypeMismatch of expected:Type * actual:Type * context:string
+    | IfBranchTypeMismatch of expected:Type * actual:Type
     | UndefinedVariable of name:string
     | UndefinedCallTarget of name:string
     | MissingTypeAnnotation of context:string
@@ -96,6 +97,8 @@ let typeErrorToString (err: TypeError) : string =
     match err with
     | TypeMismatch (expected, actual, context) ->
         $"Type mismatch in {context}: expected {typeToString expected}, got {typeToString actual}"
+    | IfBranchTypeMismatch (expected, actual) ->
+        $"Type mismatch: if branches must have same type: expected {typeToString expected}, got {typeToString actual}"
     | UndefinedVariable name ->
         $"Undefined variable: {name}"
     | UndefinedCallTarget name ->
@@ -143,6 +146,16 @@ let private describeIfConditionActual (expr: Expr) (actualType: Type) : string =
 let private ifConditionTypeMismatchMessage (expr: Expr) (actualType: Type) : string =
     let actual = describeIfConditionActual expr actualType
     $"Encountered a condition that must be a Bool, but got {withIndefiniteArticle actual}"
+
+let private describeInterpolationActual (expr: Expr) (actualType: Type) : string =
+    match expr with
+    | FloatLiteral f -> $"a Float ({f})"
+    | Int64Literal i -> $"an Int64 ({i})"
+    | _ -> withIndefiniteArticle (typeToString actualType)
+
+let private interpolationTypeMismatchMessage (expr: Expr) (actualType: Type) : string =
+    let actual = describeInterpolationActual expr actualType
+    $"Expected String in string interpolation, got {actual} instead"
 
 let private isBuiltinUnwrapName (funcName: string) : bool =
     funcName = "Builtin.unwrap" || funcName = "Stdlib.Builtin.unwrap"
@@ -1302,6 +1315,7 @@ let rec checkExprWithParamNames
     (typeReg: TypeRegistry)
     (variantLookup: VariantLookup)
     (genericFuncReg: GenericFuncRegistry)
+    (warningSettings: WarningSettings)
     (moduleRegistry: ModuleRegistry)
     (aliasReg: AliasRegistry)
     (expectedType: Type option)
@@ -1312,6 +1326,7 @@ let rec checkExprWithParamNames
         (innerTypeReg: TypeRegistry)
         (innerVariantLookup: VariantLookup)
         (innerGenericFuncReg: GenericFuncRegistry)
+        (innerWarningSettings: WarningSettings)
         (innerModuleRegistry: ModuleRegistry)
         (innerAliasReg: AliasRegistry)
         (innerExpectedType: Type option)
@@ -1323,6 +1338,7 @@ let rec checkExprWithParamNames
             innerTypeReg
             innerVariantLookup
             innerGenericFuncReg
+            innerWarningSettings
             innerModuleRegistry
             innerAliasReg
             innerExpectedType
@@ -1430,12 +1446,28 @@ let rec checkExprWithParamNames
             | StringText s :: rest ->
                 checkParts rest (StringText s :: checkedParts)
             | StringExpr e :: rest ->
-                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
+                let checkedPartResult =
+                    checkExpr e env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
+                let normalizedPartResult =
+                    match checkedPartResult with
+                    | Error (UndefinedVariable name) ->
+                        Error (UndefinedCallTarget name)
+                    | Error (TypeMismatch (expected, _, _)) when expected = TString ->
+                        checkExpr e env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
+                        |> Result.mapError (fun innerErr ->
+                            match innerErr with
+                            | UndefinedVariable name -> UndefinedCallTarget name
+                            | _ -> innerErr)
+                        |> Result.bind (fun (actualType, checkedExpr) ->
+                            Error (GenericError (interpolationTypeMismatchMessage checkedExpr actualType)))
+                    | _ ->
+                        checkedPartResult
+                normalizedPartResult
                 |> Result.bind (fun (partType, checkedExpr) ->
                     if partType = TString || partType = TChar then
                         checkParts rest (StringExpr checkedExpr :: checkedParts)
                     else
-                        Error (TypeMismatch (TString, partType, "interpolated expression")))
+                        Error (GenericError (interpolationTypeMismatchMessage checkedExpr partType)))
         match checkParts parts [] with
         | Ok checkedParts ->
             match expectedType with
@@ -1477,12 +1509,12 @@ let rec checkExprWithParamNames
                 Error (GenericError $"Uncaught exception: {msg}")
             | None ->
                 // Check left operand to determine numeric type
-                checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                 |> Result.bind (fun (leftType, left') ->
                     match tryAsNumericType leftType with
                     | Some leftNumericType ->
                         // Right operand must be same type
-                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftNumericType)
+                        checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some leftNumericType)
                         |> Result.mapError (fun err ->
                             match op, leftNumericType, err with
                             | Add, TInt64, TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
@@ -1524,7 +1556,7 @@ let rec checkExprWithParamNames
                                     | None -> None
                                 | None ->
                                     None
-                            checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg rightExpectedType
+                            checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg rightExpectedType
                             |> Result.bind (fun (rightType, right') ->
                                 let inferredNumericType =
                                     match rightExpectedType with
@@ -1579,12 +1611,12 @@ let rec checkExprWithParamNames
                 result
             | None ->
                 // Check left operand to determine type
-                checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                 |> Result.bind (fun (leftType, left') ->
                     match op with
                     | Eq | Neq ->
                     // Equality works on any type - both operands must be same type
-                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
+                        checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some leftType)
                         |> Result.bind (fun (rightType, right') ->
                             // In generic contexts, one side can still contain type variables
                             // while the other side has become concrete.
@@ -1602,19 +1634,24 @@ let rec checkExprWithParamNames
                                 | Some TBool | None -> Ok (TBool, comparisonExpr)
                                 | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
                     | Lt | Gt | Lte | Gte ->
-                        // Ordering only works on numeric types
-                        match leftType with
-                        | TInt8 | TInt16 | TInt32 | TInt64 | TUInt8 | TUInt16 | TUInt32 | TUInt64 | TFloat64 ->
-                            checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
-                            |> Result.bind (fun (rightType, right') ->
-                                if rightType <> leftType then
-                                    Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
-                                else
+                        // Ordering only works on numeric types.
+                        // Allow unresolved type variables here so guards like
+                        // `match Error 5 with | Ok x when x > 2 -> ...` can infer x as Int64.
+                        checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some leftType)
+                        |> Result.bind (fun (rightType, right') ->
+                            match reconcileTypes (Some aliasReg) leftType rightType with
+                            | None ->
+                                Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
+                            | Some comparableType ->
+                                match comparableType with
+                                | TInt8 | TInt16 | TInt32 | TInt64
+                                | TUInt8 | TUInt16 | TUInt32 | TUInt64
+                                | TFloat64 ->
                                     match expectedType with
                                     | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
-                                    | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}")))
-                        | other ->
-                            Error (InvalidOperation (opName, [other]))
+                                    | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))
+                                | other ->
+                                    Error (InvalidOperation (opName, [other])))
                     | _ ->
                         Error (GenericError $"Unexpected comparison operator: {opName}"))
 
@@ -1622,11 +1659,31 @@ let rec checkExprWithParamNames
         | And | Or ->
             let opName = if op = And then "&&" else "||"
 
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-            |> Result.bind (fun (leftType, left') ->
-                if leftType <> TBool then
+            let checkBooleanOperand (operand: Expr) : Result<Expr, TypeError> =
+                let checkedOperandResult =
+                    match op with
+                    | And ->
+                        checkExpr operand env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TBool)
+                    | Or ->
+                        checkExpr operand env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
+                    | _ ->
+                        checkExpr operand env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
+                match checkedOperandResult with
+                | Ok (operandType, operand') when operandType = TBool ->
+                    Ok operand'
+                | Ok _ ->
                     Error (GenericError $"{opName} only supports Booleans")
-                else
+                | Error (TypeMismatch (expected, _, _)) when op = And && expected = TBool ->
+                    Error (GenericError $"{opName} only supports Booleans")
+                | Error err ->
+                    Error err
+
+            match (op, tryExtractKnownTestRuntimeErrorMessage Map.empty left) with
+            | And, Some msg ->
+                Error (GenericError msg)
+            | _ ->
+                checkBooleanOperand left
+                |> Result.bind (fun left' ->
                     let rightIsKnownRuntimeError = isKnownTestRuntimeErrorExpr Map.empty right
                     let shortCircuitResult =
                         match (op, left', rightIsKnownRuntimeError) with
@@ -1639,11 +1696,12 @@ let rec checkExprWithParamNames
                         | Some TBool | None -> Ok (TBool, BoolLiteral result)
                         | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))
                     | None ->
-                        checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
-                        |> Result.bind (fun (rightType, right') ->
-                            if rightType <> TBool then
-                                Error (GenericError $"{opName} only supports Booleans")
-                            else
+                        match (op, tryExtractKnownTestRuntimeErrorMessage Map.empty right) with
+                        | And, Some msg ->
+                            Error (GenericError msg)
+                        | _ ->
+                            checkBooleanOperand right
+                            |> Result.bind (fun right' ->
                                 match expectedType with
                                 | Some TBool | None -> Ok (TBool, BinOp (op, left', right'))
                                 | Some other -> Error (TypeMismatch (other, TBool, $"result of {opName}"))))
@@ -1665,12 +1723,12 @@ let rec checkExprWithParamNames
                 | TUInt8 | TUInt16 | TUInt32 | TUInt64 -> true
                 | _ -> false
 
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+            checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
             |> Result.bind (fun (leftType, left') ->
                 if not (isIntegerType leftType) then
                     Error (InvalidOperation (opName, [leftType]))
                 else
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some leftType)
+                    checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some leftType)
                     |> Result.bind (fun (rightType, right') ->
                         if rightType <> leftType then
                             Error (TypeMismatch (leftType, rightType, $"right operand of {opName}"))
@@ -1682,13 +1740,13 @@ let rec checkExprWithParamNames
 
         // String concatenation: string -> string -> string
         | StringConcat ->
-            checkExpr left env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
+            checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
             |> Result.bind (fun (leftType, left') ->
                 let isStringLike t = t = TString || t = TChar
                 if not (isStringLike leftType) then
                     Error (InvalidOperation ("++", [leftType]))
                 else
-                    checkExpr right env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
+                    checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
                     |> Result.bind (fun (rightType, right') ->
                         if not (isStringLike rightType) then
                             Error (TypeMismatch (TString, rightType, "right operand of ++"))
@@ -1701,7 +1759,7 @@ let rec checkExprWithParamNames
         match op with
         | Neg ->
             // Negation works on integer and float numeric types
-            checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+            checkExpr inner env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
             |> Result.bind (fun (innerType, inner') ->
                 match innerType with
                 | TInt8 | TInt16 | TInt32 | TInt64
@@ -1716,7 +1774,7 @@ let rec checkExprWithParamNames
 
         | Not ->
             // Boolean not works on booleans and returns booleans
-            checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+            checkExpr inner env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TBool)
             |> Result.bind (fun (innerType, inner') ->
                 if innerType <> TBool then
                     Error (TypeMismatch (TBool, innerType, "operand of !"))
@@ -1733,7 +1791,7 @@ let rec checkExprWithParamNames
                 | TUInt8 | TUInt16 | TUInt32 | TUInt64 -> true
                 | _ -> false
 
-            checkExpr inner env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+            checkExpr inner env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
             |> Result.bind (fun (innerType, inner') ->
                 if not (isIntegerType innerType) then
                     Error (InvalidOperation ("~~~", [innerType]))
@@ -1750,10 +1808,10 @@ let rec checkExprWithParamNames
             | ListLiteral [] -> Some (TList (TVar "t"))
             | _ -> None
 
-        checkExpr value env typeReg variantLookup genericFuncReg moduleRegistry aliasReg valueExpectedType
+        checkExpr value env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg valueExpectedType
         |> Result.bind (fun (valueType, value') ->
             let env' = Map.add name valueType env
-            checkExpr body env' typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
+            checkExpr body env' typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg expectedType
             |> Result.map (fun (bodyType, body') -> (bodyType, Let (name, value', body'))))
 
     | Var name ->
@@ -1832,7 +1890,7 @@ let rec checkExprWithParamNames
 
     | If (cond, thenBranch, elseBranch) ->
         // If expression: condition must be bool, branches must have same type
-        checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr cond env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
         |> Result.bind (fun (condType, cond') ->
             let normalizedConditionResult : Result<Expr, TypeError> =
                 if condType = TBool then
@@ -1845,7 +1903,7 @@ let rec checkExprWithParamNames
                         || isKnownTestRuntimeErrorExpr Map.empty cond'
 
                     if conditionIsKnownFailure then
-                        checkExpr cond env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+                        checkExpr cond env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TBool)
                         |> Result.bind (fun (resolvedCondType, resolvedCondExpr) ->
                             if resolvedCondType = TBool then
                                 Ok resolvedCondExpr
@@ -1856,7 +1914,7 @@ let rec checkExprWithParamNames
 
             normalizedConditionResult
             |> Result.bind (fun normalizedCond ->
-                checkExpr thenBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedType
+                checkExpr thenBranch env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg expectedType
                 |> Result.bind (fun (thenType, then') ->
                     let elseExpectedType =
                         // If an outer context already provides an expected type, keep using it.
@@ -1868,7 +1926,7 @@ let rec checkExprWithParamNames
                         | None -> Some thenType
 
                     let elseResult =
-                        match checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg elseExpectedType with
+                        match checkExpr elseBranch env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg elseExpectedType with
                         | Ok checkedElse ->
                             Ok checkedElse
                         | Error originalErr ->
@@ -1877,7 +1935,7 @@ let rec checkExprWithParamNames
                             // final diagnostic can report branch-vs-branch mismatch, not literal mismatch.
                             match expectedType, originalErr with
                             | None, TypeMismatch (expectedElse, _, _) when expectedElse = thenType ->
-                                checkExpr elseBranch env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                                checkExpr elseBranch env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                             | _ ->
                                 Error originalErr
 
@@ -1905,7 +1963,7 @@ let rec checkExprWithParamNames
 
                         match reconciledBranchType with
                         | None ->
-                            Error (TypeMismatch (thenType, elseType, "if branches must have same type"))
+                            Error (IfBranchTypeMismatch (thenType, elseType))
                         | Some reconciledType ->
                             match expectedType with
                             | Some expected ->
@@ -1921,7 +1979,7 @@ let rec checkExprWithParamNames
         if isBuiltinUnwrapName funcName then
             match args with
             | [argExpr] ->
-                checkExpr argExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                checkExpr argExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                 |> Result.bind (fun (argType, argExpr') ->
                     let unwrapTypeResult =
                         match resolveType aliasReg argType with
@@ -1960,7 +2018,7 @@ let rec checkExprWithParamNames
         elif isBuiltinTestRuntimeErrorName funcName then
             match args with
             | [argExpr] ->
-                checkExpr argExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TString)
+                checkExpr argExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
                 |> Result.bind (fun (_argType, argExpr') ->
                     let outputType =
                         match expectedType with
@@ -2006,7 +2064,7 @@ let rec checkExprWithParamNames
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accTypes, List.rev accExprs)
                         | arg :: restArgs, paramT :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.bind (fun (argType, arg') ->
                                 checkProvidedArgs restArgs restParams (argType :: accTypes) (arg' :: accExprs))
                         | _ -> Error (GenericError "Internal error: argument/param length mismatch")
@@ -2059,6 +2117,7 @@ let rec checkExprWithParamNames
                                     typeReg
                                     variantLookup
                                     genericFuncReg
+                                    warningSettings
                                     moduleRegistry
                                     aliasReg
                                     (Some concreteParamType)
@@ -2124,7 +2183,7 @@ let rec checkExprWithParamNames
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accArgs)
                         | arg :: restArgs, paramT :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesCompatibleWithAliases aliasReg paramT argType then
                                     checkProvidedArgs restArgs restParams (arg' :: accArgs)
@@ -2160,7 +2219,7 @@ let rec checkExprWithParamNames
                             let paramName =
                                 paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
 
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.mapError (fun err ->
                                 match err with
                                 | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
@@ -2205,7 +2264,7 @@ let rec checkExprWithParamNames
                     match remaining with
                     | [] -> Ok (List.rev accArgs)
                     | arg :: restArgs ->
-                        checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                        checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                         |> Result.bind (fun (_argType, arg') ->
                             checkArgsWithUnknownCallableType restArgs (arg' :: accArgs))
 
@@ -2245,7 +2304,7 @@ let rec checkExprWithParamNames
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accArgs)
                         | arg :: restArgs, paramT :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesEqual aliasReg argType paramT then
                                     checkProvidedArgs restArgs restParams (arg' :: accArgs)
@@ -2282,7 +2341,7 @@ let rec checkExprWithParamNames
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accArgs, accBindings)
                         | arg :: restArgs, paramT :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.bind (fun (argType, arg') ->
                                 // Match param type against arg type to get type variable bindings
                                 match matchTypes paramT argType with
@@ -2350,6 +2409,7 @@ let rec checkExprWithParamNames
                                     typeReg
                                     variantLookup
                                     genericFuncReg
+                                    warningSettings
                                     moduleRegistry
                                     aliasReg
                                     (Some concreteParamType)
@@ -2400,7 +2460,7 @@ let rec checkExprWithParamNames
                         match remaining, paramTys with
                         | [], [] -> Ok (List.rev accArgs)
                         | arg :: restArgs, paramT :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesCompatibleWithAliases aliasReg paramT argType then
                                     checkArgsWithTypes restArgs restParams (arg' :: accArgs)
@@ -2460,7 +2520,7 @@ let rec checkExprWithParamNames
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
-                                    checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                                    checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
@@ -2494,7 +2554,7 @@ let rec checkExprWithParamNames
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
-                                    checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                                    checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
@@ -2560,7 +2620,7 @@ let rec checkExprWithParamNames
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
-                                    checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                                    checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
@@ -2594,7 +2654,7 @@ let rec checkExprWithParamNames
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
-                                    checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramT)
+                                    checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
@@ -2634,7 +2694,7 @@ let rec checkExprWithParamNames
             match elems, expectedElems with
             | [], [] -> Ok (List.rev accTypes, List.rev accExprs)
             | e :: rest, expectedElem :: expectedRest ->
-                checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg expectedElem
+                checkExpr e env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg expectedElem
                 |> Result.bind (fun (elemType, e') ->
                     checkElements rest expectedRest (elemType :: accTypes) (e' :: accExprs))
             | _ -> Ok (List.rev accTypes, List.rev accExprs)
@@ -2684,7 +2744,7 @@ let rec checkExprWithParamNames
 
     | TupleAccess (tupleExpr, index) ->
         // Check the tuple expression
-        checkExpr tupleExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr tupleExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
         |> Result.bind (fun (tupleType, tupleExpr') ->
             match tupleType with
             | TTuple elemTypes ->
@@ -2752,6 +2812,7 @@ let rec checkExprWithParamNames
                                             typeReg
                                             variantLookup
                                             genericFuncReg
+                                            warningSettings
                                             moduleRegistry
                                             aliasReg
                                             (Some expectedFieldType)
@@ -2811,7 +2872,7 @@ let rec checkExprWithParamNames
 
     | RecordUpdate (recordExpr, updates) ->
         // Check the record expression to get its type
-        checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr recordExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
             | TRecord (typeName, typeArgs) ->
@@ -2848,7 +2909,7 @@ let rec checkExprWithParamNames
                                 match Map.tryFind fname fieldTypeMap with
                                 | Some fieldTypePattern ->
                                     let expectedFieldType = applySubst subst fieldTypePattern
-                                    checkExpr updateExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some expectedFieldType)
+                                    checkExpr updateExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some expectedFieldType)
                                     |> Result.bind (fun (actualType, updateExpr') ->
                                         if typesCompatibleWithAliases aliasReg expectedFieldType actualType then
                                             checkUpdates rest ((fname, updateExpr') :: accUpdates)
@@ -2864,7 +2925,7 @@ let rec checkExprWithParamNames
 
     | RecordAccess (recordExpr, fieldName) ->
         // Check the record expression
-        checkExpr recordExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr recordExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
         |> Result.bind (fun (recordType, recordExpr') ->
             match recordType with
             | TRecord (typeName, typeArgs) ->
@@ -2933,7 +2994,7 @@ let rec checkExprWithParamNames
                 // For generic types, infer type variables from the payload
                 if List.isEmpty typeParams then
                     // Non-generic type - check payload has exact type
-                    checkExpr payloadExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some payloadType)
+                    checkExpr payloadExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some payloadType)
                     |> Result.bind (fun (actualPayloadType, payloadExpr') ->
                         // Use typesCompatible to allow type variables to match concrete types
                         if not (typesCompatible payloadType actualPayloadType) then
@@ -2950,7 +3011,7 @@ let rec checkExprWithParamNames
                 else
                     // Generic type - infer type variables from payload
                     // First, check the payload expression without expected type
-                    checkExpr payloadExpr env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+                    checkExpr payloadExpr env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
                     |> Result.bind (fun (actualPayloadType, payloadExpr') ->
                         // Try to unify payloadType (may contain TVar) with actualPayloadType
                         match unifyTypes payloadType actualPayloadType with
@@ -2994,7 +3055,7 @@ let rec checkExprWithParamNames
             | _ -> None
 
         // Type check the scrutinee first
-        checkExpr scrutinee env typeReg variantLookup genericFuncReg moduleRegistry aliasReg scrutineeExpectedType
+        checkExpr scrutinee env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg scrutineeExpectedType
         |> Result.bind (fun (scrutineeType, scrutinee') ->
             // Extract bindings from a pattern based on scrutinee type
             let rec extractPatternBindings
@@ -3344,8 +3405,10 @@ let rec checkExprWithParamNames
                 | PBool _
                 | PString _
                 | PChar _
-                | PFloat _ -> []
-                | PVar name -> [ name ]
+                | PFloat _ ->
+                    []
+                | PVar name ->
+                    [name]
                 | PConstructor (_, payloadOpt) ->
                     match payloadOpt with
                     | Some payloadPattern -> patternBindingNames payloadPattern
@@ -3378,7 +3441,8 @@ let rec checkExprWithParamNames
                     | [] -> Ok ()
                     | pattern :: rest ->
                         let duplicates = duplicatePatternBindings pattern
-                        if not (List.isEmpty duplicates) then
+                        if warningSettings.WarnOnDuplicatePatternBindings
+                           && not (List.isEmpty duplicates) then
                             let duplicateNames = String.concat ", " duplicates
                             Error (GenericError $"Duplicate pattern bindings are not allowed: {duplicateNames}")
                         else
@@ -3390,11 +3454,167 @@ let rec checkExprWithParamNames
                             | Some expected ->
                                 let expectedText = formatBindingSet expected
                                 let actualText = formatBindingSet bindings
-                                Error (GenericError $"Pattern grouping requires complete bindings in every alternative: expected [{expectedText}], got [{actualText}]")
+                                if warningSettings.WarnOnDuplicatePatternBindings then
+                                    Error (
+                                        GenericError
+                                            $"Pattern matches require all branches to provide the same variables - expected [{expectedText}], got [{actualText}]"
+                                    )
+                                else
+                                    Error (
+                                        GenericError
+                                            $"Pattern grouping requires complete bindings in every alternative: expected [{expectedText}], got [{actualText}]"
+                                    )
 
                 loop allPatterns None
 
             let allowNoMatchForKnownListLengthMismatchInThisMatch = List.length cases = 1
+
+            let rec patternAlwaysMatchesType (pattern: Pattern) (patternType: Type) : bool =
+                let resolvedPatternType = resolveType aliasReg patternType
+                match pattern, resolvedPatternType with
+                | PWildcard, _
+                | PVar _, _ ->
+                    true
+                | PUnit, TUnit ->
+                    true
+                | PTuple patterns, TTuple elementTypes when List.length patterns = List.length elementTypes ->
+                    List.zip patterns elementTypes
+                    |> List.forall (fun (innerPattern, innerType) ->
+                        patternAlwaysMatchesType innerPattern innerType)
+                | _ ->
+                    false
+
+            let variantNamesMatch (leftName: string) (rightName: string) : bool =
+                leftName = rightName
+                || leftName.EndsWith($".{rightName}")
+                || rightName.EndsWith($".{leftName}")
+
+            let rec combinePatternMatchStatuses (statuses: bool option list) : bool option =
+                if statuses |> List.exists (fun status -> status = Some false) then
+                    Some false
+                elif statuses |> List.forall (fun status -> status = Some true) then
+                    Some true
+                else
+                    None
+
+            let rec patternDefinitelyMatchesExpr (pattern: Pattern) (valueExpr: Expr) : bool option =
+                match pattern, valueExpr with
+                | PWildcard, _
+                | PVar _, _ ->
+                    Some true
+                | PUnit, UnitLiteral ->
+                    Some true
+                | PInt64 expected, Int64Literal actual ->
+                    Some (expected = actual)
+                | PInt128Literal expected, Int128Literal actual ->
+                    Some (expected = actual)
+                | PInt8Literal expected, Int8Literal actual ->
+                    Some (expected = actual)
+                | PInt16Literal expected, Int16Literal actual ->
+                    Some (expected = actual)
+                | PInt32Literal expected, Int32Literal actual ->
+                    Some (expected = actual)
+                | PUInt8Literal expected, UInt8Literal actual ->
+                    Some (expected = actual)
+                | PUInt16Literal expected, UInt16Literal actual ->
+                    Some (expected = actual)
+                | PUInt32Literal expected, UInt32Literal actual ->
+                    Some (expected = actual)
+                | PUInt64Literal expected, UInt64Literal actual ->
+                    Some (expected = actual)
+                | PUInt128Literal expected, UInt128Literal actual ->
+                    Some (expected = actual)
+                | PBool expected, BoolLiteral actual ->
+                    Some (expected = actual)
+                | PString expected, StringLiteral actual ->
+                    Some (expected = actual)
+                | PChar expected, CharLiteral actual ->
+                    Some (expected = actual)
+                | PFloat expected, FloatLiteral actual ->
+                    Some (expected = actual)
+                | PTuple patterns, TupleLiteral values ->
+                    if List.length patterns <> List.length values then
+                        Some false
+                    else
+                        List.zip patterns values
+                        |> List.map (fun (innerPattern, innerValue) ->
+                            patternDefinitelyMatchesExpr innerPattern innerValue)
+                        |> combinePatternMatchStatuses
+                | PList patterns, ListLiteral values ->
+                    if List.length patterns <> List.length values then
+                        Some false
+                    else
+                        List.zip patterns values
+                        |> List.map (fun (innerPattern, innerValue) ->
+                            patternDefinitelyMatchesExpr innerPattern innerValue)
+                        |> combinePatternMatchStatuses
+                | PListCons (headPatterns, tailPattern), ListLiteral values ->
+                    if List.length values < List.length headPatterns then
+                        Some false
+                    else
+                        let headValues = values |> List.take (List.length headPatterns)
+                        let tailValues = values |> List.skip (List.length headPatterns)
+                        let headStatuses =
+                            List.zip headPatterns headValues
+                            |> List.map (fun (innerPattern, innerValue) ->
+                                patternDefinitelyMatchesExpr innerPattern innerValue)
+                        let tailStatus = patternDefinitelyMatchesExpr tailPattern (ListLiteral tailValues)
+                        combinePatternMatchStatuses (headStatuses @ [tailStatus])
+                | PConstructor (patternVariantName, patternPayload), Constructor (_, valueVariantName, valuePayload) ->
+                    if not (variantNamesMatch patternVariantName valueVariantName) then
+                        Some false
+                    else
+                        match patternPayload, valuePayload with
+                        | None, None ->
+                            Some true
+                        | Some patternPayloadExpr, Some valuePayloadExpr ->
+                            patternDefinitelyMatchesExpr patternPayloadExpr valuePayloadExpr
+                        | _ ->
+                            Some false
+                | _ ->
+                    None
+
+            let knownCaseMatchStatus (matchCase: MatchCase) : bool option =
+                match matchCase.Guard with
+                | Some _ ->
+                    None
+                | None ->
+                    let statuses =
+                        matchCase.Patterns
+                        |> NonEmptyList.toList
+                        |> List.map (fun pattern ->
+                            if patternAlwaysMatchesType pattern scrutineeType then
+                                Some true
+                            else
+                                patternDefinitelyMatchesExpr pattern scrutinee')
+                    if statuses |> List.exists (fun status -> status = Some true) then
+                        Some true
+                    elif statuses |> List.forall (fun status -> status = Some false) then
+                        Some false
+                    else
+                        None
+
+            let rec patternIsBinderOnly (pattern: Pattern) : bool =
+                match pattern with
+                | PVar _
+                | PWildcard ->
+                    true
+                | PTuple patterns
+                | PList patterns ->
+                    patterns |> List.forall patternIsBinderOnly
+                | PListCons (headPatterns, tailPattern) ->
+                    (headPatterns |> List.forall patternIsBinderOnly)
+                    && patternIsBinderOnly tailPattern
+                | _ ->
+                    false
+
+            let caseCanShortCircuit (matchCase: MatchCase) : bool =
+                Option.isNone matchCase.Guard
+                && (
+                    matchCase.Patterns
+                    |> NonEmptyList.toList
+                    |> List.forall patternIsBinderOnly
+                )
 
             // Type check each case and ensure they all return the same type
             // Returns (resultType, transformedCases)
@@ -3405,6 +3625,7 @@ let rec checkExprWithParamNames
                     | Some t -> Ok (t, List.rev accCases)
                     | None -> Error (GenericError "Match expression must have at least one case")
                 | matchCase :: rest ->
+                    let caseMatchStatus = knownCaseMatchStatus matchCase
                     validatePatternGroupBindings matchCase.Patterns
                     |> Result.bind (fun () ->
                         // Extract bindings from first pattern after validation.
@@ -3423,7 +3644,24 @@ let rec checkExprWithParamNames
                                 match matchCase.Guard with
                                 | None -> Ok None
                                 | Some guardExpr ->
-                                    checkExpr guardExpr caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some TBool)
+                                    let checkedGuardResult =
+                                        checkExpr
+                                            guardExpr
+                                            caseEnv
+                                            typeReg
+                                            variantLookup
+                                            genericFuncReg
+                                            warningSettings
+                                            moduleRegistry
+                                            aliasReg
+                                            (Some TBool)
+                                    let normalizedGuardResult =
+                                        match checkedGuardResult with
+                                        | Error (UndefinedVariable name) ->
+                                            Error (UndefinedCallTarget name)
+                                        | _ ->
+                                            checkedGuardResult
+                                    normalizedGuardResult
                                     |> Result.bind (fun (guardType, guard') ->
                                         if guardType = TBool then
                                             Ok (Some guard')
@@ -3431,19 +3669,59 @@ let rec checkExprWithParamNames
                                             Error (TypeMismatch (TBool, guardType, "guard clause")))
                             guardResult
                             |> Result.bind (fun guard' ->
-                                checkExpr matchCase.Body caseEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg resultType
+                                let checkedBodyResult =
+                                    checkExpr
+                                        matchCase.Body
+                                        caseEnv
+                                        typeReg
+                                        variantLookup
+                                        genericFuncReg
+                                        warningSettings
+                                        moduleRegistry
+                                        aliasReg
+                                        resultType
+                                let normalizedBodyResult =
+                                    match resultType, checkedBodyResult with
+                                    | Some expectedBodyType, Error (TypeMismatch (expectedTypeFromContext, _, mismatchContext))
+                                        when expectedTypeFromContext = expectedBodyType
+                                             && mismatchContext = "boolean literal" ->
+                                        // Retry unconstrained so we can report mismatch against
+                                        // the case result type ("match body"), not literal context.
+                                        checkExpr
+                                            matchCase.Body
+                                            caseEnv
+                                            typeReg
+                                            variantLookup
+                                            genericFuncReg
+                                            warningSettings
+                                            moduleRegistry
+                                            aliasReg
+                                            None
+                                    | _ ->
+                                        checkedBodyResult
+                                normalizedBodyResult
                                 |> Result.bind (fun (bodyType, body') ->
                                     let newCase = { Patterns = matchCase.Patterns; Guard = guard'; Body = body' }
+                                    let shouldShortCircuit =
+                                        caseMatchStatus = Some true
+                                        && caseCanShortCircuit matchCase
                                     match resultType with
-                                    | None -> checkCases rest (Some bodyType) (newCase :: accCases)
+                                    | None ->
+                                        if shouldShortCircuit then
+                                            Ok (bodyType, List.rev (newCase :: accCases))
+                                        else
+                                            checkCases rest (Some bodyType) (newCase :: accCases)
                                     | Some expected ->
                                         // Use reconcileTypes to handle type variables and type aliases
                                         match reconcileTypes (Some aliasReg) expected bodyType with
                                         | Some reconciledType ->
                                             // Update resultType to the reconciled (concrete) type
-                                            checkCases rest (Some reconciledType) (newCase :: accCases)
+                                            if shouldShortCircuit then
+                                                Ok (reconciledType, List.rev (newCase :: accCases))
+                                            else
+                                                checkCases rest (Some reconciledType) (newCase :: accCases)
                                         | None ->
-                                            Error (TypeMismatch (expected, bodyType, "match case"))))))
+                                            Error (TypeMismatch (expected, bodyType, "match body"))))))
 
             // Pass expectedType to first case so empty lists, None, etc. get the right type
             checkCases cases expectedType []
@@ -3472,14 +3750,14 @@ let rec checkExprWithParamNames
                 match expectedType with
                 | Some (TList expectedElemType) -> Some expectedElemType
                 | _ -> None
-            checkExpr first env typeReg variantLookup genericFuncReg moduleRegistry aliasReg firstExpectedType
+            checkExpr first env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg firstExpectedType
             |> Result.bind (fun (elemType, first') ->
                 // Check remaining elements match the inferred type
                 let rec checkRest remaining acc =
                     match remaining with
                     | [] -> Ok (List.rev acc)
                     | e :: rs ->
-                        checkExpr e env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some elemType)
+                        checkExpr e env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some elemType)
                         |> Result.bind (fun (eType, e') ->
                             if eType = elemType then checkRest rs (e' :: acc)
                             else Error (TypeMismatch (elemType, eType, "list element")))
@@ -3501,7 +3779,7 @@ let rec checkExprWithParamNames
             match expectedType with
             | Some (TList _) -> expectedType
             | _ -> None
-        checkExpr tail env typeReg variantLookup genericFuncReg moduleRegistry aliasReg tailExpectedType
+        checkExpr tail env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg tailExpectedType
         |> Result.bind (fun (tailType, tail') ->
             match tailType with
             | TList elemType ->
@@ -3511,7 +3789,7 @@ let rec checkExprWithParamNames
                     match elems with
                     | [] -> Ok (currentElemType, List.rev acc)
                     | h :: rest ->
-                        checkExpr h env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some currentElemType)
+                        checkExpr h env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some currentElemType)
                         |> Result.bind (fun (hType, h') ->
                             // Use reconcileTypes to allow type variables to unify with concrete types
                             match reconcileTypes (Some aliasReg) currentElemType hType with
@@ -3538,7 +3816,7 @@ let rec checkExprWithParamNames
             let paramEnv =
                 resolvedParams
                 |> List.fold (fun e (name, ty) -> Map.add name ty e) env
-            checkExpr body paramEnv typeReg variantLookup genericFuncReg moduleRegistry aliasReg bodyExpectedType
+            checkExpr body paramEnv typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg bodyExpectedType
             |> Result.map (fun (bodyType, body') ->
                 let paramTypes = resolvedParams |> List.map snd
                 (TFunction (paramTypes, bodyType), Lambda (toLambdaParams resolvedParams, body')))
@@ -3593,7 +3871,7 @@ let rec checkExprWithParamNames
     | Apply (func, args) ->
         let argsList = NonEmptyList.toList args
         // Type-check the function expression
-        checkExpr func env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+        checkExpr func env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
         |> Result.bind (fun (funcType, func') ->
             match funcType with
             | TFunction (paramTypes, returnType) ->
@@ -3613,7 +3891,7 @@ let rec checkExprWithParamNames
                         match argExprs, paramTys with
                         | [], [] -> Ok (List.rev checkedArgs)
                         | arg :: restArgs, paramTy :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramTy)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramTy)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesEqual aliasReg argType paramTy then
                                     checkProvidedArgs restArgs restParams (arg' :: checkedArgs)
@@ -3647,7 +3925,7 @@ let rec checkExprWithParamNames
                         match argExprs, paramTys with
                         | [], [] -> Ok (List.rev checkedArgs)
                         | arg :: restArgs, paramTy :: restParams ->
-                            checkExpr arg env typeReg variantLookup genericFuncReg moduleRegistry aliasReg (Some paramTy)
+                            checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramTy)
                             |> Result.bind (fun (argType, arg') ->
                                 if typesEqual aliasReg argType paramTy then
                                     checkArgs restArgs restParams (arg' :: checkedArgs)
@@ -3679,7 +3957,7 @@ let rec checkExprWithParamNames
         // The closure has the same type as the underlying function (minus closure param)
         // For now, just check the captures and return function type
         let checkCapture (cap: Expr) : Result<Expr, TypeError> =
-            checkExpr cap env typeReg variantLookup genericFuncReg moduleRegistry aliasReg None
+            checkExpr cap env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg None
             |> Result.map snd
         let rec checkCaptures (caps: Expr list) (acc: Expr list) : Result<Expr list, TypeError> =
             match caps with
@@ -4161,6 +4439,7 @@ let checkFunctionDef
     (typeReg: TypeRegistry)
     (variantLookup: VariantLookup)
     (genericFuncReg: GenericFuncRegistry)
+    (warningSettings: WarningSettings)
     (moduleRegistry: ModuleRegistry)
     (aliasReg: AliasRegistry)
     : Result<FunctionDef, TypeError> =
@@ -4178,6 +4457,7 @@ let checkFunctionDef
         typeReg
         variantLookup
         genericFuncReg
+        warningSettings
         moduleRegistry
         aliasReg
         (Some funcDef.ReturnType)
@@ -4195,6 +4475,7 @@ let checkFunctionDef
 let private checkProgramInternal
     (baseEnv: TypeCheckEnv option)
     (requireExplicitTypeArgsForBareCalls: bool)
+    (warningSettings: WarningSettings)
     (program: Program)
     : Result<Type * Program * TypeCheckEnv, TypeError> =
     let (Program topLevels) = program
@@ -4316,6 +4597,7 @@ let private checkProgramInternal
                     typeReg
                     variantLookup
                     genericFuncReg
+                    warningSettings
                     moduleRegistry
                     mergedAliasReg
                 |> Result.bind (fun funcDef' ->
@@ -4330,6 +4612,7 @@ let private checkProgramInternal
                     typeReg
                     variantLookup
                     genericFuncReg
+                    warningSettings
                     moduleRegistry
                     mergedAliasReg
                     None
@@ -4361,24 +4644,26 @@ let private checkProgramInternal
 /// Returns the type of the main expression and the transformed program
 /// The transformed program has Call nodes converted to TypeApp where type inference was applied
 let checkProgram (program: Program) : Result<Type * Program, TypeError> =
-    checkProgramInternal None false program
+    checkProgramInternal None false AST.defaultWarningSettings program
     |> Result.map (fun (typ, prog, _env) -> (typ, prog))
 
 /// Type-check a program and return the type checking environment
 /// Use this when you need to reuse the environment (e.g., for stdlib caching)
 let checkProgramWithEnv (program: Program) : Result<Type * Program * TypeCheckEnv, TypeError> =
-    checkProgramInternal None false program
+    checkProgramInternal None false AST.defaultWarningSettings program
 
 /// Type-check a program with a pre-populated base environment (for separate compilation)
 /// The program's definitions are merged with the base environment, allowing lookups
 /// of types/functions from both the base (e.g., stdlib) and the program (e.g., user code)
 let checkProgramWithBaseEnv (baseEnv: TypeCheckEnv) (program: Program) : Result<Type * Program * TypeCheckEnv, TypeError> =
-    checkProgramInternal (Some baseEnv) false program
+    checkProgramInternal (Some baseEnv) false AST.defaultWarningSettings program
 
-/// Type-check a program with a pre-populated base environment and a generic-call policy override.
-let checkProgramWithBaseEnvAndGenericCallPolicy
+/// Type-check a program with a pre-populated base environment, generic-call policy override,
+/// and warning compatibility settings from the compiler driver.
+let checkProgramWithBaseEnvAndSettings
     (baseEnv: TypeCheckEnv)
     (requireExplicitTypeArgsForBareCalls: bool)
+    (warningSettings: WarningSettings)
     (program: Program)
     : Result<Type * Program * TypeCheckEnv, TypeError> =
-    checkProgramInternal (Some baseEnv) requireExplicitTypeArgsForBareCalls program
+    checkProgramInternal (Some baseEnv) requireExplicitTypeArgsForBareCalls warningSettings program

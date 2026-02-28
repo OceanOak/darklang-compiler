@@ -41,6 +41,9 @@ type SourceSyntax =
     | CompilerSyntax
     | InterpreterSyntax
 
+/// Shared compiler warning settings.
+let defaultWarningSettings : AST.WarningSettings = AST.defaultWarningSettings
+
 /// Result of compilation with timing
 type CompileReport = {
     Result: Result<byte array, string>
@@ -91,6 +94,8 @@ type CompilerOptions = {
     EnableCoverage: bool
     /// Enable leak checking (debug only)
     EnableLeakCheck: bool
+    /// Warning compatibility settings passed into type checking
+    Warnings: AST.WarningSettings
     /// Dump ANF representations to stdout
     DumpANF: bool
     /// Dump MIR representations to stdout
@@ -122,6 +127,7 @@ let defaultOptions : CompilerOptions = {
     DisableFunctionTreeShaking = false
     EnableCoverage = false
     EnableLeakCheck = false
+    Warnings = AST.defaultWarningSettings
     DumpANF = false
     DumpMIR = false
     DumpLIR = false
@@ -836,14 +842,15 @@ let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
 
 let private checkProgramWithBaseEnvForSyntax
     (sourceSyntax: SourceSyntax)
+    (warningSettings: AST.WarningSettings)
     (baseEnv: TypeChecking.TypeCheckEnv)
     (program: AST.Program)
     : Result<AST.Type * AST.Program * TypeChecking.TypeCheckEnv, TypeChecking.TypeError> =
     match sourceSyntax with
     | InterpreterSyntax ->
-        TypeChecking.checkProgramWithBaseEnvAndGenericCallPolicy baseEnv true program
+        TypeChecking.checkProgramWithBaseEnvAndSettings baseEnv true warningSettings program
     | CompilerSyntax ->
-        TypeChecking.checkProgramWithBaseEnv baseEnv program
+        TypeChecking.checkProgramWithBaseEnvAndSettings baseEnv false warningSettings program
 
 /// Parse and typecheck a preamble, returning typed AST + preamble typecheck env
 let analyzePreamble
@@ -862,7 +869,11 @@ let analyzePreamble
      | InterpreterSyntax -> InterpreterParser.parseString allowInternal preambleSource)
     |> Result.mapError (fun err -> $"Preamble parse error: {err}")
     |> Result.bind (fun preambleAst ->
-        checkProgramWithBaseEnvForSyntax sourceSyntax stdlib.Context.TypeCheckEnv preambleAst
+        checkProgramWithBaseEnvForSyntax
+            sourceSyntax
+            defaultWarningSettings
+            stdlib.Context.TypeCheckEnv
+            preambleAst
         |> Result.mapError (fun typeErr -> $"Preamble type error: {TypeChecking.typeErrorToString typeErr}")
         |> Result.map (fun (_programType, typedPreambleAst, preambleTypeCheckEnv) ->
             let preambleGenericDefs = AST_to_ANF.extractGenericFuncDefs typedPreambleAst
@@ -1184,6 +1195,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                 let typeCheckResult =
                     checkProgramWithBaseEnvForSyntax
                         plan.SourceSyntax
+                        plan.Options.Warnings
                         plan.BaseContext.TypeCheckEnv
                         userAst
                 let typeCheckTime = sw.Elapsed.TotalMilliseconds - parseTime

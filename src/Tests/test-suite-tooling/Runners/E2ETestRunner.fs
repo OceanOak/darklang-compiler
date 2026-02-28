@@ -32,11 +32,12 @@ let private typeCheckProgramForSourceSyntax
     (typeCheckEnv: TypeCheckEnv)
     (program: Program)
     : Result<Type * Program * TypeCheckEnv, TypeError> =
+    let warningSettings = CompilerLibrary.defaultWarningSettings
     match sourceSyntax with
     | CompilerLibrary.InterpreterSyntax ->
-        TypeChecking.checkProgramWithBaseEnvAndGenericCallPolicy typeCheckEnv true program
+        TypeChecking.checkProgramWithBaseEnvAndSettings typeCheckEnv true warningSettings program
     | CompilerLibrary.CompilerSyntax ->
-        TypeChecking.checkProgramWithBaseEnv typeCheckEnv program
+        TypeChecking.checkProgramWithBaseEnvAndSettings typeCheckEnv false warningSettings program
 
 // Build the source expression to execute for a test.
 // For `lhs = rhs` value tests, run a synthesized equality assertion.
@@ -890,7 +891,10 @@ let private evaluateExpectations (test: E2ETest) (run: E2ERun) : E2ETestResult =
         else
             failRun run "Output mismatch"
 
-let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptions =
+let private buildCompilerOptions
+    (_sourceSyntax: CompilerLibrary.SourceSyntax)
+    (test: E2ETest)
+    : CompilerLibrary.CompilerOptions =
     { CompilerLibrary.defaultOptions with
         DisableFreeList = test.DisableFreeList
         DisableANFOpt = test.DisableANFOpt
@@ -913,6 +917,10 @@ let private buildCompilerOptions (test: E2ETest) : CompilerLibrary.CompilerOptio
         DisableFunctionTreeShaking = test.DisableFunctionTreeShaking
         EnableCoverage = false
         EnableLeakCheck = not test.DisableLeakCheck
+        Warnings = {
+            CompilerLibrary.defaultWarningSettings with
+                WarnOnDuplicatePatternBindings = test.WarnOnDuplicatePatternBindings
+        }
         DumpANF = false
         DumpMIR = false
         DumpLIR = false
@@ -941,9 +949,9 @@ let runE2ETestWithPreambleContext
     (test: E2ETest)
     (passTimingRecorder: CompilerLibrary.PassTimingRecorder option)
     : E2ETestResult =
-    let options = buildCompilerOptions test
     let allowInternal = isInternalTestFile test.SourceFile
     let sourceSyntax = sourceSyntaxForTestFile test.SourceFile
+    let options = buildCompilerOptions sourceSyntax test
     match sourceToExecute sourceSyntax allowInternal test with
     | Error msg ->
         let run = CompileFailed (1, msg, TimeSpan.Zero)
