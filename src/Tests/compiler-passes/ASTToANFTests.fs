@@ -52,9 +52,66 @@ let testNeedsLambdaLoweringDetectsLambda () : TestResult =
     if programNeedsLambdaLowering knownFuncs program then Ok ()
     else Error "Expected lambda to trigger lambda lowering"
 
+let rec private findCallArgs (funcName: string) (expr: ANF.AExpr) : ANF.Atom list option =
+    match expr with
+    | ANF.Let (_, ANF.Call (name, args), rest) when name = funcName ->
+        Some args
+    | ANF.Let (_, _, rest) ->
+        findCallArgs funcName rest
+    | ANF.If (_, thenBranch, elseBranch) ->
+        match findCallArgs funcName thenBranch with
+        | Some args -> Some args
+        | None -> findCallArgs funcName elseBranch
+    | ANF.Return _ ->
+        None
+
+let testSyntheticNullaryCallLowersToZeroArgs () : TestResult =
+    let funcName = "Stdlib.__FingerTree.__TAG_SINGLE"
+    let expr = AST.Call (funcName, AST.NonEmptyList.singleton AST.UnitLiteral)
+    let env : VarEnv = Map.empty
+    let typeReg : TypeRegistry = Map.empty
+    let variantLookup : VariantLookup = Map.empty
+    let funcReg : FunctionRegistry =
+        Map.ofList [ (funcName, AST.TFunction ([], AST.TInt64)) ]
+    let moduleRegistry : AST.ModuleRegistry = Map.empty
+
+    match toANF expr ANF.initialVarGen env typeReg variantLookup funcReg moduleRegistry with
+    | Error err ->
+        Error $"Unexpected conversion error: {err}"
+    | Ok (anfExpr, _) ->
+        match findCallArgs funcName anfExpr with
+        | None ->
+            Error "Expected to find lowered direct call in ANF output"
+        | Some [] ->
+            Ok ()
+        | Some args ->
+            Error $"Expected synthetic nullary call to lower to zero args, got {List.length args}"
+
+let testSyntheticUnitParamLowersFunctionToZeroParams () : TestResult =
+    let funcDef : AST.FunctionDef = {
+        Name = "syntheticNullary"
+        TypeParams = []
+        Params = AST.NonEmptyList.singleton ("$unit0", AST.TUnit)
+        ReturnType = AST.TInt64
+        Body = AST.Int64Literal 1L
+    }
+    let funcReg : FunctionRegistry =
+        Map.ofList [ ("syntheticNullary", AST.TFunction ([], AST.TInt64)) ]
+
+    match convertFunction funcDef ANF.initialVarGen Map.empty Map.empty funcReg Map.empty with
+    | Error err ->
+        Error $"Unexpected conversion error: {err}"
+    | Ok (anfFunc, _) ->
+        match anfFunc.TypedParams with
+        | [] -> Ok ()
+        | typedParams ->
+            Error $"Expected 0 lowered params, got {List.length typedParams}"
+
 let tests = [
     ("Missing constructor payload type errors", testMissingVariantPayloadTypeErrors)
     ("Lambda lowering ignores shadowed functions", testNeedsLambdaLoweringIgnoresShadowedFunc)
     ("Lambda lowering detects function value", testNeedsLambdaLoweringDetectsFuncValue)
     ("Lambda lowering detects lambda", testNeedsLambdaLoweringDetectsLambda)
+    ("Synthetic nullary call lowers to zero args", testSyntheticNullaryCallLowersToZeroArgs)
+    ("Synthetic unit param lowers function to zero params", testSyntheticUnitParamLowersFunctionToZeroParams)
 ]

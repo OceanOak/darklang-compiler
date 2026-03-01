@@ -553,6 +553,25 @@ let private paramsFromList (context: string) (parameters: (string * AST.Type) li
     | Some nonEmptyParams -> nonEmptyParams
     | None -> Crash.crash $"Internal error: {context} produced zero parameters"
 
+let private syntheticUnitParamPrefix = "$unit"
+
+let private isSyntheticUnitParam ((paramName, paramType): string * AST.Type) : bool =
+    paramType = AST.TUnit && paramName.StartsWith(syntheticUnitParamPrefix)
+
+let private normalizeSyntheticNullaryParams (parameters: (string * AST.Type) list) : (string * AST.Type) list =
+    match parameters with
+    | [singleParam] when isSyntheticUnitParam singleParam -> []
+    | _ -> parameters
+
+let private normalizeSyntheticNullaryArgAtoms
+    (paramTypes: AST.Type list)
+    (argExprs: AST.Expr list)
+    (argAtoms: ANF.Atom list)
+    : ANF.Atom list =
+    match paramTypes, argExprs, argAtoms with
+    | [], [AST.UnitLiteral], [_] -> []
+    | _ -> argAtoms
+
 let private unresolvedKeyIntrinsicTypeArgErrorExpr (funcName: string) : AST.Expr =
     AST.Call (
         "Builtin.testRuntimeError",
@@ -3983,6 +4002,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
     | AST.Call (funcName, args) ->
         // Function call: convert all arguments to atoms
         // If an argument is a function reference, wrap it in a trivial closure for uniform calling convention
+        let argExprList = exprArgsToList args
+
         let wrapFuncRefInClosure (argExpr: ANF.AExpr) (atom: ANF.Atom) (vg: ANF.VarGen) : ANF.AExpr * ANF.Atom * ANF.VarGen =
             match atom with
             | ANF.FuncRef fnName ->
@@ -4011,7 +4032,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     convertArgs rest vg'' (wrappedExpr :: accExprs) (wrappedAtom :: accAtoms))
 
         // Regular function call (including module functions like Stdlib.Int64.add)
-        convertArgs (exprArgsToList args) varGen [] []
+        convertArgs argExprList varGen [] []
         |> Result.bind (fun (argSetupExprs, argAtoms, varGen1) ->
             // Bind call result to fresh variable
             let (resultVar, varGen2) = ANF.freshVar varGen1
@@ -4022,10 +4043,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     finalExpr
             // Check if funcName is a variable (indirect call) or a defined function (direct call)
             match Map.tryFind funcName env with
-            | Some (tempId, AST.TFunction (_, _)) ->
+            | Some (tempId, AST.TFunction (paramTypes, _)) ->
                 // Variable with function type - use closure call
                 // All function values are now closures (even non-capturing ones)
-                let callExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
+                let normalizedArgAtoms = normalizeSyntheticNullaryArgAtoms paramTypes argExprList argAtoms
+                let callExpr = ANF.ClosureCall (ANF.Var tempId, normalizedArgAtoms)
                 let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
                 Ok (withArgSetups finalExpr, varGen2)
             | Some (tempId, AST.TVar _) ->
@@ -4082,8 +4104,14 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     | None ->
                     // Check if it's a defined function
                     match Map.tryFind funcName funcReg with
-                    | Some _ ->
+                    | Some (AST.TFunction (paramTypes, _)) ->
                         // Direct call to defined function
+                        let normalizedArgAtoms = normalizeSyntheticNullaryArgAtoms paramTypes argExprList argAtoms
+                        let callExpr = ANF.Call (funcName, normalizedArgAtoms)
+                        let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
+                        Ok (withArgSetups finalExpr, varGen2)
+                    | Some _ ->
+                        // Preserve existing behavior for malformed registry entries.
                         let callExpr = ANF.Call (funcName, argAtoms)
                         let finalExpr = ANF.Let (resultVar, callExpr, ANF.Return (ANF.Var resultVar))
                         Ok (withArgSetups finalExpr, varGen2)
@@ -7703,6 +7731,8 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             Error "Internal error: Builtin.testRuntimeError should be lowered via toANF, not toAtom"
         else
             // Function call in atom position: convert all arguments to atoms
+            let argExprList = exprArgsToList args
+
             let rec convertArgs (argExprs: AST.Expr list) (vg: ANF.VarGen) (accAtoms: ANF.Atom list) (accBindings: (ANF.TempId * ANF.CExpr) list) : Result<ANF.Atom list * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                 match argExprs with
                 | [] -> Ok (List.rev accAtoms, accBindings, vg)
@@ -7711,16 +7741,17 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     |> Result.bind (fun (argAtom, argBindings, vg') ->
                         convertArgs rest vg' (argAtom :: accAtoms) (accBindings @ argBindings))
 
-            convertArgs (exprArgsToList args) varGen [] []
+            convertArgs argExprList varGen [] []
             |> Result.bind (fun (argAtoms, argBindings, varGen1) ->
                 // Create a temporary for the call result
                 let (tempVar, varGen2) = ANF.freshVar varGen1
                 // Check if funcName is a variable (indirect call) or a defined function (direct call)
                 match Map.tryFind funcName env with
-                | Some (tempId, AST.TFunction (_, _)) ->
+                | Some (tempId, AST.TFunction (paramTypes, _)) ->
                     // Variable with function type - use closure call
                     // All function values are now closures (even non-capturing ones)
-                    let callCExpr = ANF.ClosureCall (ANF.Var tempId, argAtoms)
+                    let normalizedArgAtoms = normalizeSyntheticNullaryArgAtoms paramTypes argExprList argAtoms
+                    let callCExpr = ANF.ClosureCall (ANF.Var tempId, normalizedArgAtoms)
                     let allBindings = argBindings @ [(tempVar, callCExpr)]
                     Ok (ANF.Var tempVar, allBindings, varGen2)
                 | Some (tempId, AST.TVar _) ->
@@ -7775,7 +7806,13 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                                             Ok (ANF.Var tempVar, allBindings, varGen2)
                                         | None ->
                                             // Assume it's a defined function (direct call)
-                                            let callCExpr = ANF.Call (funcName, argAtoms)
+                                            let callArgAtoms =
+                                                match Map.tryFind funcName funcReg with
+                                                | Some (AST.TFunction (paramTypes, _)) ->
+                                                    normalizeSyntheticNullaryArgAtoms paramTypes argExprList argAtoms
+                                                | _ ->
+                                                    argAtoms
+                                            let callCExpr = ANF.Call (funcName, callArgAtoms)
                                             let allBindings = argBindings @ [(tempVar, callCExpr)]
                                             Ok (ANF.Var tempVar, allBindings, varGen2))
 
@@ -8381,16 +8418,18 @@ and wrapBindings (bindings: (ANF.TempId * ANF.CExpr) list) (expr: ANF.AExpr) : A
 /// VarGen is passed in and out to maintain globally unique TempIds across functions
 /// (needed for TypeMap which maps TempId -> Type across the whole program)
 let convertFunction (funcDef: AST.FunctionDef) (varGen: ANF.VarGen) (typeReg: TypeRegistry) (variantLookup: VariantLookup) (funcReg: FunctionRegistry) (moduleRegistry: AST.ModuleRegistry) : Result<ANF.Function * ANF.VarGen, string> =
+    let loweredParams = paramsToList funcDef.Params |> normalizeSyntheticNullaryParams
+
     // Allocate TempIds for parameters, bundled with their types
     let (typedParams, varGen1) =
-        paramsToList funcDef.Params
+        loweredParams
         |> List.fold (fun (acc, vg) (_, typ) ->
             let (tempId, vg') = ANF.freshVar vg
             (acc @ [{ ANF.TypedParam.Id = tempId; Type = typ }], vg')) ([], varGen)
 
     // Build environment mapping param names to (TempId, Type)
     let paramEnv : VarEnv =
-        List.zip (paramsToList funcDef.Params) typedParams
+        List.zip loweredParams typedParams
         |> List.map (fun ((name, _), typedParam) -> (name, (typedParam.Id, typedParam.Type)))
         |> Map.ofList
 
@@ -8498,7 +8537,7 @@ let buildRegistries
     let funcReg : FunctionRegistry =
         functions
         |> List.map (fun f ->
-            let paramTypes = f.Params |> paramsToList |> List.map snd
+            let paramTypes = f.Params |> paramsToList |> normalizeSyntheticNullaryParams |> List.map snd
             let funcType = AST.TFunction (paramTypes, f.ReturnType)
             (f.Name, funcType))
         |> Map.ofList
