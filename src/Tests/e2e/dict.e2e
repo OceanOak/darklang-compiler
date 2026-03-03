@@ -305,3 +305,7 @@ Stdlib.Option.withDefault<List<Int64>>(getListDict(setListDict(emptyListDict(), 
 
 // fromList with list values - use Stdlib.Dict.size with specific type
 let d = Stdlib.Dict.fromList([(1, [10]), (2, [20, 30])]) in Stdlib.Dict.size(d) = 2
+
+// Regression: Dict.contains on an internal HAMT node with a missing chunk must not crash.
+// This exercises the "tag == 1 && hasBit == false" path in __containsHelper.
+let d = Stdlib.Dict.set(Stdlib.Dict.set(Stdlib.Dict.empty<Int64, Bool>(), 1, true), 2, true) in Stdlib.Dict.contains(d, 4) = false

@@ -102,6 +102,17 @@ let private inferArithmeticType (leftType: AST.Type option) (rightType: AST.Type
     | _ ->
         None
 
+let private isHeapLikeForBitwiseTagging (typ: AST.Type) : bool =
+    match typ with
+    | AST.TTuple _
+    | AST.TRecord _
+    | AST.TSum _
+    | AST.TList _
+    | AST.TDict _ ->
+        true
+    | _ ->
+        false
+
 /// Return types for monomorphized intrinsics that are not always present in FuncReg
 let private tryGetMonomorphizedIntrinsicReturnType (funcName: string) : AST.Type option =
     if funcName.StartsWith("__raw_get_") then Some AST.TInt64
@@ -136,12 +147,28 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
             let leftType = inferAtomType ctx left
             let rightType = inferAtomType ctx right
             inferArithmeticType leftType rightType
-        | Mod | Shl | Shr | BitAnd | BitOr | BitXor ->
+        | Mod | Shl | Shr ->
             let leftType = inferAtomType ctx left
             let rightType = inferAtomType ctx right
             match leftType, rightType with
-            // Internal lowerings may mix pointer-ish values with Int64 masks/counts.
-            // Preserve the left operand type (the computed value's type) instead of defaulting.
+            | Some l, Some r when l = r && isIntegerType l -> Some l
+            | Some l, None when isIntegerType l -> Some l
+            | None, Some r when isIntegerType r -> Some r
+            | Some l, Some _ -> Some l
+            | Some l, None -> Some l
+            | None, Some r -> Some r
+            | None, None -> None
+        | BitAnd | BitOr | BitXor ->
+            let leftType = inferAtomType ctx left
+            let rightType = inferAtomType ctx right
+            match leftType, rightType with
+            // Pointer-tagging lowerings use bitwise ops over tagged heap values and masks.
+            // The result is a scalar tag/masked pointer value, not a heap object ownership value.
+            | Some l, _ when isHeapLikeForBitwiseTagging l -> Some AST.TInt64
+            | _, Some r when isHeapLikeForBitwiseTagging r -> Some AST.TInt64
+            | Some l, Some r when l = r && isIntegerType l -> Some l
+            | Some l, None when isIntegerType l -> Some l
+            | None, Some r when isIntegerType r -> Some r
             | Some l, Some _ -> Some l
             | Some l, None -> Some l
             | None, Some r -> Some r
