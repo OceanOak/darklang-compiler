@@ -61,8 +61,6 @@ module UserDefined =
   UserDefined.enumValue = Stdlib.Option.Option.Some 5L
 
   Ok 5L = error="Ok is not a valid name"
-
-
   type MyRecord = { a: Bool; b: String }
   let recordValue = MyRecord { a = true; b = "glasses" }
   (Stdlib.Bool.not recordValue.a) = false

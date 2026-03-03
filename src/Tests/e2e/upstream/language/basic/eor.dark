@@ -6,7 +6,6 @@
 (true || 5L) = error="|| only supports Booleans"
 (false || 5L) = error="|| only supports Booleans"
 (5L || true) = error="|| only supports Booleans"
-
 (true |> (||) true) = true
 (true |> (||) false) = true
 (false |> (||) true) = true
@@ -15,5 +14,4 @@
 // TODO bring back short-circuiting
 //(true || Builtin.testRuntimeError "msg") = true
 (false || Builtin.testRuntimeError "msg") = error="|| only supports Booleans"
-
 (Builtin.testRuntimeError "msg1" || Builtin.testRuntimeError "msg2") = error="|| only supports Booleans"

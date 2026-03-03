@@ -9,7 +9,6 @@
 //(false && Builtin.testRuntimeError "msg") = false
 
 (Builtin.testRuntimeError "msg1" && Builtin.testRuntimeError "msg2") = exit=1 stderr="msg1"
-
 (5 && true) = error="&& only supports Booleans"
 (true |> (&&) true) = true
 (true |> (&&) false) = false

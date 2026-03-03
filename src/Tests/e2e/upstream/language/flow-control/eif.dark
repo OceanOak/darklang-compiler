@@ -1,31 +1,20 @@
 (if true then "correct" else 0L) = error="Type mismatch: if branches must have same type: expected String, got Int64"
 
-(if true then Builtin.testRuntimeError "a" else 0L) =
-  exit=1 stderr="Uncaught exception: a"
-
-(if false then 0L else Builtin.testRuntimeError "a") =
-  exit=1 stderr="Uncaught exception: a"
-
+(if true then Builtin.testRuntimeError "a" else 0L) = exit=1 stderr="Uncaught exception: a"
+(if false then 0L else Builtin.testRuntimeError "a") = exit=1 stderr="Uncaught exception: a"
 (if false then Builtin.testRuntimeError "a" else 0L) = 0L
 (if true then 0L else Builtin.testRuntimeError "a") = 0L
 (if false then "" else "correct") = "correct"
 (if () then "" else "") = error="Encountered a condition that must be a Bool, but got an Unit (())"
-
-(if Builtin.testRuntimeError "msg" then "" else "") =
-  exit=1 stderr="Uncaught exception: msg"
-
+(if Builtin.testRuntimeError "msg" then "" else "") = exit=1 stderr="Uncaught exception: msg"
 (if 5L then "" else "") = error="Encountered a condition that must be a Bool, but got an Int64 (5)"
-
 (if true then ()) = ()
 (if 1L > 3L then 4L) = error="Type mismatch: if branches must have same type: expected Int64, got Unit"
 (if 1L < 3L then 4L) = error="Type mismatch: if branches must have same type: expected Int64, got Unit"
 (if 1L < 3L then "msg") = error="Type mismatch: if branches must have same type: expected String, got Unit"
 
-(if () then "msg") =
-  error="Encountered a condition that must be a Bool, but got an Unit (())"
+(if () then "msg") = error="Encountered a condition that must be a Bool, but got an Unit (())"
 
-(if true then Builtin.testRuntimeError "a") =
-  exit=1 stderr="Uncaught exception: a"
+(if true then Builtin.testRuntimeError "a") = exit=1 stderr="Uncaught exception: a"
 
-(if Builtin.testRuntimeError "msg" then "") =
-  error="Type mismatch: if branches must have same type: expected String, got Unit"
+(if Builtin.testRuntimeError "msg" then "") = error="Type mismatch: if branches must have same type: expected String, got Unit"
