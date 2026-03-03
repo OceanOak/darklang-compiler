@@ -18,10 +18,30 @@ NC = '\033[0m'
 
 REFRESH_INTERVAL = 2
 
-def run_git(args, cwd=None):
+def run_git(args, cwd=None, check=False):
     """Run git command and return stdout."""
-    result = subprocess.run(['git'] + args, cwd=cwd, capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else ""
+    safe_cwd = cwd if cwd else None
+    try:
+        result = subprocess.run(['git'] + args, cwd=safe_cwd, capture_output=True, text=True)
+    except OSError as e:
+        if check:
+            raise RuntimeError(f"Failed to run git {' '.join(args)}: {e}") from e
+        return ""
+
+    if result.returncode != 0:
+        if check:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            details = stderr if stderr else (stdout if stdout else f"exit code {result.returncode}")
+            raise RuntimeError(f"git {' '.join(args)} failed: {details}")
+        return ""
+
+    return result.stdout.strip()
+
+
+def resolve_repo_root():
+    """Resolve git repo root from the current working directory."""
+    return run_git(['rev-parse', '--show-toplevel'], check=True)
 
 def format_age(seconds):
     """Format age in human-readable form."""
@@ -69,9 +89,19 @@ def get_log_entries(repo_root, count=11):
         })
     return entries
 
-def get_worktrees():
+def get_worktrees(repo_root):
     """Get list of worktrees with status info."""
-    output = subprocess.run(['git', 'worktree', 'list'], capture_output=True, text=True).stdout
+    if not repo_root:
+        return []
+    try:
+        output = subprocess.run(
+            ['git', 'worktree', 'list'],
+            cwd=repo_root,
+            capture_output=True,
+            text=True
+        ).stdout
+    except OSError:
+        return []
     worktrees = []
     for line in output.strip().split('\n'):
         if not line: continue
@@ -112,13 +142,13 @@ def truncate_plain_label(label, max_width):
 
 def render_status():
     """Render the full status display."""
-    repo_root = run_git(['rev-parse', '--show-toplevel'])
+    repo_root = resolve_repo_root()
     try:
         term_cols = os.get_terminal_size().columns if sys.stdout.isatty() else 120
     except OSError:
         term_cols = 120
 
-    worktrees = get_worktrees()
+    worktrees = get_worktrees(repo_root)
     log_entries = get_log_entries(repo_root)
     context = time.strftime('%H:%M:%S')
 
