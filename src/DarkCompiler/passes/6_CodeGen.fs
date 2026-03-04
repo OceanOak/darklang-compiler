@@ -3114,7 +3114,9 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                 ]
 
                 if ctx.Options.DisableFreeList then
-                    alignSizeInstrs @ checkedBumpAllocReg ctx.HeapOverflowLabel destReg ARM64Symbolic.X15
+                    alignSizeInstrs
+                    @ checkedBumpAllocReg ctx.HeapOverflowLabel destReg ARM64Symbolic.X15
+                    @ generateLeakCounterInc ctx
                 else
                     let popFreeList = [
                         ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X14)             // dest = free-list head block
@@ -3138,7 +3140,8 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                     @ popFreeList
                     // B uses a current-PC-relative instruction offset, so skipping N instructions needs N + 1.
                     @ [ARM64Symbolic.B (bumpAlloc.Length + 1)]
-                    @ bumpAlloc))
+                    @ bumpAlloc
+                    @ generateLeakCounterInc ctx))
 
     | LIR.RawFree ptr ->
         // Raw free: no-op for now (bump allocator doesn't support free)
