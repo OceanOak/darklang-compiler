@@ -444,6 +444,12 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
         funcName = "Stdlib.__FingerTree.head"
     | _ -> false
 
+let private isRcManagedHeapType (typ: AST.Type) : bool =
+    // Dict values are tagged pointers; generic RefCountInc/Dec expect raw pointers.
+    match typ with
+    | AST.TDict _ -> false
+    | _ -> isHeapType typ
+
 /// Insert RefCountInc for returned parameters at a Return node
 let insertParamIncsAtReturn
     (paramIncs: (TempId * int) list)
@@ -711,7 +717,7 @@ let rec insertRCWithAnalysis
             let bodyReturned = returnedSet bodyInfo
             let returnDecs' =
                 match maybeType with
-                | Some t when isHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
+                | Some t when isRcManagedHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
                     let size = payloadSize t ctx.TypeReg
                     (tempId, size) :: returnDecs
                 | _ -> returnDecs
@@ -724,7 +730,7 @@ let rec insertRCWithAnalysis
                         match atom with
                         | Var tid ->
                             match tryGetType ctx tid with
-                            | Some t when isHeapType t ->
+                            | Some t when isRcManagedHeapType t ->
                                 let size = payloadSize t ctx.TypeReg
                                 (tid, size) :: acc
                             | _ -> acc
@@ -735,7 +741,7 @@ let rec insertRCWithAnalysis
 
             let returnIncSize =
                 match maybeType with
-                | Some t when isHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
+                | Some t when isRcManagedHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
                     let size = payloadSize t ctx.TypeReg
                     Some size
                 | _ -> None
@@ -793,8 +799,7 @@ let private insertRCInFunctionInternal
         func.TypedParams
         |> List.fold (fun acc param ->
             match param.Type with
-            | AST.TDict _ -> acc  // Dict pointers are tagged; RC ops expect raw pointers.
-            | _ when isHeapType param.Type ->
+            | _ when isRcManagedHeapType param.Type ->
                 let size = payloadSize param.Type ctxWithParams.TypeReg
                 (param.Id, size) :: acc
             | _ -> acc
