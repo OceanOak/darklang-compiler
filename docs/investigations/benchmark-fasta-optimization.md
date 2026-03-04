@@ -4,6 +4,71 @@
 
 This investigation analyzes why the Dark compiler performs worse than Rust and OCaml on the fasta benchmark, which generates pseudo-random DNA sequences using a linear congruential generator (LCG) and computes a checksum.
 
+## 2026-03-03 Regression Investigation
+
+### Observed Regression
+
+Comparing clean commit `c50b586a` against the current local allocator-guard changes:
+
+- Clean `c50b586a`: `2,436,771,495` instructions, `106,657,107` branches
+- Local guarded allocator: `2,446,245,270` instructions, `108,551,862` branches
+- Delta: `+9,473,775` instructions, `+1,894,755` branches, `+212,594` branch mispredicts
+
+The instruction delta divides exactly by the branch delta:
+
+- `9,473,775 / 1,894,755 = 5.0`
+
+This is a direct signature of a fixed per-allocation hot-path cost increase.
+
+### Root Cause
+
+`withHeapBoundsCheck` in `6_CodeGen.fs` adds a bounds-check sequence on every bump allocation:
+
+1. `MOVZ` load heap-size high bits
+2. `ADD` compute heap end from heap base
+3. `ADD` compute next pointer
+4. `CMP` compare next pointer to heap end
+5. `B.LE` branch to fast path
+
+That is 5 additional instructions and 1 additional conditional branch per allocation attempt.
+
+`fasta` performs enough allocations that this overhead shows up clearly in cachegrind totals.
+
+### Secondary Effect
+
+The generated `fasta` binary grows substantially with the current guard implementation:
+
+- Clean `c50b586a` binary: `99,172` bytes
+- Local guarded allocator binary: `209,540` bytes
+
+Most of this growth comes from inlining the OOM trap path at each allocation site.
+
+### Follow-up After Shared OOM Trap Label
+
+A follow-up codegen change now emits a shared per-function OOM trap label instead of inlining trap code at every allocation site.
+
+Measured on `2026-03-03`:
+
+- Previous guarded run: `2,446,245,270` instructions
+- After shared OOM trap label: `2,446,245,402` instructions (`+132`, effectively unchanged)
+
+Conclusion:
+
+- This change fixes the code-size inflation (current `fasta` binary is `114,076` bytes, much smaller than `209,540`).
+- It does **not** materially change hot-path instruction count.
+- The remaining `fasta` regression is still dominated by per-allocation heap-end recomputation (`MOVZ + ADD`) plus the extra bounds-check branch.
+
+### Fix Strategy (Low Risk)
+
+1. Hoist heap end into a dedicated register during `generateHeapInit` (for example `X26`) and preserve it across codegen paths.
+2. Replace per-allocation heap-end recomputation with a single `CMP next_ptr, heap_end_reg`.
+3. Emit one shared OOM trap block/label and branch to it, instead of inlining the trap sequence at each allocation site.
+4. Keep checks only on the bump path (free-list pop path should remain check-free).
+
+Avoid moving bump allocation to a helper function call in the hot path: call/return and call-site save/restore overhead would likely outweigh the current regression.
+
+Expected outcome: retain memory safety while removing most of the `fasta` regression and reducing binary-size inflation.
+
 ## Benchmark Characteristics
 
 The fasta benchmark has three hot loops:

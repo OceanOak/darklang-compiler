@@ -3,11 +3,11 @@
 ## Executive Summary
 
 **Benchmark:** quicksort (functional quicksort with three-way partition)
-**Dark Performance:** Currently crashing (segfault) - unable to run
+**Dark Performance:** Full benchmark exits with allocator OOM (`Out of heap memory`, exit 1); reduced quick check runs
 **Rust Performance:** 6,506,788 instructions (baseline)
 **OCaml Performance:** 47,643,021 instructions (7.32x slower than Rust)
 
-Dark is currently unable to run the quicksort benchmark due to a segmentation fault. This investigation analyzes the compiled IR to identify architectural issues that likely contribute to both the crash and expected poor performance.
+Dark cannot run `benchmarks/problems/quicksort/dark/main.dark` at benchmark size and is skipped by `run_benchmarks.sh`. The allocator now traps cleanly instead of segfaulting, but quicksort still exceeds available heap due high allocation pressure from list-heavy partitioning.
 
 ## Benchmark Implementation Comparison
 
@@ -289,56 +289,44 @@ Each redundant check adds:
 
 ---
 
-## Optimization 4: Fix Segmentation Fault (Critical Bug)
+## Optimization 4: Fix Allocator Capacity/OOM (Critical Bug)
 
 ### Impact Estimate: Required to run benchmark
 
 ### Root Cause
-The benchmark crashes with SIGSEGV (exit code 139). From the checksumHelper ANF, there's suspicious code:
+Full benchmark quicksort is allocation-heavy enough to exceed the current heap budget. The crash path has been replaced by explicit allocator checks, but the underlying pressure remains.
 
-```
-Function checksumHelper:
-let TempId 1319 = t1316 == 0
-if t1319 then return t1318
-else
-    let TempId 1321 = t1316 != 0
-    if t1321 then
-        let TempId 1322 = t1316 & 7              ; Extract tag
-        let TempId 1323 = t1316 & -8             ; Extract pointer
-        let TempId 1324 = t1322 == 1             ; Is SINGLE?
-        if t1324 then
-            let TempId 1325 = RawGet(t1323, 0)   ; Dereference
-```
-
-The issue: when the list is empty (`t1316 == 0`), the first branch should return. But if there's a bug in the empty-list representation or the comparison, the code proceeds to dereference a null/invalid pointer.
-
-Also, in the else-else branch:
-```
-else
-    let TempId 1320 = RawGet(0, 0)   ; DEREFERENCE NULL!
-    return t1320
-```
-
-This explicitly dereferences address 0 - guaranteed crash.
+Current allocator behavior:
+- `generateHeapInit` now maps a larger heap (512MB)
+- `LIR.HeapAlloc` and `LIR.RawAlloc` now perform bounds checks before bump allocation
+- Overflow now terminates with `Out of heap memory` and exit code `1` instead of invalid memory writes
 
 ### Evidence
-- Exit code 139 = SIGSEGV
-- `RawGet(0, 0)` in checksumHelper else branch
-- Empty list encoded as 0 but not properly handled in match
+- `benchmarks/problems/quicksort/dark/main.dark` now exits with `Out of heap memory` (exit `1`)
+- `benchmarks/problems/quicksort/dark/quick.dark` still succeeds
+- Guarded allocator path is active (regression test in `rawptr.e2e` verifies overflow trap)
+- Quicksort still does heavy allocation (`filter` x3 + `append` x2 per recursive partition)
 
 ### Implementation Approach
 
-1. **Fix empty list handling in match desugaring**
-   - Ensure `[]` pattern correctly handles null/0 representation
-   - Add null check before RawGet operations
+1. **Completed: add allocator bounds checks**
+   - Before each bump allocation, compute/check `next_ptr <= heap_end`
+   - On overflow, terminate with explicit runtime error (`Out of heap memory`)
 
-2. **Add runtime bounds checking (debug mode)**
-   - Validate pointer before dereference
-   - Better error messages for null pointer access
+2. **Completed: increase heap size**
+   - mmap heap increased from 128MB to 512MB
+
+3. **Next fix: reduce quicksort allocation pressure**
+   - Replace 3-pass partition (`filter`/`filter`/`filter`) with a single-pass partition
+   - Prefer array-backed implementation for this benchmark when array primitive exists
+   - Consider benchmark-specific input sizing if full-size parity is not required yet
 
 ### Files to Modify
-- `src/desugar/pattern_match.rs` - Fix empty list case
-- `src/codegen/` - Add null check emission
+- `src/DarkCompiler/passes/6_CodeGen.fs`
+  - `generateHeapInit` (heap size / heap-end tracking)
+  - `LIR.HeapAlloc` lowering (bounds check)
+  - `LIR.RawAlloc` lowering (bounds check)
+- `benchmarks/problems/quicksort/dark/main.dark` (single-pass partition rewrite, recommended next step)
 
 ---
 
@@ -346,7 +334,7 @@ This explicitly dereferences address 0 - guaranteed crash.
 
 | Optimization | Est. Impact | Complexity | Priority |
 |-------------|-------------|------------|----------|
-| 4. Fix Segfault | Required | Medium | Critical |
+| 4. Reduce Quicksort Allocation Pressure (after allocator guards) | Required | Medium | Critical |
 | 1. Simplify List for Sequential Access | 70-80% | High | High |
 | 2. Closure Hoisting/Inlining | 15-20% | Medium | Medium |
 | 3. Eliminate Redundant Checks | 10-15% | Low | Medium |
@@ -411,4 +399,4 @@ Key function sizes (line counts in ANF):
 
 - Rust: `/tmp/rust_disasm.txt` (59,947 lines)
 - OCaml: `/tmp/ocaml_disasm.txt` (90,062 lines)
-- Dark: Compilation crashes
+- Dark: Compiles, full benchmark exits with allocator OOM

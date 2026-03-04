@@ -7,3 +7,6 @@ let rawPtr = __raw_alloc(8) in let _ = __raw_set<Float>(rawPtr, 0, 1.5) in let r
 // __raw_get<T> should preserve T through ANF inferType when lowered to __raw_get_* intrinsics.
 // Regression: a fallback to TInt64 made this tuple/list pattern arm get optimized away.
 let p = __raw_alloc(8) in let _ = __raw_set<(List<String>, Int64)>(p, 0, (["a"], 1)) in let x = __raw_get<(List<String>, Int64)>(p, 0) in match x with | ([_], _) -> 1 | _ -> 2 = 1
+
+// Allocator should fail gracefully (exit=1) instead of SIGSEGV when bump allocation exceeds heap.
+let p1 = __raw_alloc(600000000) in let p2 = __raw_alloc(8) in let _ = __raw_set<Int64>(p2, 0, 1) in 0 = exit=1 stderr="Out of heap memory"

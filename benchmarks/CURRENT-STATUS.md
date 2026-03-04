@@ -35,24 +35,82 @@ These benchmarks compile and run reliably.
 
 ---
 
-## BUG: Closure Variable Capture
+## BUG: Quicksort Runtime OOM
 
 **Status: BLOCKS quicksort**
 
-Closures cannot capture variables from enclosing scopes properly. The quicksort benchmark fails with "Undefined variable: pivot" because the closures passed to `filter` reference a variable defined in the outer `let` binding.
+The quicksort benchmark compiles, but still fails at runtime at full benchmark size.
 
-### Minimal Reproduction:
+### Current Reproduction:
 
-```dark
-def quicksort(arr: List<Int64>) : List<Int64> =
-    let len = Stdlib.List.length<Int64>(arr) in
-    if len <= 1 then arr
-    else
-        let pivot = getAtOrDefault(arr, len / 2, 0) in
-        // BUG: These closures cannot access 'pivot' from outer scope
-        let left = Stdlib.List.filter<Int64>(arr, (x: Int64) => x < pivot) in
-        ...
+```bash
+# Compiles, then exits with allocator OOM at runtime
+./dark benchmarks/problems/quicksort/dark/main.dark -o /tmp/quicksort -q
+/tmp/quicksort
 ```
+
+### Current Evidence:
+
+- `benchmarks/problems/quicksort/dark/main.dark` exits with `Out of heap memory` (exit code 1)
+- `benchmarks/problems/quicksort/dark/quick.dark` runs successfully
+- Allocator now has bounds checks, so the old invalid-write SIGSEGV path is gone
+- `run_benchmarks.sh` currently skips quicksort (`SKIP_BENCHMARKS=("quicksort")`)
+
+---
+
+## BUG: Fannkuch Output Mismatch
+
+**Status: BLOCKS `fannkuch` Dark result in full benchmark runs**
+
+`fannkuch` currently compiles and runs, but the Dark output is wrong for the reduced benchmark input:
+
+- Expected (Dark reduced-size target): `10`
+- Actual: `6`
+
+### Current Reproduction
+
+```bash
+./benchmarks/infrastructure/build_all.sh fannkuch
+./benchmarks/problems/fannkuch/dark/main
+# actual output: 6
+```
+
+Notes:
+
+- This reproduces on a clean `HEAD` worktree, so it is pre-existing and not from local uncommitted changes.
+- `benchmarks/problems/fannkuch/dark/expected_output.txt` still expects `10`.
+- Full `./benchmarks/run_benchmarks.sh` currently exits non-zero with `Benchmark run failures: fannkuch`.
+- Compiler flag isolation indicates optimization sensitivity:
+  - default: `6`
+  - `--disable-opt-lir-peephole`: `10`
+  - `--disable-opt-tco`: `10`
+  - `--disable-opt-inline`: `10`
+
+---
+
+## Known Regression: `fasta` (+0.39% instructions)
+
+`fasta` regressed from `2,436,771,495` to `2,446,245,270` instructions after allocator guard changes.
+
+Investigation summary:
+
+- Delta: `+9,473,775` instructions, `+1,894,755` branches
+- Ratio: exactly `5.0` extra instructions per extra branch
+- Cause: per-allocation heap bounds checks currently recompute heap-end and add one extra conditional branch on every bump allocation
+
+Suggested fix:
+
+1. Hoist heap-end into a dedicated register in heap init.
+2. Use one shared OOM trap label instead of inlining trap code at each allocation site.
+3. Keep checks only on bump-allocation fallback paths.
+
+Update from latest run (`2026-03-03_204818`):
+
+- Dark `fasta`: `2,446,245,402` instructions (`+132`, effectively unchanged vs `2,446,245,270`)
+- Shared OOM trap label is implemented, which reduced code size, but hot-path instruction regression remains
+- Remaining regression is still from per-allocation heap-end recomputation and branch in bump allocation
+
+Details: see `docs/investigations/benchmark-fasta-optimization.md` ("2026-03-03 Regression Investigation").
 
 ---
 
@@ -62,10 +120,10 @@ These benchmarks have implementations but are limited by stack depth or bugs.
 
 | Benchmark  | Status             | Limitation                                                     |
 | ---------- | ------------------ | -------------------------------------------------------------- |
-| quicksort  | COMPILE ERROR      | "Undefined variable: pivot" - closure variable capture bug     |
+| quicksort  | RUNTIME OOM        | Full-size run exceeds current heap/allocation budget (skipped) |
 | pisum      | Working (reduced)  | Uses 5 rounds, n=1000 (full size causes stack overflow)        |
 | nsieve     | Stack overflow     | Uses n=1000 (n=100000 causes stack overflow) - outputs 168     |
-| fannkuch   | Stack overflow     | Uses n=6 (n=9 causes stack overflow) - outputs 10              |
+| fannkuch   | Output mismatch    | Uses n=6 but currently outputs 6 (expected 10); n=9 is stack-limited |
 | edigits    | Stack overflow     | Uses 50 digits, 1 iteration (full: 1000 digits, 10 iterations) |
 
 ---
@@ -84,13 +142,14 @@ These benchmarks are in the suite for other languages but don't have Dark implem
 
 | Feature                    | Benchmarks Blocked                                                           |
 | -------------------------- | ---------------------------------------------------------------------------- |
-| **Closure variable capture** | quicksort                                                                  |
+| **Allocator capacity / allocation pressure** | quicksort                                                   |
+| **Benchmark correctness bug** | fannkuch                                                                  |
 | Stack depth / TCO          | pisum (full), nsieve (full), fannkuch (full), edigits (full)               |
 
 ---
 
 ## Notes
 
-- Expected outputs for reduced-size benchmarks need to be updated to match reduced parameters
-- The non-deterministic segfault bug mentioned in previous versions appears to be fixed
+- Closure capture in quicksort predicates now works (benchmark compiles)
+- Quicksort is blocked by runtime heap pressure, not a compile-time closure issue
 - The mandelbrot "negative float bug" was actually a semantic mismatch - the Dark code was counting escaped points while the Rust reference counts points in the set. Fixed.

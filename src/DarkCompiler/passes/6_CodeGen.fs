@@ -43,9 +43,14 @@ type CodeGenContext = {
     // Function context for tail call epilogue generation
     StackSize: int
     UsedCalleeSaved: LIR.PhysReg list
+    HeapOverflowLabel: string
 }
 
 let leakCounterLabel = "_leak_count"
+let heapOutOfMemoryMessage = "Out of heap memory"
+let private heapMmapSizeBytes = 512L * 1024L * 1024L
+let private heapMmapSizeMovzImm16 = 0x2000us  // 512MB == 0x20000000
+let private heapOverflowLabelPrefix = "__heap_oom_"
 
 let private dataLabel (name: string) : ARM64Symbolic.LabelRef =
     ARM64Symbolic.DataLabel (ARM64Symbolic.Named name)
@@ -64,6 +69,52 @@ let private runtimeInstrs (instrs: ARM64.Instr list) : ARM64Symbolic.Instr list 
 
 let private utf8Len (value: string) : int =
     System.Text.Encoding.UTF8.GetByteCount value
+
+let private generateHeapOverflowTrapBody () : ARM64Symbolic.Instr list =
+    let os =
+        match Platform.detectOS () with
+        | Ok platform -> platform
+        | Error msg -> Crash.crash $"Platform detection failed: {msg}"
+    let syscalls = Platform.getSyscallNumbers os
+    let messageBytes = System.Text.Encoding.UTF8.GetBytes(heapOutOfMemoryMessage) |> Array.toList
+    runtimeInstrs (Runtime.generatePrintCharsToStderr messageBytes)
+    @ [
+        ARM64Symbolic.MOVZ (ARM64Symbolic.X0, 1us, 0)  // exit code = 1
+        ARM64Symbolic.MOVZ (syscalls.SyscallRegister, syscalls.Exit, 0)
+        ARM64Symbolic.SVC syscalls.SvcImmediate
+    ]
+
+let private generateHeapOverflowTrapBlock (label: string) : ARM64Symbolic.Instr list =
+    ARM64Symbolic.Label label :: generateHeapOverflowTrapBody ()
+
+let private withHeapBoundsCheck
+    (overflowLabel: string)
+    (nextPtrInstrs: ARM64Symbolic.Instr list)
+    (allocInstrs: ARM64Symbolic.Instr list)
+    : ARM64Symbolic.Instr list =
+    [
+        ARM64Symbolic.MOVZ (ARM64Symbolic.X11, heapMmapSizeMovzImm16, 16)
+        ARM64Symbolic.ADD_reg (ARM64Symbolic.X11, ARM64Symbolic.X27, ARM64Symbolic.X11)
+    ]
+    @ nextPtrInstrs
+    @ [
+        ARM64Symbolic.CMP_reg (ARM64Symbolic.X14, ARM64Symbolic.X11)
+        ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, overflowLabel)
+    ]
+    @ allocInstrs
+
+let private checkedBumpAllocReg
+    (overflowLabel: string)
+    (destReg: ARM64Symbolic.Reg)
+    (sizeReg: ARM64Symbolic.Reg)
+    : ARM64Symbolic.Instr list =
+    withHeapBoundsCheck
+        overflowLabel
+        [ARM64Symbolic.ADD_reg (ARM64Symbolic.X14, ARM64Symbolic.X28, sizeReg)]
+        [
+            ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)
+            ARM64Symbolic.ADD_reg (ARM64Symbolic.X28, ARM64Symbolic.X28, sizeReg)
+        ]
 
 let generateLeakCounterInc (ctx: CodeGenContext) : ARM64Symbolic.Instr list =
     if ctx.Options.EnableLeakCheck then
@@ -1968,31 +2019,45 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
             let totalSize = ((sizeBytes + 8) + 7) &&& (~~~7)
             if ctx.Options.DisableFreeList then
                 // Bump allocator only (no free list reuse)
-                [
-                    ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)                  // dest = current heap pointer
-                    ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)                      // X15 = 1 (initial ref count)
-                    ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X28, int16 sizeBytes)   // store ref count after payload
-                    ARM64Symbolic.ADD_imm (ARM64Symbolic.X28, ARM64Symbolic.X28, uint16 totalSize) // bump pointer
-                ] @ generateLeakCounterInc ctx
+                (withHeapBoundsCheck
+                    ctx.HeapOverflowLabel
+                    [ARM64Symbolic.ADD_imm (ARM64Symbolic.X14, ARM64Symbolic.X28, uint16 totalSize)]
+                    [
+                        ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)                  // dest = current heap pointer
+                        ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)                      // X15 = 1 (initial ref count)
+                        ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X28, int16 sizeBytes)   // store ref count after payload
+                        ARM64Symbolic.ADD_imm (ARM64Symbolic.X28, ARM64Symbolic.X28, uint16 totalSize) // bump pointer
+                    ])
+                @ generateLeakCounterInc ctx
             else
                 // Full allocator with free list support
-                [
-                    // Check free list
-                    ARM64Symbolic.LDR (ARM64Symbolic.X15, ARM64Symbolic.X27, int16 sizeBytes)   // Load free list head
-                    ARM64Symbolic.CBZ_offset (ARM64Symbolic.X15, 7)                     // If empty, skip to bump alloc
-                    // Pop from free list
+                let popFreeList = [
                     ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X15)                  // dest = freed block
-                    ARM64Symbolic.LDR (ARM64Symbolic.X14, ARM64Symbolic.X15, 0s)                // Load next pointer
+                    ARM64Symbolic.LDR (ARM64Symbolic.X14, ARM64Symbolic.X15, 0s)        // Load next pointer
                     ARM64Symbolic.STR (ARM64Symbolic.X14, ARM64Symbolic.X27, int16 sizeBytes)   // Update free list head
-                    ARM64Symbolic.MOVZ (ARM64Symbolic.X14, 1us, 0)                      // X14 = 1 (initial ref count)
-                    ARM64Symbolic.STR (ARM64Symbolic.X14, destReg, int16 sizeBytes)     // Store ref count
-                    ARM64Symbolic.B 4                                           // Skip bump allocator
-                    // Bump allocator (fallback when free list empty)
-                    ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)                  // dest = current heap pointer
-                    ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)                      // X15 = 1 (initial ref count)
-                    ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X28, int16 sizeBytes)   // store ref count after payload
-                    ARM64Symbolic.ADD_imm (ARM64Symbolic.X28, ARM64Symbolic.X28, uint16 totalSize) // bump pointer
-                ] @ generateLeakCounterInc ctx)
+                    ARM64Symbolic.MOVZ (ARM64Symbolic.X14, 1us, 0)                       // X14 = 1 (initial ref count)
+                    ARM64Symbolic.STR (ARM64Symbolic.X14, destReg, int16 sizeBytes)      // Store ref count
+                ]
+
+                let bumpAlloc =
+                    withHeapBoundsCheck
+                        ctx.HeapOverflowLabel
+                        [ARM64Symbolic.ADD_imm (ARM64Symbolic.X14, ARM64Symbolic.X28, uint16 totalSize)]
+                        [
+                            ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)                  // dest = current heap pointer
+                            ARM64Symbolic.MOVZ (ARM64Symbolic.X15, 1us, 0)                      // X15 = 1 (initial ref count)
+                            ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X28, int16 sizeBytes)   // store ref count after payload
+                            ARM64Symbolic.ADD_imm (ARM64Symbolic.X28, ARM64Symbolic.X28, uint16 totalSize) // bump pointer
+                        ]
+
+                [
+                    ARM64Symbolic.LDR (ARM64Symbolic.X15, ARM64Symbolic.X27, int16 sizeBytes)   // Load free list head
+                    ARM64Symbolic.CBZ_offset (ARM64Symbolic.X15, popFreeList.Length + 2)         // If empty, jump past pop path + branch to bump alloc
+                ]
+                @ popFreeList
+                @ [ARM64Symbolic.B bumpAlloc.Length]
+                @ bumpAlloc
+                @ generateLeakCounterInc ctx)
 
     | LIR.HeapStore (addr, offset, src, valueType) ->
         // Store value at addr + offset (offset is in bytes)
@@ -2706,10 +2771,8 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                     ARM64Symbolic.MOVK (ARM64Symbolic.X14, 0xFFFFus, 32)               // Bits 32-47
                     ARM64Symbolic.MOVK (ARM64Symbolic.X14, 0xFFFFus, 48)               // Bits 48-63
                     ARM64Symbolic.AND_reg (ARM64Symbolic.X15, ARM64Symbolic.X15, ARM64Symbolic.X14)    // X15 = aligned size
-                    // Bump allocate
-                    ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X28)                 // dest = current heap pointer
-                    ARM64Symbolic.ADD_reg (ARM64Symbolic.X28, ARM64Symbolic.X28, ARM64Symbolic.X15)    // bump pointer by aligned size
-                ]))
+                ]
+                @ checkedBumpAllocReg ctx.HeapOverflowLabel destReg ARM64Symbolic.X15))
 
     | LIR.RawFree ptr ->
         // Raw free: no-op for now (bump allocator doesn't support free)
@@ -3026,11 +3089,11 @@ let convertCFG (ctx: CodeGenContext) (epilogueLabel: string) (cfg: LIR.CFG) : Re
     |> Result.map List.concat
 
 /// Generate heap initialization code for _start function
-/// Uses mmap to allocate 128MB of heap space and initializes X27/X28
+/// Uses mmap to allocate 512MB of heap space and initializes X27/X28
 ///
 /// Memory layout:
 ///   X27 -> [free list heads: 256 bytes (32 entries × 8 bytes)]
-///   X28 -> [heap allocation area: rest of 64MB]
+///   X28 -> [heap allocation area: mapped heap after free list heads]
 ///
 /// Free list heads are indexed by (totalSize / 8), where totalSize includes
 /// the 8-byte ref count. Size class 0 and 1 are unused (too small).
@@ -3049,10 +3112,13 @@ let generateHeapInit () : ARM64Symbolic.Instr list =
         match os with
         | Platform.MacOS -> 0x1002us  // MAP_PRIVATE | MAP_ANON
         | Platform.Linux -> 0x22us    // MAP_PRIVATE | MAP_ANONYMOUS
+    let heapSizeForMmap = loadImmediate ARM64Symbolic.X1 heapMmapSizeBytes
     [
-        // mmap(NULL, 128MB, PROT_READ|PROT_WRITE, flags, -1, 0)
+        // mmap(NULL, 512MB, PROT_READ|PROT_WRITE, flags, -1, 0)
         ARM64Symbolic.MOVZ (ARM64Symbolic.X0, 0us, 0)              // addr = NULL
-        ARM64Symbolic.MOVZ (ARM64Symbolic.X1, 0x800us, 16)         // size = 0x8000000 (128MB, high 16 bits)
+    ]
+    @ heapSizeForMmap
+    @ [
         ARM64Symbolic.MOVZ (ARM64Symbolic.X2, 3us, 0)              // PROT_READ | PROT_WRITE
         ARM64Symbolic.MOVZ (ARM64Symbolic.X3, mmapFlags, 0)        // flags
         ARM64Symbolic.MOVZ (ARM64Symbolic.X4, 0us, 0)              // X4 = 0
@@ -3078,9 +3144,24 @@ let generateHeapInit () : ARM64Symbolic.Instr list =
 let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64Symbolic.Instr list, string> =
     // Generate epilogue label for this function (passed to convertCFG for Ret terminators)
     let epilogueLabel = "_epilogue_" + func.Name
+    let overflowLabel = heapOverflowLabelPrefix + func.Name
+    let needsHeapOverflowTrap =
+        func.CFG.Blocks
+        |> Map.toList
+        |> List.exists (fun (_, block) ->
+            block.Instrs
+            |> List.exists (function
+                | LIR.HeapAlloc _ -> true
+                | LIR.RawAlloc _ -> true
+                | _ -> false))
 
     // Create function-specific context with stack info for tail call epilogue generation
-    let funcCtx = { ctx with StackSize = func.StackSize; UsedCalleeSaved = func.UsedCalleeSaved }
+    let funcCtx = {
+        ctx with
+            StackSize = func.StackSize
+            UsedCalleeSaved = func.UsedCalleeSaved
+            HeapOverflowLabel = overflowLabel
+    }
 
     // Convert CFG to ARM64 instructions
     match convertCFG funcCtx epilogueLabel func.CFG with
@@ -3147,6 +3228,13 @@ let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64Sym
 
         let paramSetup = saveIntToTemps @ moveIntFromTemps
 
+        // Shared cold path for allocation overflow in this function.
+        let heapOverflowTrap =
+            if needsHeapOverflowTrap then
+                generateHeapOverflowTrapBlock overflowLabel
+            else
+                []
+
         // Generate epilogue (deallocate stack, restore FP/LR, return or exit)
         let epilogueLabelInstr = [ARM64Symbolic.Label ("_epilogue_" + func.Name)]
         let epilogue =
@@ -3168,7 +3256,7 @@ let convertFunction (ctx: CodeGenContext) (func: LIR.Function) : Result<ARM64Sym
 
         // Combine: function label + prologue + heap init + param setup + CFG body + epilogue label + epilogue
         // All Ret terminators jump to the epilogue label
-        Ok (functionEntryLabel @ prologue @ heapInit @ paramSetup @ cfgInstrs @ epilogueLabelInstr @ epilogue)
+        Ok (functionEntryLabel @ prologue @ heapInit @ paramSetup @ cfgInstrs @ heapOverflowTrap @ epilogueLabelInstr @ epilogue)
 
 /// Peephole optimization pass
 /// Patterns:
@@ -3252,7 +3340,12 @@ let generateARM64WithOptions (options: CodeGenOptions) (program: LIR.Program) : 
 
     // Create code generation context with options
     // StackSize and UsedCalleeSaved are set per-function in convertFunction
-    let ctx = { Options = options; StackSize = 0; UsedCalleeSaved = [] }
+    let ctx = {
+        Options = options
+        StackSize = 0
+        UsedCalleeSaved = []
+        HeapOverflowLabel = ""
+    }
 
     // Ensure _start is first (entry point)
     let sortedFunctions =
