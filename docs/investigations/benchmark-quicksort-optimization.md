@@ -9,6 +9,19 @@
 
 Dark cannot run `benchmarks/problems/quicksort/dark/main.dark` at benchmark size and is skipped by `run_benchmarks.sh`. The allocator now traps cleanly instead of segfaulting, but quicksort still exceeds available heap due high allocation pressure from list-heavy partitioning.
 
+### 2026-03-04 Update: TCO Cleanup Leak Amplification Fixed
+
+Recent ANF->MIR fixes now preserve self-tailcall cleanup and protect overlapping recursive args from premature decref. This removed a major leak amplification path in quicksort-adjacent kernels.
+
+Current measurements:
+
+- `benchmarks/problems/quicksort/dark/quick.dark`: `leaks: 144` (default), `leaks: 102` (`--disable-opt-tco`), checksum unchanged
+- Full benchmark input remains blocked by allocator pressure:
+  - `n=699`: succeeds (`leaks: 17416` default, `16060` no-TCO)
+  - `n=700`: `Out of heap memory` (both default and no-TCO)
+
+Conclusion: cleanup correctness was part of the problem, but the remaining blocker is still peak allocation volume.
+
 ## Benchmark Implementation Comparison
 
 ### Dark Implementation
@@ -316,10 +329,16 @@ Current allocator behavior:
 2. **Completed: increase heap size**
    - mmap heap increased from 128MB to 512MB
 
-3. **Next fix: reduce quicksort allocation pressure**
-   - Replace 3-pass partition (`filter`/`filter`/`filter`) with a single-pass partition
+3. **Completed: preserve self-tailcall cleanup in ANF->MIR lowering**
+   - Keep trailing `RefCountDec` chain when lowering self tailcalls to loop backedges
+   - Add overlap-aware `RefCountInc` when cleanup decrefs values reused as recursive args
+   - Verified via new e2e TCO+refcount regressions and full test suite pass
+
+4. **Next fix: reduce quicksort allocation pressure**
+   - Replace 3-pass partition (`filter`/`filter`/`filter`) with a single-pass partition function
+   - Build `left/middle/right` in one traversal to avoid repeated full-list scans and intermediate list churn
    - Prefer array-backed implementation for this benchmark when array primitive exists
-   - Consider benchmark-specific input sizing if full-size parity is not required yet
+   - Keep benchmark semantics identical (no benchmark-specific shortcut paths)
 
 ### Files to Modify
 - `src/DarkCompiler/passes/6_CodeGen.fs`

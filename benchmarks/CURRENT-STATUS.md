@@ -56,6 +56,14 @@ The quicksort benchmark compiles, but still fails at runtime at full benchmark s
 - Allocator now has bounds checks, so the old invalid-write SIGSEGV path is gone
 - `run_benchmarks.sh` currently skips quicksort (`SKIP_BENCHMARKS=("quicksort")`)
 
+Latest investigation update (`2026-03-04`):
+
+- Tail-call cleanup lowering was fixed in ANF->MIR; this removed major leak amplification in quicksort-related kernels
+- `benchmarks/problems/quicksort/dark/quick.dark` now reports `leaks: 144` (or `102` with `--disable-opt-tco`) and preserves checksum output
+- Full-size quicksort still fails at `n=700` with allocator OOM both with and without TCO
+- `n=699` succeeds (`leaks: 17416` default, `16060` with `--disable-opt-tco`)
+- This indicates the remaining blocker is allocation pressure / heap budget, not only missing cleanup in TCO lowering
+
 ---
 
 ## BUG: Fannkuch Output Mismatch
@@ -82,13 +90,14 @@ Notes:
 - Full `./benchmarks/run_benchmarks.sh` currently exits non-zero with `Benchmark run failures: fannkuch`.
 - Compiler flag isolation indicates optimization sensitivity:
   - default: `6`
+  - `--disable-opt-mir`: `10`
   - `--disable-opt-lir-peephole`: `10`
   - `--disable-opt-tco`: `10`
   - `--disable-opt-inline`: `10`
 
 ---
 
-## Known Regression: `fasta` (+0.39% instructions)
+## Known Regression: `fasta` (allocator guard hot-path overhead)
 
 `fasta` regressed from `2,436,771,495` to `2,446,245,270` instructions after allocator guard changes.
 
@@ -109,6 +118,11 @@ Update from latest run (`2026-03-03_204818`):
 - Dark `fasta`: `2,446,245,402` instructions (`+132`, effectively unchanged vs `2,446,245,270`)
 - Shared OOM trap label is implemented, which reduced code size, but hot-path instruction regression remains
 - Remaining regression is still from per-allocation heap-end recomputation and branch in bump allocation
+
+Update from run (`2026-03-04_091307`):
+
+- Dark `fasta`: `2,457,610,200` instructions (`+11,364,798`, `+0.46%` vs previous latest `2,446,245,402`)
+- The regression is still consistent with the same per-allocation bounds-check hot-path cost
 
 Details: see `docs/investigations/benchmark-fasta-optimization.md` ("2026-03-03 Regression Investigation").
 

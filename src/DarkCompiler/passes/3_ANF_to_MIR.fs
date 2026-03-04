@@ -611,6 +611,87 @@ let withCoverage (builder: CFGBuilder) (cexpr: ANF.CExpr) : MIR.Instr list * CFG
     else
         ([], builder)
 
+/// Collect cleanup operations that must run before a self-tailcall loop jump.
+/// Expected shape after TailCallDetection:
+///   Let(callTmp, TailCall(...), Let(_, RefCountDec..., ... Return(callTmp)))
+let rec collectSelfTailCallCleanup
+    (builder: CFGBuilder)
+    (callTempId: ANF.TempId)
+    (expr: ANF.AExpr)
+    : Result<MIR.Instr list, string> =
+    match expr with
+    | ANF.Return (ANF.Var tid) when tid = callTempId ->
+        Ok []
+    | ANF.Let (_, ANF.RefCountDec (ANF.Var tid, payloadSize), rest) ->
+        collectSelfTailCallCleanup builder callTempId rest
+        |> Result.map (fun instrs -> MIR.RefCountDec (tempToVReg tid, payloadSize) :: instrs)
+    | ANF.Let (_, ANF.RefCountDec (_, _), _) ->
+        Error "Internal error: RefCountDec in self-tailcall cleanup on non-variable"
+    | ANF.Let (_, ANF.RefCountDecString strAtom, rest) ->
+        atomToOperand builder strAtom
+        |> Result.bind (fun strOp ->
+            collectSelfTailCallCleanup builder callTempId rest
+            |> Result.map (fun instrs -> MIR.RefCountDecString strOp :: instrs))
+    | _ ->
+        Error $"Internal error: unexpected expression after self tailcall in {builder.FuncName}"
+
+/// If a self-tailcall cleanup decrements an argument value, increment that argument first
+/// so ownership is transferred to the next loop iteration before cleanup runs.
+let refCountIncForOverlappingArgs
+    (argOperands: MIR.Operand list)
+    (cleanupInstrs: MIR.Instr list)
+    (existingInstrsRev: MIR.Instr list)
+    : MIR.Instr list =
+    let decSizes =
+        cleanupInstrs
+        |> List.choose (fun instr ->
+            match instr with
+            | MIR.RefCountDec (vreg, payloadSize) -> Some (vreg, payloadSize)
+            | _ -> None)
+        |> Map.ofList
+
+    let aliasMap =
+        existingInstrsRev
+        |> List.fold (fun map instr ->
+            match instr with
+            | MIR.Mov (dest, MIR.Register src, _) ->
+                Map.add dest src map
+            | _ ->
+                map)
+            Map.empty
+
+    let rec findCleanupTargetAlias
+        (vreg: MIR.VReg)
+        (visited: Set<MIR.VReg>)
+        : MIR.VReg option =
+        if Set.contains vreg visited then
+            None
+        else if Map.containsKey vreg decSizes then
+            Some vreg
+        else
+            match Map.tryFind vreg aliasMap with
+            | Some next ->
+                findCleanupTargetAlias next (Set.add vreg visited)
+            | None ->
+                None
+
+    let (_, incsRev) =
+        argOperands
+        |> List.fold (fun (seen, incsRev) argOp ->
+            match argOp with
+            | MIR.Register vreg ->
+                match findCleanupTargetAlias vreg Set.empty with
+                | Some targetVReg when not (Set.contains targetVReg seen) ->
+                    let payloadSize = Map.find targetVReg decSizes
+                    (Set.add targetVReg seen, MIR.RefCountInc (targetVReg, payloadSize) :: incsRev)
+                | _ ->
+                    (seen, incsRev)
+            | _ ->
+                (seen, incsRev))
+            (Set.empty, [])
+
+    List.rev incsRev
+
 /// Convert ANF expression to CFG
 /// Returns: Result of (final value operand, CFG builder with all blocks)
 let rec convertExpr
@@ -633,73 +714,83 @@ let rec convertExpr
             let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks }
             Ok (operand, builder'))
 
-    // Self-recursive tail call: emit Movs to update params + Jump to loop header
+    // Self-recursive tail call: emit arg capture + cleanup + param update + Jump to loop header
     // This must come before the general Let case to take precedence
     // Phi nodes carry type info, so this works for both int and float parameters.
-    | ANF.Let (_, ANF.TailCall (funcName, args), _) when funcName = builder.FuncName ->
-        let argTypes = args |> List.map (atomType builder)
-        args
-        |> List.map (atomToOperand builder)
-        |> sequenceResults
-        |> Result.bind (fun argOperands ->
-            let loopLabel = MIR.Label $"{funcName}_body"
-            // To handle register swaps correctly (e.g., swapInt(b, a, n-1)),
-            // we need temps only when an argument directly references a parameter.
-            //
-            // Example where temps are needed: args = [b, a] for params [a, b]
-            //   - Arg 0 is param b (VReg 1), needs capture before a is overwritten
-            //   - Arg 1 is param a (VReg 0), needs capture before b is overwritten
-            //
-            // Example where temps are NOT needed: args = [n-1, acc+n] for params [n, acc]
-            //   - Arg 0 is a computed temp (VReg 10xxx), not a direct param reference
-            //   - Arg 1 is a computed temp (VReg 10xxx), not a direct param reference
-            //
-            // We only need temps if ANY argument is a direct param reference AND
-            // that param will be written to by another assignment.
-            let paramSet = builder.ParamRegs |> Set.ofList
-            let argReferencesParam (op: MIR.Operand) =
-                match op with
-                | MIR.Register vreg -> Set.contains vreg paramSet
-                | _ -> false
-            let needsTemps = argOperands |> List.exists argReferencesParam
+    | ANF.Let (callTempId, ANF.TailCall (funcName, args), rest) when funcName = builder.FuncName ->
+        collectSelfTailCallCleanup builder callTempId rest
+        |> Result.bind (fun cleanupInstrs ->
+            let argTypes = args |> List.map (atomType builder)
+            args
+            |> List.map (atomToOperand builder)
+            |> sequenceResults
+            |> Result.bind (fun argOperands ->
+                let loopLabel = MIR.Label $"{funcName}_body"
+                // To handle register swaps correctly (e.g., swapInt(b, a, n-1)),
+                // we need temps only when an argument directly references a parameter.
+                //
+                // Example where temps are needed: args = [b, a] for params [a, b]
+                //   - Arg 0 is param b (VReg 1), needs capture before a is overwritten
+                //   - Arg 1 is param a (VReg 0), needs capture before b is overwritten
+                //
+                // Example where temps are NOT needed: args = [n-1, acc+n] for params [n, acc]
+                //   - Arg 0 is a computed temp (VReg 10xxx), not a direct param reference
+                //   - Arg 1 is a computed temp (VReg 10xxx), not a direct param reference
+                //
+                // We only need temps if ANY argument is a direct param reference AND
+                // that param will be written to by another assignment.
+                let paramSet = builder.ParamRegs |> Set.ofList
+                let argReferencesParam (op: MIR.Operand) =
+                    match op with
+                    | MIR.Register vreg -> Set.contains vreg paramSet
+                    | _ -> false
+                let needsTemps = argOperands |> List.exists argReferencesParam
 
-            let (paramAssignments, regGen') =
-                if needsTemps then
-                    // Use temps to avoid swap issues
-                    let (tempRegs, rg) =
-                        argOperands
-                        |> List.fold (fun (temps, rg) _ ->
-                            let (temp, rg') = MIR.freshReg rg
-                            (temps @ [temp], rg')
-                        ) ([], builder.RegGen)
-                    // First capture all arg values into temps
-                    let captureInstrs =
-                        List.zip3 tempRegs argOperands argTypes
-                        |> List.map (fun (temp, argOp, argType) ->
-                            MIR.Mov (temp, argOp, Some argType))
-                    // Then assign temps to params
-                    let assignInstrs =
-                        List.zip3 builder.ParamRegs tempRegs argTypes
-                        |> List.map (fun (paramReg, temp, argType) ->
-                            MIR.Mov (paramReg, MIR.Register temp, Some argType))
-                    (captureInstrs @ assignInstrs, rg)
-                else
-                    // No temps needed - just assign directly
-                    let assignInstrs =
-                        List.zip3 builder.ParamRegs argOperands argTypes
-                        |> List.map (fun (paramReg, argOp, argType) ->
-                            MIR.Mov (paramReg, argOp, Some argType))
-                    (assignInstrs, builder.RegGen)
+                let (captureInstrs, assignInstrs, regGen') =
+                    if needsTemps then
+                        // Use temps to avoid swap issues
+                        let (tempRegs, rg) =
+                            argOperands
+                            |> List.fold (fun (temps, rg) _ ->
+                                let (temp, rg') = MIR.freshReg rg
+                                (temps @ [temp], rg')
+                            ) ([], builder.RegGen)
+                        // First capture all arg values into temps
+                        let captures =
+                            List.zip3 tempRegs argOperands argTypes
+                            |> List.map (fun (temp, argOp, argType) ->
+                                MIR.Mov (temp, argOp, Some argType))
+                        // Then assign temps to params
+                        let assigns =
+                            List.zip3 builder.ParamRegs tempRegs argTypes
+                            |> List.map (fun (paramReg, temp, argType) ->
+                                MIR.Mov (paramReg, MIR.Register temp, Some argType))
+                        (captures, assigns, rg)
+                    else
+                        // No temps needed - just assign directly
+                        let assigns =
+                            List.zip3 builder.ParamRegs argOperands argTypes
+                            |> List.map (fun (paramReg, argOp, argType) ->
+                                MIR.Mov (paramReg, argOp, Some argType))
+                        ([], assigns, builder.RegGen)
 
-            // Create block with accumulated instructions + param assignments + Jump
-            let block = {
-                MIR.Label = currentLabel
-                MIR.Instrs = currentInstrsRev |> appendInstrsRev paramAssignments |> List.rev
-                MIR.Terminator = MIR.Jump loopLabel
-            }
-            let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks; RegGen = regGen' }
-            // Return dummy operand since this doesn't return
-            Ok (MIR.Int64Const 0L, builder'))
+                let overlapArgIncs = refCountIncForOverlappingArgs argOperands cleanupInstrs currentInstrsRev
+
+                // Create block with accumulated instructions + arg capture + overlap incs + cleanup + param assignments + Jump
+                let instrsRev =
+                    currentInstrsRev
+                    |> appendInstrsRev captureInstrs
+                    |> appendInstrsRev overlapArgIncs
+                    |> appendInstrsRev cleanupInstrs
+                    |> appendInstrsRev assignInstrs
+                let block = {
+                    MIR.Label = currentLabel
+                    MIR.Instrs = List.rev instrsRev
+                    MIR.Terminator = MIR.Jump loopLabel
+                }
+                let builder' = { builder with Blocks = Map.add currentLabel block builder.Blocks; RegGen = regGen' }
+                // Return dummy operand since this doesn't return
+                Ok (MIR.Int64Const 0L, builder')))
 
     | ANF.Let (tempId, cexpr, rest) ->
         // Let binding: handle based on cexpr type
@@ -1282,62 +1373,72 @@ and convertExprToOperand
                 let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks }
                 Ok (operand, Some startLabel, builder'))
 
-    // Self-recursive tail call: emit Movs to update params + Jump to loop header
+    // Self-recursive tail call: emit arg capture + cleanup + param update + Jump to loop header
     // This must come before the general Let case to take precedence
     // Phi nodes carry type info, so this works for both int and float parameters.
-    | ANF.Let (_, ANF.TailCall (funcName, args), _) when funcName = builder.FuncName ->
-        let argTypes = args |> List.map (atomType builder)
-        args
-        |> List.map (atomToOperand builder)
-        |> sequenceResults
-        |> Result.bind (fun argOperands ->
-            let loopLabel = MIR.Label $"{funcName}_body"
-            // To handle register swaps correctly (e.g., swapInt(b, a, n-1)),
-            // we need temps only when an argument directly references a parameter.
-            // (See convertExpr for detailed explanation)
-            let paramSet = builder.ParamRegs |> Set.ofList
-            let argReferencesParam (op: MIR.Operand) =
-                match op with
-                | MIR.Register vreg -> Set.contains vreg paramSet
-                | _ -> false
-            let needsTemps = argOperands |> List.exists argReferencesParam
+    | ANF.Let (callTempId, ANF.TailCall (funcName, args), rest) when funcName = builder.FuncName ->
+        collectSelfTailCallCleanup builder callTempId rest
+        |> Result.bind (fun cleanupInstrs ->
+            let argTypes = args |> List.map (atomType builder)
+            args
+            |> List.map (atomToOperand builder)
+            |> sequenceResults
+            |> Result.bind (fun argOperands ->
+                let loopLabel = MIR.Label $"{funcName}_body"
+                // To handle register swaps correctly (e.g., swapInt(b, a, n-1)),
+                // we need temps only when an argument directly references a parameter.
+                // (See convertExpr for detailed explanation)
+                let paramSet = builder.ParamRegs |> Set.ofList
+                let argReferencesParam (op: MIR.Operand) =
+                    match op with
+                    | MIR.Register vreg -> Set.contains vreg paramSet
+                    | _ -> false
+                let needsTemps = argOperands |> List.exists argReferencesParam
 
-            let (paramAssignments, regGen') =
-                if needsTemps then
-                    // Use temps to avoid swap issues
-                    let (tempRegs, rg) =
-                        argOperands
-                        |> List.fold (fun (temps, rg) _ ->
-                            let (temp, rg') = MIR.freshReg rg
-                            (temps @ [temp], rg')
-                        ) ([], builder.RegGen)
-                    let captureInstrs =
-                        List.zip3 tempRegs argOperands argTypes
-                        |> List.map (fun (temp, argOp, argType) ->
-                            MIR.Mov (temp, argOp, Some argType))
-                    let assignInstrs =
-                        List.zip3 builder.ParamRegs tempRegs argTypes
-                        |> List.map (fun (paramReg, temp, argType) ->
-                            MIR.Mov (paramReg, MIR.Register temp, Some argType))
-                    (captureInstrs @ assignInstrs, rg)
-                else
-                    // No temps needed - just assign directly
-                    let assignInstrs =
-                        List.zip3 builder.ParamRegs argOperands argTypes
-                        |> List.map (fun (paramReg, argOp, argType) ->
-                            MIR.Mov (paramReg, argOp, Some argType))
-                    (assignInstrs, builder.RegGen)
+                let (captureInstrs, assignInstrs, regGen') =
+                    if needsTemps then
+                        // Use temps to avoid swap issues
+                        let (tempRegs, rg) =
+                            argOperands
+                            |> List.fold (fun (temps, rg) _ ->
+                                let (temp, rg') = MIR.freshReg rg
+                                (temps @ [temp], rg')
+                            ) ([], builder.RegGen)
+                        let captures =
+                            List.zip3 tempRegs argOperands argTypes
+                            |> List.map (fun (temp, argOp, argType) ->
+                                MIR.Mov (temp, argOp, Some argType))
+                        let assigns =
+                            List.zip3 builder.ParamRegs tempRegs argTypes
+                            |> List.map (fun (paramReg, temp, argType) ->
+                                MIR.Mov (paramReg, MIR.Register temp, Some argType))
+                        (captures, assigns, rg)
+                    else
+                        // No temps needed - just assign directly
+                        let assigns =
+                            List.zip3 builder.ParamRegs argOperands argTypes
+                            |> List.map (fun (paramReg, argOp, argType) ->
+                                MIR.Mov (paramReg, argOp, Some argType))
+                        ([], assigns, builder.RegGen)
 
-            // Create block with accumulated instructions + param assignments + Jump
-            let block = {
-                MIR.Label = startLabel
-                MIR.Instrs = startInstrsRev |> appendInstrsRev paramAssignments |> List.rev
-                MIR.Terminator = MIR.Jump loopLabel
-            }
-            let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks; RegGen = regGen' }
-            // Return Some startLabel to tell the caller we created a block that's terminal
-            // (jumps back to loop header). The caller should not try to patch this block.
-            Ok (MIR.Int64Const 0L, Some startLabel, builder'))
+                let overlapArgIncs = refCountIncForOverlappingArgs argOperands cleanupInstrs startInstrsRev
+
+                // Create block with accumulated instructions + arg capture + overlap incs + cleanup + param assignments + Jump
+                let instrsRev =
+                    startInstrsRev
+                    |> appendInstrsRev captureInstrs
+                    |> appendInstrsRev overlapArgIncs
+                    |> appendInstrsRev cleanupInstrs
+                    |> appendInstrsRev assignInstrs
+                let block = {
+                    MIR.Label = startLabel
+                    MIR.Instrs = List.rev instrsRev
+                    MIR.Terminator = MIR.Jump loopLabel
+                }
+                let builder' = { builder with Blocks = Map.add startLabel block builder.Blocks; RegGen = regGen' }
+                // Return Some startLabel to tell the caller we created a block that's terminal
+                // (jumps back to loop header). The caller should not try to patch this block.
+                Ok (MIR.Int64Const 0L, Some startLabel, builder')))
 
     | ANF.Let (tempId, cexpr, rest) ->
         let destReg = tempToVReg tempId
