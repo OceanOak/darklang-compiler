@@ -7740,17 +7740,43 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                     Ok (ANF.Var tempVar, allBindings, varGen3)))
 
     | AST.If (condExpr, thenExpr, elseExpr) ->
-        // If expression in atom position: convert all parts to atoms, create IfValue
+        // If expression in atom position: use IfValue only when branch bindings are
+        // safe to evaluate eagerly. Otherwise, force callers to use full toANF
+        // lowering so non-selected branches remain lazy.
+        let isEagerIfBindingSafe (_: ANF.TempId, cexpr: ANF.CExpr) : bool =
+            match cexpr with
+            | ANF.Atom _
+            | ANF.TypedAtom _
+            | ANF.Prim _
+            | ANF.UnaryPrim _
+            | ANF.IfValue _
+            | ANF.TupleGet _
+            | ANF.RawGet _
+            | ANF.RawGetByte _
+            | ANF.FloatSqrt _
+            | ANF.FloatAbs _
+            | ANF.FloatNeg _
+            | ANF.Int64ToFloat _
+            | ANF.FloatToInt64 _
+            | ANF.FloatToBits _ -> true
+            | _ -> false
+
         toAtom condExpr varGen env typeReg variantLookup funcReg moduleRegistry |> Result.bind (fun (condAtom, condBindings, varGen1) ->
             toAtom thenExpr varGen1 env typeReg variantLookup funcReg moduleRegistry |> Result.bind (fun (thenAtom, thenBindings, varGen2) ->
                 toAtom elseExpr varGen2 env typeReg variantLookup funcReg moduleRegistry |> Result.bind (fun (elseAtom, elseBindings, varGen3) ->
-                    // Create a temporary for the result
-                    let (tempVar, varGen4) = ANF.freshVar varGen3
-                    // Create an IfValue CExpr
-                    let ifCExpr = ANF.IfValue (condAtom, thenAtom, elseAtom)
-                    // Return temp as atom with all bindings
-                    let allBindings = condBindings @ thenBindings @ elseBindings @ [(tempVar, ifCExpr)]
-                    Ok (ANF.Var tempVar, allBindings, varGen4))))
+                    let thenBindingsSafe = List.forall isEagerIfBindingSafe thenBindings
+                    let elseBindingsSafe = List.forall isEagerIfBindingSafe elseBindings
+
+                    if thenBindingsSafe && elseBindingsSafe then
+                        // Create a temporary for the result
+                        let (tempVar, varGen4) = ANF.freshVar varGen3
+                        // Create an IfValue CExpr
+                        let ifCExpr = ANF.IfValue (condAtom, thenAtom, elseAtom)
+                        // Return temp as atom with all bindings
+                        let allBindings = condBindings @ thenBindings @ elseBindings @ [(tempVar, ifCExpr)]
+                        Ok (ANF.Var tempVar, allBindings, varGen4)
+                    else
+                        Error "If expression requires lazy branch lowering")))
 
     | AST.Call (funcName, args) ->
         if isBuiltinUnwrapName funcName then

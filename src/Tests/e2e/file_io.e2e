@@ -80,6 +80,12 @@ match Stdlib.File.writeText("/nonexistent/directory/file.txt", "test") with | Ok
 // Write empty string
 let _ = Stdlib.File.writeText("/tmp/dark_test_empty.txt", "") in Stdlib.File.exists("/tmp/dark_test_empty.txt") = true
 
+// Dead if-branch file writes must not execute when if is lowered in atom position.
+let path = "/tmp/dark_test_if_lazy_write.txt" in let _ = Stdlib.File.writeText(path, "good") in let _ = if true then 0 else let _ = Stdlib.File.writeText(path, "bad") in 0 in match Stdlib.File.readText(path) with | Ok(s) -> s | Error(_) -> "error" = "good"
+
+// Regression: if-toAtom lowering must not eagerly execute branch calls when the branch is dead.
+let path = "/tmp/dark_test_if_dead_branch_call.txt" in let _ = Stdlib.File.writeText(path, "good") in let _ = if false then Stdlib.File.writeText(path, "bad") else Result.Ok(()) in match Stdlib.File.readText(path) with | Ok(s) -> s | Error(_) -> "error" = "good"
+
 
 // ===================================================================
 // File Appending
