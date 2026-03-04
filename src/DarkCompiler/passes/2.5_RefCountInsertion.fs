@@ -646,8 +646,9 @@ let rec insertRCWithAnalysis
                     let inferred = inferCExprType ctx cexpr
                     (inferred, Map.add cexpr inferred typeCache)
 
-            // When a temp is immediately aliased (let x = y), infer y's type from x's first call-site.
-            let inferAliasedVarTypeFromUse (aliasedTemp: TempId) (nextBody: ReturnAnnotatedExpr) : AST.Type option =
+            // When a temp is aliased through one or more let-bound vars, infer its type
+            // from the first concrete use-site (typically a call argument position).
+            let rec inferAliasedVarTypeFromUse (aliasedTemp: TempId) (nextBody: ReturnAnnotatedExpr) : AST.Type option =
                 let inferFromCall (funcName: string) (args: Atom list) : AST.Type option =
                     match Map.tryFind funcName ctx.FuncReg with
                     | Some (AST.TFunction (paramTypes, _)) ->
@@ -667,6 +668,13 @@ let rec insertRCWithAnalysis
                     inferFromCall funcName args
                 | RLet (_, TailCall (funcName, args), _, _) ->
                     inferFromCall funcName args
+                | RLet (nextAliasTemp, Atom (Var sourceId), nextNextBody, _) when sourceId = aliasedTemp ->
+                    inferAliasedVarTypeFromUse nextAliasTemp nextNextBody
+                | RLet (nextAliasTemp, TypedAtom (Var sourceId, aliasType), nextNextBody, _) when sourceId = aliasedTemp ->
+                    if isRcManagedHeapType aliasType then
+                        Some aliasType
+                    else
+                        inferAliasedVarTypeFromUse nextAliasTemp nextNextBody
                 | RIf (Var tid, _, _, _) when tid = aliasedTemp ->
                     Some AST.TBool
                 | _ ->
@@ -676,7 +684,21 @@ let rec insertRCWithAnalysis
             // when TupleGet cannot infer it from a multi-parameter sum.
             let inferredType =
                 match maybeType with
-                | Some t -> t
+                | Some t ->
+                    let aliasTypeFromBody =
+                        match bodyInfo with
+                        | RLet (_, TypedAtom (Var sourceId, aliasType), _, _) when sourceId = tempId ->
+                            Some aliasType
+                        | RLet (aliasTemp, Atom (Var sourceId), nextBody, _) when sourceId = tempId ->
+                            inferAliasedVarTypeFromUse aliasTemp nextBody
+                        | _ ->
+                            None
+
+                    match aliasTypeFromBody with
+                    | Some inferredAliasType when isRcManagedHeapType inferredAliasType && not (isRcManagedHeapType t) ->
+                        inferredAliasType
+                    | _ ->
+                        t
                 | None ->
                     match cexpr, bodyInfo with
                     | TupleGet _, RLet (_, TypedAtom (Var sourceId, aliasType), _, _) when sourceId = tempId ->
@@ -716,11 +738,11 @@ let rec insertRCWithAnalysis
 
             let bodyReturned = returnedSet bodyInfo
             let returnDecs' =
-                match maybeType with
-                | Some t when isRcManagedHeapType t && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) ->
-                    let size = payloadSize t ctx.TypeReg
+                if isRcManagedHeapType inferredType && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) then
+                    let size = payloadSize inferredType ctx.TypeReg
                     (tempId, size) :: returnDecs
-                | _ -> returnDecs
+                else
+                    returnDecs
 
             let tupleIncTargets =
                 match cexpr with
@@ -756,11 +778,21 @@ let rec insertRCWithAnalysis
                     | Some size, _ -> Some size
                     | None, Some size -> Some size
                     | None, None -> None
+                | Atom (Var sourceId)
+                | TypedAtom (Var sourceId, _) ->
+                    // Returning a pure alias of an already-returned owned value should not inc again.
+                    if isRcManagedHeapType inferredType && Set.contains tempId bodyReturned && isBorrowingExpr cexpr then
+                        if Set.contains sourceId bodyReturned then
+                            None
+                        else
+                            Some (payloadSize inferredType ctx.TypeReg)
+                    else
+                        None
                 | _ ->
-                    match maybeType with
-                    | Some t when isRcManagedHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
-                        Some (payloadSize t ctx.TypeReg)
-                    | _ -> None
+                    if isRcManagedHeapType inferredType && Set.contains tempId bodyReturned && isBorrowingExpr cexpr then
+                        Some (payloadSize inferredType ctx.TypeReg)
+                    else
+                        None
 
             let frame = {
                 TempId = tempId
