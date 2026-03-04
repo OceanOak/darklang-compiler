@@ -477,7 +477,7 @@ let getUsedVRegs (instr: LIR.Instr) : int list =
         (regToVReg ptr |> Option.toList) @ (regToVReg byteOffset |> Option.toList)
     | LIR.RawGetByte (_, ptr, byteOffset) ->
         (regToVReg ptr |> Option.toList) @ (regToVReg byteOffset |> Option.toList)
-    | LIR.RawSet (ptr, byteOffset, value) ->
+    | LIR.RawSet (ptr, byteOffset, value, _) ->
         (regToVReg ptr |> Option.toList)
         @ (regToVReg byteOffset |> Option.toList)
         @ (regToVReg value |> Option.toList)
@@ -2773,11 +2773,11 @@ let applyToInstr (mapping: AllocationResult) (instr: LIR.Instr) : LIR.Instr list
             | _ -> []
         ptrLoads @ offsetLoads @ [getInstr] @ storeInstrs
 
-    | LIR.RawSet (ptr, byteOffset, value) ->
+    | LIR.RawSet (ptr, byteOffset, value, valueType) ->
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12
         let (offsetReg, offsetLoads) = loadSpilled mapping byteOffset LIR.X13
         let (valueReg, valueLoads) = loadSpilled mapping value LIR.X14
-        ptrLoads @ offsetLoads @ valueLoads @ [LIR.RawSet (ptrReg, offsetReg, valueReg)]
+        ptrLoads @ offsetLoads @ valueLoads @ [LIR.RawSet (ptrReg, offsetReg, valueReg, valueType)]
 
     | LIR.RawSetByte (ptr, byteOffset, value) ->
         let (ptrReg, ptrLoads) = loadSpilled mapping ptr LIR.X12

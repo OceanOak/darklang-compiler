@@ -613,8 +613,11 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRReg dest} <- RawGet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset})"
     | LIR.RawGetByte (dest, ptr, byteOffset) ->
         $"{prettyPrintLIRReg dest} <- RawGetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset})"
-    | LIR.RawSet (ptr, byteOffset, value) ->
-        $"RawSet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
+    | LIR.RawSet (ptr, byteOffset, value, valueType) ->
+        let baseText = $"RawSet({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
+        match valueType with
+        | Some typ -> $"{baseText} : {typ}"
+        | None -> baseText
     | LIR.RawSetByte (ptr, byteOffset, value) ->
         $"RawSetByte({prettyPrintLIRReg ptr}, {prettyPrintLIRReg byteOffset}, {prettyPrintLIRReg value})"
     | LIR.RefCountIncString str ->
@@ -648,6 +651,11 @@ let private prettyPrintLIRTerminator (term: LIR.Terminator) : string =
 
 /// Format symbolic LIR program with CFG structure
 let formatLIR (LIR.Program functions) : string =
+    let prettyPrintCalleeSaved (regs: LIR.PhysReg list) : string =
+        regs
+        |> List.map prettyPrintLIRPhysReg
+        |> String.concat ", "
+
     let funcStrs =
         functions
         |> List.map (fun func ->
@@ -664,6 +672,7 @@ let formatLIR (LIR.Program functions) : string =
                     let termStr = sprintf "    %s" (prettyPrintLIRTerminator block.Terminator)
                     $"  {label}:\n{instrStrs}\n{termStr}")
                 |> String.concat "\n"
-            $"{func.Name}:\n{blockStrs}")
+            let calleeSavedText = prettyPrintCalleeSaved func.UsedCalleeSaved
+            $"{func.Name}:\n  StackSize: {func.StackSize}\n  UsedCalleeSaved: [{calleeSavedText}]\n{blockStrs}")
         |> String.concat "\n\n"
     funcStrs

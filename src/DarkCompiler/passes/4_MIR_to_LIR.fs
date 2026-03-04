@@ -1231,7 +1231,7 @@ let selectInstr
         | MIR.StringSymbol _ ->
             let (tempReg, nextState) = freshTempReg stateAfterOffset
             let movInstr = LIR.Mov (tempReg, convertOperand value)
-            Ok (ptrInstrs @ offsetInstrs @ [movInstr; LIR.RawSet (ptrReg, offsetReg, tempReg)], nextState)
+            Ok (ptrInstrs @ offsetInstrs @ [movInstr; LIR.RawSet (ptrReg, offsetReg, tempReg, valueType)], nextState)
         | _ ->
             match valueType with
             | Some AST.TFloat64 ->
@@ -1240,12 +1240,12 @@ let selectInstr
                 | Error err -> Error err
                 | Ok (valueInstrs, valueFReg, nextState) ->
                     let tempReg = LIR.Physical LIR.X9  // Use temp register for FpToGp
-                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.FpToGp (tempReg, valueFReg); LIR.RawSet (ptrReg, offsetReg, tempReg)], nextState)
+                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.FpToGp (tempReg, valueFReg); LIR.RawSet (ptrReg, offsetReg, tempReg, valueType)], nextState)
             | _ ->
                 match ensureInRegister value stateAfterOffset with
                 | Error err -> Error err
                 | Ok (valueInstrs, valueReg, nextState) ->
-                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.RawSet (ptrReg, offsetReg, valueReg)], nextState)
+                    Ok (ptrInstrs @ offsetInstrs @ valueInstrs @ [LIR.RawSet (ptrReg, offsetReg, valueReg, valueType)], nextState)
 
     | MIR.RawSetByte (ptr, byteOffset, value) ->
         // All three operands must be in registers

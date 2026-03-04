@@ -3,5 +3,5 @@
 // These tests guard against dropping RefCountDec operations when a self-tailcall
 // is lowered to a loop in ANF->MIR.
 
-def buildList(n: Int64, acc: List<Int64>) : List<Int64> = if n <= 0 then acc else buildList(n - 1, [n, ...acc]) let xs = buildList(50, []) in let _ = Stdlib.List.reverse<Int64>(xs) in 1 = stdout="1\n" stderr="leaks: 89\n"
-def buildList(n: Int64, acc: List<Int64>) : List<Int64> = if n <= 0 then acc else buildList(n - 1, [n, ...acc]) let xs = buildList(50, []) in let _ = Stdlib.List.filter<Int64>(xs, (x: Int64) => x < 9999) in 1 = stdout="1\n" stderr="leaks: 89\n"
+def buildList(n: Int64, acc: List<Int64>) : List<Int64> = if n <= 0 then acc else buildList(n - 1, [n, ...acc]) let xs = buildList(50, []) in let _ = Stdlib.List.reverse<Int64>(xs) in 1 = stdout="1\n" stderr=""
+def buildList(n: Int64, acc: List<Int64>) : List<Int64> = if n <= 0 then acc else buildList(n - 1, [n, ...acc]) let xs = buildList(50, []) in let _ = Stdlib.List.filter<Int64>(xs, (x: Int64) => x < 9999) in 1 = stdout="1\n" stderr=""

@@ -146,7 +146,7 @@ type Instr =
     | RawFree of ptr:Reg
     | RawGet of dest:Reg * ptr:Reg * byteOffset:Reg
     | RawGetByte of dest:Reg * ptr:Reg * byteOffset:Reg
-    | RawSet of ptr:Reg * byteOffset:Reg * value:Reg
+    | RawSet of ptr:Reg * byteOffset:Reg * value:Reg * valueType:AST.Type option
     | RawSetByte of ptr:Reg * byteOffset:Reg * value:Reg
     | RefCountIncString of str:Operand
     | RefCountDecString of str:Operand

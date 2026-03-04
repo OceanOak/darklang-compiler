@@ -202,7 +202,7 @@ let isHeapType (t: AST.Type) : bool =
     match t with
     | AST.TTuple _ -> true
     | AST.TRecord _ -> true
-    | AST.TList _ -> false  // FingerTree lists use raw memory without refcount headers
+    | AST.TList _ -> true
     | AST.TSum _ -> true  // Conservative: sum types with payloads are heap-allocated
     | AST.TDict _ -> true  // Dict root pointer is heap-allocated
     | _ -> false

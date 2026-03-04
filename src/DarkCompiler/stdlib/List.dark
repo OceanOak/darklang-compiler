@@ -40,6 +40,10 @@ def Stdlib.List.singleton<t>(value: t) : List<t> =
 def Stdlib.List.push<t>(list: List<t>, value: t) : List<t> =
     Stdlib.__FingerTree.push<t>(list, value)
 
+// Internal: force concrete monomorphization of push for compiler-generated list literals
+def Stdlib.List.__pushInt64(list: List<Int64>, value: Int64) : List<Int64> =
+    Stdlib.__FingerTree.push<Int64>(list, value)
+
 // Apply a function to each element of a list - O(n)
 def Stdlib.List.map<a, b>(list: List<a>, fn: (a) -> b) : List<b> =
     Stdlib.List.__mapHelper<a, b>(list, fn, Stdlib.__FingerTree.empty<b>())
@@ -72,16 +76,23 @@ def Stdlib.List.flatMap<a, b>(list: List<a>, fn: (a) -> List<b>) : List<b> =
 
 // Keep only elements that satisfy a predicate - O(n)
 def Stdlib.List.filter<a>(list: List<a>, fn: (a) -> Bool) : List<a> =
-    Stdlib.List.__filterHelper<a>(list, fn, Stdlib.__FingerTree.empty<a>())
+    let len = Stdlib.__FingerTree.length<a>(list) in
+    Stdlib.List.__filterByIndexHelper<a>(list, fn, 0, len, Stdlib.__FingerTree.empty<a>())
 
 def Stdlib.List.__filterHelper<a>(list: List<a>, fn: (a) -> Bool, acc: List<a>) : List<a> =
-    if Stdlib.__FingerTree.isEmpty<a>(list) then acc
+    let len = Stdlib.__FingerTree.length<a>(list) in
+    let filtered = Stdlib.List.__filterByIndexHelper<a>(list, fn, 0, len, Stdlib.__FingerTree.empty<a>()) in
+    Stdlib.List.append<a>(acc, filtered)
+
+def Stdlib.List.__filterByIndexHelper<a>(list: List<a>, fn: (a) -> Bool, index: Int64, len: Int64, accRev: List<a>) : List<a> =
+    if index >= len then
+        Stdlib.List.reverse<a>(accRev)
     else
-        match Stdlib.__FingerTree.head<a>(list) with
-        | None -> acc
-        | Some(h) ->
-            let newAcc = if fn(h) then Stdlib.__FingerTree.pushBack<a>(acc, h) else acc in
-            Stdlib.List.__filterHelper<a>(Stdlib.__FingerTree.tail<a>(list), fn, newAcc)
+        match Stdlib.__FingerTree.getAt<a>(list, index) with
+        | None -> Stdlib.List.reverse<a>(accRev)
+        | Some(v) ->
+            let nextAccRev = if fn(v) then [v, ...accRev] else accRev in
+            Stdlib.List.__filterByIndexHelper<a>(list, fn, index + 1, len, nextAccRev)
 
 // Append an element to the end of a list - O(1) amortized
 def Stdlib.List.pushBack<a>(list: List<a>, value: a) : List<a> =
@@ -93,16 +104,20 @@ def Stdlib.List.append<a>(list1: List<a>, list2: List<a>) : List<a> =
 
 // Reverse a list - O(n)
 def Stdlib.List.reverse<a>(list: List<a>) : List<a> =
-    Stdlib.List.__reverseHelper<a>(list, Stdlib.__FingerTree.empty<a>())
+    let len = Stdlib.__FingerTree.length<a>(list) in
+    Stdlib.List.__reverseByIndexHelper<a>(list, len - 1, Stdlib.__FingerTree.empty<a>())
 
 def Stdlib.List.__reverseHelper<a>(list: List<a>, acc: List<a>) : List<a> =
-    if Stdlib.__FingerTree.isEmpty<a>(list) then acc
+    let len = Stdlib.__FingerTree.length<a>(list) in
+    Stdlib.List.__reverseByIndexHelper<a>(list, len - 1, acc)
+
+def Stdlib.List.__reverseByIndexHelper<a>(list: List<a>, index: Int64, acc: List<a>) : List<a> =
+    if index < 0 then acc
     else
-        match Stdlib.__FingerTree.head<a>(list) with
+        match Stdlib.__FingerTree.getAt<a>(list, index) with
         | None -> acc
-        | Some(h) ->
-            let newAcc = Stdlib.__FingerTree.push<a>(acc, h) in
-            Stdlib.List.__reverseHelper<a>(Stdlib.__FingerTree.tail<a>(list), newAcc)
+        | Some(v) ->
+            Stdlib.List.__reverseByIndexHelper<a>(list, index - 1, [v, ...acc])
 
 // Fold left (reduce) over a list - O(n)
 def Stdlib.List.fold<a, b>(list: List<a>, init: b, fn: (b, a) -> b) : b =
