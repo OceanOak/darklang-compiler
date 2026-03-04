@@ -1,0 +1,58 @@
+// TailCallDetectionTests.fs - Unit tests for tailcall conversion and cleanup ordering.
+//
+// Ensures non-self tailcall conversion does not strand RefCountDec operations
+// after TailCall (which would be unreachable).
+
+module TailCallDetectionTests
+
+open ANF
+open TailCallDetection
+
+type TestResult = Result<unit, string>
+
+let rec private hasDecAfterNonSelfTailCall (funcName: string) (expr: AExpr) : bool =
+    match expr with
+    | Return _ ->
+        false
+    | Let (_, TailCall (target, _), Let (_, RefCountDec _, _)) when target <> funcName ->
+        true
+    | Let (_, TailCall (target, _), Let (_, RefCountDecString _, _)) when target <> funcName ->
+        true
+    | Let (_, _, body) ->
+        hasDecAfterNonSelfTailCall funcName body
+    | If (_, thenBranch, elseBranch) ->
+        hasDecAfterNonSelfTailCall funcName thenBranch
+        || hasDecAfterNonSelfTailCall funcName elseBranch
+
+let testNonSelfTailCallMovesDecBeforeTailCall () : TestResult =
+    let p0 = TempId 0
+    let tupleTmp = TempId 1
+    let callTmp = TempId 2
+    let decTmp = TempId 3
+
+    let caller : Function = {
+        Name = "caller"
+        TypedParams = [{ Id = p0; Type = AST.TInt64 }]
+        ReturnType = AST.TInt64
+        Body =
+            Let (
+                tupleTmp,
+                TupleAlloc [Var p0; IntLiteral (Int64 1L)],
+                Let (
+                    callTmp,
+                    Call ("callee", [Var p0]),
+                    Let (decTmp, RefCountDec (Var tupleTmp, 16), Return (Var callTmp))
+                )
+            )
+    }
+
+    let transformed = detectTailCallsInFunction caller
+
+    if hasDecAfterNonSelfTailCall transformed.Name transformed.Body then
+        Error "Found RefCountDec after non-self TailCall; cleanup should run before tailcall"
+    else
+        Ok ()
+
+let tests = [
+    ("non-self tailcall moves dec before tailcall", testNonSelfTailCallMovesDecBeforeTailCall)
+]

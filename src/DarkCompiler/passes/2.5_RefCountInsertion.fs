@@ -248,7 +248,7 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
                 | Some (AST.TTuple (_ :: secondType :: _)) -> Some secondType
                 | _ -> None
         | _ ->
-            match Map.tryFind funcName ctx.FuncReg with
+            match tryGetFuncReturnTypeFromReg ctx funcName with
             | Some t -> Some t
             | None -> tryGetMonomorphizedIntrinsicReturnType funcName
     | TailCall (funcName, _) ->
@@ -531,6 +531,65 @@ let applyLetFrames
         applyLetFrame frame (accExpr, accVarGen, accTypes)
     List.fold folder (expr, varGen, types) frames
 
+let private tailCallArgTempIds (cexpr: CExpr) : Set<TempId> =
+    let fromAtom (atom: Atom) : Set<TempId> =
+        match atom with
+        | Var tid -> Set.singleton tid
+        | _ -> Set.empty
+    match cexpr with
+    | TailCall (_, args) ->
+        args |> List.fold (fun acc atom -> Set.union acc (fromAtom atom)) Set.empty
+    | IndirectTailCall (func, args) ->
+        (fromAtom func, args)
+        ||> List.fold (fun acc atom -> Set.union acc (fromAtom atom))
+    | ClosureTailCall (closure, args) ->
+        (fromAtom closure, args)
+        ||> List.fold (fun acc atom -> Set.union acc (fromAtom atom))
+    | _ ->
+        Set.empty
+
+let rec private collectMovableTailDecPrefix
+    (tailArgTemps: Set<TempId>)
+    (expr: AExpr)
+    : (TempId * CExpr) list * AExpr =
+    match expr with
+    | Let (tmpId, RefCountDec (Var tid, size), rest) when not (Set.contains tid tailArgTemps) ->
+        let (bindings, remaining) = collectMovableTailDecPrefix tailArgTemps rest
+        ((tmpId, RefCountDec (Var tid, size)) :: bindings, remaining)
+    | Let (tmpId, RefCountDecString atom, rest) ->
+        let overlaps =
+            match atom with
+            | Var tid -> Set.contains tid tailArgTemps
+            | _ -> false
+        if overlaps then
+            ([], expr)
+        else
+            let (bindings, remaining) = collectMovableTailDecPrefix tailArgTemps rest
+            ((tmpId, RefCountDecString atom) :: bindings, remaining)
+    | _ ->
+        ([], expr)
+
+let rec private moveDecsBeforeNonSelfTailCalls (currentFuncName: string) (expr: AExpr) : AExpr =
+    match expr with
+    | Return _ ->
+        expr
+    | If (cond, thenBranch, elseBranch) ->
+        If (
+            cond,
+            moveDecsBeforeNonSelfTailCalls currentFuncName thenBranch,
+            moveDecsBeforeNonSelfTailCalls currentFuncName elseBranch
+        )
+    | Let (tempId, cexpr, body) ->
+        let body' = moveDecsBeforeNonSelfTailCalls currentFuncName body
+        match cexpr with
+        | TailCall (targetFunc, _) when targetFunc <> currentFuncName ->
+            let tailArgTemps = tailCallArgTempIds cexpr
+            let (movableDecs, remainingBody) = collectMovableTailDecPrefix tailArgTemps body'
+            let tailLet = Let (tempId, cexpr, remainingBody)
+            wrapBindings movableDecs tailLet
+        | _ ->
+            Let (tempId, cexpr, body')
+
 /// Insert reference counting operations using return analysis and a dec stack
 /// Returns (transformed expr, varGen, types defined in this subtree)
 let rec insertRCWithAnalysis
@@ -743,8 +802,9 @@ let private insertRCInFunctionInternal
     let paramIncs = List.rev paramIncsRev
 
     // Process function body with return analysis
-    let (body', varGen', accTypes, typeCache') =
+    let (bodyWithRC, varGen', accTypes, typeCache') =
         insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs typesWithParams typeCache
+    let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithRC
     ({ func with Body = body' }, varGen', accTypes, typeCache')
 
 /// Insert RC operations into a function

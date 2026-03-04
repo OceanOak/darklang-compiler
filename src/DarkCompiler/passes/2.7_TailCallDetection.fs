@@ -30,6 +30,7 @@ open ANF
 let isRefCountDec (cexpr: CExpr) : bool =
     match cexpr with
     | RefCountDec _ -> true
+    | RefCountDecString _ -> true
     | _ -> false
 
 /// Check if an expression eventually returns a specific TempId
@@ -50,6 +51,47 @@ let convertToTailCall (cexpr: CExpr) : CExpr =
     | ClosureCall (closure, args) -> ClosureTailCall (closure, args)
     | _ -> cexpr
 
+let private wrapBindings (bindings: (TempId * CExpr) list) (body: AExpr) : AExpr =
+    List.foldBack (fun (tempId, cexpr) acc -> Let (tempId, cexpr, acc)) bindings body
+
+let private tailCallArgTempIds (cexpr: CExpr) : Set<TempId> =
+    let fromAtom (atom: Atom) : Set<TempId> =
+        match atom with
+        | Var tid -> Set.singleton tid
+        | _ -> Set.empty
+    match cexpr with
+    | TailCall (_, args) ->
+        args |> List.fold (fun acc atom -> Set.union acc (fromAtom atom)) Set.empty
+    | IndirectTailCall (func, args) ->
+        (fromAtom func, args)
+        ||> List.fold (fun acc atom -> Set.union acc (fromAtom atom))
+    | ClosureTailCall (closure, args) ->
+        (fromAtom closure, args)
+        ||> List.fold (fun acc atom -> Set.union acc (fromAtom atom))
+    | _ ->
+        Set.empty
+
+let rec private collectMovableDecPrefix
+    (tailArgTemps: Set<TempId>)
+    (expr: AExpr)
+    : (TempId * CExpr) list * AExpr =
+    match expr with
+    | Let (tmpId, RefCountDec (Var tid, size), rest) when not (Set.contains tid tailArgTemps) ->
+        let (bindings, remaining) = collectMovableDecPrefix tailArgTemps rest
+        ((tmpId, RefCountDec (Var tid, size)) :: bindings, remaining)
+    | Let (tmpId, RefCountDecString atom, rest) ->
+        let overlaps =
+            match atom with
+            | Var tid -> Set.contains tid tailArgTemps
+            | _ -> false
+        if overlaps then
+            ([], expr)
+        else
+            let (bindings, remaining) = collectMovableDecPrefix tailArgTemps rest
+            ((tmpId, RefCountDecString atom) :: bindings, remaining)
+    | _ ->
+        ([], expr)
+
 /// Check if a CExpr is a call (direct, indirect, or closure)
 let isCallExpr (cexpr: CExpr) : bool =
     match cexpr with
@@ -59,7 +101,7 @@ let isCallExpr (cexpr: CExpr) : bool =
 /// Detect and transform tail calls in an expression.
 /// The 'inTailPosition' parameter indicates if the current expression
 /// is in tail position (its result is directly returned).
-let rec detectTailCalls (inTailPosition: bool) (expr: AExpr) : AExpr =
+let rec detectTailCalls (currentFuncName: string) (inTailPosition: bool) (expr: AExpr) : AExpr =
     match expr with
     | Return atom ->
         // Return is always a base case - just return it
@@ -70,23 +112,32 @@ let rec detectTailCalls (inTailPosition: bool) (expr: AExpr) : AExpr =
         // Let (t, Call(...), Return (Var t))
         if inTailPosition && isCallExpr cexpr && isReturnOf tempId body then
             // This is a tail call! Convert the call to tail call variant
-            Let (tempId, convertToTailCall cexpr, body)
+            let tailCall = convertToTailCall cexpr
+            match tailCall with
+            | TailCall (targetFunc, _) when targetFunc <> currentFuncName ->
+                // For non-self tailcalls, execute movable cleanup decs before the tailcall.
+                // Any dec left after a tailcall would be unreachable.
+                let tailArgTemps = tailCallArgTempIds tailCall
+                let (movableDecs, remainingBody) = collectMovableDecPrefix tailArgTemps body
+                wrapBindings movableDecs (Let (tempId, tailCall, remainingBody))
+            | _ ->
+                Let (tempId, tailCall, body)
         else
             // Not a tail call - recurse into body
             // Body is in tail position if current expression is
-            let body' = detectTailCalls inTailPosition body
+            let body' = detectTailCalls currentFuncName inTailPosition body
             Let (tempId, cexpr, body')
 
     | If (cond, thenBranch, elseBranch) ->
         // If expression: both branches are in tail position if If is
-        let thenBranch' = detectTailCalls inTailPosition thenBranch
-        let elseBranch' = detectTailCalls inTailPosition elseBranch
+        let thenBranch' = detectTailCalls currentFuncName inTailPosition thenBranch
+        let elseBranch' = detectTailCalls currentFuncName inTailPosition elseBranch
         If (cond, thenBranch', elseBranch')
 
 /// Detect tail calls in a function
 let detectTailCallsInFunction (func: Function) : Function =
     // Function body is always in tail position
-    let body' = detectTailCalls true func.Body
+    let body' = detectTailCalls func.Name true func.Body
     { func with Body = body' }
 
 /// Detect tail calls in a program

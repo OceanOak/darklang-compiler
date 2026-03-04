@@ -231,6 +231,8 @@ let main args =
         { Name = "Phi Resolution Tests"; Tests = PhiResolutionTests.tests }
         { Name = "Chordal Graph Tests"; Tests = ChordalGraphTests.tests }
         { Name = "AST to ANF Tests"; Tests = ASTToANFTests.tests }
+        { Name = "RefCount Insertion Tests"; Tests = RefCountInsertionTests.tests }
+        { Name = "TailCall Detection Tests"; Tests = TailCallDetectionTests.tests }
         { Name = "ANF Inlining Tests"; Tests = ANFInliningTests.tests }
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
