@@ -185,9 +185,51 @@ def Stdlib.__FingerTree.__getDeepMiddle<a>(tree: List<a>) : List<a> =
 def Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr: RawPtr, index: Int64, node: List<a>) : Unit =
     __raw_set<List<a>>(ptr, Stdlib.__FingerTree.__DEEP_PREFIX_OFF() + (index * 8), node)
 
+// Conditionally copy prefix element from a source tree
+def Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(dstPtr: RawPtr, shouldCopy: Bool, dstIndex: Int64, srcTree: List<a>, srcIndex: Int64) : Unit =
+    if shouldCopy then
+        Stdlib.__FingerTree.__setDeepPrefixAt<a>(dstPtr, dstIndex, Stdlib.__FingerTree.__getDeepPrefixAt<a>(srcTree, srcIndex))
+    else ()
+
+// Conditionally copy/update prefix element from a source tree
+def Stdlib.__FingerTree.__copyDeepPrefixAtOrIf<a>(
+    dstPtr: RawPtr,
+    shouldCopy: Bool,
+    dstIndex: Int64,
+    srcTree: List<a>,
+    srcIndex: Int64,
+    useReplacement: Bool,
+    replacement: List<a>
+) : Unit =
+    if shouldCopy then
+        if useReplacement then Stdlib.__FingerTree.__setDeepPrefixAt<a>(dstPtr, dstIndex, replacement)
+        else Stdlib.__FingerTree.__setDeepPrefixAt<a>(dstPtr, dstIndex, Stdlib.__FingerTree.__getDeepPrefixAt<a>(srcTree, srcIndex))
+    else ()
+
 // Set suffix element at index (stores TreeNode, not raw element)
 def Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr: RawPtr, index: Int64, node: List<a>) : Unit =
     __raw_set<List<a>>(ptr, Stdlib.__FingerTree.__DEEP_SUFFIX_OFF() + (index * 8), node)
+
+// Conditionally copy suffix element from a source tree
+def Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(dstPtr: RawPtr, shouldCopy: Bool, dstIndex: Int64, srcTree: List<a>, srcIndex: Int64) : Unit =
+    if shouldCopy then
+        Stdlib.__FingerTree.__setDeepSuffixAt<a>(dstPtr, dstIndex, Stdlib.__FingerTree.__getDeepSuffixAt<a>(srcTree, srcIndex))
+    else ()
+
+// Conditionally copy/update suffix element from a source tree
+def Stdlib.__FingerTree.__copyDeepSuffixAtOrIf<a>(
+    dstPtr: RawPtr,
+    shouldCopy: Bool,
+    dstIndex: Int64,
+    srcTree: List<a>,
+    srcIndex: Int64,
+    useReplacement: Bool,
+    replacement: List<a>
+) : Unit =
+    if shouldCopy then
+        if useReplacement then Stdlib.__FingerTree.__setDeepSuffixAt<a>(dstPtr, dstIndex, replacement)
+        else Stdlib.__FingerTree.__setDeepSuffixAt<a>(dstPtr, dstIndex, Stdlib.__FingerTree.__getDeepSuffixAt<a>(srcTree, srcIndex))
+    else ()
 
 // Set middle tree (type-uniform: middle is also List<a>)
 def Stdlib.__FingerTree.__setDeepMiddle<a>(ptr: RawPtr, middle: List<a>) : Unit =
@@ -365,15 +407,15 @@ def Stdlib.__FingerTree.tail<a>(tree: List<a>) : List<a> =
                     let suffixCount = Stdlib.__FingerTree.__getDeepSuffixCount<a>(tree) in
                     let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure - 1, prefixCount - 1, suffixCount) in
                     // Copy prefix elements shifted left
-                    let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                    let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                    let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 0, tree, 1) in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 1, tree, 2) in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 2, tree, 3) in
                     // Copy middle and suffix
                     let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
-                    let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                    let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                    let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-                    let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
                     Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
                 else
                     // Only one prefix element (a LEAF), need to borrow from middle or use suffix
@@ -441,10 +483,10 @@ def Stdlib.__FingerTree.tail<a>(tree: List<a>) : List<a> =
                                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, c0) in
                                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, c1) in
                                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.empty<a>()) in
-                                let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                                let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                                let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-                                let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
                                 Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
                             else if ntag == Stdlib.__FingerTree.__TAG_NODE3() then
                                 let c0 = Stdlib.__FingerTree.__node3GetChild<a>(node, 0) in
@@ -456,16 +498,15 @@ def Stdlib.__FingerTree.tail<a>(tree: List<a>) : List<a> =
                                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, c1) in
                                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, c2) in
                                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.empty<a>()) in
-                                let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                                let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                                let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-                                let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+                                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
                                 Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
                             else tree // Shouldn't happen
                         else if middleTag == Stdlib.__FingerTree.__TAG_DEEP() then
                             // Middle is DEEP - need to call tail on middle to get new middle
                             // and use head of old middle as new prefix
-                            let middleHeadOpt = Stdlib.__FingerTree.head<a>(middle) in
                             // Actually we need to get the first NODE from middle, not element
                             // This is complex - let's use a simpler approach for now
                             // Just rebuild from elements 1 to end
@@ -574,16 +615,16 @@ def Stdlib.__FingerTree.init<a>(tree: List<a>) : List<a> =
                     let prefixCount = Stdlib.__FingerTree.__getDeepPrefixCount<a>(tree) in
                     let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure - 1, prefixCount, suffixCount - 1) in
                     // Copy prefix
-                    let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                    let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                    let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                    let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+                    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
                     // Copy middle
                     let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
                     // Copy suffix (minus last)
-                    let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                    let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                    let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 0, tree, 0) in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 1, tree, 1) in
+                    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 2, tree, 2) in
                     Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
                 else
                     // Only one suffix element (a LEAF), need to borrow from middle or use prefix
@@ -648,10 +689,10 @@ def Stdlib.__FingerTree.init<a>(tree: List<a>) : List<a> =
                                 let c1 = Stdlib.__FingerTree.__node2GetChild<a>(node, 1) in
                                 let newMeasure = Stdlib.__FingerTree.__getDeepMeasure<a>(tree) - 1 in
                                 let ptr = Stdlib.__FingerTree.__allocDeep<a>(newMeasure, prefixCount, 2) in
-                                let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                                let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                                let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                                let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
                                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.empty<a>()) in
                                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, c0) in
                                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, c1) in
@@ -662,10 +703,10 @@ def Stdlib.__FingerTree.init<a>(tree: List<a>) : List<a> =
                                 let c2 = Stdlib.__FingerTree.__node3GetChild<a>(node, 2) in
                                 let newMeasure = Stdlib.__FingerTree.__getDeepMeasure<a>(tree) - 1 in
                                 let ptr = Stdlib.__FingerTree.__allocDeep<a>(newMeasure, prefixCount, 3) in
-                                let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                                let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                                let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                                let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+                                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
                                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.empty<a>()) in
                                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, c0) in
                                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, c1) in
@@ -716,14 +757,14 @@ def Stdlib.__FingerTree.__pushNode<a>(tree: List<a>, node: List<a>) : List<a> =
                 // Set new node at front
                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, node) in
                 // Copy existing prefix (shifted by 1)
-                let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 1, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 2, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 3, tree, 2) in
                 // Copy suffix
-                let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-                let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
                 // Copy middle
                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
                 Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
@@ -746,10 +787,10 @@ def Stdlib.__FingerTree.__pushNode<a>(tree: List<a>, node: List<a>) : List<a> =
                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, node) in
                 let _ = Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, p0) in
                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, newMiddle) in
-                let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-                let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
                 Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
         else
             // Unknown tag - just return singleton with node
@@ -785,14 +826,14 @@ def Stdlib.__FingerTree.__pushBackNode<a>(tree: List<a>, node: List<a>) : List<a
                 let prefixCount = Stdlib.__FingerTree.__getDeepPrefixCount<a>(tree) in
                 let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure + nodeMeasure, prefixCount, suffixCount + 1) in
                 // Copy prefix
-                let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
                 // Copy existing suffix and add new node
-                let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-                let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-                let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, suffixCount, node) in
                 // Copy middle
                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
@@ -813,10 +854,10 @@ def Stdlib.__FingerTree.__pushBackNode<a>(tree: List<a>, node: List<a>) : List<a
                 let s3 = Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3) in
                 let prefixCount = Stdlib.__FingerTree.__getDeepPrefixCount<a>(tree) in
                 let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure + nodeMeasure, prefixCount, 2) in
-                let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-                let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-                let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-                let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+                let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
                 let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, newMiddle) in
                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, s3) in
                 let _ = Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, node) in
@@ -1128,15 +1169,15 @@ def Stdlib.__FingerTree.__setAtDeep<a>(tree: List<a>, index: Int64, value: a) : 
         let newNode = Stdlib.__FingerTree.__setAtPrefixGetNode<a>(tree, prefixCount, index, value) in
         let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure, prefixCount, suffixCount) in
         // Copy prefix with the updated node at nodeIdx
-        let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, if nodeIdx == 0 then newNode else Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-        let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, if nodeIdx == 1 then newNode else Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-        let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, if nodeIdx == 2 then newNode else Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-        let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, if nodeIdx == 3 then newNode else Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+        let _ = Stdlib.__FingerTree.__copyDeepPrefixAtOrIf<a>(ptr, prefixCount >= 1, 0, tree, 0, nodeIdx == 0, newNode) in
+        let _ = Stdlib.__FingerTree.__copyDeepPrefixAtOrIf<a>(ptr, prefixCount >= 2, 1, tree, 1, nodeIdx == 1, newNode) in
+        let _ = Stdlib.__FingerTree.__copyDeepPrefixAtOrIf<a>(ptr, prefixCount >= 3, 2, tree, 2, nodeIdx == 2, newNode) in
+        let _ = Stdlib.__FingerTree.__copyDeepPrefixAtOrIf<a>(ptr, prefixCount >= 4, 3, tree, 3, nodeIdx == 3, newNode) in
         // Copy suffix unchanged
-        let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-        let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-        let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-        let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+        let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+        let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+        let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+        let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
         // Copy middle unchanged
         let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
         Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
@@ -1148,15 +1189,15 @@ def Stdlib.__FingerTree.__setAtDeep<a>(tree: List<a>, index: Int64, value: a) : 
             let newMiddle = Stdlib.__FingerTree.setAt<a>(middle, index - prefixMeasure, value) in
             let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure, prefixCount, suffixCount) in
             // Copy prefix unchanged
-            let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-            let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-            let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-            let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
             // Copy suffix unchanged
-            let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-            let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-            let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-            let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 1, 0, tree, 0) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 2, 1, tree, 1) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 3, 2, tree, 2) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, suffixCount >= 4, 3, tree, 3) in
             // Set updated middle
             let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, newMiddle) in
             Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
@@ -1167,15 +1208,15 @@ def Stdlib.__FingerTree.__setAtDeep<a>(tree: List<a>, index: Int64, value: a) : 
             let newNode = Stdlib.__FingerTree.__setAtSuffixGetNode<a>(tree, suffixCount, indexInSuffix, value) in
             let ptr = Stdlib.__FingerTree.__allocDeep<a>(measure, prefixCount, suffixCount) in
             // Copy prefix unchanged
-            let _ = if prefixCount >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 0)) else () in
-            let _ = if prefixCount >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 1)) else () in
-            let _ = if prefixCount >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 2)) else () in
-            let _ = if prefixCount >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(tree, 3)) else () in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 1, 0, tree, 0) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 2, 1, tree, 1) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 3, 2, tree, 2) in
+            let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, prefixCount >= 4, 3, tree, 3) in
             // Copy suffix with the updated node at nodeIdx
-            let _ = if suffixCount >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, if nodeIdx == 0 then newNode else Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 0)) else () in
-            let _ = if suffixCount >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, if nodeIdx == 1 then newNode else Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 1)) else () in
-            let _ = if suffixCount >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, if nodeIdx == 2 then newNode else Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 2)) else () in
-            let _ = if suffixCount >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, if nodeIdx == 3 then newNode else Stdlib.__FingerTree.__getDeepSuffixAt<a>(tree, 3)) else () in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtOrIf<a>(ptr, suffixCount >= 1, 0, tree, 0, nodeIdx == 0, newNode) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtOrIf<a>(ptr, suffixCount >= 2, 1, tree, 1, nodeIdx == 1, newNode) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtOrIf<a>(ptr, suffixCount >= 3, 2, tree, 2, nodeIdx == 2, newNode) in
+            let _ = Stdlib.__FingerTree.__copyDeepSuffixAtOrIf<a>(ptr, suffixCount >= 4, 3, tree, 3, nodeIdx == 3, newNode) in
             // Copy middle unchanged
             let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, Stdlib.__FingerTree.__getDeepMiddle<a>(tree)) in
             Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
@@ -1320,19 +1361,19 @@ def Stdlib.__FingerTree.__concatDeep<a>(t1: List<a>, t2: List<a>) : List<a> =
     let ptr = Stdlib.__FingerTree.__allocDeep<a>(totalMeasure, pr1Count, sf2Count) in
 
     // Copy prefix from t1
-    let _ = if pr1Count >= 1 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepPrefixAt<a>(t1, 0)) else () in
-    let _ = if pr1Count >= 2 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepPrefixAt<a>(t1, 1)) else () in
-    let _ = if pr1Count >= 3 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepPrefixAt<a>(t1, 2)) else () in
-    let _ = if pr1Count >= 4 then Stdlib.__FingerTree.__setDeepPrefixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepPrefixAt<a>(t1, 3)) else () in
+    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, pr1Count >= 1, 0, t1, 0) in
+    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, pr1Count >= 2, 1, t1, 1) in
+    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, pr1Count >= 3, 2, t1, 2) in
+    let _ = Stdlib.__FingerTree.__copyDeepPrefixAtIf<a>(ptr, pr1Count >= 4, 3, t1, 3) in
 
     // Set middle
     let _ = Stdlib.__FingerTree.__setDeepMiddle<a>(ptr, newMiddle) in
 
     // Copy suffix from t2
-    let _ = if sf2Count >= 1 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 0, Stdlib.__FingerTree.__getDeepSuffixAt<a>(t2, 0)) else () in
-    let _ = if sf2Count >= 2 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 1, Stdlib.__FingerTree.__getDeepSuffixAt<a>(t2, 1)) else () in
-    let _ = if sf2Count >= 3 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 2, Stdlib.__FingerTree.__getDeepSuffixAt<a>(t2, 2)) else () in
-    let _ = if sf2Count >= 4 then Stdlib.__FingerTree.__setDeepSuffixAt<a>(ptr, 3, Stdlib.__FingerTree.__getDeepSuffixAt<a>(t2, 3)) else () in
+    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, sf2Count >= 1, 0, t2, 0) in
+    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, sf2Count >= 2, 1, t2, 1) in
+    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, sf2Count >= 3, 2, t2, 2) in
+    let _ = Stdlib.__FingerTree.__copyDeepSuffixAtIf<a>(ptr, sf2Count >= 4, 3, t2, 3) in
 
     Stdlib.__FingerTree.__fromRawPtr<a>(ptr, Stdlib.__FingerTree.__TAG_DEEP())
 
