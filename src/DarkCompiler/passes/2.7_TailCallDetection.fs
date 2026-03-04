@@ -168,14 +168,21 @@ let rec detectTailCalls
                 // Any dec left after a tailcall would be unreachable.
                 let tailArgTemps = tailCallArgTempIds aliasRoots tailCall
                 let (movableDecs, remainingBody) = collectMovableDecPrefix aliasRoots tailArgTemps body
-                wrapBindings movableDecs (Let (tempId, tailCall, remainingBody))
+                if isDirectReturnOf tempId remainingBody then
+                    wrapBindings movableDecs (Let (tempId, tailCall, remainingBody))
+                else
+                    // Cleanup remains after the call (typically overlap with a tail argument),
+                    // so keep a normal call to preserve the post-call unwind work.
+                    let aliasRoots' = extendAliasRoots aliasRoots tempId cexpr
+                    let body' = detectTailCalls currentFuncName inTailPosition aliasRoots' body
+                    Let (tempId, cexpr, body')
             | TailCall (targetFunc, _) when targetFunc = currentFuncName ->
                 // Self-tailcall lowering currently cannot preserve cleanup decrefs that overlap
                 // tail arguments (the decref is required on unwind). Keep these as normal calls.
                 let tailArgTemps = tailCallArgTempIds aliasRoots tailCall
-                let (_movableDecs, remainingBody) = collectMovableDecPrefix aliasRoots tailArgTemps body
+                let (movableDecs, remainingBody) = collectMovableDecPrefix aliasRoots tailArgTemps body
                 if isDirectReturnOf tempId remainingBody then
-                    Let (tempId, tailCall, body)
+                    wrapBindings movableDecs (Let (tempId, tailCall, remainingBody))
                 else
                     let aliasRoots' = extendAliasRoots aliasRoots tempId cexpr
                     let body' = detectTailCalls currentFuncName inTailPosition aliasRoots' body
