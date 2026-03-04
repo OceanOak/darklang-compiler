@@ -740,11 +740,27 @@ let rec insertRCWithAnalysis
                 | _ -> []
 
             let returnIncSize =
-                match maybeType with
-                | Some t when isRcManagedHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
-                    let size = payloadSize t ctx.TypeReg
-                    Some size
-                | _ -> None
+                let sizeFromAtom (atom: Atom) : int option =
+                    match atom with
+                    | Var tid ->
+                        match tryGetType ctx tid with
+                        | Some t when isRcManagedHeapType t -> Some (payloadSize t ctx.TypeReg)
+                        | _ -> None
+                    | _ -> None
+
+                match cexpr with
+                | IfValue (_, thenAtom, elseAtom) ->
+                    // IfValue selects one of two existing heap values.
+                    // Materialize ownership on the selected temp before source temps are decref'd.
+                    match sizeFromAtom thenAtom, sizeFromAtom elseAtom with
+                    | Some size, _ -> Some size
+                    | None, Some size -> Some size
+                    | None, None -> None
+                | _ ->
+                    match maybeType with
+                    | Some t when isRcManagedHeapType t && Set.contains tempId bodyReturned && isBorrowingExpr cexpr ->
+                        Some (payloadSize t ctx.TypeReg)
+                    | _ -> None
 
             let frame = {
                 TempId = tempId
