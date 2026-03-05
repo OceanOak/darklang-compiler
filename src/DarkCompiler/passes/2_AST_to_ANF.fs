@@ -93,6 +93,102 @@ let private normalizeNullaryIntrinsicArgs (args: ANF.Atom list) : ANF.Atom list 
     | [ANF.UnitLiteral] -> []
     | _ -> args
 
+/// Parse mangled type names used by monomorphized raw intrinsics.
+/// This is duplicated early in the file so raw-intrinsic lowering can recover value types.
+let private tryParseMangledTypeForRawIntrinsic
+    (variantLookup: Map<string, (string * string list * int * AST.Type option)>)
+    (mangled: string)
+    : AST.Type option =
+    let tokens = mangled.Split('_') |> Array.toList
+    let sumTypeNames =
+        variantLookup
+        |> Map.toList
+        |> List.map (fun (_, (typeName, _, _, _)) -> typeName)
+        |> Set.ofList
+
+    let mkNamedType (name: string) (args: AST.Type list) : AST.Type =
+        if Set.contains name sumTypeNames then AST.TSum (name, args) else AST.TRecord (name, args)
+
+    let tryPrimitive (tok: string) : AST.Type option =
+        match tok with
+        | "i8" -> Some AST.TInt8
+        | "i16" -> Some AST.TInt16
+        | "i32" -> Some AST.TInt32
+        | "i64" -> Some AST.TInt64
+        | "i128" -> Some AST.TInt128
+        | "u8" -> Some AST.TUInt8
+        | "u16" -> Some AST.TUInt16
+        | "u32" -> Some AST.TUInt32
+        | "u64" -> Some AST.TUInt64
+        | "u128" -> Some AST.TUInt128
+        | "bool" -> Some AST.TBool
+        | "f64" -> Some AST.TFloat64
+        | "str" -> Some AST.TString
+        | "bytes" -> Some AST.TBytes
+        | "char" -> Some AST.TChar
+        | "unit" -> Some AST.TUnit
+        | "rawptr" -> Some AST.TRawPtr
+        | _ -> None
+
+    let rec parseType (toks: string list) : (AST.Type * string list) list =
+        match toks with
+        | [] -> []
+        | tok :: rest ->
+            match tok with
+            | "list" ->
+                parseType rest |> List.map (fun (elemT, rem) -> (AST.TList elemT, rem))
+            | "dict" ->
+                parseType rest
+                |> List.collect (fun (keyT, rem1) ->
+                    parseType rem1 |> List.map (fun (valueT, rem2) -> (AST.TDict (keyT, valueT), rem2)))
+            | "tup" ->
+                parseTupleElems rest |> List.map (fun (elems, rem) -> (AST.TTuple elems, rem))
+            | "fn" ->
+                parseFunction rest
+            | _ ->
+                match tryPrimitive tok with
+                | Some prim -> [ (prim, rest) ]
+                | None ->
+                    let baseType = (mkNamedType tok [], rest)
+                    let withArgs =
+                        parseTupleElems rest
+                        |> List.map (fun (args, rem) -> (mkNamedType tok args, rem))
+                    baseType :: withArgs
+
+    and parseTupleElems (toks: string list) : (AST.Type list * string list) list =
+        parseType toks
+        |> List.collect (fun (firstT, rem1) ->
+            let single = ([firstT], rem1)
+            let more =
+                parseTupleElems rem1
+                |> List.map (fun (restTs, rem2) -> (firstT :: restTs, rem2))
+            single :: more)
+
+    and parseFunction (toks: string list) : (AST.Type * string list) list =
+        let rec splitParams (acc: string list) (remaining: string list) =
+            match remaining with
+            | [] -> None
+            | "to" :: rest -> Some (List.rev acc, rest)
+            | tok :: rest -> splitParams (tok :: acc) rest
+        match splitParams [] toks with
+        | None -> []
+        | Some (paramTokens, retTokens) ->
+            let paramParses =
+                parseTupleElems paramTokens
+                |> List.filter (fun (_, rem) -> rem = [])
+                |> List.map fst
+            let retParses =
+                parseType retTokens
+                |> List.filter (fun (_, rem) -> rem = [])
+                |> List.map fst
+            paramParses
+            |> List.collect (fun paramTypes ->
+                retParses |> List.map (fun ret -> (AST.TFunction (paramTypes, ret), [])))
+
+    match parseType tokens |> List.filter (fun (_, rem) -> rem = []) with
+    | [ (typ, _) ] -> Some typ
+    | _ -> None
+
 /// Try to convert a function call to a Float intrinsic CExpr
 /// Returns Some CExpr if it's a Float intrinsic, None otherwise
 let tryFloatIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
@@ -136,8 +232,20 @@ let tryConstantFoldIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExp
 /// Returns Some CExpr if it's a raw memory intrinsic, None otherwise
 /// Note: __raw_get and __raw_set are generic and become monomorphized names like
 /// __raw_get_i64, __raw_get_str, __raw_set_i64, etc.
-let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr option =
+let tryRawMemoryIntrinsic
+    (variantLookup: Map<string, (string * string list * int * AST.Type option)>)
+    (funcName: string)
+    (args: ANF.Atom list)
+    : ANF.CExpr option =
     let args = normalizeNullaryIntrinsicArgs args
+    let tryMonomorphizedValueType (prefix: string) (name: string) : AST.Type option =
+        if name = prefix then
+            None
+        elif name.StartsWith(prefix + "_") then
+            let mangled = name.Substring(prefix.Length + 1)
+            tryParseMangledTypeForRawIntrinsic variantLookup mangled
+        else
+            None
     match funcName, args with
     | "__raw_alloc", [numBytesAtom] ->
         Some (ANF.RawAlloc numBytesAtom)
@@ -148,30 +256,18 @@ let tryRawMemoryIntrinsic (funcName: string) (args: ANF.Atom list) : ANF.CExpr o
         // IMPORTANT: Must come before the generic __raw_get_* pattern
         Some (ANF.RawGetByte (ptrAtom, offsetAtom))
     | name, [ptrAtom; offsetAtom] when name = "__raw_get" || name.StartsWith("__raw_get_") ->
-        // Generic __raw_get<v> monomorphizes to __raw_get_i64, __raw_get_str, __raw_get_f64, etc.
-        // Track Float/List value types for codegen and RC insertion.
-        let valueType =
-            if name = "__raw_get_f64" then
-                Some AST.TFloat64
-            elif name.StartsWith("__raw_get_list_") then
-                Some (AST.TList (AST.TVar "a"))
-            else
-                None
+        // Generic __raw_get<v> monomorphizes to __raw_get_<mangled-type>.
+        // Preserve recovered value type so downstream RC/codegen can handle heap payloads correctly.
+        let valueType = tryMonomorphizedValueType "__raw_get" name
         Some (ANF.RawGet (ptrAtom, offsetAtom, valueType))
     | "__raw_set_byte", [ptrAtom; offsetAtom; valueAtom] ->
         // Write single byte at offset
         // IMPORTANT: Must come before the generic __raw_set_* pattern
         Some (ANF.RawSetByte (ptrAtom, offsetAtom, valueAtom))
     | name, [ptrAtom; offsetAtom; valueAtom] when name = "__raw_set" || name.StartsWith("__raw_set_") ->
-        // Generic __raw_set<v> monomorphizes to __raw_set_i64, __raw_set_str, __raw_set_f64, etc.
-        // Track Float/List value types so codegen can do the right conversion/RC edge updates.
-        let valueType =
-            if name = "__raw_set_f64" then
-                Some AST.TFloat64
-            elif name.StartsWith("__raw_set_list_") then
-                Some (AST.TList (AST.TVar "a"))
-            else
-                None
+        // Generic __raw_set<v> monomorphizes to __raw_set_<mangled-type>.
+        // Preserve recovered value type so codegen can update ownership for stored heap values.
+        let valueType = tryMonomorphizedValueType "__raw_set" name
         Some (ANF.RawSet (ptrAtom, offsetAtom, valueAtom, valueType))
     // Cast operations are no-ops at runtime - just pass through the value
     | "__rawptr_to_int64", [ptrAtom] ->
@@ -4078,7 +4174,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     Ok (withArgSetups finalExpr, varGen2)
                 | None ->
                     // Check if it's a raw memory intrinsic
-                    match tryRawMemoryIntrinsic funcName argAtoms with
+                    match tryRawMemoryIntrinsic variantLookup funcName argAtoms with
                     | Some intrinsicExpr ->
                         // Raw memory intrinsic call
                         let finalExpr = ANF.Let (resultVar, intrinsicExpr, ANF.Return (ANF.Var resultVar))
@@ -7825,7 +7921,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
                         Ok (ANF.Var tempVar, allBindings, varGen2)
                     | None ->
                         // Check if it's a raw memory intrinsic
-                        match tryRawMemoryIntrinsic funcName argAtoms with
+                        match tryRawMemoryIntrinsic variantLookup funcName argAtoms with
                         | Some intrinsicExpr ->
                             // Raw memory intrinsic call
                             let allBindings = argBindings @ [(tempVar, intrinsicExpr)]

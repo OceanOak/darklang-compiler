@@ -12,6 +12,8 @@ def collatzSteps(n: Int64, steps: Int64) : Int64 =
 collatzSteps(7, 0)
 ---EXPECTED---
 collatzSteps:
+  StackSize: 0
+  UsedCalleeSaved: []
   Label "collatzSteps_L1":
     BranchBitZero(v10021, #0, Label "collatzSteps_L3", Label "collatzSteps_L4")
   Label "collatzSteps_L2":
@@ -45,6 +47,8 @@ collatzSteps:
     Jump(Label "collatzSteps_body")
 
 _start:
+  StackSize: 0
+  UsedCalleeSaved: []
   Label "_start_body":
     SaveRegs([], [])
     ArgMoves(X0 <- Imm 7, X1 <- Imm 0)
@@ -94,6 +98,8 @@ def loop(n: Int64, acc: Int64) : Int64 =
 loop(2, 0)
 ---EXPECTED---
 helper:
+  StackSize: 0
+  UsedCalleeSaved: []
   Label "helper_body":
     v10049 <- Add(v0, Imm 1)
     v10050 <- Add(v10049, Imm 1)
@@ -126,6 +132,8 @@ helper:
     Jump(Label "helper_body")
 
 loop:
+  StackSize: 0
+  UsedCalleeSaved: []
   Label "loop_L1":
     v10065 <- Sub(v10063, Imm 1)
     v10070 <- Lsl_imm(v10062, #1)
@@ -149,6 +157,8 @@ loop:
     Jump(Label "loop_body")
 
 _start:
+  StackSize: 0
+  UsedCalleeSaved: []
   Label "_start_body":
     SaveRegs([], [])
     ArgMoves(X0 <- Imm 2, X1 <- Imm 0)

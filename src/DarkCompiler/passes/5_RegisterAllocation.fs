@@ -3489,8 +3489,10 @@ let private allocateRegistersInternal
                     | ParallelMoves.MoveFromTemp dest ->
                         [LIR.Mov (LIR.Physical dest, LIR.Reg (LIR.Physical LIR.X16))])
 
-            // Combine register moves and stack stores
-            let intParamCopyInstrs = regMoveInstrs @ intParamStackStores
+            // IMPORTANT: stack stores must happen BEFORE register shuffles.
+            // Otherwise a shuffle may clobber a source parameter register
+            // (for example X5) before we spill that original parameter value.
+            let intParamCopyInstrs = intParamStackStores @ regMoveInstrs
 
             // Step 6: Build mapping that copies FLOAT parameters from D0-D7
             // Float parameters use FVirtual registers (same ID as Virtual)

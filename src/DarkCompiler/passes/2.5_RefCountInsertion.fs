@@ -737,8 +737,25 @@ let rec insertRCWithAnalysis
                 | _ -> ctxWithTypes
 
             let bodyReturned = returnedSet bodyInfo
+            let consumedByImmediateI64Push =
+                let isI64Push (funcName: string) : bool =
+                    funcName = "Stdlib.__FingerTree.push_i64"
+                    || funcName = "Stdlib.__FingerTree.pushBack_i64"
+                let consumesSecondArg (args: Atom list) : bool =
+                    match args with
+                    | _listAtom :: Var valueTemp :: _ -> valueTemp = tempId
+                    | _ -> false
+                match bodyInfo with
+                | RLet (_, Call (funcName, args), _, _)
+                | RLet (_, TailCall (funcName, args), _, _) ->
+                    isI64Push funcName && consumesSecondArg args
+                | _ ->
+                    false
             let returnDecs' =
-                if isRcManagedHeapType inferredType && not (Set.contains tempId bodyReturned) && not (isBorrowingExpr cexpr) then
+                if isRcManagedHeapType inferredType
+                   && not (Set.contains tempId bodyReturned)
+                   && not (isBorrowingExpr cexpr)
+                   && not consumedByImmediateI64Push then
                     let size = payloadSize inferredType ctx.TypeReg
                     (tempId, size) :: returnDecs
                 else

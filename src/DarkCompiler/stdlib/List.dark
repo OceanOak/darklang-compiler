@@ -117,7 +117,7 @@ def Stdlib.List.__reverseByIndexHelper<a>(list: List<a>, index: Int64, acc: List
         match Stdlib.__FingerTree.getAt<a>(list, index) with
         | None -> acc
         | Some(v) ->
-            Stdlib.List.__reverseByIndexHelper<a>(list, index - 1, [v, ...acc])
+            Stdlib.List.__reverseByIndexHelper<a>(list, index - 1, Stdlib.__FingerTree.pushBack<a>(acc, v))
 
 // Fold left (reduce) over a list - O(n)
 def Stdlib.List.fold<a, b>(list: List<a>, init: b, fn: (b, a) -> b) : b =

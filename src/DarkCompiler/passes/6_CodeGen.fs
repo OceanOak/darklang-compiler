@@ -3176,7 +3176,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
 
     | LIR.RawSet (ptr, byteOffset, value, valueType) ->
         // Store 8 bytes at ptr + byteOffset.
-        // For RawSet<List<_>>, increment child list-node RC because the parent node now owns that edge.
+        // If the stored value is RC-managed, increment ownership because the parent now owns that edge.
         lirRegToARM64Reg ptr
         |> Result.bind (fun ptrReg ->
             lirRegToARM64Reg byteOffset
@@ -3193,7 +3193,7 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                         ARM64Symbolic.STR (valueReg, tempReg, 0s)            // [temp] = value
                     ]
 
-                    let listChildInc =
+                    let ownershipInc =
                         match valueType with
                         | Some (AST.TList _) ->
                             [
@@ -3208,9 +3208,36 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                                 ARM64Symbolic.LDP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
                                 ARM64Symbolic.LDP_post (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, 64s)
                             ]
+                        | Some typ ->
+                            let isRcManagedHeapType =
+                                match typ with
+                                | AST.TDict _ -> false
+                                | _ -> ANF.isHeapType typ
+                            if isRcManagedHeapType then
+                                let rcOffsetOpt =
+                                    match typ with
+                                    | AST.TTuple elemTypes -> Some (int16 (List.length elemTypes * 8))
+                                    | AST.TSum _ -> Some 16s
+                                    | AST.TList _ -> Some 24s
+                                    | AST.TDict _ -> Some 8s
+                                    | _ -> None
+                                match rcOffsetOpt with
+                                | Some rcOffset ->
+                                    let rcReg =
+                                        if valueReg = ARM64Symbolic.X15 then ARM64Symbolic.X14 else ARM64Symbolic.X15
+                                    [
+                                        ARM64Symbolic.CBZ_offset (valueReg, 4)
+                                        ARM64Symbolic.LDR (rcReg, valueReg, rcOffset)
+                                        ARM64Symbolic.ADD_imm (rcReg, rcReg, 1us)
+                                        ARM64Symbolic.STR (rcReg, valueReg, rcOffset)
+                                    ]
+                                | None ->
+                                    []
+                            else
+                                []
                         | _ -> []
 
-                    storeValue @ listChildInc)))
+                    storeValue @ ownershipInc)))
 
     | LIR.RawSetByte (ptr, byteOffset, value) ->
         // Store 1 byte at ptr + byteOffset

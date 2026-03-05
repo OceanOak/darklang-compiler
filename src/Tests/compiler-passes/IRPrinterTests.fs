@@ -76,6 +76,8 @@ let testFormatLIR () : TestResult =
     let expected =
         [
             "lir_print:"
+            "  StackSize: 0"
+            "  UsedCalleeSaved: []"
             "  Label \"entry\":"
             "    v0 <- Mov(Imm 1)"
             "    v1 <- Add(v0, Imm 2)"
