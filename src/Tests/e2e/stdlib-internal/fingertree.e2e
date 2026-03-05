@@ -137,3 +137,12 @@ let t = buildTree(1, 10000, Stdlib.__FingerTree.empty<Int64>()) in let len = Std
 // Access specifically the second element (index 1) which comes from
 // the second prefix node - this is the one that gets corrupted by the mutation
 Stdlib.Option.withDefault(Stdlib.List.getAt([10, 20, 30, 40, 50, 60], 1), -1) = 20
+
+// ===================================================================
+// getAt regression: repeatedly traverse deep tree positions
+// This exercises internal borrowed accessors on the hot getAt path.
+// ===================================================================
+
+def getAtChecksum(tree: List<Int64>, idx: Int64, rounds: Int64, acc: Int64) : Int64 = if idx >= rounds then acc else let pos = (idx * 7) % 1000 in let v = Stdlib.Option.withDefault(Stdlib.__FingerTree.getAt(tree, pos), -1) in getAtChecksum(tree, idx + 1, rounds, acc + v)
+def expectedChecksum(idx: Int64, rounds: Int64, acc: Int64) : Int64 = if idx >= rounds then acc else let pos = (idx * 7) % 1000 in expectedChecksum(idx + 1, rounds, acc + pos + 1)
+let t = buildTree(1, 1000, Stdlib.__FingerTree.empty<Int64>()) in getAtChecksum(t, 0, 4000, 0) = expectedChecksum(0, 4000, 0)

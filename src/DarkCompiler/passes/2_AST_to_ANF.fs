@@ -4400,7 +4400,17 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             | _ ->
                 (vg, bindings)
 
-        let listNodeType = Some (AST.TList (AST.TVar "a"))
+        let listNode = AST.TList (AST.TVar "a")
+        let listNodeType = Some listNode
+
+        // Tag a raw pointer as a list value without routing through Stdlib wrappers.
+        // Keep a typed binding so RC/type inference still treats the result as List<a>.
+        let tagRawPtrAsList (tag: int64) (ptrVar: ANF.TempId) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
+            let (taggedRawVar, vg1) = ANF.freshVar vg
+            let tagExpr = ANF.Prim (ANF.BitOr, ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 tag))
+            let (taggedVar, vg2) = ANF.freshVar vg1
+            let typedExpr = ANF.TypedAtom (ANF.Var taggedRawVar, listNode)
+            (ANF.Var taggedVar, bindings @ [(taggedRawVar, tagExpr); (taggedVar, typedExpr)], vg2)
 
         // Helper to create a LEAF node wrapping an element
         let allocLeaf (elemAtom: ANF.Atom) (elemType: AST.Type) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -4412,24 +4422,18 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 8L), ANF.IntLiteral (ANF.Int64 1L), None)
             let (vg4, bindings4) =
                 addLeafInc elemAtom elemType vg3 (bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr)])
-            let (taggedVar, vg5) = ANF.freshVar vg4
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 5L)])  // tag 5 = LEAF
-            let newBindings = bindings4 @ [(taggedVar, tagExpr)]
-            (ANF.Var taggedVar, newBindings, vg5)
+            tagRawPtrAsList 5L ptrVar vg4 bindings4
 
         // Helper to create a SINGLE node containing a TreeNode
         let allocSingle (nodeAtom: ANF.Atom) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
             let (ptrVar, vg1) = ANF.freshVar vg
             let (setVar, vg2) = ANF.freshVar vg1
             let (setRcVar, vg3) = ANF.freshVar vg2
-            let (taggedVar, vg4) = ANF.freshVar vg3
             let allocExpr = ANF.RawAlloc (ANF.IntLiteral (ANF.Int64 16L))
             let setExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 0L), nodeAtom, listNodeType)
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 8L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 1L)])  // tag 1 = SINGLE
-            let newBindings =
-                bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            (ANF.Var taggedVar, newBindings, vg4)
+            let bindings1 = bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr)]
+            tagRawPtrAsList 1L ptrVar vg3 bindings1
 
         // Helper to create a DEEP node
         let allocDeep (measure: int) (prefixNodes: ANF.Atom list) (middle: ANF.Atom) (suffixNodes: ANF.Atom list) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -4469,9 +4473,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             let (vg8, bindings8) = setAt 96 (ANF.IntLiteral (ANF.Int64 1L)) None vg7 bindings7
 
             // Tag with DEEP (2)
-            let (taggedVar, vg9) = ANF.freshVar vg8
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 2L)])
-            (ANF.Var taggedVar, bindings8 @ [(taggedVar, tagExpr)], vg9)
+            tagRawPtrAsList 2L ptrVar vg8 bindings8
 
         // Build FingerTree nodes for middle spines without using pushBack.
         let emptyTree = ANF.IntLiteral (ANF.Int64 0L)
@@ -4492,12 +4494,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             let set2Expr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 16L), ANF.IntLiteral (ANF.Int64 (int64 measure)), None)
             let (setRcVar, vg5) = ANF.freshVar vg4
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 24L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let (taggedVar, vg6) = ANF.freshVar vg5
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 3L)])  // tag 3 = NODE2
-            let newBindings =
+            let bindings1 =
                 bindings
-                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            ((ANF.Var taggedVar, measure), newBindings, vg6)
+                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (setRcVar, setRcExpr)]
+            let (taggedNode, bindings2, vg6) = tagRawPtrAsList 3L ptrVar vg5 bindings1
+            ((taggedNode, measure), bindings2, vg6)
 
         // Helper to create a NODE3 (tag 4): [child0:8][child1:8][child2:8][measure:8]
         let allocNode3 (first: ANF.Atom * int) (second: ANF.Atom * int) (third: ANF.Atom * int) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -4514,12 +4515,11 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             let set3Expr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 24L), ANF.IntLiteral (ANF.Int64 (int64 measure)), None)
             let (setRcVar, vg6) = ANF.freshVar vg5
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 32L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let (taggedVar, vg7) = ANF.freshVar vg6
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 4L)])  // tag 4 = NODE3
-            let newBindings =
+            let bindings1 =
                 bindings
-                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (set3Var, set3Expr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            ((ANF.Var taggedVar, measure), newBindings, vg7)
+                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (set3Var, set3Expr); (setRcVar, setRcExpr)]
+            let (taggedNode, bindings2, vg7) = tagRawPtrAsList 4L ptrVar vg6 bindings1
+            ((taggedNode, measure), bindings2, vg7)
 
         let splitAt count nodes =
             let rec loop remaining acc rest =
@@ -8114,7 +8114,17 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             | _ ->
                 (vg, bindings)
 
-        let listNodeType = Some (AST.TList (AST.TVar "a"))
+        let listNode = AST.TList (AST.TVar "a")
+        let listNodeType = Some listNode
+
+        // Tag a raw pointer as a list value without routing through Stdlib wrappers.
+        // Keep a typed binding so RC/type inference still treats the result as List<a>.
+        let tagRawPtrAsList (tag: int64) (ptrVar: ANF.TempId) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
+            let (taggedRawVar, vg1) = ANF.freshVar vg
+            let tagExpr = ANF.Prim (ANF.BitOr, ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 tag))
+            let (taggedVar, vg2) = ANF.freshVar vg1
+            let typedExpr = ANF.TypedAtom (ANF.Var taggedRawVar, listNode)
+            (ANF.Var taggedVar, bindings @ [(taggedRawVar, tagExpr); (taggedVar, typedExpr)], vg2)
 
         // Helper to create a LEAF node wrapping an element
         let allocLeaf (elemAtom: ANF.Atom) (elemType: AST.Type) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -8126,24 +8136,18 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 8L), ANF.IntLiteral (ANF.Int64 1L), None)
             let (vg4, bindings4) =
                 addLeafInc elemAtom elemType vg3 (bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr)])
-            let (taggedVar, vg5) = ANF.freshVar vg4
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 5L)])  // tag 5 = LEAF
-            let newBindings = bindings4 @ [(taggedVar, tagExpr)]
-            (ANF.Var taggedVar, newBindings, vg5)
+            tagRawPtrAsList 5L ptrVar vg4 bindings4
 
         // Helper to create a SINGLE node containing a TreeNode
         let allocSingle (nodeAtom: ANF.Atom) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
             let (ptrVar, vg1) = ANF.freshVar vg
             let (setVar, vg2) = ANF.freshVar vg1
             let (setRcVar, vg3) = ANF.freshVar vg2
-            let (taggedVar, vg4) = ANF.freshVar vg3
             let allocExpr = ANF.RawAlloc (ANF.IntLiteral (ANF.Int64 16L))
             let setExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 0L), nodeAtom, listNodeType)
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 8L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 1L)])  // tag 1 = SINGLE
-            let newBindings =
-                bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            (ANF.Var taggedVar, newBindings, vg4)
+            let bindings1 = bindings @ [(ptrVar, allocExpr); (setVar, setExpr); (setRcVar, setRcExpr)]
+            tagRawPtrAsList 1L ptrVar vg3 bindings1
 
         // Helper to create a DEEP node
         let allocDeep (measure: int) (prefixNodes: ANF.Atom list) (middle: ANF.Atom) (suffixNodes: ANF.Atom list) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -8183,9 +8187,7 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             let (vg8, bindings8) = setAt 96 (ANF.IntLiteral (ANF.Int64 1L)) None vg7 bindings7
 
             // Tag with DEEP (2)
-            let (taggedVar, vg9) = ANF.freshVar vg8
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 2L)])
-            (ANF.Var taggedVar, bindings8 @ [(taggedVar, tagExpr)], vg9)
+            tagRawPtrAsList 2L ptrVar vg8 bindings8
 
         // Build FingerTree nodes for middle spines without using pushBack.
         let emptyTree = ANF.IntLiteral (ANF.Int64 0L)
@@ -8206,12 +8208,11 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             let set2Expr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 16L), ANF.IntLiteral (ANF.Int64 (int64 measure)), None)
             let (setRcVar, vg5) = ANF.freshVar vg4
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 24L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let (taggedVar, vg6) = ANF.freshVar vg5
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 3L)])  // tag 3 = NODE2
-            let newBindings =
+            let bindings1 =
                 bindings
-                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            ((ANF.Var taggedVar, measure), newBindings, vg6)
+                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (setRcVar, setRcExpr)]
+            let (taggedNode, bindings2, vg6) = tagRawPtrAsList 3L ptrVar vg5 bindings1
+            ((taggedNode, measure), bindings2, vg6)
 
         // Helper to create a NODE3 (tag 4): [child0:8][child1:8][child2:8][measure:8]
         let allocNode3 (first: ANF.Atom * int) (second: ANF.Atom * int) (third: ANF.Atom * int) (vg: ANF.VarGen) (bindings: (ANF.TempId * ANF.CExpr) list) =
@@ -8228,12 +8229,11 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             let set3Expr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 24L), ANF.IntLiteral (ANF.Int64 (int64 measure)), None)
             let (setRcVar, vg6) = ANF.freshVar vg5
             let setRcExpr = ANF.RawSet (ANF.Var ptrVar, ANF.IntLiteral (ANF.Int64 32L), ANF.IntLiteral (ANF.Int64 1L), None)
-            let (taggedVar, vg7) = ANF.freshVar vg6
-            let tagExpr = ANF.Call ("Stdlib.__FingerTree.__fromRawPtr_i64", [ANF.Var ptrVar; ANF.IntLiteral (ANF.Int64 4L)])  // tag 4 = NODE3
-            let newBindings =
+            let bindings1 =
                 bindings
-                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (set3Var, set3Expr); (setRcVar, setRcExpr); (taggedVar, tagExpr)]
-            ((ANF.Var taggedVar, measure), newBindings, vg7)
+                @ [(ptrVar, allocExpr); (set0Var, set0Expr); (set1Var, set1Expr); (set2Var, set2Expr); (set3Var, set3Expr); (setRcVar, setRcExpr)]
+            let (taggedNode, bindings2, vg7) = tagRawPtrAsList 4L ptrVar vg6 bindings1
+            ((taggedNode, measure), bindings2, vg7)
 
         let splitAt count nodes =
             let rec loop remaining acc rest =

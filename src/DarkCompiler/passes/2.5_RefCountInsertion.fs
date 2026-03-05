@@ -429,6 +429,14 @@ let rec analyzeReturns
         let returned = Set.union (returnedSet thenInfo) (returnedSet elseInfo)
         RIf (cond, thenInfo, elseInfo, returned)
 
+let private isFingerTreeBorrowedAccessorName (funcName: string) : bool =
+    funcName.StartsWith("Stdlib.__FingerTree.__node2GetChild")
+    || funcName.StartsWith("Stdlib.__FingerTree.__node3GetChild")
+    || funcName.StartsWith("Stdlib.__FingerTree.__getSingleElem")
+    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepPrefixAt")
+    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepSuffixAt")
+    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepMiddle")
+
 /// Check if a CExpr is a borrowing/aliasing operation
 /// Borrowed/aliased values should NOT get their own RefCountDec - the original value owns the memory
 let isBorrowingExpr (cexpr: CExpr) : bool =
@@ -441,7 +449,8 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
         // List element extraction functions return borrowed references
         funcName = "Stdlib.__FingerTree.headUnsafe_i64" ||
         funcName = "Stdlib.__FingerTree.head_i64" ||
-        funcName = "Stdlib.__FingerTree.head"
+        funcName = "Stdlib.__FingerTree.head" ||
+        isFingerTreeBorrowedAccessorName funcName
     | _ -> false
 
 let private isRcManagedHeapType (typ: AST.Type) : bool =
@@ -600,6 +609,7 @@ let rec private moveDecsBeforeNonSelfTailCalls (currentFuncName: string) (expr: 
 /// Returns (transformed expr, varGen, types defined in this subtree)
 let rec insertRCWithAnalysis
     (ctx: TypeContext)
+    (currentFuncName: string option)
     (expr: ReturnAnnotatedExpr)
     (varGen: VarGen)
     (returnDecs: (TempId * int) list)
@@ -628,9 +638,9 @@ let rec insertRCWithAnalysis
 
         | RIf (cond, thenBranch, elseBranch, _) ->
             let (thenBranch', varGen1, types1, typeCache1) =
-                insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs types typeCache
+                insertRCWithAnalysis ctx currentFuncName thenBranch varGen returnDecs paramIncs types typeCache
             let (elseBranch', varGen2, types2, typeCache2) =
-                insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs types1 typeCache1
+                insertRCWithAnalysis ctx currentFuncName elseBranch varGen1 returnDecs paramIncs types1 typeCache1
             let (finalExpr, finalVarGen, finalTypes) =
                 applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
             (finalExpr, finalVarGen, finalTypes, typeCache2)
@@ -779,6 +789,11 @@ let rec insertRCWithAnalysis
                 | _ -> []
 
             let returnIncSize =
+                let shouldMaterializeBorrowedReturn =
+                    match currentFuncName with
+                    | Some funcName when isFingerTreeBorrowedAccessorName funcName && isBorrowingExpr cexpr -> false
+                    | _ -> true
+
                 let sizeFromAtom (atom: Atom) : int option =
                     match atom with
                     | Var tid ->
@@ -798,7 +813,10 @@ let rec insertRCWithAnalysis
                 | Atom (Var sourceId)
                 | TypedAtom (Var sourceId, _) ->
                     // Returning a pure alias of an already-returned owned value should not inc again.
-                    if isRcManagedHeapType inferredType && Set.contains tempId bodyReturned && isBorrowingExpr cexpr then
+                    if isRcManagedHeapType inferredType
+                       && Set.contains tempId bodyReturned
+                       && isBorrowingExpr cexpr
+                       && shouldMaterializeBorrowedReturn then
                         if Set.contains sourceId bodyReturned then
                             None
                         else
@@ -806,7 +824,10 @@ let rec insertRCWithAnalysis
                     else
                         None
                 | _ ->
-                    if isRcManagedHeapType inferredType && Set.contains tempId bodyReturned && isBorrowingExpr cexpr then
+                    if isRcManagedHeapType inferredType
+                       && Set.contains tempId bodyReturned
+                       && isBorrowingExpr cexpr
+                       && shouldMaterializeBorrowedReturn then
                         Some (payloadSize inferredType ctx.TypeReg)
                     else
                         None
@@ -835,7 +856,7 @@ let private insertRCInternal
     let ctxWithTypes = withTempTypes ctx types
     let analyzed = analyzeReturns Map.empty expr
     let (expr', varGen', types', typeCache') =
-        insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] types typeCache
+        insertRCWithAnalysis ctxWithTypes None analyzed varGen [] [] types typeCache
     (expr', varGen', types', typeCache')
 
 /// Insert reference counting operations into an AExpr
@@ -873,7 +894,7 @@ let private insertRCInFunctionInternal
 
     // Process function body with return analysis
     let (bodyWithRC, varGen', accTypes, typeCache') =
-        insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs typesWithParams typeCache
+        insertRCWithAnalysis ctxWithParams (Some func.Name) bodyInfo varGen [] paramIncs typesWithParams typeCache
     let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithRC
     ({ func with Body = body' }, varGen', accTypes, typeCache')
 

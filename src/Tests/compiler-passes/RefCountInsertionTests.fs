@@ -47,6 +47,30 @@ let rec private hasDecAfterNonSelfTailCall (funcName: string) (expr: AExpr) : bo
         hasDecAfterNonSelfTailCall funcName thenBranch
         || hasDecAfterNonSelfTailCall funcName elseBranch
 
+let rec private hasRefCountIncForTemp (target: TempId) (expr: AExpr) : bool =
+    match expr with
+    | Return _ ->
+        false
+    | Let (_, RefCountInc (Var tempId, _), _) when tempId = target ->
+        true
+    | Let (_, _, body) ->
+        hasRefCountIncForTemp target body
+    | If (_, thenBranch, elseBranch) ->
+        hasRefCountIncForTemp target thenBranch
+        || hasRefCountIncForTemp target elseBranch
+
+let rec private hasRefCountDecForTemp (target: TempId) (expr: AExpr) : bool =
+    match expr with
+    | Return _ ->
+        false
+    | Let (_, RefCountDec (Var tempId, _), _) when tempId = target ->
+        true
+    | Let (_, _, body) ->
+        hasRefCountDecForTemp target body
+    | If (_, thenBranch, elseBranch) ->
+        hasRefCountDecForTemp target thenBranch
+        || hasRefCountDecForTemp target elseBranch
+
 let testNonSelfTailCallDoesNotLeaveDecAfterTailCall () : TestResult =
     let funcReg : AST_to_ANF.FunctionRegistry =
         Map.ofList [
@@ -89,7 +113,100 @@ let testNonSelfTailCallDoesNotLeaveDecAfterTailCall () : TestResult =
     else
         Ok ()
 
+let testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn () : TestResult =
+    let nodeType = AST.TList AST.TInt64
+    let funcReg : AST_to_ANF.FunctionRegistry =
+        Map.ofList [
+            ("Stdlib.__FingerTree.__node2GetChild_i64", AST.TFunction ([nodeType; AST.TInt64], nodeType))
+        ]
+
+    let ctx : TypeContext = {
+        TypeReg = Map.empty
+        VariantLookup = Map.empty
+        FuncReg = funcReg
+        FuncParams = Map.empty
+        TempTypes = Map.empty
+        ClosureFuncs = Map.empty
+    }
+
+    let nodeParam = TempId 0
+    let indexParam = TempId 1
+    let childTemp = TempId 2
+
+    let func : Function = {
+        Name = "Stdlib.__FingerTree.__node2GetChild_i64"
+        TypedParams = [
+            { Id = nodeParam; Type = nodeType }
+            { Id = indexParam; Type = AST.TInt64 }
+        ]
+        ReturnType = nodeType
+        Body =
+            Let (
+                childTemp,
+                RawGet (Var nodeParam, IntLiteral (Int64 0L), Some nodeType),
+                Return (Var childTemp)
+            )
+    }
+
+    let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
+
+    if hasRefCountIncForTemp childTemp transformed.Body then
+        Error "FingerTree borrowed accessor should not materialize ownership with RefCountInc on its RawGet result"
+    else
+        Ok ()
+
+let testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec () : TestResult =
+    let nodeType = AST.TList AST.TInt64
+    let funcReg : AST_to_ANF.FunctionRegistry =
+        Map.ofList [
+            ("consumer", AST.TFunction ([nodeType; AST.TInt64], AST.TInt64))
+            ("Stdlib.__FingerTree.__node2GetChild_i64", AST.TFunction ([nodeType; AST.TInt64], nodeType))
+            ("Stdlib.__FingerTree.__nodeMeasure_i64", AST.TFunction ([nodeType], AST.TInt64))
+        ]
+
+    let ctx : TypeContext = {
+        TypeReg = Map.empty
+        VariantLookup = Map.empty
+        FuncReg = funcReg
+        FuncParams = Map.empty
+        TempTypes = Map.empty
+        ClosureFuncs = Map.empty
+    }
+
+    let nodeParam = TempId 0
+    let indexParam = TempId 1
+    let childTemp = TempId 2
+    let measureTemp = TempId 3
+
+    let func : Function = {
+        Name = "consumer"
+        TypedParams = [
+            { Id = nodeParam; Type = nodeType }
+            { Id = indexParam; Type = AST.TInt64 }
+        ]
+        ReturnType = AST.TInt64
+        Body =
+            Let (
+                childTemp,
+                Call ("Stdlib.__FingerTree.__node2GetChild_i64", [Var nodeParam; Var indexParam]),
+                Let (
+                    measureTemp,
+                    Call ("Stdlib.__FingerTree.__nodeMeasure_i64", [Var childTemp]),
+                    Return (Var measureTemp)
+                )
+            )
+    }
+
+    let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
+
+    if hasRefCountDecForTemp childTemp transformed.Body then
+        Error "Borrowed FingerTree accessor call should not add an automatic RefCountDec for the child temp"
+    else
+        Ok ()
+
 let tests = [
     ("inferCExprType Call returns function return type", testInferCallReturnsFunctionReturnType)
     ("non-self tailcall does not keep dec after tailcall", testNonSelfTailCallDoesNotLeaveDecAfterTailCall)
+    ("borrowed FingerTree accessor does not materialize borrowed return", testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn)
+    ("borrowed FingerTree accessor call does not insert auto-dec", testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec)
 ]
