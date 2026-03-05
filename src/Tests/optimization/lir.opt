@@ -14,11 +14,11 @@ collatzSteps(7, 0)
 collatzSteps:
   StackSize: 0
   UsedCalleeSaved: []
-  Label "collatzSteps_L1":
-    BranchBitZero(v10021, #0, Label "collatzSteps_L3", Label "collatzSteps_L4")
-  Label "collatzSteps_L2":
+  Label "collatzSteps_L0":
     X0 <- Mov(Reg v10020)
     Ret
+  Label "collatzSteps_L1":
+    BranchBitZero(v10021, #0, Label "collatzSteps_L3", Label "collatzSteps_L4")
   Label "collatzSteps_L3":
     v10030 <- Lsr_imm(v10021, #1)
     v10031 <- Add(v10020, Imm 1)
@@ -34,15 +34,10 @@ collatzSteps:
     v10029 <- Mov(Reg v10027)
     Jump(Label "collatzSteps_body")
   Label "collatzSteps_body":
-    v10012 <- Phi([(Reg v10, collatzSteps_entry), (Reg v10027, collatzSteps_L4), (Reg v10012, collatzSteps_L3)])
-    v10013 <- Phi([(Reg v9, collatzSteps_entry), (Reg v10026, collatzSteps_L4), (Reg v10013, collatzSteps_L3)])
-    v10014 <- Phi([(Reg v8, collatzSteps_entry), (Reg v10025, collatzSteps_L4), (Reg v10014, collatzSteps_L3)])
-    v10015 <- Phi([(Reg v6, collatzSteps_entry), (Reg v10015, collatzSteps_L4), (Reg v10031, collatzSteps_L3)])
-    v10016 <- Phi([(Reg v5, collatzSteps_entry), (Reg v10016, collatzSteps_L4), (Reg v10030, collatzSteps_L3)])
     v10020 <- Phi([(Reg v1, collatzSteps_entry), (Reg v10029, collatzSteps_L4), (Reg v10033, collatzSteps_L3)])
     v10021 <- Phi([(Reg v0, collatzSteps_entry), (Reg v10028, collatzSteps_L4), (Reg v10032, collatzSteps_L3)])
     Cmp(v10021, Imm 1)
-    CondBranch(EQ, Label "collatzSteps_L2", Label "collatzSteps_L1")
+    CondBranch(EQ, Label "collatzSteps_L0", Label "collatzSteps_L1")
   Label "collatzSteps_entry":
     Jump(Label "collatzSteps_body")
 

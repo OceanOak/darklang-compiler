@@ -55,6 +55,154 @@ let testCseAfterCopyPropFixpoint () : TestResult =
         let actual = formatMIR (Program ([optimizedFunc], Map.empty, Map.empty))
         Error $"MIR optimization did not reach fixpoint.\nActual:\n{actual}"
 
+let testDceRemovesSelfReferentialDeadPhi () : TestResult =
+    let entry = Label "entry"
+    let loop = Label "loop"
+    let exitLabel = Label "exit"
+
+    let entryBlock: BasicBlock = {
+        Label = entry
+        Instrs = []
+        Terminator = Jump loop
+    }
+
+    let loopBlock: BasicBlock = {
+        Label = loop
+        Instrs = [
+            Phi (
+                VReg 1,
+                [
+                    (Register (VReg 0), entry)
+                    (Register (VReg 1), loop)
+                ],
+                Some AST.TBool
+            )
+        ]
+        Terminator = Branch (Register (VReg 0), exitLabel, loop)
+    }
+
+    let exitBlock: BasicBlock = {
+        Label = exitLabel
+        Instrs = []
+        Terminator = Ret (Register (VReg 0))
+    }
+
+    let cfg: CFG = {
+        Entry = entry
+        Blocks =
+            Map.ofList [
+                (entry, entryBlock)
+                (loop, loopBlock)
+                (exitLabel, exitBlock)
+            ]
+    }
+
+    let func: Function = {
+        Name = "dead_phi_cycle"
+        TypedParams = [{ Reg = VReg 0; Type = AST.TBool }]
+        ReturnType = AST.TBool
+        CFG = cfg
+        FloatRegs = Set.empty
+    }
+
+    let program = Program ([func], Map.empty, Map.empty)
+    let (Program (functions, _, _)) = optimizeProgram program
+    let optimizedFunc = functions |> List.head
+    let optimizedLoop = optimizedFunc.CFG.Blocks |> Map.find loop
+
+    let hasPhi =
+        optimizedLoop.Instrs
+        |> List.exists (function
+            | Phi _ -> true
+            | _ -> false)
+
+    if hasPhi then
+        let actual = formatMIR (Program ([optimizedFunc], Map.empty, Map.empty))
+        Error $"Expected dead self-referential phi to be removed by DCE.\nActual:\n{actual}"
+    else
+        Ok ()
+
+let testCfgSimplifyRemovesRetPhiJoin () : TestResult =
+    let entry = Label "entry"
+    let thenLabel = Label "then"
+    let elseLabel = Label "else"
+    let joinLabel = Label "join"
+
+    let entryBlock: BasicBlock = {
+        Label = entry
+        Instrs = []
+        Terminator = Branch (Register (VReg 0), thenLabel, elseLabel)
+    }
+
+    let thenBlock: BasicBlock = {
+        Label = thenLabel
+        Instrs = []
+        Terminator = Jump joinLabel
+    }
+
+    let elseBlock: BasicBlock = {
+        Label = elseLabel
+        Instrs = []
+        Terminator = Jump joinLabel
+    }
+
+    let joinBlock: BasicBlock = {
+        Label = joinLabel
+        Instrs = [
+            Phi (
+                VReg 1,
+                [
+                    (Int64Const 1L, thenLabel)
+                    (Int64Const 2L, elseLabel)
+                ],
+                Some AST.TInt64
+            )
+        ]
+        Terminator = Ret (Register (VReg 1))
+    }
+
+    let cfg: CFG = {
+        Entry = entry
+        Blocks =
+            Map.ofList [
+                (entry, entryBlock)
+                (thenLabel, thenBlock)
+                (elseLabel, elseBlock)
+                (joinLabel, joinBlock)
+            ]
+    }
+
+    let func: Function = {
+        Name = "ret_phi_join"
+        TypedParams = [{ Reg = VReg 0; Type = AST.TBool }]
+        ReturnType = AST.TInt64
+        CFG = cfg
+        FloatRegs = Set.empty
+    }
+
+    let program = Program ([func], Map.empty, Map.empty)
+    let (Program (functions, _, _)) = optimizeProgram program
+    let optimizedFunc = functions |> List.head
+    let blocks = optimizedFunc.CFG.Blocks
+
+    let joinRemoved = not (Map.containsKey joinLabel blocks)
+    let thenRet =
+        match Map.tryFind thenLabel blocks with
+        | Some block -> block.Terminator = Ret (Int64Const 1L)
+        | None -> false
+    let elseRet =
+        match Map.tryFind elseLabel blocks with
+        | Some block -> block.Terminator = Ret (Int64Const 2L)
+        | None -> false
+
+    if joinRemoved && thenRet && elseRet then
+        Ok ()
+    else
+        let actual = formatMIR (Program ([optimizedFunc], Map.empty, Map.empty))
+        Error $"Expected ret-phi join simplification.\nActual:\n{actual}"
+
 let tests = [
     ("MIR optimize fixed point CSE after copy prop", testCseAfterCopyPropFixpoint)
+    ("MIR optimize removes dead self-referential phi", testDceRemovesSelfReferentialDeadPhi)
+    ("MIR optimize removes ret-phi join blocks", testCfgSimplifyRemovesRetPhiJoin)
 ]

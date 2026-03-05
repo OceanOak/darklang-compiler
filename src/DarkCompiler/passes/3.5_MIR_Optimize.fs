@@ -519,19 +519,67 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
                 ({ cfgAcc with Blocks = blocks' }, true)
     ) (cfg, false)
 
-/// Collect all uses in a CFG
-let collectAllUses (cfg: CFG) : Set<VReg> =
+/// Build map from SSA destination to the registers used by its defining instruction.
+let private buildDefUseMap (cfg: CFG) : Map<VReg, Set<VReg>> =
     cfg.Blocks
-    |> Map.fold (fun uses _ block ->
-        let instrUses = block.Instrs |> List.map getInstrUses |> Set.unionMany
+    |> Map.fold (fun defUses _ block ->
+        block.Instrs
+        |> List.fold (fun acc instr ->
+            match getInstrDest instr with
+            | Some dest -> Map.add dest (getInstrUses instr) acc
+            | None -> acc
+        ) defUses
+    ) Map.empty
+
+/// Collect registers that are directly required by side effects and control flow.
+let private collectRootUses (cfg: CFG) : Set<VReg> =
+    cfg.Blocks
+    |> Map.fold (fun roots _ block ->
+        let sideEffectUses =
+            block.Instrs
+            |> List.fold (fun acc instr ->
+                if hasSideEffects instr then
+                    Set.union acc (getInstrUses instr)
+                else
+                    acc
+            ) Set.empty
         let termUses = getTerminatorUses block.Terminator
-        Set.unionMany [uses; instrUses; termUses]
+        Set.unionMany [roots; sideEffectUses; termUses]
     ) Set.empty
+
+/// Mark live SSA destinations by walking backwards from root uses.
+let private collectLiveDestinations (cfg: CFG) : Set<VReg> =
+    let defUseMap = buildDefUseMap cfg
+    let roots = collectRootUses cfg
+
+    let rec loop (work: VReg list) (queued: Set<VReg>) (live: Set<VReg>) : Set<VReg> =
+        match work with
+        | [] -> live
+        | reg :: rest ->
+            let queued' = Set.remove reg queued
+            match Map.tryFind reg defUseMap with
+            | None ->
+                // Parameters or registers without a local definition.
+                loop rest queued' live
+            | Some uses when Set.contains reg live ->
+                loop rest queued' live
+            | Some uses ->
+                let (rest', queued'') =
+                    uses
+                    |> Set.fold (fun (pending, queuedAcc) usedReg ->
+                        if Set.contains usedReg queuedAcc || Set.contains usedReg live then
+                            (pending, queuedAcc)
+                        else
+                            (usedReg :: pending, Set.add usedReg queuedAcc)
+                    ) (rest, queued')
+                loop rest' queued'' (Set.add reg live)
+
+    loop (Set.toList roots) roots Set.empty
 
 /// Dead Code Elimination
 /// Remove instructions whose destinations are never used (unless they have side effects)
 let eliminateDeadCode (cfg: CFG) : CFG * bool =
-    let allUses = collectAllUses cfg
+    let liveDests = collectLiveDestinations cfg
 
     let (blocks', changed) =
         cfg.Blocks
@@ -540,7 +588,7 @@ let eliminateDeadCode (cfg: CFG) : CFG * bool =
                 block.Instrs
                 |> List.fold (fun (acc', ch') instr ->
                     match getInstrDest instr with
-                    | Some dest when not (Set.contains dest allUses) && not (hasSideEffects instr) ->
+                    | Some dest when not (Set.contains dest liveDests) && not (hasSideEffects instr) ->
                         // Dead instruction - remove it
                         (acc', true)
                     | _ ->
@@ -787,6 +835,85 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
 
                 { block with Instrs = instrs'; Terminator = term' }
             )
+
+        ({ cfg with Blocks = blocks' }, true)
+
+/// Simplify join blocks that only return a phi-selected value.
+/// Pattern:
+///   pred1: ...; Jump join
+///   pred2: ...; Jump join
+///   join:
+///     p <- Phi([(v1, pred1), (v2, pred2)])
+///     Ret p
+/// Becomes:
+///   pred1: ...; Ret v1
+///   pred2: ...; Ret v2
+/// and removes `join`.
+let simplifyRetPhiJoins (cfg: CFG) : CFG * bool =
+    let preds = buildPredecessors cfg
+
+    let candidateMappings : Map<Label, Map<Label, Operand>> =
+        cfg.Blocks
+        |> Map.toList
+        |> List.choose (fun (joinLabel, joinBlock) ->
+            match joinBlock.Instrs, joinBlock.Terminator with
+            | [Phi (phiDest, sources, _)], Ret (Register retReg) when phiDest = retReg ->
+                let predLabels = Map.tryFind joinLabel preds |> Option.defaultValue []
+                let predSet = predLabels |> Set.ofList
+                let sourceSet = sources |> List.map snd |> Set.ofList
+
+                // Require exact predecessor/source match and direct jumps to join.
+                let allJumpToJoin =
+                    predLabels
+                    |> List.forall (fun predLabel ->
+                        match Map.tryFind predLabel cfg.Blocks with
+                        | Some predBlock ->
+                            match predBlock.Terminator with
+                            | Jump target -> target = joinLabel
+                            | _ -> false
+                        | None -> false)
+
+                if predSet = sourceSet && allJumpToJoin then
+                    let sourceMap = sources |> List.map (fun (op, lbl) -> (lbl, op)) |> Map.ofList
+                    Some (joinLabel, sourceMap)
+                else
+                    None
+            | _ ->
+                None)
+        |> Map.ofList
+
+    if Map.isEmpty candidateMappings then
+        (cfg, false)
+    else
+        let allJoinLabels = candidateMappings |> Map.keys |> Set.ofSeq
+        let allPredLabels =
+            candidateMappings
+            |> Map.values
+            |> Seq.collect Map.keys
+            |> Set.ofSeq
+
+        let blocks' =
+            cfg.Blocks
+            |> Map.filter (fun label _ -> not (Set.contains label allJoinLabels))
+            |> Map.map (fun label block ->
+                if Set.contains label allPredLabels then
+                    // A predecessor may feed multiple candidate joins only in impossible CFGs
+                    // (single terminator), so pick the matching join by current terminator.
+                    match block.Terminator with
+                    | Jump target ->
+                        match Map.tryFind target candidateMappings with
+                        | Some sourceMap ->
+                            match Map.tryFind label sourceMap with
+                            | Some retOp ->
+                                { block with Terminator = Ret retOp }
+                            | None ->
+                                block
+                        | None ->
+                            block
+                    | _ ->
+                        block
+                else
+                    block)
 
         ({ cfg with Blocks = blocks' }, true)
 
@@ -1073,9 +1200,11 @@ let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
     let (cfg8, changed8) =
         if options.EnableCFGSimplify then eliminateUnreachableBlocks cfg7 else (cfg7, false)
     let (cfg9, changed9) =
-        if options.EnableCFGSimplify then simplifyEmptyBlocks cfg8 else (cfg8, false)
-    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7 || changed8 || changed9
-    (cfg9, changed)
+        if options.EnableCFGSimplify then simplifyRetPhiJoins cfg8 else (cfg8, false)
+    let (cfg10, changed10) =
+        if options.EnableCFGSimplify then simplifyEmptyBlocks cfg9 else (cfg9, false)
+    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7 || changed8 || changed9 || changed10
+    (cfg10, changed)
 
 /// Run all optimizations until fixed point
 let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
