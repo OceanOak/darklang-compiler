@@ -42,6 +42,10 @@ let t1 = (1, 2) in let _ = t1.0 in let t2 = (3, 4) in t2.0 + t2.1 = 7
 // Allocate many tuples - tests free list under pressure
 let a = (1, 1) in let b = (2, 2) in let c = (3, 3) in let d = (4, 4) in a.0 + b.0 + c.0 + d.0 = 10
 
+// 24-byte non-list payloads should use generic RC, not list-specific helper paths
+let t = (1, 2, 3) in t.0 + t.1 + t.2 = stdout="6\n" stderr=""
+type Point3 = { x: Int64, y: Int64, z: Int64 } let p = Point3 { x = 1, y = 2, z = 3 } in p.x + p.y + p.z = stdout="6\n" stderr=""
+
 // ===================================================================
 // Function calls with heap values
 // ===================================================================

@@ -2458,7 +2458,8 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
 
     | LIR.RefCountInc (addr, payloadSize) ->
         // Generic RC increment for heap values.
-        // Special-case tagged List pointers (payloadSize=24 in ANF) to update node-sized headers.
+        // payloadSize=24 is ambiguous (List payload and 3-field tuple/record payload).
+        // Dispatch based on pointer tags so untagged 24-byte payloads use generic RC.
         lirRegToARM64Reg addr
         |> Result.map (fun addrReg ->
             let tupleIncPath = [
@@ -2481,10 +2482,16 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                     ARM64Symbolic.LDP_post (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, 64s)
                 ]
                 let listCallLen = List.length listIncCall
+                let tupleIncLen = List.length tupleIncPath
                 [
-                    ARM64Symbolic.CBZ_offset (addrReg, listCallLen + 1)
+                    ARM64Symbolic.CBZ_offset (addrReg, listCallLen + tupleIncLen + 4)
+                    ARM64Symbolic.AND_imm (ARM64Symbolic.X14, addrReg, 7UL)
+                    // Untagged 24-byte payloads are tuples/records: use generic RC path.
+                    ARM64Symbolic.CBZ_offset (ARM64Symbolic.X14, listCallLen + 2)
                 ]
                 @ listIncCall
+                @ [ARM64Symbolic.B (tupleIncLen + 1)]
+                @ tupleIncPath
             else
                 [
                     ARM64Symbolic.CBZ_offset (addrReg, 4)
@@ -2542,10 +2549,16 @@ let convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symbolic
                     ARM64Symbolic.LDP_post (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, 80s)
                 ]
                 let listCallLen = List.length listDecCall
+                let tupleDecLen = List.length tupleDecPath
                 [
-                    ARM64Symbolic.CBZ_offset (addrReg, listCallLen + 1)
+                    ARM64Symbolic.CBZ_offset (addrReg, listCallLen + tupleDecLen + 4)
+                    ARM64Symbolic.AND_imm (ARM64Symbolic.X14, addrReg, 7UL)
+                    // Untagged 24-byte payloads are tuples/records: use generic RC path.
+                    ARM64Symbolic.CBZ_offset (ARM64Symbolic.X14, listCallLen + 2)
                 ]
                 @ listDecCall
+                @ [ARM64Symbolic.B (tupleDecLen + 1)]
+                @ tupleDecPath
             else
                 let cbzOffset = if List.isEmpty leakDec then 8 else 13
                 [
