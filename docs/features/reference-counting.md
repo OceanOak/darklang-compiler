@@ -7,7 +7,7 @@ This document is a codebase-wide RC audit. It describes:
 - edge cases and mismatches in current behavior
 - a concrete plan to expand RC across the type system and runtime representation
 
-Status in this document reflects the codebase as of 2026-03-06.
+Status in this document reflects the codebase as of 2026-03-07.
 
 ## What Exists Today
 
@@ -19,6 +19,24 @@ The compiler currently uses a mixed memory model:
 - raw-memory paths for HAMT and other internals that bypass generic RC
 
 This is not yet a single unified ownership model.
+
+## Current RC Policy Decisions (Authoritative)
+
+These are the current compiler decisions and should be treated as source-of-truth:
+
+1. Conservative call/return ownership ABI:
+   - all lowered calls are `ANF.Call` (no name-based borrowed-call lowering)
+   - function lowering defaults to `ReturnOwnership = OwnedReturn`
+   - call results are treated as owned values for lifetime management
+2. Local alias-based borrowing (intra-procedural):
+   - borrowing expressions are local alias/projection forms (`IfValue`, `TupleGet`, `RawGet`, `Atom(Var)`, `TypedAtom(Var, _)`)
+   - borrowing is not inferred from function names
+3. Return materialization rule:
+   - when a returned heap value comes from a borrowing expression, pass 2.5 inserts `RefCountInc` before return
+   - this materialization is not gated by function borrowed-return metadata
+4. Scope cleanup rule:
+   - pass 2.5 inserts `RefCountDec` for non-returned heap-owned temporaries at scope exit
+   - because calls are owned by default, call-result temps are decref'd unless returned/otherwise retained
 
 ## RC Through the Pipeline
 
@@ -44,11 +62,11 @@ Pass 2.5 inserts `RefCountInc` / `RefCountDec` over ANF based on inferred types 
 
 Core model:
 
-- borrowed calling convention
+- conservative owned-return call convention
 - dec on scope exit for owned RC values
-- no dec for borrowed aliases
+- no dec for borrowing aliases/projections
 - no dec for returned values
-- param return materialization for borrowed convention
+- alias returns are materialized with `RefCountInc` before return
 
 Additional responsibilities:
 
@@ -194,10 +212,10 @@ Generic `HeapAlloc`/`RefCountDec` paths use `[X27 + payloadSize]` directly witho
 
 Large payload objects can therefore index outside the intended 256-byte head table.
 
-## I) Borrowing rules are partly name-based (high confidence from code)
+## I) Borrowing rules now use local expression shape (updated)
 
-`isBorrowingExpr` has hardcoded function-name checks for FingerTree accessors.
-This is brittle and easy to miss when adding new borrowed-return APIs.
+Borrowing classification in pass 2.5 is based on local expression form, not function-name heuristics.
+This removes brittle name-coupling at call sites and establishes a conservative owned-call baseline.
 
 ## J) Type inference fallback can suppress RC opportunities (high confidence from code)
 
