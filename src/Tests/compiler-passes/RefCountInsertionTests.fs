@@ -114,7 +114,7 @@ let testNonSelfTailCallDoesNotLeaveDecAfterTailCall () : TestResult =
     else
         Ok ()
 
-let testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn () : TestResult =
+let testAliasReturnMaterializesOwnershipEvenIfFunctionMarkedBorrowed () : TestResult =
     let nodeType = AST.TList AST.TInt64
     let funcReg : AST_to_ANF.FunctionRegistry =
         Map.ofList [
@@ -153,11 +153,11 @@ let testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn () : TestResu
     let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
 
     if hasRefCountIncForTemp childTemp transformed.Body then
-        Error "FingerTree borrowed accessor should not materialize ownership with RefCountInc on its RawGet result"
-    else
         Ok ()
+    else
+        Error "Alias return should materialize ownership with RefCountInc even when function is marked BorrowedReturn"
 
-let testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec () : TestResult =
+let testBorrowedCallStillGetsAutoDecUnderConservativePolicy () : TestResult =
     let nodeType = AST.TList AST.TInt64
     let funcReg : AST_to_ANF.FunctionRegistry =
         Map.ofList [
@@ -203,13 +203,13 @@ let testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec () : TestResult =
     let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
 
     if hasRefCountDecForTemp childTemp transformed.Body then
-        Error "Borrowed FingerTree accessor call should not add an automatic RefCountDec for the child temp"
-    else
         Ok ()
+    else
+        Error "BorrowedCall should be treated as owned result under conservative policy and get automatic RefCountDec"
 
 let tests = [
     ("inferCExprType Call returns function return type", testInferCallReturnsFunctionReturnType)
     ("non-self tailcall does not keep dec after tailcall", testNonSelfTailCallDoesNotLeaveDecAfterTailCall)
-    ("borrowed FingerTree accessor does not materialize borrowed return", testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn)
-    ("borrowed FingerTree accessor call does not insert auto-dec", testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec)
+    ("alias return materializes ownership even for borrowed-return function", testAliasReturnMaterializesOwnershipEvenIfFunctionMarkedBorrowed)
+    ("borrowed call still gets auto-dec under conservative policy", testBorrowedCallStillGetsAutoDecUnderConservativePolicy)
 ]

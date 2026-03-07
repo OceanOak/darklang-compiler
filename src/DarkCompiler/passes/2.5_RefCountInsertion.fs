@@ -434,11 +434,11 @@ let rec analyzeReturns
 /// Borrowed/aliased values should NOT get their own RefCountDec - the original value owns the memory
 let isBorrowingExpr (cexpr: CExpr) : bool =
     match cexpr with
+    | IfValue _ -> true            // Selects one of two existing values; no ownership transfer
     | TupleGet _ -> true           // Extracts pointer from tuple/list - borrowed from parent
     | RawGet _ -> true             // RawGet reads existing memory; it does not transfer ownership
     | Atom (Var _) -> true         // Alias/copy of existing variable - don't double-dec
     | TypedAtom (Var _, _) -> true // TypedAtom wrapping a variable - also borrowed
-    | BorrowedCall _ -> true       // Explicit borrowed-call annotation from AST->ANF
     | _ -> false
 
 let private isRcManagedHeapType (typ: AST.Type) : bool =
@@ -600,7 +600,6 @@ let rec private moveDecsBeforeNonSelfTailCalls (currentFuncName: string) (expr: 
 /// Returns (transformed expr, varGen, types defined in this subtree)
 let rec insertRCWithAnalysis
     (ctx: TypeContext)
-    (currentFuncReturnOwnership: ReturnOwnership option)
     (expr: ReturnAnnotatedExpr)
     (varGen: VarGen)
     (returnDecs: (TempId * int * RcKind) list)
@@ -629,9 +628,9 @@ let rec insertRCWithAnalysis
 
         | RIf (cond, thenBranch, elseBranch, _) ->
             let (thenBranch', varGen1, types1, typeCache1) =
-                insertRCWithAnalysis ctx currentFuncReturnOwnership thenBranch varGen returnDecs paramIncs types typeCache
+                insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs types typeCache
             let (elseBranch', varGen2, types2, typeCache2) =
-                insertRCWithAnalysis ctx currentFuncReturnOwnership elseBranch varGen1 returnDecs paramIncs types1 typeCache1
+                insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs types1 typeCache1
             let (finalExpr, finalVarGen, finalTypes) =
                 applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
             (finalExpr, finalVarGen, finalTypes, typeCache2)
@@ -782,11 +781,6 @@ let rec insertRCWithAnalysis
                 | _ -> []
 
             let returnInc =
-                let shouldMaterializeBorrowedReturn =
-                    match currentFuncReturnOwnership with
-                    | Some BorrowedReturn when isBorrowingExpr cexpr -> false
-                    | _ -> true
-
                 let rcInfoFromAtom (atom: Atom) : (int * RcKind) option =
                     match atom with
                     | Var tid ->
@@ -808,8 +802,7 @@ let rec insertRCWithAnalysis
                     // Returning a pure alias of an already-returned owned value should not inc again.
                     if isRcManagedHeapType inferredType
                        && Set.contains tempId bodyReturned
-                       && isBorrowingExpr cexpr
-                       && shouldMaterializeBorrowedReturn then
+                       && isBorrowingExpr cexpr then
                         if Set.contains sourceId bodyReturned then
                             None
                         else
@@ -819,8 +812,7 @@ let rec insertRCWithAnalysis
                 | _ ->
                     if isRcManagedHeapType inferredType
                        && Set.contains tempId bodyReturned
-                       && isBorrowingExpr cexpr
-                       && shouldMaterializeBorrowedReturn then
+                       && isBorrowingExpr cexpr then
                         Some (rcInfoForType ctx inferredType)
                     else
                         None
@@ -849,7 +841,7 @@ let private insertRCInternal
     let ctxWithTypes = withTempTypes ctx types
     let analyzed = analyzeReturns Map.empty expr
     let (expr', varGen', types', typeCache') =
-        insertRCWithAnalysis ctxWithTypes None analyzed varGen [] [] types typeCache
+        insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] types typeCache
     (expr', varGen', types', typeCache')
 
 /// Insert reference counting operations into an AExpr
@@ -887,7 +879,7 @@ let private insertRCInFunctionInternal
 
     // Process function body with return analysis
     let (bodyWithRC, varGen', accTypes, typeCache') =
-        insertRCWithAnalysis ctxWithParams (Some func.ReturnOwnership) bodyInfo varGen [] paramIncs typesWithParams typeCache
+        insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs typesWithParams typeCache
     let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithRC
     ({ func with Body = body' }, varGen', accTypes, typeCache')
 

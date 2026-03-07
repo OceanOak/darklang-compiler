@@ -93,22 +93,8 @@ let private normalizeNullaryIntrinsicArgs (args: ANF.Atom list) : ANF.Atom list 
     | [ANF.UnitLiteral] -> []
     | _ -> args
 
-let private isBorrowedCallName (funcName: string) : bool =
-    funcName = "Stdlib.__FingerTree.headUnsafe_i64"
-    || funcName = "Stdlib.__FingerTree.head_i64"
-    || funcName = "Stdlib.__FingerTree.head"
-    || funcName.StartsWith("Stdlib.__FingerTree.__node2GetChild")
-    || funcName.StartsWith("Stdlib.__FingerTree.__node3GetChild")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getSingleElem")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepPrefixAt")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepSuffixAt")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepMiddle")
-
 let private makeCallCExpr (funcName: string, args: ANF.Atom list) : ANF.CExpr =
-    if isBorrowedCallName funcName then
-        ANF.BorrowedCall (funcName, args)
-    else
-        ANF.Call (funcName, args)
+    ANF.Call (funcName, args)
 
 /// Parse mangled type names used by monomorphized raw intrinsics.
 /// This is duplicated early in the file so raw-intrinsic lowering can recover value types.
@@ -8623,12 +8609,10 @@ let convertFunction (funcDef: AST.FunctionDef) (varGen: ANF.VarGen) (typeReg: Ty
     // Convert body
     toANF funcDef.Body varGen1 paramEnv typeReg variantLookup funcReg moduleRegistry
     |> Result.map (fun (body, varGen2) ->
-        let returnOwnership =
-            if isBorrowedCallName funcDef.Name then ANF.BorrowedReturn else ANF.OwnedReturn
         ({ Name = funcDef.Name
            TypedParams = typedParams
            ReturnType = funcDef.ReturnType
-           ReturnOwnership = returnOwnership
+           ReturnOwnership = ANF.OwnedReturn
            Body = body }, varGen2))
 
 /// Result type that includes registries needed for later passes
