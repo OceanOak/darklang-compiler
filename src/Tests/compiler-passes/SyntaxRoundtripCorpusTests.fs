@@ -34,8 +34,11 @@ type private RoundtripPlan = {
 
 let private syntaxModeForFile (sourceFile: string) : SyntaxMode =
     let normalized = sourceFile.Replace('\\', '/')
-    if normalized.Contains("/interpreter/")
-       || normalized.Contains("/e2e/upstream/language/") then
+    let isUpstreamDark =
+        normalized.Contains("/e2e/upstream/")
+        && normalized.EndsWith(".dark", StringComparison.OrdinalIgnoreCase)
+
+    if normalized.Contains("/interpreter/") || isUpstreamDark then
         {
             SourceSyntax = CompilerLibrary.InterpreterSyntax
         }

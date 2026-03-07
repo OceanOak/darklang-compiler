@@ -1,3 +1,15 @@
 // Interpreter-syntax E2E tests
 
 let inc = fun x -> Stdlib.Int64.add x 1L in inc 5L = 6L
+
+type PairRec =
+  { a: Int64
+    b: Int64 }
+
+(PairRec
+  { a = 5L
+    b = 7L }).b = 7L
+
+((Stdlib.Result.Result.Ok 5L)
+ |> Stdlib.Result.map (fun x -> x + 1L)) =
+  Stdlib.Result.Result.Ok 6L

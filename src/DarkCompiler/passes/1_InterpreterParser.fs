@@ -885,6 +885,10 @@ let rec parseRecordFieldsWithContext
             | (TComma | TSemicolon) :: rest' ->
                 // More fields
                 parseRecordFieldsWithContext typeParams rest' ((name, ty) :: acc)
+            | TIdent _ :: TColon :: _ ->
+                // Upstream interpreter syntax frequently separates record fields
+                // by newline indentation instead of explicit separators.
+                parseRecordFieldsWithContext typeParams remaining ((name, ty) :: acc)
             | TRBrace :: rest' ->
                 // End of fields
                 Ok (List.rev ((name, ty) :: acc), rest')
@@ -1466,6 +1470,13 @@ let parse (tokens: Token list) : Result<Program, string> =
         lambdaSeedCounter <- lambdaSeedCounter + 1
         current
 
+    let implicitLambdaTypeVarName
+        (lambdaSeed: int)
+        (paramIndex: int)
+        (paramName: string)
+        : string =
+        $"__interp_lambda_{lambdaSeed}_{paramIndex}_{paramName}"
+
     let startsWithNegativeNumericLiteral (toks: Token list) : bool =
         match toks with
         | TMinus :: TInt64 _ :: _
@@ -1961,17 +1972,17 @@ let parse (tokens: Token list) : Result<Program, string> =
             let rec parseFunParameters
                 (toks: Token list)
                 (paramIndex: int)
-                (acc: (string * Type) list)
-                : Result<(string * Type) list * Token list, string> =
+                (acc: (string * Type * Pattern option) list)
+                : Result<(string * Type * Pattern option) list * Token list, string> =
                 match toks with
                 | TArrow :: remaining when not (List.isEmpty acc) ->
                     Ok (List.rev acc, remaining)
                 | TIdent name :: remaining when not (System.Char.IsUpper(name.[0])) ->
-                    let typeVarName = $"__interp_lambda_{lambdaSeed}_{paramIndex}_{name}"
+                    let typeVarName = implicitLambdaTypeVarName lambdaSeed paramIndex name
                     parseFunParameters
                         remaining
                         (paramIndex + 1)
-                        ((name, TVar typeVarName) :: acc)
+                        ((name, TVar typeVarName, None) :: acc)
                 | TLParen :: TIdent name :: TColon :: remaining when not (System.Char.IsUpper(name.[0])) ->
                     parseType remaining
                     |> Result.bind (fun (paramType, afterType) ->
@@ -1980,14 +1991,60 @@ let parse (tokens: Token list) : Result<Program, string> =
                             parseFunParameters
                                 remaining'
                                 (paramIndex + 1)
-                                ((name, paramType) :: acc)
+                                ((name, paramType, None) :: acc)
                         | _ -> Error "Expected ')' after typed lambda parameter")
+                | TLParen :: _ ->
+                    parsePattern toks
+                    |> Result.bind (fun (pattern, remaining) ->
+                        match pattern with
+                        | PVar name ->
+                            let typeVarName =
+                                implicitLambdaTypeVarName lambdaSeed paramIndex name
+                            parseFunParameters
+                                remaining
+                                (paramIndex + 1)
+                                ((name, TVar typeVarName, None) :: acc)
+                        | _ ->
+                            let syntheticParamName = $"lambdaPattern{lambdaSeed}_{paramIndex}"
+                            let typeVarName =
+                                implicitLambdaTypeVarName
+                                    lambdaSeed
+                                    paramIndex
+                                    syntheticParamName
+                            parseFunParameters
+                                remaining
+                                (paramIndex + 1)
+                                ((syntheticParamName, TVar typeVarName, Some pattern) :: acc))
                 | _ -> Error "Expected one or more parameters before '->' in fun expression"
 
             parseFunParameters rest 0 []
-            |> Result.bind (fun (parameters, bodyStart) ->
+            |> Result.bind (fun (parsedParameters, bodyStart) ->
                 parseExpr bodyStart
                 |> Result.map (fun (body, remaining) ->
+                    let parameters =
+                        parsedParameters
+                        |> List.map (fun (paramName, paramType, _) -> (paramName, paramType))
+
+                    let patternBindings =
+                        parsedParameters
+                        |> List.choose (fun (paramName, _, bindingPattern) ->
+                            match bindingPattern with
+                            | Some pattern -> Some (paramName, pattern)
+                            | None -> None)
+
+                    let bodyWithPatternBindings =
+                        List.foldBack (fun (paramName, pattern) innerBody ->
+                            Match (
+                                Var paramName,
+                                [
+                                    {
+                                        Patterns = NonEmptyList.singleton pattern
+                                        Guard = None
+                                        Body = innerBody
+                                    }
+                                ]
+                            )) patternBindings body
+
                     // Preserve typed lambdas as multi-parameter AST for stable
                     // parser/pretty roundtrips. Curry fully-untyped interpreter
                     // lambdas (`fun x y -> ...`) to match upstream behavior for
@@ -2012,9 +2069,9 @@ let parse (tokens: Token list) : Result<Program, string> =
                             | param :: restParams ->
                                 Lambda (NonEmptyList.singleton param, buildCurriedLambda restParams innerBody)
 
-                        (buildCurriedLambda parameters body, remaining)
+                        (buildCurriedLambda parameters bodyWithPatternBindings, remaining)
                     else
-                        (Lambda (NonEmptyList.fromList parameters, body), remaining)))
+                        (Lambda (NonEmptyList.fromList parameters, bodyWithPatternBindings), remaining)))
         // Qualified identifier: Stdlib.Int64.add, Module.func, or Stdlib.Result.Result.Ok
         | TIdent name :: TDot :: TIdent nextName :: rest when System.Char.IsUpper(name.[0]) ->
             // Parse the full qualified name
@@ -2185,6 +2242,9 @@ let parse (tokens: Token list) : Result<Program, string> =
                 | (TComma | TSemicolon) :: rest' ->
                     // More fields
                     parseRecordLiteralFieldsWithTypeName typeName rest' ((fieldName, value) :: acc)
+                | TIdent _ :: TEquals :: _ ->
+                    // Support newline-delimited field lists in upstream interpreter syntax.
+                    parseRecordLiteralFieldsWithTypeName typeName remaining ((fieldName, value) :: acc)
                 | TRBrace :: rest' ->
                     // End of record
                     Ok (RecordLiteral (typeName, List.rev ((fieldName, value) :: acc)), rest')
@@ -2204,6 +2264,9 @@ let parse (tokens: Token list) : Result<Program, string> =
                 | (TComma | TSemicolon) :: rest' ->
                     // More fields
                     parseRecordUpdateFields rest' ((fieldName, value) :: acc)
+                | TIdent _ :: TEquals :: _ ->
+                    // Support newline-delimited update fields.
+                    parseRecordUpdateFields remaining ((fieldName, value) :: acc)
                 | TRBrace :: rest' ->
                     // End of record update
                     Ok (List.rev ((fieldName, value) :: acc), rest')
