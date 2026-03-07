@@ -104,6 +104,11 @@ type UnaryOp =
     | Not
     | BitNot  // Bitwise NOT: ~~~expr
 
+/// Reference-count operation kind
+type RcKind =
+    | GenericHeap
+    | TaggedList
+
 /// Complex expressions (produce values)
 type CExpr =
     | Atom of Atom
@@ -123,8 +128,8 @@ type CExpr =
     // String operations (heap-allocating)
     | StringConcat of left:Atom * right:Atom    // Concatenate strings: s1 ++ s2
     // Reference counting operations
-    | RefCountInc of Atom * payloadSize:int    // Increment ref count of heap value
-    | RefCountDec of Atom * payloadSize:int    // Decrement ref count, free if zero
+    | RefCountInc of Atom * payloadSize:int * kind:RcKind    // Increment ref count of heap value
+    | RefCountDec of Atom * payloadSize:int * kind:RcKind    // Decrement ref count, free if zero
     // Output operations (for main expression result)
     | Print of Atom * AST.Type                 // Print value with type-appropriate formatting
     | RuntimeError of message:string           // Print runtime error to stderr and exit with code 1
@@ -219,6 +224,12 @@ let payloadSize (t: AST.Type) (typeReg: Map<string, (string * AST.Type) list>) :
     | AST.TSum _ -> 16  // [tag, payload]
     | AST.TDict _ -> 8  // Root pointer only (HAMT structure is variable-sized raw memory)
     | _ -> 0  // Non-heap types
+
+/// Determine reference-count dispatch kind for a heap type
+let rcKind (t: AST.Type) : RcKind =
+    match t with
+    | AST.TList _ -> TaggedList
+    | _ -> GenericHeap
 
 // ============================================================================
 // Coverage Types

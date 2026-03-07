@@ -51,7 +51,7 @@ let rec private hasRefCountIncForTemp (target: TempId) (expr: AExpr) : bool =
     match expr with
     | Return _ ->
         false
-    | Let (_, RefCountInc (Var tempId, _), _) when tempId = target ->
+    | Let (_, RefCountInc (Var tempId, _, _), _) when tempId = target ->
         true
     | Let (_, _, body) ->
         hasRefCountIncForTemp target body
@@ -63,7 +63,7 @@ let rec private hasRefCountDecForTemp (target: TempId) (expr: AExpr) : bool =
     match expr with
     | Return _ ->
         false
-    | Let (_, RefCountDec (Var tempId, _), _) when tempId = target ->
+    | Let (_, RefCountDec (Var tempId, _, _), _) when tempId = target ->
         true
     | Let (_, _, body) ->
         hasRefCountDecForTemp target body

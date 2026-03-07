@@ -41,7 +41,7 @@ let testNonSelfTailCallMovesDecBeforeTailCall () : TestResult =
                 Let (
                     callTmp,
                     Call ("callee", [Var p0]),
-                    Let (decTmp, RefCountDec (Var tupleTmp, 16), Return (Var callTmp))
+                    Let (decTmp, RefCountDec (Var tupleTmp, 16, GenericHeap), Return (Var callTmp))
                 )
             )
     }

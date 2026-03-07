@@ -45,6 +45,10 @@ let private prettyPrintANFUnaryOp = function
     | ANF.Not -> "!"
     | ANF.BitNot -> "~~~"
 
+let private prettyPrintANFRcKind = function
+    | ANF.GenericHeap -> "generic"
+    | ANF.TaggedList -> "list"
+
 /// Append a type suffix when available
 let private appendANFTypeSuffix (typOpt: AST.Type option) (value: string) : string =
     match typOpt with
@@ -78,10 +82,10 @@ let private prettyPrintANFCExpr = function
         $"({elemsStr})"
     | ANF.TupleGet (tupleAtom, index) ->
         $"{prettyPrintANFAtom tupleAtom}.{index}"
-    | ANF.RefCountInc (atom, payloadSize) ->
-        $"rc_inc({prettyPrintANFAtom atom}, size={payloadSize})"
-    | ANF.RefCountDec (atom, payloadSize) ->
-        $"rc_dec({prettyPrintANFAtom atom}, size={payloadSize})"
+    | ANF.RefCountInc (atom, payloadSize, kind) ->
+        $"rc_inc({prettyPrintANFAtom atom}, size={payloadSize}, kind={prettyPrintANFRcKind kind})"
+    | ANF.RefCountDec (atom, payloadSize, kind) ->
+        $"rc_dec({prettyPrintANFAtom atom}, size={payloadSize}, kind={prettyPrintANFRcKind kind})"
     | ANF.StringConcat (left, right) ->
         $"{prettyPrintANFAtom left} ++ {prettyPrintANFAtom right}"
     | ANF.Print (atom, valueType) ->
@@ -212,6 +216,10 @@ let private prettyPrintMIRUnaryOp = function
     | MIR.Not -> "!"
     | MIR.BitNot -> "~~~"
 
+let private prettyPrintMIRRcKind = function
+    | MIR.GenericHeap -> "generic"
+    | MIR.TaggedList -> "list"
+
 /// Pretty-print MIR virtual register
 let private prettyPrintMIRVReg (MIR.VReg n) : string =
     $"v{n}"
@@ -267,10 +275,10 @@ let private prettyPrintMIRInstr (instr: MIR.Instr) : string =
         appendTypeSuffix valueType baseText
     | MIR.StringConcat (dest, left, right) ->
         $"{prettyPrintMIRVReg dest} <- StringConcat({prettyPrintMIROperand left}, {prettyPrintMIROperand right})"
-    | MIR.RefCountInc (addr, payloadSize) ->
-        $"RefCountInc({prettyPrintMIRVReg addr}, size={payloadSize})"
-    | MIR.RefCountDec (addr, payloadSize) ->
-        $"RefCountDec({prettyPrintMIRVReg addr}, size={payloadSize})"
+    | MIR.RefCountInc (addr, payloadSize, kind) ->
+        $"RefCountInc({prettyPrintMIRVReg addr}, size={payloadSize}, kind={prettyPrintMIRRcKind kind})"
+    | MIR.RefCountDec (addr, payloadSize, kind) ->
+        $"RefCountDec({prettyPrintMIRVReg addr}, size={payloadSize}, kind={prettyPrintMIRRcKind kind})"
     | MIR.Print (src, valueType) ->
         $"Print({prettyPrintMIROperand src}, type={valueType})"
     | MIR.RuntimeError message ->
@@ -417,6 +425,10 @@ let private prettyPrintLIROperand = function
     | LIR.StringSymbol value -> $"str[{value}]"
     | LIR.FloatSymbol value -> $"float[{value}]"
     | LIR.FuncAddr name -> $"&{name}"
+
+let private prettyPrintLIRRcKind = function
+    | LIR.GenericHeap -> "generic"
+    | LIR.TaggedList -> "list"
 
 /// Pretty-print LIR instruction
 let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
@@ -581,10 +593,10 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"HeapStore({prettyPrintLIRReg addr}, {offset}, {prettyPrintLIROperand src})"
     | LIR.HeapLoad (dest, addr, offset) ->
         $"{prettyPrintLIRReg dest} <- HeapLoad({prettyPrintLIRReg addr}, {offset})"
-    | LIR.RefCountInc (addr, payloadSize) ->
-        $"RefCountInc({prettyPrintLIRReg addr}, {payloadSize})"
-    | LIR.RefCountDec (addr, payloadSize) ->
-        $"RefCountDec({prettyPrintLIRReg addr}, {payloadSize})"
+    | LIR.RefCountInc (addr, payloadSize, kind) ->
+        $"RefCountInc({prettyPrintLIRReg addr}, {payloadSize}, {prettyPrintLIRRcKind kind})"
+    | LIR.RefCountDec (addr, payloadSize, kind) ->
+        $"RefCountDec({prettyPrintLIRReg addr}, {payloadSize}, {prettyPrintLIRRcKind kind})"
     | LIR.StringConcat (dest, left, right) ->
         $"{prettyPrintLIRReg dest} <- StringConcat({prettyPrintLIROperand left}, {prettyPrintLIROperand right})"
     | LIR.PrintHeapString reg ->

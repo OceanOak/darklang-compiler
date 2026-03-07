@@ -116,6 +116,6 @@ Function _start:
     HeapStore(v10010, 0, 10)
     HeapStore(v10010, 8, 20)
     v10011 <- Call(loop, [3, 0, v10010])
-    RefCountDec(v10010, size=16)
+    RefCountDec(v10010, size=16, kind=generic)
     Print(v10011, type=TInt64)
     ret v10011

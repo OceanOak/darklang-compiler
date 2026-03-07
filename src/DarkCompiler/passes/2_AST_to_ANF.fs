@@ -4394,8 +4394,9 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
             match elemAtom with
             | ANF.Var _ when ANF.isHeapType elemType ->
                 let size = ANF.payloadSize elemType typeReg
+                let kind = ANF.rcKind elemType
                 let (incVar, vg1) = ANF.freshVar vg
-                let incExpr = ANF.RefCountInc (elemAtom, size)
+                let incExpr = ANF.RefCountInc (elemAtom, size, kind)
                 (vg1, bindings @ [(incVar, incExpr)])
             | _ ->
                 (vg, bindings)
@@ -8108,8 +8109,9 @@ and toAtom (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: TypeReg
             match elemAtom with
             | ANF.Var _ when ANF.isHeapType elemType ->
                 let size = ANF.payloadSize elemType typeReg
+                let kind = ANF.rcKind elemType
                 let (incVar, vg1) = ANF.freshVar vg
-                let incExpr = ANF.RefCountInc (elemAtom, size)
+                let incExpr = ANF.RefCountInc (elemAtom, size, kind)
                 (vg1, bindings @ [(incVar, incExpr)])
             | _ ->
                 (vg, bindings)

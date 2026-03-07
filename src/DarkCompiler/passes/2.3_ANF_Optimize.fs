@@ -245,8 +245,8 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | TupleAlloc elems -> elems |> List.map collectAtomUses |> Set.unionMany
     | TupleGet (tuple, _) -> collectAtomUses tuple
     | StringConcat (left, right) -> Set.union (collectAtomUses left) (collectAtomUses right)
-    | RefCountInc (atom, _) -> collectAtomUses atom
-    | RefCountDec (atom, _) -> collectAtomUses atom
+    | RefCountInc (atom, _, _) -> collectAtomUses atom
+    | RefCountDec (atom, _, _) -> collectAtomUses atom
     | Print (atom, _) -> collectAtomUses atom
     | FileReadText path -> collectAtomUses path
     | FileExists path -> collectAtomUses path
@@ -299,8 +299,8 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | TupleAlloc elems -> TupleAlloc (List.map s elems)
     | TupleGet (tuple, idx) -> TupleGet (s tuple, idx)
     | StringConcat (left, right) -> StringConcat (s left, s right)
-    | RefCountInc (atom, size) -> RefCountInc (s atom, size)
-    | RefCountDec (atom, size) -> RefCountDec (s atom, size)
+    | RefCountInc (atom, size, kind) -> RefCountInc (s atom, size, kind)
+    | RefCountDec (atom, size, kind) -> RefCountDec (s atom, size, kind)
     | Print (atom, t) -> Print (s atom, t)
     | FileReadText path -> FileReadText (s path)
     | FileExists path -> FileExists (s path)

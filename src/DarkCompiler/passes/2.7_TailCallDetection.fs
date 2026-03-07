@@ -114,10 +114,10 @@ let rec private collectMovableDecPrefix
     (expr: AExpr)
     : (TempId * CExpr) list * AExpr =
     match expr with
-    | Let (tmpId, RefCountDec (Var tid, size), rest)
+    | Let (tmpId, RefCountDec (Var tid, size, kind), rest)
         when not (Set.contains (canonicalTempId aliasRoots tid) tailArgTemps) ->
         let (bindings, remaining) = collectMovableDecPrefix aliasRoots tailArgTemps rest
-        ((tmpId, RefCountDec (Var tid, size)) :: bindings, remaining)
+        ((tmpId, RefCountDec (Var tid, size, kind)) :: bindings, remaining)
     | Let (tmpId, RefCountDecString atom, rest) ->
         let overlaps =
             match atom with

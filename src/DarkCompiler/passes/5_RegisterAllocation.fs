@@ -445,9 +445,9 @@ let getUsedVRegs (instr: LIR.Instr) : int list =
         a @ s
     | LIR.HeapLoad (_, addr, _) ->
         regToVReg addr |> Option.toList
-    | LIR.RefCountInc (addr, _) ->
+    | LIR.RefCountInc (addr, _, _) ->
         regToVReg addr |> Option.toList
-    | LIR.RefCountDec (addr, _) ->
+    | LIR.RefCountDec (addr, _, _) ->
         regToVReg addr |> Option.toList
     | LIR.StringConcat (_, left, right) ->
         (operandToVReg left |> Option.toList) @ (operandToVReg right |> Option.toList)
@@ -2631,13 +2631,13 @@ let applyToInstr (mapping: AllocationResult) (instr: LIR.Instr) : LIR.Instr list
             | _ -> []
         addrLoads @ [loadInstr] @ storeInstrs
 
-    | LIR.RefCountInc (addr, payloadSize) ->
+    | LIR.RefCountInc (addr, payloadSize, kind) ->
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
-        addrLoads @ [LIR.RefCountInc (addrReg, payloadSize)]
+        addrLoads @ [LIR.RefCountInc (addrReg, payloadSize, kind)]
 
-    | LIR.RefCountDec (addr, payloadSize) ->
+    | LIR.RefCountDec (addr, payloadSize, kind) ->
         let (addrReg, addrLoads) = loadSpilled mapping addr LIR.X12
-        addrLoads @ [LIR.RefCountDec (addrReg, payloadSize)]
+        addrLoads @ [LIR.RefCountDec (addrReg, payloadSize, kind)]
 
     | LIR.StringConcat (dest, left, right) ->
         let (destReg, destAlloc) = applyToReg mapping dest

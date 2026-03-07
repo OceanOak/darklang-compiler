@@ -61,6 +61,11 @@ type UnaryOp =
     | Not
     | BitNot  // Bitwise NOT: ~~~expr
 
+/// Reference-count operation kind
+type RcKind =
+    | GenericHeap
+    | TaggedList
+
 /// Basic block label (defined early for use in Phi nodes)
 type Label = Label of string
 
@@ -83,8 +88,8 @@ type Instr =
     // String operations
     | StringConcat of dest:VReg * left:Operand * right:Operand  // Concatenate strings
     // Reference counting operations
-    | RefCountInc of addr:VReg * payloadSize:int   // Increment ref count at [addr + payloadSize]
-    | RefCountDec of addr:VReg * payloadSize:int   // Decrement ref count, free if zero
+    | RefCountInc of addr:VReg * payloadSize:int * kind:RcKind   // Increment ref count at [addr + payloadSize]
+    | RefCountDec of addr:VReg * payloadSize:int * kind:RcKind   // Decrement ref count, free if zero
     // Output operations (for main expression result printing)
     | Print of src:Operand * valueType:AST.Type    // Print value with type-appropriate formatting
     | RuntimeError of message:string               // Print runtime error to stderr and exit with code 1

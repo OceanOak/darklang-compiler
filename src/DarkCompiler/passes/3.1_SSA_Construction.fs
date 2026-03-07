@@ -335,8 +335,8 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
             | HeapLoad (_, addr, _, _) -> Set.add addr uses
             | StringConcat (_, left, right) ->
                 uses |> Set.union (getOperandUses left) |> Set.union (getOperandUses right)
-            | RefCountInc (addr, _) -> Set.add addr uses
-            | RefCountDec (addr, _) -> Set.add addr uses
+            | RefCountInc (addr, _, _) -> Set.add addr uses
+            | RefCountDec (addr, _, _) -> Set.add addr uses
             | Print (src, _) -> Set.union uses (getOperandUses src)
             | FileReadText (_, path) -> Set.union uses (getOperandUses path)
             | FileExists (_, path) -> Set.union uses (getOperandUses path)
@@ -699,13 +699,13 @@ let renameInstr (state: RenamingState) (instr: Instr) : Instr * RenamingState =
         let (_, newDest, state') = newVersion state dest
         (StringConcat (newDest, left', right'), state')
 
-    | RefCountInc (addr, size) ->
+    | RefCountInc (addr, size, kind) ->
         let addr' = getRenamedReg state addr
-        (RefCountInc (addr', size), state)
+        (RefCountInc (addr', size, kind), state)
 
-    | RefCountDec (addr, size) ->
+    | RefCountDec (addr, size, kind) ->
         let addr' = getRenamedReg state addr
-        (RefCountDec (addr', size), state)
+        (RefCountDec (addr', size, kind), state)
 
     | Print (src, vt) ->
         let src' = renameOperand state src

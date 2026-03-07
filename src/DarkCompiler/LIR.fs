@@ -53,6 +53,11 @@ type Condition =
     | LE
     | GE
 
+/// Reference-count operation kind
+type RcKind =
+    | GenericHeap
+    | TaggedList
+
 /// Basic block label (wrapper type for type safety)
 type Label = Label of string
 
@@ -130,8 +135,8 @@ type Instr =
     | HeapAlloc of dest:Reg * sizeBytes:int
     | HeapStore of addr:Reg * offset:int * src:Operand * valueType:AST.Type option
     | HeapLoad of dest:Reg * addr:Reg * offset:int
-    | RefCountInc of addr:Reg * payloadSize:int
-    | RefCountDec of addr:Reg * payloadSize:int
+    | RefCountInc of addr:Reg * payloadSize:int * kind:RcKind
+    | RefCountDec of addr:Reg * payloadSize:int * kind:RcKind
     | StringConcat of dest:Reg * left:Operand * right:Operand
     | PrintHeapString of Reg
     | LoadFuncAddr of dest:Reg * funcName:string
