@@ -79,8 +79,26 @@ Blocking tests/reasons:
 - E2E preamble type error for the suite: `Stdlib.Result.map expects 2 arguments, but got 3 arguments`.
 - Representative failing tests from this file when fully enabled: `L9, L188, L189, L190, L191, L192, L193, L194, L197, L199, L201, L202, L204, L205, L207, L208, L210, L212, L222, L223, L224, L225, L226, L233, L234, L235, L236, L237, L244, L245, L246, L247, L248, L249, L250, L251`.
 
+## Additional `--roundtrip-all-dark` blocker
+
+Status: blocked.
+
+Blocking test/reason:
+- File: `src/Tests/e2e/upstream/cloud/db.dark`
+- Test: `L112` (`NestedRecordFieldAccess`)
+- Snippet: `source`
+- Failure: `ParseOriginalFailed`
+- Parse error: `Unexpected tokens after expression (only function definitions can be followed by more definitions)`
+- Source shape uses a parenthesized multiline sequence of expressions where the first statements are bare calls (not `let` bindings):
+  - `Stdlib.DB.set ...`
+  - `Stdlib.DB.set ...`
+  - `let shouldBeJustJoe = ...`
+  - `Stdlib.List.length shouldBeJustJoe`
+- Current interpreter parser does not support this sequencing form as a standalone expression snippet.
+
 ## Next Steps
 
 1. Fix parser compatibility for upstream syntax forms used in blocked files (`fun (a, b) -> ...`, multiline record literals, and the date preamble `Result.map` form).
 2. Fix the `RefCountInsertion.payloadSize` crash path (`runtime` record type missing from `typeReg`) to unlock `elambda.dark`.
-3. Re-run this checklist and only add files to `defaultUpstreamDarkPaths` once `./run-tests` passes with allowlists removed.
+3. Add interpreter parser support for parenthesized multiline expression sequencing with bare call statements (the `cloud/db.dark` `L112` form), or keep this case excluded from all-upstream syntax roundtrip coverage.
+4. Re-run this checklist and only add files to `defaultUpstreamDarkPaths` once `./run-tests` passes with allowlists removed.

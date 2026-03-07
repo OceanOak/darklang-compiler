@@ -2399,6 +2399,23 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TSemicolon :: rest ->
             // Optional top-level separator in interpreter pretty-printed programs.
             parseTopLevels rest acc
+        | TLBracket :: TLt :: rest ->
+            // Top-level attributes (for example `[<DB>]`) are metadata markers.
+            // The shared AST does not currently represent attributes, so consume
+            // and ignore them before parsing the next top-level declaration.
+            let rec consumeAttribute (remaining: Token list) : Result<Token list, string> =
+                match remaining with
+                | TGt :: TRBracket :: afterAttr ->
+                    Ok afterAttr
+                | TEOF :: _ ->
+                    Error "Unterminated top-level attribute (missing '>]')"
+                | _ :: afterToken ->
+                    consumeAttribute afterToken
+                | [] ->
+                    Error "Unterminated top-level attribute (missing '>]')"
+            consumeAttribute rest
+            |> Result.bind (fun remaining ->
+                parseTopLevels remaining acc)
         | TEOF :: [] ->
             // End of input
             if List.isEmpty acc then

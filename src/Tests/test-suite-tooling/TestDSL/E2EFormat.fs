@@ -231,6 +231,21 @@ let private splitBySpacesRespectingQuotes (s: string) : string list =
         result <- current.ToString() :: result
     List.rev result
 
+/// Find start index of a `//` comment outside quoted strings.
+let private findCommentStartOutsideQuotes (line: string) : int option =
+    let rec loop (i: int) (inQuotes: bool) : int option =
+        if i >= line.Length then
+            None
+        elif inQuotes && line.[i] = '\\' && i + 1 < line.Length then
+            loop (i + 2) inQuotes
+        elif line.[i] = '"' then
+            loop (i + 1) (not inQuotes)
+        elif not inQuotes && line.[i] = '/' && i + 1 < line.Length && line.[i + 1] = '/' then
+            Some i
+        else
+            loop (i + 1) inQuotes
+    loop 0 false
+
 /// Check if string starts with expectation keywords (digit, -, stdout, etc.)
 let private isExpectationStart (rest: string) : bool =
     let trimmed = rest.TrimStart()
@@ -359,22 +374,50 @@ let private isIncompleteExpectationHead (afterEq: string) : bool =
         && trimmed.Contains(".")
 
 let private hasClosingParenTest (s: string) : bool =
-
-    let rec findPattern (i: int) =
-        if i >= s.Length then false
-        elif s.[i] = ')' then
-            let rest = s.Substring(i + 1).TrimStart()
-            if rest.StartsWith("=") then
-                let afterEq = rest.Substring(1)
-                if isExpectationCandidate afterEq && not (isIncompleteExpectationHead afterEq) then
-                    true
+    let rec findPattern
+        (i: int)
+        (inQuotes: bool)
+        (parenDepth: int)
+        (bracketDepth: int)
+        (braceDepth: int)
+        : bool =
+        if i >= s.Length then
+            false
+        elif inQuotes && s.[i] = '\\' && i + 1 < s.Length then
+            findPattern (i + 2) inQuotes parenDepth bracketDepth braceDepth
+        elif s.[i] = '"' then
+            findPattern (i + 1) (not inQuotes) parenDepth bracketDepth braceDepth
+        elif not inQuotes && s.[i] = '(' then
+            findPattern (i + 1) inQuotes (parenDepth + 1) bracketDepth braceDepth
+        elif not inQuotes && s.[i] = ')' then
+            let newParenDepth = max 0 (parenDepth - 1)
+            let isOutermostClose =
+                newParenDepth = 0
+                && bracketDepth = 0
+                && braceDepth = 0
+            if isOutermostClose then
+                let rest = s.Substring(i + 1).TrimStart()
+                if rest.StartsWith("=") then
+                    let afterEq = rest.Substring(1)
+                    if isExpectationCandidate afterEq && not (isIncompleteExpectationHead afterEq) then
+                        true
+                    else
+                        findPattern (i + 1) inQuotes newParenDepth bracketDepth braceDepth
                 else
-                    findPattern (i + 1)
+                    findPattern (i + 1) inQuotes newParenDepth bracketDepth braceDepth
             else
-                findPattern (i + 1)
+                findPattern (i + 1) inQuotes newParenDepth bracketDepth braceDepth
+        elif not inQuotes && s.[i] = '[' then
+            findPattern (i + 1) inQuotes parenDepth (bracketDepth + 1) braceDepth
+        elif not inQuotes && s.[i] = ']' then
+            findPattern (i + 1) inQuotes parenDepth (max 0 (bracketDepth - 1)) braceDepth
+        elif not inQuotes && s.[i] = '{' then
+            findPattern (i + 1) inQuotes parenDepth bracketDepth (braceDepth + 1)
+        elif not inQuotes && s.[i] = '}' then
+            findPattern (i + 1) inQuotes parenDepth bracketDepth (max 0 (braceDepth - 1))
         else
-            findPattern (i + 1)
-    findPattern 0
+            findPattern (i + 1) inQuotes parenDepth bracketDepth braceDepth
+    findPattern 0 false 0 0 0
 
 /// Find the = that separates source from expectations
 /// Returns Some index if this looks like a test line, along with how many matches were seen
@@ -482,6 +525,7 @@ let private isTestLine (lineWithoutComment: string) : bool =
         trimmed.StartsWith("def ")
         || trimmed.StartsWith("type ")
         || trimmed.StartsWith("let ")
+        || trimmed.StartsWith("[<")
     let (idxOpt, count) = findSeparatorIndexAndCount lineWithoutComment
     match idxOpt with
     | None -> false
@@ -495,11 +539,11 @@ let private isTestLine (lineWithoutComment: string) : bool =
 let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath: string) (preamble: string) (funcLineMap: Map<string, int>) : Result<E2ETest, string> =
     // First, remove any comment
     let lineWithoutComment, comment =
-        let commentIdx = line.IndexOf("//")
-        if commentIdx >= 0 then
+        match findCommentStartOutsideQuotes line with
+        | Some commentIdx ->
             (line.Substring(0, commentIdx).Trim(),
              Some (line.Substring(commentIdx + 2).Trim()))
-        else
+        | None ->
             (line, None)
 
     match findSeparatorIndex lineWithoutComment with
@@ -914,9 +958,9 @@ let private parseMultilineTest (fullText: string) (startLineNumber: int) (filePa
 
 /// Remove trailing comment from a line
 let private stripComment (line: string) : string =
-    let commentIdx = line.IndexOf("//")
-    if commentIdx >= 0 then line.Substring(0, commentIdx).Trim()
-    else line.Trim()
+    match findCommentStartOutsideQuotes line with
+    | Some commentIdx -> line.Substring(0, commentIdx).Trim()
+    | None -> line.Trim()
 
 /// Parse all E2E tests from a single file
 /// Supports preamble definitions that are prepended to all tests.
@@ -991,16 +1035,27 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                             |> List.rev
                             |> List.map stripComment
                             |> String.concat "\n"
-                        if hasClosingParenTest accumulatedWithoutComments || hasCompleteSeparator accumulatedWithoutComments then
+                        let hasClosingParen = hasClosingParenTest accumulatedWithoutComments
+                        let hasCompleteTopLevelSeparator = hasCompleteSeparator accumulatedWithoutComments
+                        if hasClosingParen || hasCompleteTopLevelSeparator then
                             // Combine all accumulated lines and parse as multi-line test
                             let fullExpr = String.concat "\n" (List.rev pendingExprLines)
                             let preamble = String.concat "\n" (List.rev preambleLines)
                             match parseMultilineTest fullExpr pendingStartLine path preamble functionLineMap with
-                            | Ok test -> tests <- test :: tests
-                            | Error err -> errors <- err :: errors
-                            // Reset multi-line state
-                            pendingExprLines <- []
-                            inMultilineExpr <- false
+                            | Ok test ->
+                                tests <- test :: tests
+                                // Reset multi-line state
+                                pendingExprLines <- []
+                                inMultilineExpr <- false
+                            | Error err when hasCompleteTopLevelSeparator && not hasClosingParen ->
+                                // A top-level-separator guess can be a false positive when
+                                // multiline source still needs additional continuation lines.
+                                ()
+                            | Error err ->
+                                errors <- err :: errors
+                                // Reset multi-line state after a hard parse error.
+                                pendingExprLines <- []
+                                inMultilineExpr <- false
                         // else: continue accumulating
                     else
                         let lineWithoutComment = stripComment trimmedLine
@@ -1023,6 +1078,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                             || lineWithoutComment.StartsWith("type ")
                             || lineWithoutComment.StartsWith("let ")
                             || lineWithoutComment.StartsWith("module ")
+                            || lineWithoutComment.StartsWith("[<")
 
                         let shouldStartMultilineExpr =
                             mayStartOrBeTest
@@ -1064,6 +1120,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                                                 || nextWithoutComment.StartsWith("type ")
                                                 || nextWithoutComment.StartsWith("let ")
                                                 || nextWithoutComment.StartsWith("module ")
+                                                || nextWithoutComment.StartsWith("[<")
                                             if nextIsIndented && not nextStartsDefinition && not (isTestLine nextWithoutComment) then
                                                 collectContinuation (j + 1) (nextLine :: acc)
                                             else

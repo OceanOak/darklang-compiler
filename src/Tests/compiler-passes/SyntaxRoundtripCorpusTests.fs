@@ -7,6 +7,7 @@
 module SyntaxRoundtripCorpusTests
 
 open System
+open System.Text.RegularExpressions
 open AST
 open Parser
 open InterpreterParser
@@ -79,6 +80,10 @@ let private formatProgramSafe
         Ok (ASTPrettyPrinter.formatProgram syntax ast)
     with ex ->
         Error ex.Message
+
+let private normalizeImplicitLambdaTypeVarSeedsInAstDebug (ast: AST.Program) : string =
+    let astDebug = sprintf "%A" ast
+    Regex.Replace(astDebug, "__interp_lambda_[0-9]+_", "__interp_lambda_N_")
 
 let private roundtripPlans (mode: SyntaxMode) (allowInternal: bool) : RoundtripPlan list =
     let parseCompiler = parseBySyntax CompilerLibrary.CompilerSyntax allowInternal
@@ -201,7 +206,15 @@ let private roundtripWithPlan
                     + snippet.Source
                 )
             | Ok printed1 ->
-                if ast0 <> ast1 then
+                let astChanged =
+                    if ast0 = ast1 then
+                        false
+                    else
+                        let normalizedAst0Debug = normalizeImplicitLambdaTypeVarSeedsInAstDebug ast0
+                        let normalizedAst1Debug = normalizeImplicitLambdaTypeVarSeedsInAstDebug ast1
+                        normalizedAst0Debug <> normalizedAst1Debug
+
+                if astChanged then
                     let ast0Repr = sprintf "%A" ast0
                     let ast1Repr = sprintf "%A" ast1
                     let header =
@@ -254,7 +267,23 @@ let private roundtripSnippet
     (snippet: Snippet)
     : TestResult =
     let parseOriginal = parseBySyntax mode.SourceSyntax allowInternal
-    match parseOriginal snippet.Source with
+    let parsedOriginal =
+        match parseOriginal snippet.Source with
+        | Ok ast ->
+            Ok ast
+        | Error originalParseError
+            when snippet.Label = "source"
+                 && snippet.Source.Contains("\n")
+                 && originalParseError.Contains("Unexpected tokens after expression") ->
+            // E2E source snippets may be unwrapped multiline blocks (outer parens
+            // stripped by the E2E parser). Retry with grouping parens.
+            match parseOriginal $"({snippet.Source})" with
+            | Ok ast -> Ok ast
+            | Error _ -> Error originalParseError
+        | Error originalParseError ->
+            Error originalParseError
+
+    match parsedOriginal with
     | Error originalParseError ->
         let parseOriginalSyntax = sourceSyntaxName mode.SourceSyntax
         Error (
