@@ -16,6 +16,8 @@ let private extractFromCExpr (cexpr: ANF.CExpr) : string list =
     match cexpr with
     | ANF.Call (funcName, args) ->
         funcName :: (args |> List.collect extractFromAtom)
+    | ANF.BorrowedCall (funcName, args) ->
+        funcName :: (args |> List.collect extractFromAtom)
     | ANF.TailCall (funcName, args) ->
         funcName :: (args |> List.collect extractFromAtom)
     | ANF.IndirectCall (func, args) ->

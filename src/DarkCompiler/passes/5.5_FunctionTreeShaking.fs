@@ -37,6 +37,10 @@ let getReachableStdlibNames
     (userProgram: ANF.Program)
     : Set<string> =
     let (ANF.Program (userFuncs, userMainExpr)) = userProgram
-    let startFunc = { ANF.Name = "_start"; ANF.TypedParams = []; ANF.ReturnType = AST.TUnit; ANF.Body = userMainExpr }
+    let startFunc = { ANF.Name = "_start"
+                      ANF.TypedParams = []
+                      ANF.ReturnType = AST.TUnit
+                      ANF.ReturnOwnership = ANF.OwnedReturn
+                      ANF.Body = userMainExpr }
     let userFuncsWithStart = startFunc :: userFuncs
     ANFDeadCodeElimination.getReachableStdlib stdlibCallGraph userFuncsWithStart

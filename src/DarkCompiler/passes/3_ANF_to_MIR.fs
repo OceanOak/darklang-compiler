@@ -170,7 +170,8 @@ let maxTempIdInCExpr (cexpr: ANF.CExpr) : int =
     | ANF.UnaryPrim (_, atom) -> maxTempIdInAtom atom
     | ANF.IfValue (cond, thenVal, elseVal) ->
         max (maxTempIdInAtom cond) (max (maxTempIdInAtom thenVal) (maxTempIdInAtom elseVal))
-    | ANF.Call (_, args) ->
+    | ANF.Call (_, args)
+    | ANF.BorrowedCall (_, args) ->
         args |> List.map maxTempIdInAtom |> List.fold max -1
     | ANF.TailCall (_, args) ->
         args |> List.map maxTempIdInAtom |> List.fold max -1
@@ -272,6 +273,7 @@ let cexprProducesFloat (floatRegs: Set<int>) (returnTypeReg: Map<string, AST.Typ
         // (then and else should have the same type, so we check then)
         isFloatAtom floatRegs thenAtom
     | ANF.Call (funcName, _)
+    | ANF.BorrowedCall (funcName, _)
     | ANF.TailCall (funcName, _) ->
         // Check if the called function returns a float
         match Map.tryFind funcName returnTypeReg with
@@ -289,6 +291,7 @@ let cexprProducesFloat (floatRegs: Set<int>) (returnTypeReg: Map<string, AST.Typ
 let calleeNamesInCExpr (cexpr: ANF.CExpr) : Set<string> =
     match cexpr with
     | ANF.Call (funcName, _) -> Set.singleton funcName
+    | ANF.BorrowedCall (funcName, _) -> Set.singleton funcName
     | ANF.TailCall (funcName, _) -> Set.singleton funcName
     | _ -> Set.empty
 
@@ -566,6 +569,7 @@ let cexprDescription (cexpr: ANF.CExpr) : string =
     | ANF.UnaryPrim (op, _) -> unaryOpDescription op
     | ANF.IfValue _ -> "IfValue"
     | ANF.Call (name, _) -> System.String.Concat("Call ", name)
+    | ANF.BorrowedCall (name, _) -> System.String.Concat("BorrowedCall ", name)
     | ANF.TailCall (name, _) -> System.String.Concat("TailCall ", name)
     | ANF.IndirectCall _ -> "IndirectCall"
     | ANF.IndirectTailCall _ -> "IndirectTailCall"
@@ -912,7 +916,8 @@ let rec convertExpr
                         | ANF.BitNot ->
                             // x XOR -1 is equivalent to bitwise-not and preserves integer width via operandType.
                             [MIR.BinOp (destReg, MIR.BitXor, operand, MIR.Int64Const -1L, atomTy)])
-                | ANF.Call (funcName, args) ->
+                | ANF.Call (funcName, args)
+                | ANF.BorrowedCall (funcName, args) ->
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with
@@ -1550,7 +1555,8 @@ and convertExprToOperand
                         | ANF.BitNot ->
                             // x XOR -1 is equivalent to bitwise-not and preserves integer width via operandType.
                             [MIR.BinOp (destReg, MIR.BitXor, operand, MIR.Int64Const -1L, atomTy)])
-                | ANF.Call (funcName, args) ->
+                | ANF.Call (funcName, args)
+                | ANF.BorrowedCall (funcName, args) ->
                     let argTypes = args |> List.map (atomType builder)
                     let returnType =
                         match Map.tryFind funcName builder.ReturnTypeReg with

@@ -34,6 +34,7 @@ let testNonSelfTailCallMovesDecBeforeTailCall () : TestResult =
         Name = "caller"
         TypedParams = [{ Id = p0; Type = AST.TInt64 }]
         ReturnType = AST.TInt64
+        ReturnOwnership = OwnedReturn
         Body =
             Let (
                 tupleTmp,

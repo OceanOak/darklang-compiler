@@ -66,6 +66,9 @@ let private prettyPrintANFCExpr = function
     | ANF.Call (funcName, args) ->
         let argStr = args |> List.map prettyPrintANFAtom |> String.concat ", "
         $"{funcName}({argStr})"
+    | ANF.BorrowedCall (funcName, args) ->
+        let argStr = args |> List.map prettyPrintANFAtom |> String.concat ", "
+        $"borrowed {funcName}({argStr})"
     | ANF.IndirectCall (func, args) ->
         let argStr = args |> List.map prettyPrintANFAtom |> String.concat ", "
         $"IndirectCall({prettyPrintANFAtom func}, [{argStr}])"

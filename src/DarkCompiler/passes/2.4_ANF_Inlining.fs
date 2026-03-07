@@ -236,6 +236,7 @@ let renameCExpr (mapping: Map<TempId, TempId>) (cexpr: CExpr) : CExpr =
     | UnaryPrim (op, src) -> UnaryPrim (op, r src)
     | IfValue (cond, thenVal, elseVal) -> IfValue (r cond, r thenVal, r elseVal)
     | Call (name, args) -> Call (name, List.map r args)
+    | BorrowedCall (name, args) -> BorrowedCall (name, List.map r args)
     | TailCall (name, args) -> TailCall (name, List.map r args)
     | IndirectCall (func, args) -> IndirectCall (r func, List.map r args)
     | IndirectTailCall (func, args) -> IndirectTailCall (r func, List.map r args)

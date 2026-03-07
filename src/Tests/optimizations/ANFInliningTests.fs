@@ -42,6 +42,7 @@ let testInliningWithLiteralArgumentsRemovesCall () : TestResult =
         { Name = "addOne"
           TypedParams = [param]
           ReturnType = AST.TInt64
+          ReturnOwnership = OwnedReturn
           Body = addBody }
     let main =
         Let (
@@ -62,6 +63,7 @@ let testInliningWithLiteralArgumentsBindsTemp () : TestResult =
         { Name = "id"
           TypedParams = [param]
           ReturnType = AST.TInt64
+          ReturnOwnership = OwnedReturn
           Body = Return (Var param.Id) }
     let main =
         Let (
@@ -88,6 +90,7 @@ let testInliningUnderscoreFunctionName () : TestResult =
         { Name = "_addOne"
           TypedParams = [param]
           ReturnType = AST.TInt64
+          ReturnOwnership = OwnedReturn
           Body = addBody }
     let main =
         Let (

@@ -206,7 +206,8 @@ let inferCExprType (ctx: TypeContext) (cexpr: CExpr) : AST.Type option =
         | StringLiteral _ -> Some AST.TString
         | FloatLiteral _ -> Some AST.TFloat64
         | FuncRef funcName -> Map.tryFind funcName ctx.FuncReg
-    | Call (funcName, args) ->
+    | Call (funcName, args)
+    | BorrowedCall (funcName, args) ->
         // Return type from function registry (with special-case inference for stdlib list/tuple helpers)
         match funcName, args with
         | name, [listAtom; _] when name.StartsWith("Stdlib.List.getAt") || name.StartsWith("Stdlib.__FingerTree.getAt") ->
@@ -429,14 +430,6 @@ let rec analyzeReturns
         let returned = Set.union (returnedSet thenInfo) (returnedSet elseInfo)
         RIf (cond, thenInfo, elseInfo, returned)
 
-let private isFingerTreeBorrowedAccessorName (funcName: string) : bool =
-    funcName.StartsWith("Stdlib.__FingerTree.__node2GetChild")
-    || funcName.StartsWith("Stdlib.__FingerTree.__node3GetChild")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getSingleElem")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepPrefixAt")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepSuffixAt")
-    || funcName.StartsWith("Stdlib.__FingerTree.__getDeepMiddle")
-
 /// Check if a CExpr is a borrowing/aliasing operation
 /// Borrowed/aliased values should NOT get their own RefCountDec - the original value owns the memory
 let isBorrowingExpr (cexpr: CExpr) : bool =
@@ -445,12 +438,7 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
     | RawGet _ -> true             // RawGet reads existing memory; it does not transfer ownership
     | Atom (Var _) -> true         // Alias/copy of existing variable - don't double-dec
     | TypedAtom (Var _, _) -> true // TypedAtom wrapping a variable - also borrowed
-    | Call (funcName, _) ->
-        // List element extraction functions return borrowed references
-        funcName = "Stdlib.__FingerTree.headUnsafe_i64" ||
-        funcName = "Stdlib.__FingerTree.head_i64" ||
-        funcName = "Stdlib.__FingerTree.head" ||
-        isFingerTreeBorrowedAccessorName funcName
+    | BorrowedCall _ -> true       // Explicit borrowed-call annotation from AST->ANF
     | _ -> false
 
 let private isRcManagedHeapType (typ: AST.Type) : bool =
@@ -612,7 +600,7 @@ let rec private moveDecsBeforeNonSelfTailCalls (currentFuncName: string) (expr: 
 /// Returns (transformed expr, varGen, types defined in this subtree)
 let rec insertRCWithAnalysis
     (ctx: TypeContext)
-    (currentFuncName: string option)
+    (currentFuncReturnOwnership: ReturnOwnership option)
     (expr: ReturnAnnotatedExpr)
     (varGen: VarGen)
     (returnDecs: (TempId * int * RcKind) list)
@@ -641,9 +629,9 @@ let rec insertRCWithAnalysis
 
         | RIf (cond, thenBranch, elseBranch, _) ->
             let (thenBranch', varGen1, types1, typeCache1) =
-                insertRCWithAnalysis ctx currentFuncName thenBranch varGen returnDecs paramIncs types typeCache
+                insertRCWithAnalysis ctx currentFuncReturnOwnership thenBranch varGen returnDecs paramIncs types typeCache
             let (elseBranch', varGen2, types2, typeCache2) =
-                insertRCWithAnalysis ctx currentFuncName elseBranch varGen1 returnDecs paramIncs types1 typeCache1
+                insertRCWithAnalysis ctx currentFuncReturnOwnership elseBranch varGen1 returnDecs paramIncs types1 typeCache1
             let (finalExpr, finalVarGen, finalTypes) =
                 applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
             (finalExpr, finalVarGen, finalTypes, typeCache2)
@@ -678,6 +666,8 @@ let rec insertRCWithAnalysis
 
                 match nextBody with
                 | RLet (_, Call (funcName, args), _, _) ->
+                    inferFromCall funcName args
+                | RLet (_, BorrowedCall (funcName, args), _, _) ->
                     inferFromCall funcName args
                 | RLet (_, TailCall (funcName, args), _, _) ->
                     inferFromCall funcName args
@@ -793,8 +783,8 @@ let rec insertRCWithAnalysis
 
             let returnInc =
                 let shouldMaterializeBorrowedReturn =
-                    match currentFuncName with
-                    | Some funcName when isFingerTreeBorrowedAccessorName funcName && isBorrowingExpr cexpr -> false
+                    match currentFuncReturnOwnership with
+                    | Some BorrowedReturn when isBorrowingExpr cexpr -> false
                     | _ -> true
 
                 let rcInfoFromAtom (atom: Atom) : (int * RcKind) option =
@@ -897,7 +887,7 @@ let private insertRCInFunctionInternal
 
     // Process function body with return analysis
     let (bodyWithRC, varGen', accTypes, typeCache') =
-        insertRCWithAnalysis ctxWithParams (Some func.Name) bodyInfo varGen [] paramIncs typesWithParams typeCache
+        insertRCWithAnalysis ctxWithParams (Some func.ReturnOwnership) bodyInfo varGen [] paramIncs typesWithParams typeCache
     let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithRC
     ({ func with Body = body' }, varGen', accTypes, typeCache')
 

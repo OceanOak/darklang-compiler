@@ -109,6 +109,11 @@ type RcKind =
     | GenericHeap
     | TaggedList
 
+/// Function return ownership convention
+type ReturnOwnership =
+    | OwnedReturn
+    | BorrowedReturn
+
 /// Complex expressions (produce values)
 type CExpr =
     | Atom of Atom
@@ -117,6 +122,7 @@ type CExpr =
     | UnaryPrim of UnaryOp * Atom
     | IfValue of cond:Atom * thenValue:Atom * elseValue:Atom  // If-expression that produces a value
     | Call of funcName:string * args:Atom list  // Function call (direct: BL instruction)
+    | BorrowedCall of funcName:string * args:Atom list  // Function call that returns a borrowed/aliased value
     | TailCall of funcName:string * args:Atom list  // Tail call (direct: B instruction, no return)
     | IndirectCall of func:Atom * args:Atom list  // Call through function variable (BLR instruction)
     | IndirectTailCall of func:Atom * args:Atom list  // Tail call through function variable (BR instruction)
@@ -176,6 +182,7 @@ type Function = {
     Name: string
     TypedParams: TypedParam list  // Parameter IDs with their types bundled
     ReturnType: AST.Type
+    ReturnOwnership: ReturnOwnership
     Body: AExpr
 }
 

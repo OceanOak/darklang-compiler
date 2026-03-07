@@ -47,6 +47,7 @@ let rec isReturnOf (tempId: TempId) (expr: AExpr) : bool =
 let convertToTailCall (cexpr: CExpr) : CExpr =
     match cexpr with
     | Call (funcName, args) -> TailCall (funcName, args)
+    | BorrowedCall (funcName, args) -> TailCall (funcName, args)
     | IndirectCall (func, args) -> IndirectTailCall (func, args)
     | ClosureCall (closure, args) -> ClosureTailCall (closure, args)
     | _ -> cexpr
@@ -139,7 +140,7 @@ let private isDirectReturnOf (tempId: TempId) (expr: AExpr) : bool =
 /// Check if a CExpr is a call (direct, indirect, or closure)
 let isCallExpr (cexpr: CExpr) : bool =
     match cexpr with
-    | Call _ | IndirectCall _ | ClosureCall _ -> true
+    | Call _ | BorrowedCall _ | IndirectCall _ | ClosureCall _ -> true
     | _ -> false
 
 /// Detect and transform tail calls in an expression.

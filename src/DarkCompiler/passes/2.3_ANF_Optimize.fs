@@ -180,6 +180,7 @@ let hasSideEffects (cexpr: CExpr) : bool =
     | TupleGet _ -> false
     // These have side effects
     | Call _ -> true
+    | BorrowedCall _ -> true
     | TailCall _ -> true
     | IndirectCall _ -> true
     | IndirectTailCall _ -> true
@@ -232,6 +233,7 @@ let collectCExprUses (cexpr: CExpr) : Set<TempId> =
     | IfValue (cond, thenVal, elseVal) ->
         Set.unionMany [collectAtomUses cond; collectAtomUses thenVal; collectAtomUses elseVal]
     | Call (_, args) -> args |> List.map collectAtomUses |> Set.unionMany
+    | BorrowedCall (_, args) -> args |> List.map collectAtomUses |> Set.unionMany
     | TailCall (_, args) -> args |> List.map collectAtomUses |> Set.unionMany
     | IndirectCall (func, args) ->
         Set.unionMany ((collectAtomUses func) :: (args |> List.map collectAtomUses))
@@ -290,6 +292,7 @@ let substCExpr (env: Map<TempId, Atom>) (cexpr: CExpr) : CExpr =
     | UnaryPrim (op, src) -> UnaryPrim (op, s src)
     | IfValue (cond, thenVal, elseVal) -> IfValue (s cond, s thenVal, s elseVal)
     | Call (name, args) -> Call (name, List.map s args)
+    | BorrowedCall (name, args) -> BorrowedCall (name, List.map s args)
     | TailCall (name, args) -> TailCall (name, List.map s args)
     | IndirectCall (func, args) -> IndirectCall (s func, List.map s args)
     | IndirectTailCall (func, args) -> IndirectTailCall (s func, List.map s args)
@@ -484,7 +487,11 @@ let optimizeProgramWithOptions (options: OptimizeOptions) (program: Program) : P
     let functions' = functions |> List.map (fun f -> optimizeToFixedPoint options f 10)
 
     // Optimize main expression
-    let mainFunc = { Name = "__main__"; TypedParams = []; ReturnType = AST.TUnit; Body = mainExpr }
+    let mainFunc = { Name = "__main__"
+                     TypedParams = []
+                     ReturnType = AST.TUnit
+                     ReturnOwnership = OwnedReturn
+                     Body = mainExpr }
     let mainOptimized = optimizeToFixedPoint options mainFunc 10
 
     Program (functions', mainOptimized.Body)

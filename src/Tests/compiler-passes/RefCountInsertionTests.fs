@@ -94,6 +94,7 @@ let testNonSelfTailCallDoesNotLeaveDecAfterTailCall () : TestResult =
         Name = "caller"
         TypedParams = [{ Id = p0; Type = AST.TInt64 }]
         ReturnType = AST.TInt64
+        ReturnOwnership = OwnedReturn
         Body =
             Let (
                 tupleTmp,
@@ -140,6 +141,7 @@ let testBorrowedFingerTreeAccessorDoesNotMaterializeBorrowedReturn () : TestResu
             { Id = indexParam; Type = AST.TInt64 }
         ]
         ReturnType = nodeType
+        ReturnOwnership = BorrowedReturn
         Body =
             Let (
                 childTemp,
@@ -185,10 +187,11 @@ let testBorrowedFingerTreeAccessorCallDoesNotInsertAutoDec () : TestResult =
             { Id = indexParam; Type = AST.TInt64 }
         ]
         ReturnType = AST.TInt64
+        ReturnOwnership = OwnedReturn
         Body =
             Let (
                 childTemp,
-                Call ("Stdlib.__FingerTree.__node2GetChild_i64", [Var nodeParam; Var indexParam]),
+                BorrowedCall ("Stdlib.__FingerTree.__node2GetChild_i64", [Var nodeParam; Var indexParam]),
                 Let (
                     measureTemp,
                     Call ("Stdlib.__FingerTree.__nodeMeasure_i64", [Var childTemp]),
