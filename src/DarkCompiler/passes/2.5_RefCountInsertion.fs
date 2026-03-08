@@ -449,7 +449,6 @@ let private isRcManagedHeapType (typ: AST.Type) : bool =
 
 let private rcInfoForType (ctx: TypeContext) (typ: AST.Type) : int * RcKind =
     (payloadSize typ ctx.TypeReg, rcKind typ)
-
 /// Insert RefCountInc for returned parameters at a Return node
 let insertParamIncsAtReturn
     (paramIncs: (TempId * int * RcKind) list)
@@ -600,6 +599,7 @@ let rec private moveDecsBeforeNonSelfTailCalls (currentFuncName: string) (expr: 
 /// Returns (transformed expr, varGen, types defined in this subtree)
 let rec insertRCWithAnalysis
     (ctx: TypeContext)
+    (currentFuncName: string option)
     (expr: ReturnAnnotatedExpr)
     (varGen: VarGen)
     (returnDecs: (TempId * int * RcKind) list)
@@ -628,9 +628,9 @@ let rec insertRCWithAnalysis
 
         | RIf (cond, thenBranch, elseBranch, _) ->
             let (thenBranch', varGen1, types1, typeCache1) =
-                insertRCWithAnalysis ctx thenBranch varGen returnDecs paramIncs types typeCache
+                insertRCWithAnalysis ctx currentFuncName thenBranch varGen returnDecs paramIncs types typeCache
             let (elseBranch', varGen2, types2, typeCache2) =
-                insertRCWithAnalysis ctx elseBranch varGen1 returnDecs paramIncs types1 typeCache1
+                insertRCWithAnalysis ctx currentFuncName elseBranch varGen1 returnDecs paramIncs types1 typeCache1
             let (finalExpr, finalVarGen, finalTypes) =
                 applyLetFrames frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
             (finalExpr, finalVarGen, finalTypes, typeCache2)
@@ -754,9 +754,43 @@ let rec insertRCWithAnalysis
                 | _ ->
                     false
             let returnDecs' =
+                let secondParamNeedsOwnershipTransfer (funcName: string) : bool =
+                    let isOwnershipTransferredParamType (typ: AST.Type) : bool =
+                        isRcManagedHeapType typ
+                        || match typ with
+                           | AST.TFunction _ -> true
+                           | _ -> false
+                    match Map.tryFind funcName ctx.FuncReg with
+                    | Some (AST.TFunction (paramTypes, _)) ->
+                        match paramTypes with
+                        | _ :: secondParamType :: _ -> isOwnershipTransferredParamType secondParamType
+                        | _ -> false
+                    | _ ->
+                        false
+                let skipReturnDecForPushBackHelpers =
+                    match currentFuncName with
+                    | Some funcName ->
+                        let isFunctionSpecialization = funcName.Contains("_fn_")
+                        let isPushBackFamily =
+                            funcName = "Stdlib.List.pushBack"
+                            || funcName.StartsWith("Stdlib.List.pushBack_")
+                            || funcName = "Stdlib.__FingerTree.pushBack"
+                            || funcName.StartsWith("Stdlib.__FingerTree.pushBack_")
+                            || funcName = "Stdlib.__FingerTree.__pushBackNode"
+                            || funcName.StartsWith("Stdlib.__FingerTree.__pushBackNode_")
+                            || funcName.StartsWith("Stdlib.List.__mapHelper_")
+                        isPushBackFamily
+                        && isFunctionSpecialization
+                        && secondParamNeedsOwnershipTransfer funcName
+                        && match inferredType with
+                           | AST.TList _ -> true
+                           | _ -> false
+                    | None ->
+                        false
                 if isRcManagedHeapType inferredType
                    && not (Set.contains tempId bodyReturned)
                    && not (isBorrowingExpr cexpr)
+                   && not skipReturnDecForPushBackHelpers
                    && not consumedByImmediateI64Push then
                     let (size, kind) = rcInfoForType ctx inferredType
                     (tempId, size, kind) :: returnDecs
@@ -841,7 +875,7 @@ let private insertRCInternal
     let ctxWithTypes = withTempTypes ctx types
     let analyzed = analyzeReturns Map.empty expr
     let (expr', varGen', types', typeCache') =
-        insertRCWithAnalysis ctxWithTypes analyzed varGen [] [] types typeCache
+        insertRCWithAnalysis ctxWithTypes None analyzed varGen [] [] types typeCache
     (expr', varGen', types', typeCache')
 
 /// Insert reference counting operations into an AExpr
@@ -879,7 +913,7 @@ let private insertRCInFunctionInternal
 
     // Process function body with return analysis
     let (bodyWithRC, varGen', accTypes, typeCache') =
-        insertRCWithAnalysis ctxWithParams bodyInfo varGen [] paramIncs typesWithParams typeCache
+        insertRCWithAnalysis ctxWithParams (Some func.Name) bodyInfo varGen [] paramIncs typesWithParams typeCache
     let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithRC
     ({ func with Body = body' }, varGen', accTypes, typeCache')
 
