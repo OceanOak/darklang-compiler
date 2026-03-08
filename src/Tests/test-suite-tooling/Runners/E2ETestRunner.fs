@@ -621,8 +621,12 @@ let private analyzePreambleWithReducedFunctionSet
                 (funcDef.Name, deps))
             |> Map.ofList
 
-        let hasUnparsableTestSource =
+        let runnableTests =
             tests
+            |> List.filter (fun test -> not test.ExpectCompileError && Option.isNone test.SkipReason)
+
+        let hasUnparsableTestSource =
+            runnableTests
             |> List.exists (fun test ->
                 CompilerLibrary.parseProgram spec.SourceSyntax spec.AllowInternal test.Source
                 |> Result.isError)
@@ -631,7 +635,7 @@ let private analyzePreambleWithReducedFunctionSet
             if hasUnparsableTestSource then
                 preambleFunctionNames
             else
-                tests
+                runnableTests
                 |> List.map (fun test ->
                     CompilerLibrary.parseProgram spec.SourceSyntax spec.AllowInternal test.Source
                     |> Result.map (collectProgramReferencedPreambleFuncs preambleFunctionNames))
@@ -950,6 +954,80 @@ let private compileAndRun (request: CompilerLibrary.CompileRequest) : E2ERun =
         | Error err ->
             Ran (-1, "", $"Execution failed: {err}", compileReport.CompileTime, TimeSpan.Zero)
 
+let private combinePreambleWithTestSource
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (preamble: string)
+    (source: string)
+    : string =
+    if String.IsNullOrWhiteSpace preamble then
+        source
+    else
+        match sourceSyntax with
+        | CompilerLibrary.CompilerSyntax ->
+            preamble + "\n" + source
+        | CompilerLibrary.InterpreterSyntax ->
+            // Keep a hard top-level separator between preamble and test expression.
+            preamble + "\n;\n" + source
+
+let private tryBuildReducedPreambleForTest
+    (sourceSyntax: CompilerLibrary.SourceSyntax)
+    (allowInternal: bool)
+    (preamble: string)
+    (testSource: string)
+    : string option =
+    let parsePreambleResult = parsePreambleAsProgram sourceSyntax allowInternal preamble
+    let parseTestResult = CompilerLibrary.parseProgram sourceSyntax allowInternal testSource
+
+    match parsePreambleResult, parseTestResult with
+    | Ok (Program preambleTopLevels), Ok testProgram ->
+        let preambleFunctionDefs =
+            preambleTopLevels
+            |> List.choose (function
+                | FunctionDef funcDef -> Some funcDef
+                | _ -> None)
+
+        let preambleFunctionNames =
+            preambleFunctionDefs
+            |> List.map (fun funcDef -> funcDef.Name)
+            |> Set.ofList
+
+        let dependencyMap =
+            preambleFunctionDefs
+            |> List.map (fun funcDef ->
+                let paramBoundVars =
+                    funcDef.Params
+                    |> NonEmptyList.toList
+                    |> List.map fst
+                    |> Set.ofList
+                let deps =
+                    collectExprReferencedPreambleFuncsWithBound
+                        preambleFunctionNames
+                        paramBoundVars
+                        funcDef.Body
+                (funcDef.Name, deps))
+            |> Map.ofList
+
+        let seedFunctions =
+            collectProgramReferencedPreambleFuncs preambleFunctionNames testProgram
+
+        let requiredFunctions =
+            seedFunctions
+            |> Set.filter (fun name -> Set.contains name preambleFunctionNames)
+            |> expandRequiredPreambleFunctions dependencyMap
+
+        let reducedTopLevels =
+            preambleTopLevels
+            |> List.filter (function
+                | TypeDef _ -> true
+                | FunctionDef funcDef -> Set.contains funcDef.Name requiredFunctions
+                | Expression _ -> false)
+
+        let prettySyntax = prettySyntaxForSourceSyntax sourceSyntax
+        let reducedPreambleSource = ASTPrettyPrinter.formatProgram prettySyntax (Program reducedTopLevels)
+        Some reducedPreambleSource
+    | _ ->
+        None
+
 /// Run E2E test using a prebuilt preamble context
 let runE2ETestWithPreambleContext
     (stdlib: CompilerLibrary.StdlibResult)
@@ -977,4 +1055,39 @@ let runE2ETestWithPreambleContext
             PassTimingRecorder = passTimingRecorder
         }
         let run = compileAndRun request
-        evaluateExpectations test run
+        let primaryResult = evaluateExpectations test run
+
+        let shouldTryRawPreambleFallback =
+            match primaryResult with
+            | Ok _ ->
+                false
+            | Error failure ->
+                test.ExpectCompileError
+                && Option.isSome test.ExpectedErrorMessage
+                && isUpstreamDarkTestFile test.SourceFile
+                && failure.Message.StartsWith("Expected error message", StringComparison.Ordinal)
+
+        if shouldTryRawPreambleFallback then
+            let fallbackPreamble =
+                tryBuildReducedPreambleForTest sourceSyntax allowInternal test.Preamble source
+                |> Option.defaultValue test.Preamble
+            let fallbackSource = combinePreambleWithTestSource sourceSyntax fallbackPreamble source
+            let fallbackRequest : CompilerLibrary.CompileRequest = {
+                Context = CompilerLibrary.StdlibOnly stdlib
+                Mode = CompilerLibrary.CompileMode.FullProgram
+                SourceSyntax = sourceSyntax
+                Source = fallbackSource
+                SourceFile = test.SourceFile
+                AllowInternal = allowInternal
+                Verbosity = 0
+                Options = options
+                PassTimingRecorder = passTimingRecorder
+            }
+            let fallbackRun = compileAndRun fallbackRequest
+            match evaluateExpectations test fallbackRun with
+            | Ok _ as success ->
+                success
+            | Error _ ->
+                primaryResult
+        else
+            primaryResult

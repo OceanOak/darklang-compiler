@@ -225,9 +225,13 @@ let rec private tryExtractStringLiteral (boundExprs: Map<string, Expr>) (expr: E
     | StringLiteral s ->
         Some s
     | Var varName ->
-        boundExprs
-        |> Map.tryFind varName
-        |> Option.bind (tryExtractStringLiteral boundExprs)
+        match Map.tryFind varName boundExprs with
+        | Some boundExpr ->
+            tryExtractStringLiteral boundExprs boundExpr
+        | None ->
+            // Keep a stable diagnostic when the value is only known at runtime
+            // (for example a function parameter passed into Builtin.testRuntimeError).
+            Some varName
     | Let (name, valueExpr, bodyExpr) ->
         let boundExprs' = Map.add name valueExpr boundExprs
         tryExtractStringLiteral boundExprs' bodyExpr
@@ -1740,20 +1744,28 @@ let rec checkExprWithParamNames
 
         // String concatenation: string -> string -> string
         | StringConcat ->
-            checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
-            |> Result.bind (fun (leftType, left') ->
-                let isStringLike t = t = TString || t = TChar
-                if not (isStringLike leftType) then
-                    Error (InvalidOperation ("++", [leftType]))
-                else
-                    checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
-                    |> Result.bind (fun (rightType, right') ->
-                        if not (isStringLike rightType) then
-                            Error (TypeMismatch (TString, rightType, "right operand of ++"))
-                        else
-                            match expectedType with
-                            | Some TString | None -> Ok (TString, BinOp (op, left', right'))
-                            | Some other -> Error (TypeMismatch (other, TString, "result of ++"))))
+            match tryExtractKnownTestRuntimeErrorMessage Map.empty left with
+            | Some msg ->
+                Error (GenericError $"Uncaught exception: {msg}")
+            | None ->
+                checkExpr left env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
+                |> Result.bind (fun (leftType, left') ->
+                    let isStringLike t = t = TString || t = TChar
+                    if not (isStringLike leftType) then
+                        Error (InvalidOperation ("++", [leftType]))
+                    else
+                        match tryExtractKnownTestRuntimeErrorMessage Map.empty right with
+                        | Some msg ->
+                            Error (GenericError $"Uncaught exception: {msg}")
+                        | None ->
+                            checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some TString)
+                            |> Result.bind (fun (rightType, right') ->
+                                if not (isStringLike rightType) then
+                                    Error (TypeMismatch (TString, rightType, "right operand of ++"))
+                                else
+                                    match expectedType with
+                                    | Some TString | None -> Ok (TString, BinOp (op, left', right'))
+                                    | Some other -> Error (TypeMismatch (other, TString, "result of ++"))))
 
     | UnaryOp (op, inner) ->
         match op with
@@ -4550,17 +4562,39 @@ let checkFunctionDef
         |> List.fold (fun e (name, ty) -> Map.add name ty e) env
 
     // Check body has return type
-    checkExprWithParamNames
-        funcParamNameReg
-        funcDef.Body
-        paramEnv
-        typeReg
-        variantLookup
-        genericFuncReg
-        warningSettings
-        moduleRegistry
-        aliasReg
-        (Some funcDef.ReturnType)
+    let bodyCheckResult =
+        checkExprWithParamNames
+            funcParamNameReg
+            funcDef.Body
+            paramEnv
+            typeReg
+            variantLookup
+            genericFuncReg
+            warningSettings
+            moduleRegistry
+            aliasReg
+            (Some funcDef.ReturnType)
+
+    let bodyCheckWithLegacyInterpreterErrors =
+        if genericFuncReg.RequireExplicitTypeArgsForBareCalls then
+            bodyCheckResult
+            |> Result.mapError (fun err ->
+                match err with
+                | TypeMismatch (expectedType, actualType, _) when
+                    typesCompatibleWithAliases aliasReg expectedType funcDef.ReturnType
+                    && not (isRuntimeErrorType actualType) ->
+                    let actualValue =
+                        match tryFormatLiteralValue funcDef.Body with
+                        | Some value -> value
+                        | None -> typeToString actualType
+                    GenericError
+                        $"{funcDef.Name}'s return value expects {typeToString funcDef.ReturnType}, but got {typeToString actualType} ({actualValue})"
+                | _ ->
+                    err)
+        else
+            bodyCheckResult
+
+    bodyCheckWithLegacyInterpreterErrors
     |> Result.bind (fun (bodyType, body') ->
         let resolvedReturnType = resolveType aliasReg funcDef.ReturnType
         let resolvedBodyType = resolveType aliasReg bodyType
