@@ -85,7 +85,7 @@ let testParsesIndentedMultilineDarkTestsInsideModule () : TestResult =
         | Ok tests ->
             match tests with
             | [ test ] ->
-                if test.Source <> "match 6L with\n   | 6L -> \"pass\"\n   | _ -> \"fail\"" then
+                if test.Source <> "match 6L with\n | 6L -> \"pass\"\n | _ -> \"fail\"" then
                     Error $"Unexpected parsed source: {test.Source}"
                 elif test.ExpectedValueExpr <> Some "\"pass\"" then
                     Error $"Expected value-expression RHS '\"pass\"', got: {test.ExpectedValueExpr}"
@@ -133,6 +133,36 @@ let testParsesMultilineWithInnerLetBinding () : TestResult =
                     Error $"Unexpected parsed source: {test.Source}"
                 elif test.ExpectedValueExpr <> Some "\"pass\"" then
                     Error $"Expected value-expression RHS '\"pass\"', got: {test.ExpectedValueExpr}"
+                elif test.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble, got: {test.Preamble}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}")
+
+let testParsesIndentedMultilineLetWithoutModuleIndentLeak () : TestResult =
+    let testSource =
+        "module GenericTypeArgsAreOK =\n"
+        + "  (let segments =\n"
+        + "    [ \"a\"; \"b\" ]\n"
+        + "  String.join \"\" segments) = \"ab\"\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected indented multiline let test to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                let expectedSource =
+                    "let segments =\n"
+                    + "  [ \"a\"; \"b\" ]\n"
+                    + "String.join \"\" segments"
+
+                if test.Source <> expectedSource then
+                    Error $"Unexpected parsed source: {test.Source}"
+                elif test.ExpectedValueExpr <> Some "\"ab\"" then
+                    Error $"Expected value-expression RHS '\"ab\"', got: {test.ExpectedValueExpr}"
                 elif test.Preamble.Trim().Length <> 0 then
                     Error $"Expected empty preamble, got: {test.Preamble}"
                 else
@@ -376,7 +406,7 @@ let testParsesMultilineDictExpectationWithoutPreambleLeakage () : TestResult =
         | Ok tests ->
             match tests with
             | [ first; second ] ->
-                if first.ExpectedValueExpr <> Some "Dict\n      { one = 1L\n        two = 2L }" then
+                if first.ExpectedValueExpr <> Some "Dict\n    { one = 1L\n      two = 2L }" then
                     Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
                 elif first.Preamble.Trim().Length <> 0 then
                     Error $"Expected empty preamble for first test, got: {first.Preamble}"
@@ -419,6 +449,7 @@ let tests = [
     ("parses indented multiline .dark tests inside module", testParsesIndentedMultilineDarkTestsInsideModule)
     ("parses multiline with inner double equals", testParsesMultilineWithInnerDoubleEquals)
     ("parses multiline with inner let binding", testParsesMultilineWithInnerLetBinding)
+    ("parses indented multiline let without module indent leak", testParsesIndentedMultilineLetWithoutModuleIndentLeak)
     ("parses expectation with keyword inside quoted message", testParsesExpectationWithKeywordInsideQuotedMessage)
     ("parses multiline function-head expectation with next-line arg", testParsesMultilineExpectationWithFunctionHeadAndNextLineArg)
     ("parses bare .e2e rhs as value expression", testParsesBareE2ERightHandSideAsValueExpression)

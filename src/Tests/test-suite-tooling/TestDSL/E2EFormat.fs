@@ -1026,6 +1026,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
         // Multi-line expression state
         let mutable pendingExprLines : string list = []
         let mutable pendingStartLine = 0
+        let mutable pendingExprIndentShift = 0
         let mutable inMultilineExpr = false
         let mutable moduleIndentStack : int list = []
         let mutable skipUntilIndex = -1
@@ -1092,7 +1093,12 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                 if trimmedLine.Length > 0 && not (trimmedLine.StartsWith("//")) then
                     if inMultilineExpr then
                         // Accumulating multi-line expression
-                        pendingExprLines <- line :: pendingExprLines
+                        let normalizedLine =
+                            if allowIndentedTests then
+                                trimLeadingSpaces pendingExprIndentShift line
+                            else
+                                line
+                        pendingExprLines <- normalizedLine :: pendingExprLines
 
                         // Check whether the accumulated expression now has a closing
                         // ') = <expectation>' pattern. This supports expectations that
@@ -1121,6 +1127,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                                 tests <- test :: tests
                                 // Reset multi-line state
                                 pendingExprLines <- []
+                                pendingExprIndentShift <- 0
                                 inMultilineExpr <- false
                             | Error err when hasCompleteTopLevelSeparator && not hasClosingParen ->
                                 // A top-level-separator guess can be a false positive when
@@ -1130,6 +1137,7 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                                 errors <- err :: errors
                                 // Reset multi-line state after a hard parse error.
                                 pendingExprLines <- []
+                                pendingExprIndentShift <- 0
                                 inMultilineExpr <- false
                         // else: continue accumulating
                     else
@@ -1162,7 +1170,13 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
 
                         if shouldStartMultilineExpr then
                             // Start accumulating multi-line expression
-                            pendingExprLines <- [line]
+                            pendingExprIndentShift <- if allowIndentedTests then moduleShift else 0
+                            let normalizedStartLine =
+                                if allowIndentedTests then
+                                    trimLeadingSpaces pendingExprIndentShift line
+                                else
+                                    line
+                            pendingExprLines <- [normalizedStartLine]
                             pendingStartLine <- lineNumber
                             inMultilineExpr <- true
                         elif mayStartOrBeTest && isTestLine lineWithoutComment then
