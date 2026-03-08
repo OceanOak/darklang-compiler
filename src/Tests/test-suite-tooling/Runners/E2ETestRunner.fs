@@ -524,7 +524,15 @@ let private parsePreambleAsProgram
         | CompilerLibrary.CompilerSyntax -> "0"
         | CompilerLibrary.InterpreterSyntax -> "0L"
 
-    let preambleSource = preamble + $"\n{preambleTerminator}"
+    let preambleSource =
+        match sourceSyntax with
+        | CompilerLibrary.CompilerSyntax ->
+            preamble + $"\n{preambleTerminator}"
+        | CompilerLibrary.InterpreterSyntax ->
+            // Interpreter syntax supports `;` as a top-level separator. Add it
+            // before the synthetic terminator so a trailing identifier body like
+            // `= x` does not absorb the terminator as an application argument.
+            preamble + $"\n;\n{preambleTerminator}"
     CompilerLibrary.parseProgram sourceSyntax allowInternal preambleSource
 
 let private countLeadingSpaces (lineText: string) : int =
