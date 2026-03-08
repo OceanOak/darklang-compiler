@@ -67,11 +67,10 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
     opam install ocamlfind --yes && \
     echo 'eval $(opam env)' >> ~/.bashrc
 
-# Install darklang interpreter
-RUN mkdir -p ~/.local/bin && \
-    curl -sSL https://github.com/darklang/dark/releases/download/v0.0.1/darklang-alpha-f0375cb7a3-linux-arm.gz | \
-    gunzip > ~/.local/bin/darklang-interpreter && \
-    chmod +x ~/.local/bin/darklang-interpreter
+# Install darklang interpreter from latest GitHub release
+COPY --chown=${LOCAL_UID}:${LOCAL_GID} scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
+RUN bash /tmp/install-darklang-interpreter.sh && \
+    rm /tmp/install-darklang-interpreter.sh
 
 # Configure git aliases
 RUN git config --global alias.ci commit && \
