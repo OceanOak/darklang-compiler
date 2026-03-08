@@ -4464,7 +4464,12 @@ let checkFunctionDef
     |> Result.bind (fun (bodyType, body') ->
         let resolvedReturnType = resolveType aliasReg funcDef.ReturnType
         let resolvedBodyType = resolveType aliasReg bodyType
-        if resolvedReturnType = resolvedBodyType then
+        let allowGenericReturnSpecialization =
+            containsTVar resolvedReturnType
+            && not (containsTVar resolvedBodyType)
+            && typesCompatibleWithAliases aliasReg resolvedReturnType resolvedBodyType
+
+        if resolvedReturnType = resolvedBodyType || allowGenericReturnSpecialization then
             Ok { funcDef with Body = body' }
         else
             Error (TypeMismatch (funcDef.ReturnType, bodyType, $"function {funcDef.Name} body")))
