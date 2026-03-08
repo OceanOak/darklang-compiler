@@ -2516,20 +2516,45 @@ let rec checkExprWithParamNames
                             let remainingParamTypes = List.skip numArgs concreteParamTypes
 
                             // Type-check the provided arguments
-                            let rec checkProvidedArgs remaining paramTys accArgs =
+                            let rec checkProvidedArgs remaining paramTys paramIndex accArgs =
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
+                                    let paramName =
+                                        paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
+
                                     checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
+                                    |> Result.mapError (fun err ->
+                                        match err with
+                                        | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                            GenericError
+                                                (formatLegacyParamTypeError
+                                                    funcName
+                                                    paramIndex
+                                                    paramName
+                                                    paramT
+                                                    actualType
+                                                    arg)
+                                        | _ ->
+                                            err)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
-                                            checkProvidedArgs restArgs restParams (arg' :: accArgs)
+                                            checkProvidedArgs restArgs restParams (paramIndex + 1) (arg' :: accArgs)
                                         else
-                                            Error (TypeMismatch (paramT, argType, $"argument to {funcName}")))
+                                            Error (
+                                                GenericError
+                                                    (formatLegacyParamTypeError
+                                                        funcName
+                                                        paramIndex
+                                                        paramName
+                                                        paramT
+                                                        argType
+                                                        arg)
+                                            ))
                                 | _ -> Error (GenericError "Internal error: argument/param length mismatch")
 
-                            checkProvidedArgs args providedParamTypes []
+                            checkProvidedArgs args providedParamTypes 1 []
                             |> Result.bind (fun args' ->
                                 // Create unique parameter names for the remaining parameters
                                 let remainingParams = makePartialParams resolvedFuncName remainingParamTypes
@@ -2550,20 +2575,45 @@ let rec checkExprWithParamNames
                                 | _ -> Ok (partialType, lambdaExpr))
                         else
                             // 6. Type check each argument and collect transformed args
-                            let rec checkArgsWithTypes remaining paramTys accArgs =
+                            let rec checkArgsWithTypes remaining paramTys paramIndex accArgs =
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
+                                    let paramName =
+                                        paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
+
                                     checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
+                                    |> Result.mapError (fun err ->
+                                        match err with
+                                        | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                            GenericError
+                                                (formatLegacyParamTypeError
+                                                    funcName
+                                                    paramIndex
+                                                    paramName
+                                                    paramT
+                                                    actualType
+                                                    arg)
+                                        | _ ->
+                                            err)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
-                                            checkArgsWithTypes restArgs restParams (arg' :: accArgs)
+                                            checkArgsWithTypes restArgs restParams (paramIndex + 1) (arg' :: accArgs)
                                         else
-                                            Error (TypeMismatch (paramT, argType, $"argument to {funcName}")))
+                                            Error (
+                                                GenericError
+                                                    (formatLegacyParamTypeError
+                                                        funcName
+                                                        paramIndex
+                                                        paramName
+                                                        paramT
+                                                        argType
+                                                        arg)
+                                            ))
                                 | _ -> Error (GenericError "Internal error: argument/param length mismatch")
 
-                            checkArgsWithTypes args concreteParamTypes []
+                            checkArgsWithTypes args concreteParamTypes 1 []
                             |> Result.bind (fun args' ->
                                 // 7. Return the concrete return type (using resolved name)
                                 // Use typesCompatible to allow type variables to unify with concrete types
@@ -2616,20 +2666,45 @@ let rec checkExprWithParamNames
                             let remainingParamTypes = List.skip numArgs concreteParamTypes
 
                             // Type-check the provided arguments
-                            let rec checkProvidedArgs remaining paramTys accArgs =
+                            let rec checkProvidedArgs remaining paramTys paramIndex accArgs =
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
+                                    let paramName =
+                                        paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
+
                                     checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
+                                    |> Result.mapError (fun err ->
+                                        match err with
+                                        | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                            GenericError
+                                                (formatLegacyParamTypeError
+                                                    funcName
+                                                    paramIndex
+                                                    paramName
+                                                    paramT
+                                                    actualType
+                                                    arg)
+                                        | _ ->
+                                            err)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
-                                            checkProvidedArgs restArgs restParams (arg' :: accArgs)
+                                            checkProvidedArgs restArgs restParams (paramIndex + 1) (arg' :: accArgs)
                                         else
-                                            Error (TypeMismatch (paramT, argType, $"argument to {funcName}")))
+                                            Error (
+                                                GenericError
+                                                    (formatLegacyParamTypeError
+                                                        funcName
+                                                        paramIndex
+                                                        paramName
+                                                        paramT
+                                                        argType
+                                                        arg)
+                                            ))
                                 | _ -> Error (GenericError "Internal error: argument/param length mismatch")
 
-                            checkProvidedArgs args providedParamTypes []
+                            checkProvidedArgs args providedParamTypes 1 []
                             |> Result.bind (fun args' ->
                                 // Create unique parameter names for the remaining parameters
                                 let remainingParams = makePartialParams resolvedFuncName remainingParamTypes
@@ -2650,20 +2725,45 @@ let rec checkExprWithParamNames
                                 | _ -> Ok (partialType, lambdaExpr))
                         else
                             // Type check each argument and collect transformed args
-                            let rec checkArgsWithTypes remaining paramTys accArgs =
+                            let rec checkArgsWithTypes remaining paramTys paramIndex accArgs =
                                 match remaining, paramTys with
                                 | [], [] -> Ok (List.rev accArgs)
                                 | arg :: restArgs, paramT :: restParams ->
+                                    let paramName =
+                                        paramNameForLegacyError funcParamNameReg resolvedFuncName paramIndex
+
                                     checkExpr arg env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some paramT)
+                                    |> Result.mapError (fun err ->
+                                        match err with
+                                        | TypeMismatch (_, actualType, _) when not (isRuntimeErrorType actualType) ->
+                                            GenericError
+                                                (formatLegacyParamTypeError
+                                                    funcName
+                                                    paramIndex
+                                                    paramName
+                                                    paramT
+                                                    actualType
+                                                    arg)
+                                        | _ ->
+                                            err)
                                     |> Result.bind (fun (argType, arg') ->
                                         // Use typesCompatible to allow type variables to unify with concrete types
                                         if typesCompatible paramT argType then
-                                            checkArgsWithTypes restArgs restParams (arg' :: accArgs)
+                                            checkArgsWithTypes restArgs restParams (paramIndex + 1) (arg' :: accArgs)
                                         else
-                                            Error (TypeMismatch (paramT, argType, $"argument to {funcName}")))
+                                            Error (
+                                                GenericError
+                                                    (formatLegacyParamTypeError
+                                                        funcName
+                                                        paramIndex
+                                                        paramName
+                                                        paramT
+                                                        argType
+                                                        arg)
+                                            ))
                                 | _ -> Error (GenericError "Internal error: argument/param length mismatch")
 
-                            checkArgsWithTypes args concreteParamTypes []
+                            checkArgsWithTypes args concreteParamTypes 1 []
                             |> Result.bind (fun args' ->
                                 // Use typesCompatible to allow type variables to unify with concrete types
                                 match expectedType with
