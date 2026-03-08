@@ -1626,6 +1626,26 @@ type LiftState = {
     VariantLookup: VariantLookup
 }
 
+let private liftedNameExists (state: LiftState) (name: string) : bool =
+    Map.containsKey name state.FuncParams
+    || (state.LiftedFunctions |> List.exists (fun f -> f.Name = name))
+
+let rec private findNextLiftedNameCounter
+    (state: LiftState)
+    (prefix: string)
+    (counter: int)
+    : int =
+    let candidate = $"{prefix}{counter}"
+    if liftedNameExists state candidate then
+        findNextLiftedNameCounter state prefix (counter + 1)
+    else
+        counter
+
+let private freshLiftedName (state: LiftState) (prefix: string) : string * LiftState =
+    let nextCounter = findNextLiftedNameCounter state prefix state.Counter
+    let name = $"{prefix}{nextCounter}"
+    (name, { state with Counter = nextCounter + 1 })
+
 /// Collect free variables in an expression (variables not bound by let or lambda parameters)
 let rec freeVars (expr: AST.Expr) (bound: Set<string>) : Set<string> =
     match expr with
@@ -2099,7 +2119,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
             collectCaptureTypes captures []
             |> Result.bind (fun captureTypes ->
                 // Create lifted function
-                let funcName = $"__closure_{state1.Counter}"
+                let (funcName, stateWithName) = freshLiftedName state1 "__closure_"
                 // First element is function pointer (Int64), rest are captures with their actual types
                 let closureTupleTypes = AST.TInt64 :: captureTypes
                 let closureParam = ("__closure", AST.TTuple closureTupleTypes)
@@ -2132,7 +2152,7 @@ let rec liftLambdasInExpr (expr: AST.Expr) (state: LiftState) : Result<AST.Expr 
                         Body = bodyWithExtractions
                     }
                     let state' = {
-                        Counter = state1.Counter + 1
+                        Counter = stateWithName.Counter
                         LiftedFunctions = funcDef :: state1.LiftedFunctions
                         TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
                         FuncParams = state1.FuncParams
@@ -2196,7 +2216,7 @@ and liftLambdasInArgs (args: AST.NonEmptyList<AST.Expr>) (state: LiftState) : Re
                     let buildLiftedFunc captureTypes =
                         // All lambdas become closures (even non-capturing ones) for uniform calling convention
                         // The lifted function takes closure as first param, then original params
-                        let funcName = $"__closure_{state1.Counter}"
+                        let (funcName, stateWithName) = freshLiftedName state1 "__closure_"
                         // First element is function pointer (Int64), rest are captures with their actual types
                         let closureTupleTypes = AST.TInt64 :: captureTypes
                         let closureParam = ("__closure", AST.TTuple closureTupleTypes)
@@ -2231,7 +2251,7 @@ and liftLambdasInArgs (args: AST.NonEmptyList<AST.Expr>) (state: LiftState) : Re
                                 Body = bodyWithExtractions
                             }
                             let state' = {
-                                Counter = state1.Counter + 1
+                                Counter = stateWithName.Counter
                                 LiftedFunctions = funcDef :: state1.LiftedFunctions
                                 TypeEnv = state.TypeEnv  // Restore original TypeEnv (exclude lambda params)
                                 FuncParams = state1.FuncParams
@@ -2253,7 +2273,7 @@ and liftLambdasInArgs (args: AST.NonEmptyList<AST.Expr>) (state: LiftState) : Re
                 // Look up the actual function signature to generate correct wrapper
                 match Map.tryFind origFuncName state.FuncParams, Map.tryFind origFuncName state.FuncReturnTypes with
                 | Some origParams, Some origReturnType ->
-                    let wrapperName = $"__funcref_wrapper_{state.Counter}"
+                    let (wrapperName, stateWithName) = freshLiftedName state "__funcref_wrapper_"
                     let closureParam = ("__closure", AST.TTuple [AST.TInt64])
                     // Generate parameter names for wrapper that match original function's parameters
                     let wrapperParams = origParams |> List.mapi (fun i (_, t) -> ($"__arg{i}", t))
@@ -2267,7 +2287,7 @@ and liftLambdasInArgs (args: AST.NonEmptyList<AST.Expr>) (state: LiftState) : Re
                         Body = wrapperBody
                     }
                     let state' = {
-                        Counter = state.Counter + 1
+                        Counter = stateWithName.Counter
                         LiftedFunctions = wrapperDef :: state.LiftedFunctions
                         TypeEnv = state.TypeEnv
                         FuncParams = state.FuncParams
@@ -2362,7 +2382,7 @@ let generateFuncWrapper
     match Map.tryFind origFuncName funcParams, Map.tryFind origFuncName funcReturnTypes with
     | Some parameters, Some returnType ->
         // Create wrapper: __funcref_wrapper_N(__closure, ...params) = origFunc(...params)
-        let wrapperName = $"__funcref_wrapper_{stateWithFuncs.State.Counter}"
+        let (wrapperName, stateWithName) = freshLiftedName stateWithFuncs.State "__funcref_wrapper_"
         let closureParam = ("__closure", AST.TTuple [AST.TInt64])
         let wrapperBody =
             parameters
@@ -2378,7 +2398,7 @@ let generateFuncWrapper
         }
         let newState = {
             stateWithFuncs with
-                State = { stateWithFuncs.State with Counter = stateWithFuncs.State.Counter + 1 }
+                State = stateWithName
                 GeneratedWrappers = Map.add origFuncName wrapperName stateWithFuncs.GeneratedWrappers
         }
         Ok (wrapperDef, newState)

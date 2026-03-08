@@ -379,11 +379,37 @@ let private lowerToAllocatedLir
 
     compileResult
     |> Result.map (fun compiledFuncs ->
-        let compiledMap =
-            compiledFuncs
-            |> List.fold (fun acc func -> Map.add func.Name func acc) Map.empty
-        functionOrder
-        |> List.choose (fun name -> Map.tryFind name compiledMap))
+        // Keep per-name queues so duplicate function names (e.g. lifted __closure_N from
+        // different compilation units) preserve distinct bodies in original order.
+        let compiledQueues : Map<string, LIR.Function list> =
+            List.foldBack
+                (fun (func: LIR.Function) (acc: Map<string, LIR.Function list>) ->
+                    let existing = Map.tryFind func.Name acc |> Option.defaultValue []
+                    Map.add func.Name (func :: existing) acc)
+                compiledFuncs
+                Map.empty
+
+        let rec rebuildOrder
+            (remainingNames: string list)
+            (queues: Map<string, LIR.Function list>)
+            (acc: LIR.Function list)
+            : LIR.Function list =
+            match remainingNames with
+            | [] ->
+                List.rev acc
+            | name :: rest ->
+                match Map.tryFind name queues with
+                | Some (nextFunc :: remainingFuncs) ->
+                    let queues' =
+                        if List.isEmpty remainingFuncs then
+                            Map.remove name queues
+                        else
+                            Map.add name remainingFuncs queues
+                    rebuildOrder rest queues' (nextFunc :: acc)
+                | _ ->
+                    Crash.crash $"lowerToAllocatedLir: missing compiled function for '{name}'"
+
+        rebuildOrder functionOrder compiledQueues [])
 
 let private buildConversionResult
     (program: ANF.Program)
@@ -683,13 +709,21 @@ let private emptyRegistries (moduleRegistry: AST.ModuleRegistry) : AST_to_ANF.Re
 
 let private liftLambdasWithBase
     (baseRegistries: AST_to_ANF.Registries)
+    (baseFuncNames: Set<string>)
     (program: AST.Program)
     : Result<AST.Program, string> =
     let baseFuncReturnTypes = extractReturnTypes baseRegistries.FuncReg
+    let baseFuncParamsWithReservedNames =
+        baseFuncNames
+        |> Set.fold (fun acc name ->
+            if Map.containsKey name acc then
+                acc
+            else
+                Map.add name [] acc) baseRegistries.FuncParams
     AST_to_ANF.liftLambdasInProgram
         baseRegistries.TypeReg
         baseRegistries.VariantLookup
-        baseRegistries.FuncParams
+        baseFuncParamsWithReservedNames
         baseFuncReturnTypes
         program
 
@@ -758,7 +792,7 @@ let private prepareProgramForAnf
         let needsLowering = AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized
         if needsLowering then
             let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
-            liftLambdasWithBase baseRegistries inlined
+            liftLambdasWithBase baseRegistries baseFuncNames inlined
         else
             Ok monomorphized
 
@@ -996,6 +1030,14 @@ let buildStdlibWithTrace
                         tcoFunctions
                         |> List.map (fun f -> f.Name, f)
                         |> Map.ofList
+                    let stdlibLiftedFuncNames =
+                        tcoFunctions
+                        |> List.map (fun f -> f.Name)
+                        |> Set.ofList
+                    let contextWithLiftedNames = {
+                        context with
+                            BaseFuncNames = Set.union context.BaseFuncNames stdlibLiftedFuncNames
+                    }
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
                     let externalReturnTypes = returnTypes
@@ -1016,7 +1058,7 @@ let buildStdlibWithTrace
                         Ok {
                             AST = stdlibAst
                             TypedAST = typedStdlib
-                            Context = context
+                            Context = contextWithLiftedNames
                             AllocatedFunctions = allocatedFuncs
                             StdlibCallGraph = stdlibCallGraph
                             StdlibANFFunctions = stdlibFuncMap
@@ -1115,7 +1157,14 @@ let buildStdlibSpecializations
                                     |> List.map snd
                                 let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
                                 let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
-                                let baseFuncNames = buildBaseFuncNames registries
+                                let specializedFuncNames =
+                                    mergedStdlibAnfFunctions
+                                    |> Map.keys
+                                    |> Set.ofSeq
+                                let baseFuncNames =
+                                    Set.union
+                                        stdlib.Context.BaseFuncNames
+                                        (Set.union (buildBaseFuncNames registries) specializedFuncNames)
                                 let updatedContext = {
                                     stdlib.Context with
                                         Registries = registries
@@ -1449,12 +1498,21 @@ let buildPreambleContext
                                 allocatedFuncs
                                 |> List.filter (fun func -> not (isStdlibFunction func.Name))
                             let preambleSymbolicFuncs = preambleOnlyFuncs
+                            let preambleLiftedFuncNames =
+                                tcoFunctions
+                                |> List.map (fun func -> func.Name)
+                                |> Set.ofList
+                            let pipelineContextWithLiftedNames = {
+                                pipelineContext with
+                                    BaseFuncNames =
+                                        Set.union pipelineContext.BaseFuncNames preambleLiftedFuncNames
+                            }
 
                             // Merge TypeMaps (stdlib + preamble)
                             let mergedTypeMap = Map.fold (fun acc k v -> Map.add k v acc) stdlib.StdlibTypeMap typeMap
 
                             let context = {
-                                Context = pipelineContext
+                                Context = pipelineContextWithLiftedNames
                                 ANFFunctions = tcoFunctions
                                 TypeMap = mergedTypeMap
                                 SymbolicFunctions = preambleSymbolicFuncs
