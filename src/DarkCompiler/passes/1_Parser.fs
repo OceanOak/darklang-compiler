@@ -145,11 +145,33 @@ let lex (input: string) : Result<Token list, string> =
         | '|' :: '|' :: rest -> lexHelper rest (TOr :: acc)
         | '|' :: '>' :: rest -> lexHelper rest (TPipe :: acc)
         | '|' :: rest -> lexHelper rest (TBar :: acc)
+        | '`' :: '`' :: rest ->
+            // Backtick-escaped identifiers: ``name`` (including keyword-like names).
+            let rec parseBacktickIdent (cs: char list) (chars: char list) : Result<string * char list, string> =
+                match cs with
+                | '`' :: '`' :: remaining ->
+                    let ident = System.String(List.rev chars |> List.toArray)
+                    if ident.Length = 0 then
+                        Error "Backtick identifier cannot be empty"
+                    else
+                        Ok (ident, remaining)
+                | '\n' :: _ | '\r' :: _ ->
+                    Error "Unterminated backtick identifier"
+                | c :: remaining ->
+                    parseBacktickIdent remaining (c :: chars)
+                | [] ->
+                    Error "Unterminated backtick identifier"
+
+            parseBacktickIdent rest []
+            |> Result.bind (fun (ident, remaining) ->
+                lexHelper remaining (TIdent ident :: acc))
+        | '`' :: _ ->
+            Error "Backtick identifiers must use double backticks: ``name``"
         | c :: _ when System.Char.IsLetter(c) || c = '_' ->
             // Parse identifier or keyword
             let rec parseIdent (cs: char list) (chars: char list) : string * char list =
                 match cs with
-                | c :: rest when System.Char.IsLetterOrDigit(c) || c = '_' ->
+                | c :: rest when System.Char.IsLetterOrDigit(c) || c = '_' || c = '\'' ->
                     parseIdent rest (c :: chars)
                 | _ ->
                     let ident = System.String(List.rev chars |> List.toArray)
@@ -242,7 +264,11 @@ let lex (input: string) : Result<Token list, string> =
                     // Int8 suffix: 1y
                     match System.SByte.TryParse(numStr) with
                     | (true, value) -> lexHelper rest (TInt8 value :: acc)
-                    | (false, _) -> Error $"Value {numStr} is out of range for Int8 (-128 to 127)"
+                    | (false, _) ->
+                        if numStr = "128" then
+                            lexHelper rest (TInt8 System.SByte.MinValue :: acc)
+                        else
+                            Error $"Value {numStr} is out of range for Int8 (-128 to 127)"
                 | 'u' :: 's' :: rest ->
                     // UInt16 suffix: 1us
                     match System.UInt16.TryParse(numStr) with
@@ -252,7 +278,11 @@ let lex (input: string) : Result<Token list, string> =
                     // Int16 suffix: 1s
                     match System.Int16.TryParse(numStr) with
                     | (true, value) -> lexHelper rest (TInt16 value :: acc)
-                    | (false, _) -> Error $"Value {numStr} is out of range for Int16 (-32768 to 32767)"
+                    | (false, _) ->
+                        if numStr = "32768" then
+                            lexHelper rest (TInt16 System.Int16.MinValue :: acc)
+                        else
+                            Error $"Value {numStr} is out of range for Int16 (-32768 to 32767)"
                 | 'u' :: 'l' :: rest ->
                     // UInt32 suffix: 1ul
                     match System.UInt32.TryParse(numStr) with
@@ -262,7 +292,11 @@ let lex (input: string) : Result<Token list, string> =
                     // Int32 suffix: 1l
                     match System.Int32.TryParse(numStr) with
                     | (true, value) -> lexHelper rest (TInt32 value :: acc)
-                    | (false, _) -> Error $"Value {numStr} is out of range for Int32 (-2147483648 to 2147483647)"
+                    | (false, _) ->
+                        if numStr = "2147483648" then
+                            lexHelper rest (TInt32 System.Int32.MinValue :: acc)
+                        else
+                            Error $"Value {numStr} is out of range for Int32 (-2147483648 to 2147483647)"
                 | 'U' :: 'L' :: rest ->
                     // UInt64 suffix: 1UL
                     match System.UInt64.TryParse(numStr) with
@@ -318,6 +352,7 @@ let lex (input: string) : Result<Token list, string> =
                 | 'r' :: remaining -> Ok ('\r', remaining)
                 | '\\' :: remaining -> Ok ('\\', remaining)
                 | '"' :: remaining -> Ok ('"', remaining)
+                | '\'' :: remaining -> Ok ('\'', remaining)
                 | '0' :: remaining -> Ok ('\000', remaining)
                 | '{' :: remaining -> Ok ('{', remaining)  // Escape { as \{
                 | '}' :: remaining -> Ok ('}', remaining)  // Escape } as \}
@@ -326,6 +361,11 @@ let lex (input: string) : Result<Token list, string> =
                     match System.Int32.TryParse(hexStr, System.Globalization.NumberStyles.HexNumber, null) with
                     | (true, value) -> Ok (char value, remaining)
                     | (false, _) -> Error $"Invalid hex escape sequence: \\x{hexStr}"
+                | 'u' :: h1 :: h2 :: h3 :: h4 :: remaining ->
+                    let hexStr = System.String([| h1; h2; h3; h4 |])
+                    match System.Int32.TryParse(hexStr, System.Globalization.NumberStyles.HexNumber, null) with
+                    | (true, value) -> Ok (char value, remaining)
+                    | (false, _) -> Error $"Invalid unicode escape sequence: \\u{hexStr}"
                 | c :: _ -> Error $"Unknown escape sequence: \\{c}"
                 | [] -> Error "Unterminated escape sequence"
 
@@ -455,6 +495,8 @@ let lex (input: string) : Result<Token list, string> =
 
             let isApostropheTypeVarContext =
                 match acc with
+                | TLParen :: _  // parenthesized type context: ('a * 'b)
+                | TStar :: _  // tuple-type element separator: 'a * 'b
                 | TLt :: _  // generic/type arg list start: <'a>
                 | TComma :: _  // additional generic/type arg: <'a, 'b>
                 | TColon :: _  // type annotation: x: 'a
@@ -503,6 +545,8 @@ let lex (input: string) : Result<Token list, string> =
                     parseString remaining ('\\' :: chars)
                 | '\\' :: '"' :: remaining ->
                     parseString remaining ('"' :: chars)
+                | '\\' :: '\'' :: remaining ->
+                    parseString remaining ('\'' :: chars)
                 | '\\' :: '0' :: remaining ->
                     parseString remaining ('\000' :: chars)
                 | '\\' :: 'x' :: h1 :: h2 :: remaining ->
@@ -513,6 +557,14 @@ let lex (input: string) : Result<Token list, string> =
                         parseString remaining (char value :: chars)
                     | (false, _) ->
                         Error $"Invalid hex escape sequence: \\x{hexStr}"
+                | '\\' :: 'u' :: h1 :: h2 :: h3 :: h4 :: remaining ->
+                    // Unicode escape: \uNNNN
+                    let hexStr = System.String([| h1; h2; h3; h4 |])
+                    match System.Int32.TryParse(hexStr, System.Globalization.NumberStyles.HexNumber, null) with
+                    | (true, value) ->
+                        parseString remaining (char value :: chars)
+                    | (false, _) ->
+                        Error $"Invalid unicode escape sequence: \\u{hexStr}"
                 | '\\' :: c :: _ ->
                     Error $"Unknown escape sequence: \\{c}"
                 | c :: remaining ->
@@ -578,16 +630,21 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
     | TIdent "Dict" :: TLt :: rest ->
         // Dict type: Dict<KeyType, ValueType>
         parseTypeWithContext typeParams rest
-        |> Result.bind (fun (keyType, afterKey) ->
-            match afterKey with
+        |> Result.bind (fun (firstTypeArg, afterFirstArg) ->
+            match afterFirstArg with
             | TComma :: valueRest ->
                 parseTypeWithContext typeParams valueRest
                 |> Result.bind (fun (valueType, afterValue) ->
                     match afterValue with
-                    | TGt :: remaining -> Ok (TDict (keyType, valueType), remaining)
-                    | TShr :: remaining -> Ok (TDict (keyType, valueType), TGt :: remaining)  // >> is two >'s
+                    | TGt :: remaining -> Ok (TDict (firstTypeArg, valueType), remaining)
+                    | TShr :: remaining -> Ok (TDict (firstTypeArg, valueType), TGt :: remaining)  // >> is two >'s
                     | _ -> Error "Expected '>' after Dict value type")
-            | _ -> Error "Expected ',' after Dict key type")
+            | TGt :: remaining ->
+                // Upstream syntax also supports Dict<ValueType> with String keys.
+                Ok (TDict (AST.TString, firstTypeArg), remaining)
+            | TShr :: remaining ->
+                Ok (TDict (AST.TString, firstTypeArg), TGt :: remaining)  // >> is two >'s
+            | _ -> Error "Expected ',' or '>' after Dict type argument")
     | TIdent typeName :: rest when System.Char.IsUpper(typeName.[0]) ->
         // Could be a simple type or a qualified type like Stdlib.Option.Option
         // First parse the full qualified name
@@ -663,48 +720,64 @@ let rec parseTypeParams (tokens: Token list) (acc: string list) : Result<string 
 /// Parse type for type arguments context (allows lowercase as type variables)
 /// This is used when parsing call sites like func<t>(args) where t is a type variable
 let rec parseTypeArgType (tokens: Token list) : Result<Type * Token list, string> =
+    let withPossibleArrow
+        (parsedType: Type)
+        (remaining: Token list)
+        : Result<Type * Token list, string> =
+        match remaining with
+        | TArrow :: returnRest ->
+            parseTypeArgType returnRest
+            |> Result.map (fun (returnType, remaining') ->
+                (TFunction ([parsedType], returnType), remaining'))
+        | _ ->
+            Ok (parsedType, remaining)
+
     match tokens with
-    | TIdent "Int8" :: rest -> Ok (AST.TInt8, rest)
-    | TIdent "Int16" :: rest -> Ok (AST.TInt16, rest)
-    | TIdent "Int32" :: rest -> Ok (AST.TInt32, rest)
-    | TIdent "Int64" :: rest -> Ok (AST.TInt64, rest)
-    | TIdent "Int128" :: rest -> Ok (AST.TInt128, rest)
-    | TIdent "UInt8" :: rest -> Ok (AST.TUInt8, rest)
-    | TIdent "UInt16" :: rest -> Ok (AST.TUInt16, rest)
-    | TIdent "UInt32" :: rest -> Ok (AST.TUInt32, rest)
-    | TIdent "UInt64" :: rest -> Ok (AST.TUInt64, rest)
-    | TIdent "UInt128" :: rest -> Ok (AST.TUInt128, rest)
-    | TIdent "Bool" :: rest -> Ok (AST.TBool, rest)
-    | TIdent "String" :: rest -> Ok (AST.TString, rest)
-    | TIdent "Bytes" :: rest -> Ok (AST.TBytes, rest)
-    | TIdent "Char" :: rest -> Ok (AST.TChar, rest)
-    | TIdent "Float" :: rest -> Ok (AST.TFloat64, rest)
-    | TIdent "Unit" :: rest -> Ok (AST.TUnit, rest)
-    | TIdent "RawPtr" :: rest -> Ok (AST.TRawPtr, rest)  // Internal raw pointer type
+    | TIdent "Int8" :: rest -> withPossibleArrow AST.TInt8 rest
+    | TIdent "Int16" :: rest -> withPossibleArrow AST.TInt16 rest
+    | TIdent "Int32" :: rest -> withPossibleArrow AST.TInt32 rest
+    | TIdent "Int64" :: rest -> withPossibleArrow AST.TInt64 rest
+    | TIdent "Int128" :: rest -> withPossibleArrow AST.TInt128 rest
+    | TIdent "UInt8" :: rest -> withPossibleArrow AST.TUInt8 rest
+    | TIdent "UInt16" :: rest -> withPossibleArrow AST.TUInt16 rest
+    | TIdent "UInt32" :: rest -> withPossibleArrow AST.TUInt32 rest
+    | TIdent "UInt64" :: rest -> withPossibleArrow AST.TUInt64 rest
+    | TIdent "UInt128" :: rest -> withPossibleArrow AST.TUInt128 rest
+    | TIdent "Bool" :: rest -> withPossibleArrow AST.TBool rest
+    | TIdent "String" :: rest -> withPossibleArrow AST.TString rest
+    | TIdent "Bytes" :: rest -> withPossibleArrow AST.TBytes rest
+    | TIdent "Char" :: rest -> withPossibleArrow AST.TChar rest
+    | TIdent "Float" :: rest -> withPossibleArrow AST.TFloat64 rest
+    | TIdent "Unit" :: rest -> withPossibleArrow AST.TUnit rest
+    | TIdent "RawPtr" :: rest -> withPossibleArrow AST.TRawPtr rest  // Internal raw pointer type
     | TIdent "List" :: TLt :: rest ->
         // List type: List<ElementType>
         parseTypeArgType rest
         |> Result.bind (fun (elemType, afterElem) ->
             match afterElem with
-            | TGt :: remaining -> Ok (TList elemType, remaining)
-            | TShr :: remaining -> Ok (TList elemType, TGt :: remaining)  // >> is two >'s
+            | TGt :: remaining -> withPossibleArrow (TList elemType) remaining
+            | TShr :: remaining -> withPossibleArrow (TList elemType) (TGt :: remaining)  // >> is two >'s
             | _ -> Error "Expected '>' after List element type in type argument")
     | TIdent "Dict" :: TLt :: rest ->
         // Dict type: Dict<KeyType, ValueType>
         parseTypeArgType rest
-        |> Result.bind (fun (keyType, afterKey) ->
-            match afterKey with
+        |> Result.bind (fun (firstTypeArg, afterFirstArg) ->
+            match afterFirstArg with
             | TComma :: valueRest ->
                 parseTypeArgType valueRest
                 |> Result.bind (fun (valueType, afterValue) ->
                     match afterValue with
-                    | TGt :: remaining -> Ok (TDict (keyType, valueType), remaining)
-                    | TShr :: remaining -> Ok (TDict (keyType, valueType), TGt :: remaining)  // >> is two >'s
+                    | TGt :: remaining -> withPossibleArrow (TDict (firstTypeArg, valueType)) remaining
+                    | TShr :: remaining -> withPossibleArrow (TDict (firstTypeArg, valueType)) (TGt :: remaining)  // >> is two >'s
                     | _ -> Error "Expected '>' after Dict value type in type argument")
-            | _ -> Error "Expected ',' after Dict key type in type argument")
+            | TGt :: remaining ->
+                withPossibleArrow (TDict (AST.TString, firstTypeArg)) remaining
+            | TShr :: remaining ->
+                withPossibleArrow (TDict (AST.TString, firstTypeArg)) (TGt :: remaining)  // >> is two >'s
+            | _ -> Error "Expected ',' or '>' after Dict type argument")
     | TIdent typeName :: rest when System.Char.IsLower(typeName.[0]) ->
         // Lowercase identifier is a type variable in type argument context
-        Ok (TVar typeName, rest)
+        withPossibleArrow (TVar typeName) rest
     | TIdent typeName :: rest when System.Char.IsUpper(typeName.[0]) ->
         // Could be a simple type or a qualified type like Stdlib.Option.Option
         // First parse the full qualified name
@@ -727,11 +800,11 @@ let rec parseTypeArgType (tokens: Token list) : Result<Type * Token list, string
                     | TComma :: rest -> parseNestedTypeArgs rest (ty :: acc)
                     | _ -> Error "Expected ',' or '>' after type argument in generic type")
             parseNestedTypeArgs typeArgsStart []
-            |> Result.map (fun (typeArgs, remaining) ->
-                (TSum (fullTypeName, typeArgs), remaining))
+            |> Result.bind (fun (typeArgs, remaining) ->
+                withPossibleArrow (TSum (fullTypeName, typeArgs)) remaining)
         | _ ->
             // Simple type without type arguments
-            Ok (TRecord (fullTypeName, []), afterTypeName)
+            withPossibleArrow (TRecord (fullTypeName, [])) afterTypeName
     | TLParen :: rest ->
         // Tuple type or function type: (Type1, Type2, ...) or (Type1, Type2) -> RetType
         parseTypeArgTupleElements rest []
@@ -842,11 +915,44 @@ let parseRecordFields (tokens: Token list) (acc: (string * Type) list) : Result<
 
 /// Parse sum type variants: Variant1 | Variant2 of Type | ...
 /// Returns list of variants and remaining tokens
+let private parseVariantPayloadType (tokens: Token list) : Result<Type * Token list, string> =
+    let rec stripLabels (expectLabel: bool) (remainingTokens: Token list) (acc: Token list) : Token list =
+        match remainingTokens with
+        | TIdent _ :: TColon :: rest when expectLabel ->
+            stripLabels false rest acc
+        | TStar :: rest ->
+            stripLabels true rest (TStar :: acc)
+        | token :: rest ->
+            stripLabels false rest (token :: acc)
+        | [] ->
+            List.rev acc
+
+    let normalizedTokens = stripLabels true tokens []
+    parseType normalizedTokens
+
+let private parseVariantPayloadTypeWithContext
+    (typeParamSet: Set<string>)
+    (tokens: Token list)
+    : Result<Type * Token list, string> =
+    let rec stripLabels (expectLabel: bool) (remainingTokens: Token list) (acc: Token list) : Token list =
+        match remainingTokens with
+        | TIdent _ :: TColon :: rest when expectLabel ->
+            stripLabels false rest acc
+        | TStar :: rest ->
+            stripLabels true rest (TStar :: acc)
+        | token :: rest ->
+            stripLabels false rest (token :: acc)
+        | [] ->
+            List.rev acc
+
+    let normalizedTokens = stripLabels true tokens []
+    parseTypeWithContext typeParamSet normalizedTokens
+
 let rec parseVariants (tokens: Token list) (acc: Variant list) : Result<Variant list * Token list, string> =
     match tokens with
     | TIdent variantName :: TOf :: rest when System.Char.IsUpper(variantName.[0]) ->
         // Variant with payload: Variant of Type
-        parseType rest
+        parseVariantPayloadType rest
         |> Result.bind (fun (payloadType, afterType) ->
             let variant = { Name = variantName; Payload = Some payloadType }
             match afterType with
@@ -875,7 +981,7 @@ let rec parseVariantsWithContext (typeParams: string list) (tokens: Token list) 
     match tokens with
     | TIdent variantName :: TOf :: rest when System.Char.IsUpper(variantName.[0]) ->
         // Variant with payload: Variant of Type
-        parseTypeWithContext typeParamSet rest
+        parseVariantPayloadTypeWithContext typeParamSet rest
         |> Result.bind (fun (payloadType, afterType) ->
             let variant = { Name = variantName; Payload = Some payloadType }
             match afterType with
@@ -927,7 +1033,7 @@ let parseTypeDef (tokens: Token list) : Result<TypeDef * Token list, string> =
             | TEquals :: TIdent variantName :: TOf :: bodyRest when System.Char.IsUpper(variantName.[0]) ->
                 // Sum type with first variant having payload: type Name = Variant of Type | ...
                 let typeParamSet = Set.ofList typeParams
-                parseTypeWithContext typeParamSet bodyRest
+                parseVariantPayloadTypeWithContext typeParamSet bodyRest
                 |> Result.bind (fun (payloadType, afterType) ->
                     let firstVariant = { Name = variantName; Payload = Some payloadType }
                     match afterType with
@@ -1614,8 +1720,14 @@ let parse (tokens: Token list) : Result<Program, string> =
         | TMinus :: TInt128 n :: rest when n = System.Int128.MinValue ->
             Ok (Int128Literal System.Int128.MinValue, rest)
         | TMinus :: TInt128 n :: rest -> Ok (Int128Literal (-n), rest)
+        | TMinus :: TInt8 n :: rest when n = System.SByte.MinValue ->
+            Ok (Int8Literal System.SByte.MinValue, rest)
         | TMinus :: TInt8 n :: rest -> Ok (Int8Literal (-n), rest)
+        | TMinus :: TInt16 n :: rest when n = System.Int16.MinValue ->
+            Ok (Int16Literal System.Int16.MinValue, rest)
         | TMinus :: TInt16 n :: rest -> Ok (Int16Literal (-n), rest)
+        | TMinus :: TInt32 n :: rest when n = System.Int32.MinValue ->
+            Ok (Int32Literal System.Int32.MinValue, rest)
         | TMinus :: TInt32 n :: rest -> Ok (Int32Literal (-n), rest)
         | TMinus :: TFloat f :: rest -> Ok (FloatLiteral (-f), rest)
         | TMinus :: rest ->
@@ -1696,6 +1808,9 @@ let parse (tokens: Token list) : Result<Program, string> =
             let isConstructor = System.Char.IsUpper(lastSegment.[0])
             // Check what follows - function call, constructor, or variable reference
             match afterQualified with
+            | TLBrace :: recordFieldsStart when isConstructor ->
+                // Qualified record literal: Module.TypeName { field = value, ... }
+                parseRecordLiteralFieldsWithTypeName fullName recordFieldsStart []
             | TLParen :: argsStart when isConstructor ->
                 // Qualified constructor with payload: Stdlib.Result.Result.Ok(5)
                 // Split into type name and variant name
@@ -1884,17 +1999,24 @@ let parse (tokens: Token list) : Result<Program, string> =
                             parseTupleElements rest' [firstExpr]
                         | _ -> Error "Expected ')' or ',' in tuple/parenthesized expression")
         | TLBrace :: rest ->
-            // Check for record update syntax: { record with field = value, ... }
-            // First, try to parse an expression, then check for 'with'
-            parseExpr rest
-            |> Result.bind (fun (recordExpr, afterExpr) ->
-                match afterExpr with
-                | TWith :: afterWith ->
-                    // Record update: { record with field = value, ... }
-                    parseRecordUpdateFields afterWith []
-                    |> Result.map (fun (updates, remaining) ->
-                        (RecordUpdate (recordExpr, updates), remaining))
-                | _ -> Error "Record update requires 'with' keyword: use '{ record with field = value, ... }'")
+            // Distinguish between:
+            // - anonymous record literal: { field = value, ... }
+            // - record update: { recordExpr with field = value, ... }
+            match rest with
+            | TRBrace :: _ ->
+                parseRecordLiteralFieldsWithTypeName "" rest []
+            | TIdent _ :: TEquals :: _ ->
+                parseRecordLiteralFieldsWithTypeName "" rest []
+            | _ ->
+                parseExpr rest
+                |> Result.bind (fun (recordExpr, afterExpr) ->
+                    match afterExpr with
+                    | TWith :: afterWith ->
+                        // Record update: { record with field = value, ... }
+                        parseRecordUpdateFields afterWith []
+                        |> Result.map (fun (updates, remaining) ->
+                            (RecordUpdate (recordExpr, updates), remaining))
+                    | _ -> Error "Record update requires 'with' keyword: use '{ record with field = value, ... }'")
         | TLBracket :: rest ->
             // List literal: [1, 2, 3] or []
             parseListLiteralElements rest []
@@ -2089,7 +2211,8 @@ let parse (tokens: Token list) : Result<Program, string> =
     parseTopLevels tokens []
 
 let private isInternalIdentifier (name: string) : bool =
-    name.StartsWith("__") || name.Contains(".__")
+    let isAllUnderscores = name |> Seq.forall (fun c -> c = '_')
+    (name.StartsWith("__") && not isAllUnderscores) || name.Contains(".__")
 
 let private validateNoInternalIdentifier (name: string) : Result<unit, string> =
     if isInternalIdentifier name then

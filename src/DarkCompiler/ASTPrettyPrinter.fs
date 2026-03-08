@@ -42,6 +42,52 @@ let private formatFloatLiteral (value: float) : string =
     else
         $"{raw}.0"
 
+let private reservedIdentifierNames : Set<string> =
+    set [
+        "let"
+        "in"
+        "if"
+        "then"
+        "else"
+        "def"
+        "type"
+        "of"
+        "match"
+        "with"
+        "when"
+        "fun"
+        "true"
+        "false"
+        "_"
+    ]
+
+let private isIdentifierStartChar (c: char) : bool =
+    System.Char.IsLetter(c) || c = '_'
+
+let private isIdentifierContinueChar (c: char) : bool =
+    System.Char.IsLetterOrDigit(c) || c = '_'
+
+let private isBareIdentifierSegment (name: string) : bool =
+    name.Length > 0
+    && isIdentifierStartChar name[0]
+    && (name |> Seq.forall isIdentifierContinueChar)
+    && not (Set.contains name reservedIdentifierNames)
+
+let private formatIdentifierSegment (name: string) : string =
+    if isBareIdentifierSegment name then
+        name
+    else
+        $"``{name}``"
+
+let private formatIdentifierPath (name: string) : string =
+    if name.Contains "." then
+        name.Split('.')
+        |> Array.toList
+        |> List.map formatIdentifierSegment
+        |> String.concat "."
+    else
+        formatIdentifierSegment name
+
 let rec private formatType (typ: Type) : string =
     match typ with
     | TInt8 -> "Int8"
@@ -62,20 +108,20 @@ let rec private formatType (typ: Type) : string =
     | TUnit -> "Unit"
     | TRuntimeError -> "RuntimeError"
     | TRawPtr -> "RawPtr"
-    | TVar name -> name
+    | TVar name -> formatIdentifierSegment name
     | TList elemType -> $"List<{formatType elemType}>"
     | TDict (keyType, valueType) -> $"Dict<{formatType keyType}, {formatType valueType}>"
     | TTuple elemTypes ->
         let elemText = elemTypes |> List.map formatType |> String.concat ", "
         $"({elemText})"
-    | TRecord (name, []) -> name
+    | TRecord (name, []) -> formatIdentifierPath name
     | TRecord (name, typeArgs) ->
         let argsText = typeArgs |> List.map formatType |> String.concat ", "
-        $"{name}<{argsText}>"
-    | TSum (name, []) -> name
+        $"{formatIdentifierPath name}<{argsText}>"
+    | TSum (name, []) -> formatIdentifierPath name
     | TSum (name, typeArgs) ->
         let argsText = typeArgs |> List.map formatType |> String.concat ", "
-        $"{name}<{argsText}>"
+        $"{formatIdentifierPath name}<{argsText}>"
     | TFunction (paramTypes, returnType) ->
         let paramsText = paramTypes |> List.map formatType |> String.concat ", "
         $"({paramsText}) -> {formatType returnType}"
@@ -206,18 +252,80 @@ let private isUnitArgumentList (args: NonEmptyList<Expr>) : bool =
     | [UnitLiteral] -> true
     | _ -> false
 
+let private tryParseInterpreterLambdaTypeVar (typeVarName: string) : (int * int) option =
+    let prefix = "__interp_lambda_"
+    if not (typeVarName.StartsWith prefix) then
+        None
+    else
+        let remainder = typeVarName.Substring(prefix.Length)
+        let firstSeparator = remainder.IndexOf '_'
+        if firstSeparator < 0 then
+            None
+        else
+            let secondSeparator = remainder.IndexOf('_', firstSeparator + 1)
+            if secondSeparator < 0 then
+                None
+            else
+                let seedText = remainder.Substring(0, firstSeparator)
+                let indexText =
+                    remainder.Substring(firstSeparator + 1, secondSeparator - firstSeparator - 1)
+
+                match System.Int32.TryParse seedText, System.Int32.TryParse indexText with
+                | (true, seed), (true, paramIndex) -> Some (seed, paramIndex)
+                | _ -> None
+
+let private trySingleInterpreterLambdaParamInfo
+    (parameters: NonEmptyList<string * Type>)
+    : ((string * Type) * (int * int)) option =
+    match NonEmptyList.toList parameters with
+    | [singleParam] ->
+        let (_, paramType) = singleParam
+        match paramType with
+        | TVar typeVarName ->
+            tryParseInterpreterLambdaTypeVar typeVarName
+            |> Option.map (fun info -> (singleParam, info))
+        | _ -> None
+    | _ -> None
+
+let private tryCollectImplicitCurriedLambdaParameters
+    (parameters: NonEmptyList<string * Type>)
+    (body: Expr)
+    : ((string * Type) list * Expr) option =
+    match trySingleInterpreterLambdaParamInfo parameters with
+    | None -> None
+    | Some (firstParam, (seed, startIndex)) ->
+        let rec collect
+            (expectedIndex: int)
+            (collectedRev: (string * Type) list)
+            (currentExpr: Expr)
+            : ((string * Type) list * Expr) =
+            match currentExpr with
+            | Lambda (nextParameters, nextBody) ->
+                match trySingleInterpreterLambdaParamInfo nextParameters with
+                | Some (nextParam, (nextSeed, nextIndex))
+                    when nextSeed = seed && nextIndex = expectedIndex ->
+                    collect (expectedIndex + 1) (nextParam :: collectedRev) nextBody
+                | _ -> (List.rev collectedRev, currentExpr)
+            | _ -> (List.rev collectedRev, currentExpr)
+
+        let (collected, finalBody) = collect (startIndex + 1) [firstParam] body
+        if List.length collected > 1 then Some (collected, finalBody) else None
+
 let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
     match pattern with
     | PUnit -> "()"
     | PWildcard -> "_"
-    | PVar name -> name
-    | PConstructor (name, None) -> name
+    | PVar name -> formatIdentifierSegment name
+    | PConstructor (name, None) -> formatIdentifierPath name
     | PConstructor (name, Some payload) ->
         let payloadText = formatPattern syntax payload
         match syntax with
-        | CompilerSyntax -> $"{name}({payloadText})"
+        | CompilerSyntax -> $"{formatIdentifierPath name}({payloadText})"
         | InterpreterSyntax ->
-            if payloadText.StartsWith "(" then $"{name} {payloadText}" else $"{name} {payloadText}"
+            if payloadText.StartsWith "(" then
+                $"{formatIdentifierPath name} {payloadText}"
+            else
+                $"{formatIdentifierPath name} {payloadText}"
     | PInt64 n ->
         match syntax with
         | CompilerSyntax -> $"{n}"
@@ -268,9 +376,13 @@ let rec private formatPattern (syntax: Syntax) (pattern: Pattern) : string =
     | PRecord (typeName, fields) ->
         let fieldsText =
             fields
-            |> List.map (fun (name, fieldPattern) -> $"{name} = {formatPattern syntax fieldPattern}")
+            |> List.map (fun (name, fieldPattern) ->
+                $"{formatIdentifierSegment name} = {formatPattern syntax fieldPattern}")
             |> String.concat ", "
-        $"{typeName} {{ {fieldsText} }}"
+        if typeName = "" then
+            $"{{ {fieldsText} }}"
+        else
+            $"{formatIdentifierPath typeName} {{ {fieldsText} }}"
     | PList patterns ->
         let separator =
             match syntax with
@@ -432,37 +544,39 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
         let innerText = parenthesizeIfNeeded inner (formatExpr syntax inner)
         $"{formatUnaryOp op}{innerText}"
     | Let (name, value, body) ->
-        $"let {name} = {formatExpr syntax value} in {formatExpr syntax body}"
-    | Var name -> name
+        $"let {formatIdentifierSegment name} = {formatExpr syntax value} in {formatExpr syntax body}"
+    | Var name -> formatIdentifierPath name
     | If (cond, thenBranch, elseBranch) ->
         $"if {formatExpr syntax cond} then {formatExpr syntax thenBranch} else {formatExpr syntax elseBranch}"
     | Call (funcName, args) ->
         let argsList = NonEmptyList.toList args
+        let formattedName = formatIdentifierPath funcName
         match syntax with
         | CompilerSyntax ->
             if isUnitArgumentList args then
-                $"{funcName}()"
+                $"{formattedName}()"
             else
                 let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
-                $"{funcName}({argsText})"
+                $"{formattedName}({argsText})"
         | InterpreterSyntax ->
             if isUnitArgumentList args then
-                $"{funcName}()"
+                $"{formattedName}()"
             else
                 let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
-                $"{funcName} {argsText}"
+                $"{formattedName} {argsText}"
     | TypeApp (funcName, typeArgs, args) ->
         let argsList = NonEmptyList.toList args
         let typeArgsText = typeArgs |> List.map formatType |> String.concat ", "
+        let formattedName = formatIdentifierPath funcName
         match syntax with
         | CompilerSyntax ->
             if isUnitArgumentList args then
-                $"{funcName}<{typeArgsText}>()"
+                $"{formattedName}<{typeArgsText}>()"
             else
                 let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
-                $"{funcName}<{typeArgsText}>({argsText})"
+                $"{formattedName}<{typeArgsText}>({argsText})"
         | InterpreterSyntax ->
-            let head = $"{funcName}<{typeArgsText}>"
+            let head = $"{formattedName}<{typeArgsText}>"
             if isUnitArgumentList args then
                 $"{head}()"
             else
@@ -485,14 +599,19 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
     | RecordLiteral (typeName, fields) ->
         let fieldsText =
             fields
-            |> List.map (fun (name, value) -> $"{name} = {formatExpr syntax value}")
+            |> List.map (fun (name, value) ->
+                $"{formatIdentifierSegment name} = {formatExpr syntax value}")
             |> String.concat ", "
-        $"{typeName} {{ {fieldsText} }}"
+        if typeName = "" then
+            $"{{ {fieldsText} }}"
+        else
+            $"{formatIdentifierPath typeName} {{ {fieldsText} }}"
     | RecordUpdate (recordExpr, updates) ->
         let recordText = formatExpr syntax recordExpr
         let updatesText =
             updates
-            |> List.map (fun (name, value) -> $"{name} = {formatExpr syntax value}")
+            |> List.map (fun (name, value) ->
+                $"{formatIdentifierSegment name} = {formatExpr syntax value}")
             |> String.concat ", "
         $"{{ {recordText} with {updatesText} }}"
     | RecordAccess (recordExpr, fieldName) ->
@@ -504,10 +623,14 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                 $"({recordBaseText})"
             | _ ->
                 parenthesizeIfNeeded recordExpr recordBaseText
-        $"{recordText}.{fieldName}"
+        $"{recordText}.{formatIdentifierSegment fieldName}"
     | Constructor (typeName, variantName, payload) ->
         let fullName =
-            if typeName = "" then variantName else $"{typeName}.{variantName}"
+            let formattedVariantName = formatIdentifierSegment variantName
+            if typeName = "" then
+                formattedVariantName
+            else
+                $"{formatIdentifierPath typeName}.{formattedVariantName}"
         match payload with
         | None -> fullName
         | Some payloadExpr ->
@@ -571,7 +694,8 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                 else
                     let paramsText =
                         parameterList
-                        |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
+                        |> List.map (fun (name, typ) ->
+                            $"{formatIdentifierSegment name}: {formatType typ}")
                         |> String.concat ", "
                     $"({paramsText}) => {formatExpr syntax body}"
         | InterpreterSyntax ->
@@ -584,35 +708,79 @@ let rec private formatExpr (syntax: Syntax) (expr: Expr) : string =
                 | [ (paramName, TBool) ], BinOp (Or, Var varName, rightArg) when paramName = "$pipe_arg" && varName = "$pipe_arg" ->
                     $"(||) {formatAppArg rightArg}"
                 | _ ->
+                    let parametersToFormat, bodyToFormat =
+                        match tryCollectImplicitCurriedLambdaParameters parameters body with
+                        | Some flattened -> flattened
+                        | None -> (parameterList, body)
+
                     let paramsText =
-                        parameterList
+                        parametersToFormat
                         |> List.map (fun (name, typ) ->
                             match typ with
-                            | TVar typeVar when typeVar.StartsWith "__interp_lambda_" -> name
-                            | _ -> $"({name}: {formatType typ})")
+                            | TVar typeVar ->
+                                match tryParseInterpreterLambdaTypeVar typeVar with
+                                | Some _ -> formatIdentifierSegment name
+                                | None ->
+                                    $"({formatIdentifierSegment name}: {formatType typ})"
+                            | _ ->
+                                $"({formatIdentifierSegment name}: {formatType typ})")
                         |> String.concat " "
-                    $"fun {paramsText} -> {formatExpr syntax body}"
+                    $"fun {paramsText} -> {formatExpr syntax bodyToFormat}"
     | Apply (funcExpr, args) ->
         let argsList = NonEmptyList.toList args
         match syntax with
         | CompilerSyntax ->
-            let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
+            let funcText =
+                match funcExpr with
+                // Preserve Apply-vs-Constructor distinction for compiler parser
+                // (`Constructor(arg)` parses as constructor payload, not Apply).
+                | Constructor (_, _, None) -> $"({formatExpr syntax funcExpr})"
+                | _ -> parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
             if isUnitArgumentList args then
                 $"{funcText}()"
             else
                 let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
                 $"{funcText}({argsText})"
         | InterpreterSyntax ->
-            let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
-            if isUnitArgumentList args then
-                $"{funcText}()"
-            else
-                let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
-                $"{funcText} {argsText}"
-    | FuncRef funcName -> funcName
+            match funcExpr, argsList with
+            // Preserve Apply-vs-Constructor distinction for interpreter parser
+            // by printing constructor application in pipe form.
+            | Constructor (_, _, None), [singleArg] ->
+                $"{formatExpr syntax singleArg} |> {formatExpr syntax funcExpr}"
+            | TupleLiteral _, _ ->
+                let funcText = formatExpr syntax funcExpr
+                if isUnitArgumentList args then
+                    $"{funcText}()"
+                elif List.length argsList > 1 then
+                    // Tuple-callee apply is only parseable in interpreter syntax
+                    // via parenthesized call-arg form: (tupleExpr)(a, b).
+                    let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                    $"{funcText}({argsText})"
+                else
+                    let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
+                    $"{funcText} {argsText}"
+            | Lambda _, _ when List.length argsList > 1 ->
+                // Preserve uncurried multi-arg lambda-apply shape.
+                let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{funcText}({argsText})"
+            | Apply _, _ when List.length argsList > 1 ->
+                // Preserve grouped argument shape for nested apply chains that
+                // originated from parenthesized multi-arg application.
+                let funcText = formatExpr syntax funcExpr
+                let argsText = argsList |> List.map (formatExpr syntax) |> String.concat ", "
+                $"{funcText}({argsText})"
+            | _ ->
+                let funcText = parenthesizeIfNeeded funcExpr (formatExpr syntax funcExpr)
+                if isUnitArgumentList args then
+                    $"{funcText}()"
+                else
+                    let argsText = argsList |> formatInterpreterAppArgs |> String.concat " "
+                    $"{funcText} {argsText}"
+    | FuncRef funcName -> formatIdentifierPath funcName
     | Closure (funcName, captures) ->
         let capturesText = captures |> List.map (formatExpr syntax) |> String.concat ", "
-        $"Closure({funcName}, [{capturesText}])"
+        $"Closure({formatIdentifierPath funcName}, [{capturesText}])"
 
 let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
     match syntax with
@@ -632,7 +800,7 @@ let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
                     parameters
                     |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
                     |> String.concat ", ")
-        $"def {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
+        $"def {formatIdentifierSegment funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
     | InterpreterSyntax ->
         let typeParamsText =
             if List.isEmpty funcDef.TypeParams then ""
@@ -649,7 +817,7 @@ let private formatFunctionDef (syntax: Syntax) (funcDef: FunctionDef) : string =
                     parameters
                     |> List.map (fun (name, typ) -> $"{name}: {formatType typ}")
                     |> String.concat ", ")
-        $"let {funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
+        $"let {formatIdentifierSegment funcDef.Name}{typeParamsText}({paramsText}) : {formatType funcDef.ReturnType} = {formatExpr syntax funcDef.Body}"
 
 let private formatTypeDef (typeDef: TypeDef) : string =
     let formatTypeParams (typeParams: string list) : string =
@@ -662,20 +830,22 @@ let private formatTypeDef (typeDef: TypeDef) : string =
     | RecordDef (name, typeParams, fields) ->
         let fieldsText =
             fields
-            |> List.map (fun (fieldName, fieldType) -> $"{fieldName}: {formatType fieldType}")
+            |> List.map (fun (fieldName, fieldType) ->
+                $"{formatIdentifierSegment fieldName}: {formatType fieldType}")
             |> String.concat ", "
-        $"type {name}{formatTypeParams typeParams} = {{ {fieldsText} }}"
+        $"type {formatIdentifierSegment name}{formatTypeParams typeParams} = {{ {fieldsText} }}"
     | SumTypeDef (name, typeParams, variants) ->
         let variantsText =
             variants
             |> List.map (fun variant ->
                 match variant.Payload with
-                | None -> variant.Name
-                | Some payloadType -> $"{variant.Name} of {formatType payloadType}")
+                | None -> formatIdentifierSegment variant.Name
+                | Some payloadType ->
+                    $"{formatIdentifierSegment variant.Name} of {formatType payloadType}")
             |> String.concat " | "
-        $"type {name}{formatTypeParams typeParams} = {variantsText}"
+        $"type {formatIdentifierSegment name}{formatTypeParams typeParams} = {variantsText}"
     | TypeAlias (name, typeParams, targetType) ->
-        $"type {name}{formatTypeParams typeParams} = {formatType targetType}"
+        $"type {formatIdentifierSegment name}{formatTypeParams typeParams} = {formatType targetType}"
 
 let private formatTopLevel (syntax: Syntax) (topLevel: TopLevel) : string =
     match topLevel with

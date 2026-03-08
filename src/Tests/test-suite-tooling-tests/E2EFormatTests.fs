@@ -231,6 +231,34 @@ let testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble () : TestResult 
             | _ ->
                 Error $"Expected exactly 2 parsed tests, got {tests.Length}")
 
+let testParsesDottedRhsContinuationAfterBareIdentifierHead () : TestResult =
+    let testSource =
+        "(let _ = 1L in 2L) = Stdlib\n"
+        + "  .Option\n"
+        + "  .Option\n"
+        + "  .Some(2L)\n"
+        + "(3L) = 3L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected dotted RHS continuation after bare identifier head, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ first; second ] ->
+                if first.ExpectedValueExpr <> Some "Stdlib\n  .Option\n  .Option\n  .Some(2L)" then
+                    Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
+                elif first.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for first test, got: {first.Preamble}"
+                elif second.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for second test, got: {second.Preamble}"
+                elif second.ExpectedValueExpr <> Some "3L" then
+                    Error $"Unexpected second RHS parse: {second.ExpectedValueExpr}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 2 parsed tests, got {tests.Length}")
+
 let testParsesMultilinePipeBeforeSeparator () : TestResult =
     let testSource =
         "(Stdlib.List.map_v0 [ 1L; 2L ] (fun x -> x + 1L))\n"
@@ -280,6 +308,111 @@ let testParsesMultilineWithoutLeadingParen () : TestResult =
             | _ ->
                 Error $"Expected exactly 1 parsed test, got {tests.Length}")
 
+let testParsesMultilineListRhsContinuation () : TestResult =
+    let testSource =
+        "module AccessDataInGenericField =\n"
+        + "  (Stdlib.DB.query TestRecordWithGenericThing (fun p -> p.name == \"joe\")) = [ RecordWithGenericThing\n"
+        + "                                                                                { name =\n"
+        + "                                                                                    \"joe\" } ]\n"
+        + "  (1L) = 1L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected multiline list RHS continuation to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ first; second ] ->
+                if first.ExpectedValueExpr <> Some "[ RecordWithGenericThing\n                                                                                { name =\n                                                                                    \"joe\" } ]" then
+                    Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
+                elif first.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for first test, got: {first.Preamble}"
+                elif second.ExpectedValueExpr <> Some "1L" then
+                    Error $"Unexpected second RHS parse: {second.ExpectedValueExpr}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 2 parsed tests, got {tests.Length}")
+
+let testParsesSingleLineDottedRhsWithoutConsumingNextTest () : TestResult =
+    let testSource =
+        "module GetMany =\n"
+        + "  (1L) = Stdlib.Option.Option.None\n"
+        + "\n"
+        + "  (2L) = 2L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected single-line dotted RHS to parse without continuation, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ first; second ] ->
+                if first.ExpectedValueExpr <> Some "Stdlib.Option.Option.None" then
+                    Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
+                elif second.ExpectedValueExpr <> Some "2L" then
+                    Error $"Unexpected second RHS parse: {second.ExpectedValueExpr}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 2 parsed tests, got {tests.Length}")
+
+let testParsesMultilineDictExpectationWithoutPreambleLeakage () : TestResult =
+    let testSource =
+        "module GetManyWithKeys =\n"
+        + "  (let one = 1L\n"
+        + "   let two = 2L\n"
+        + "   one) =\n"
+        + "    Dict\n"
+        + "      { one = 1L\n"
+        + "        two = 2L }\n"
+        + "\n"
+        + "  (3L) = 3L\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected multiline Dict RHS to parse without preamble leakage, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ first; second ] ->
+                if first.ExpectedValueExpr <> Some "Dict\n      { one = 1L\n        two = 2L }" then
+                    Error $"Unexpected first RHS parse: {first.ExpectedValueExpr}"
+                elif first.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for first test, got: {first.Preamble}"
+                elif second.ExpectedValueExpr <> Some "3L" then
+                    Error $"Unexpected second RHS parse: {second.ExpectedValueExpr}"
+                elif second.Preamble.Trim().Length <> 0 then
+                    Error $"Expected empty preamble for second test, got: {second.Preamble}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 2 parsed tests, got {tests.Length}")
+
+let testParsesSqlErrorExpectationShorthand () : TestResult =
+    let testSource =
+        "friendsError (fun p -> \"x\") = sqlerror=\"Incorrect type in String \\\"x\\\"\"\n"
+
+    withTempFile testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg ->
+            Error $"Expected sqlerror shorthand expectation to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests with
+            | [ test ] ->
+                if test.ExpectedValueExpr <> None then
+                    Error $"Expected no value-expression RHS for sqlerror shorthand, got: {test.ExpectedValueExpr}"
+                elif test.ExpectedExitCode <> 1 then
+                    Error $"Expected exit code 1 for sqlerror shorthand, got: {test.ExpectedExitCode}"
+                elif test.ExpectedStdout <> Some "" then
+                    Error $"Expected stdout empty-string expectation for sqlerror shorthand, got: {test.ExpectedStdout}"
+                elif test.ExpectedStderr <> Some "Incorrect type in String \"x\"" then
+                    Error $"Expected stderr parse for sqlerror shorthand, got: {test.ExpectedStderr}"
+                else
+                    Ok ()
+            | _ ->
+                Error $"Expected exactly 1 parsed test, got {tests.Length}")
+
 let tests = [
     ("parses multiline expectation on next line", testParsesMultilineExpectationOnNextLine)
     ("parses skip attribute", testParsesSkipAttribute)
@@ -290,6 +423,11 @@ let tests = [
     ("parses multiline function-head expectation with next-line arg", testParsesMultilineExpectationWithFunctionHeadAndNextLineArg)
     ("parses bare .e2e rhs as value expression", testParsesBareE2ERightHandSideAsValueExpression)
     ("parses indented rhs continuation without preamble leakage", testParsesIndentedRhsContinuationWithoutLeakingIntoPreamble)
+    ("parses dotted rhs continuation after bare identifier head", testParsesDottedRhsContinuationAfterBareIdentifierHead)
     ("parses multiline pipe before separator", testParsesMultilinePipeBeforeSeparator)
     ("parses multiline without leading paren", testParsesMultilineWithoutLeadingParen)
+    ("parses multiline list rhs continuation", testParsesMultilineListRhsContinuation)
+    ("parses single-line dotted rhs without consuming next test", testParsesSingleLineDottedRhsWithoutConsumingNextTest)
+    ("parses multiline Dict rhs without preamble leakage", testParsesMultilineDictExpectationWithoutPreambleLeakage)
+    ("parses sqlerror shorthand expectation", testParsesSqlErrorExpectationShorthand)
 ]

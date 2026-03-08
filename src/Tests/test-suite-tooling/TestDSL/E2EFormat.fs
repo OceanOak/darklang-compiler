@@ -362,16 +362,48 @@ let private parseSimpleStdout (valueText: string) : Result<string, string> =
         Ok $"{trimmed}\n"
 
 /// Check if line has ) followed by = <expectation> (for multi-line expression closing)
+let private hasUnclosedDelimiters (text: string) : bool =
+    let rec scan (i: int) (inQuotes: bool) (parenDepth: int) (bracketDepth: int) (braceDepth: int) : bool =
+        if i >= text.Length then
+            inQuotes || parenDepth > 0 || bracketDepth > 0 || braceDepth > 0
+        elif inQuotes && text.[i] = '\\' && i + 1 < text.Length then
+            scan (i + 2) inQuotes parenDepth bracketDepth braceDepth
+        elif text.[i] = '"' then
+            scan (i + 1) (not inQuotes) parenDepth bracketDepth braceDepth
+        elif inQuotes then
+            scan (i + 1) inQuotes parenDepth bracketDepth braceDepth
+        elif text.[i] = '(' then
+            scan (i + 1) inQuotes (parenDepth + 1) bracketDepth braceDepth
+        elif text.[i] = ')' then
+            scan (i + 1) inQuotes (max 0 (parenDepth - 1)) bracketDepth braceDepth
+        elif text.[i] = '[' then
+            scan (i + 1) inQuotes parenDepth (bracketDepth + 1) braceDepth
+        elif text.[i] = ']' then
+            scan (i + 1) inQuotes parenDepth (max 0 (bracketDepth - 1)) braceDepth
+        elif text.[i] = '{' then
+            scan (i + 1) inQuotes parenDepth bracketDepth (braceDepth + 1)
+        elif text.[i] = '}' then
+            scan (i + 1) inQuotes parenDepth bracketDepth (max 0 (braceDepth - 1))
+        else
+            scan (i + 1) inQuotes parenDepth bracketDepth braceDepth
+    scan 0 false 0 0 0
+
 let private isIncompleteExpectationHead (afterEq: string) : bool =
     let trimmed = afterEq.Trim()
     if trimmed.Length = 0 then
         true
+    elif hasUnclosedDelimiters trimmed then
+        true
     else
-        let looksLikeBareIdentifierPath =
-            trimmed
-            |> Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '_' || c = '.')
-        looksLikeBareIdentifierPath
-        && trimmed.Contains(".")
+        false
+
+let private isIdentifierPathHead (afterEq: string) : bool =
+    let trimmed = afterEq.Trim()
+    if trimmed.Length = 0 then
+        false
+    else
+        trimmed
+        |> Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '_' || c = '.')
 
 let private hasClosingParenTest (s: string) : bool =
     let rec findPattern
@@ -611,6 +643,16 @@ let private parseTestLineWithPreamble (line: string) (lineNumber: int) (filePath
                 |> Result.bind (fun msg ->
                     parseErrorAttributeFlags restTokens
                     |> Result.map (fun optFlags -> (None, 1, None, None, optFlags, true, Some msg, None)))
+            | firstToken :: [] when firstToken.Equals("sqlerror", StringComparison.OrdinalIgnoreCase) ->
+                // Legacy runtime SQL error shorthand with no specific message.
+                Ok (None, 1, Some "", None, defaultOptFlags, false, None, None)
+            | firstToken :: [] when firstToken.StartsWith("sqlerror=", StringComparison.OrdinalIgnoreCase) ->
+                // Legacy runtime SQL error shorthand:
+                //   source = sqlerror="message"
+                let msgPart = firstToken.Substring(9)  // Skip "sqlerror="
+                parseStringLiteral msgPart
+                |> Result.mapError (fun e -> $"Invalid sqlerror message: {e}")
+                |> Result.map (fun msg -> (None, 1, Some "", Some msg, defaultOptFlags, false, None, None))
             | _ ->
                 if trimmed.ToLower() = "skip" then
                     Ok (None, 0, None, None, defaultOptFlags, false, None, Some "Skipped by test")
@@ -1005,6 +1047,31 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                     remaining <- remaining - 1
                 lineText.Substring(idx)
 
+        let hasIndentedIdentifierHeadContinuation (rhs: string) (nextIndex: int) : bool =
+            if not allowIndentedTests then
+                false
+            elif not (isIdentifierPathHead rhs) then
+                false
+            elif nextIndex >= lines.Length then
+                false
+            else
+                let nextLine = lines.[nextIndex]
+                let nextTrimmed = nextLine.Trim()
+                if nextTrimmed.Length = 0 || nextTrimmed.StartsWith("//") then
+                    false
+                elif nextLine.Length = 0 || not (Char.IsWhiteSpace(nextLine.[0])) then
+                    false
+                else
+                    let nextWithoutComment = stripComment nextTrimmed
+                    let nextStartsDefinition =
+                        nextWithoutComment.StartsWith("def ")
+                        || nextWithoutComment.StartsWith("type ")
+                        || nextWithoutComment.StartsWith("let ")
+                        || nextWithoutComment.StartsWith("module ")
+                        || nextWithoutComment.StartsWith("[<")
+                    not nextStartsDefinition
+                    && not (isTestLine nextWithoutComment)
+
         let hasCompleteSeparator (text: string) : bool =
             match findSeparatorIndex text with
             | Some sepIdx ->
@@ -1037,7 +1104,15 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                             |> String.concat "\n"
                         let hasClosingParen = hasClosingParenTest accumulatedWithoutComments
                         let hasCompleteTopLevelSeparator = hasCompleteSeparator accumulatedWithoutComments
-                        if hasClosingParen || hasCompleteTopLevelSeparator then
+                        let hasIdentifierHeadContinuation =
+                            match findSeparatorIndex accumulatedWithoutComments with
+                            | Some sepIdx ->
+                                let rhs = accumulatedWithoutComments.Substring(sepIdx + 1)
+                                hasIndentedIdentifierHeadContinuation rhs (i + 1)
+                            | None ->
+                                false
+
+                        if (hasClosingParen || hasCompleteTopLevelSeparator) && not hasIdentifierHeadContinuation then
                             // Combine all accumulated lines and parse as multi-line test
                             let fullExpr = String.concat "\n" (List.rev pendingExprLines)
                             let preamble = String.concat "\n" (List.rev preambleLines)
@@ -1098,7 +1173,13 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                                     match findSeparatorIndex lineWithoutComment with
                                     | Some sepIdx ->
                                         let rhs = lineWithoutComment.Substring(sepIdx + 1)
-                                        isIncompleteExpectationHead rhs
+                                        let baseIncomplete = isIncompleteExpectationHead rhs
+                                        let hasIdentifierHeadContinuation =
+                                            if baseIncomplete then
+                                                false
+                                            else
+                                                hasIndentedIdentifierHeadContinuation rhs (i + 1)
+                                        baseIncomplete || hasIdentifierHeadContinuation
                                     | None -> false
                                 else
                                     false
@@ -1121,7 +1202,15 @@ let parseE2ETestFile (path: string) : Result<E2ETest list, string> =
                                                 || nextWithoutComment.StartsWith("let ")
                                                 || nextWithoutComment.StartsWith("module ")
                                                 || nextWithoutComment.StartsWith("[<")
-                                            if nextIsIndented && not nextStartsDefinition && not (isTestLine nextWithoutComment) then
+                                            let needsDelimiterContinuation =
+                                                let currentAccumulatedWithoutComments =
+                                                    line :: (List.rev acc)
+                                                    |> List.map stripComment
+                                                    |> String.concat "\n"
+                                                hasUnclosedDelimiters currentAccumulatedWithoutComments
+                                            if nextIsIndented
+                                               && not nextStartsDefinition
+                                               && (needsDelimiterContinuation || not (isTestLine nextWithoutComment)) then
                                                 collectContinuation (j + 1) (nextLine :: acc)
                                             else
                                                 (List.rev acc, j)

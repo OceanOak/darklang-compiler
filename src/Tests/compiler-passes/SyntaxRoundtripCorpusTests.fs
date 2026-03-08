@@ -107,12 +107,6 @@ let private roundtripPlans (mode: SyntaxMode) (allowInternal: bool) : RoundtripP
     ]
 
 let private snippetsForTest (test: E2ETest) : Snippet list =
-    let preambleSnippet =
-        if String.IsNullOrWhiteSpace test.Preamble then
-            []
-        else
-            [ { Label = "preamble"; Source = test.Preamble } ]
-
     let sourceSnippet =
         [ { Label = "source"; Source = test.Source } ]
 
@@ -122,7 +116,7 @@ let private snippetsForTest (test: E2ETest) : Snippet list =
             [ { Label = "expected-value"; Source = rhs } ]
         | None -> []
 
-    preambleSnippet @ sourceSnippet @ expectedSnippet
+    sourceSnippet @ expectedSnippet
 
 let private failureHeader
     (kind: string)
