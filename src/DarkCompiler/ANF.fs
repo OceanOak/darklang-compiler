@@ -235,6 +235,7 @@ let payloadSize (t: AST.Type) (typeReg: Map<string, (string * AST.Type) list>) :
 /// Determine reference-count dispatch kind for a heap type
 let rcKind (t: AST.Type) : RcKind =
     match t with
+    | AST.TList (AST.TFunction _) -> GenericHeap
     | AST.TList _ -> TaggedList
     | _ -> GenericHeap
 
