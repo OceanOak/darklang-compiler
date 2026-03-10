@@ -1,8 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
 
-# Build args to align container UID/GID with the host user (important for Colima mounts)
-ARG LOCAL_UID=501
-ARG LOCAL_GID=20
+# Bootstrap user/group. Entry point remaps this identity to the mounted workspace owner at runtime.
 
 # Install development tools, benchmarking dependencies, and curl for Codex CLI installation
 RUN apt-get update && apt-get install -y \
@@ -30,17 +28,13 @@ RUN apt-get update && apt-get install -y \
 # Install Codex CLI + Claude Code
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
-# Create paulbiggar user with host-matching UID/GID to avoid volume permission issues
+# Create bootstrap user (remapped at container start to match mounted workspace UID/GID)
 RUN mkdir -p /Users/paulbiggar/projects && \
-    if getent group "${LOCAL_GID}" > /dev/null; then \
-      useradd -m -u "${LOCAL_UID}" -g "${LOCAL_GID}" -s /bin/bash paulbiggar; \
-    else \
-      groupadd -g "${LOCAL_GID}" paulbiggar && \
-      useradd -m -u "${LOCAL_UID}" -g "${LOCAL_GID}" -s /bin/bash paulbiggar; \
-    fi && \
+    groupadd -g 1000 paulbiggar && \
+    useradd -m -u 1000 -g 1000 -s /bin/bash paulbiggar && \
     echo "paulbiggar ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     mkdir -p /home/paulbiggar/.nuget/packages /home/paulbiggar/.codex /home/paulbiggar/.claude && \
-    chown -R "${LOCAL_UID}:${LOCAL_GID}" /Users/paulbiggar /home/paulbiggar
+    chown -R 1000:1000 /Users/paulbiggar /home/paulbiggar
 
 # Switch to paulbiggar user
 USER paulbiggar
@@ -68,7 +62,7 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
     echo 'eval $(opam env)' >> ~/.bashrc
 
 # Install darklang interpreter from latest GitHub release
-COPY --chown=${LOCAL_UID}:${LOCAL_GID} scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
+COPY --chown=1000:1000 scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
 RUN bash /tmp/install-darklang-interpreter.sh && \
     rm /tmp/install-darklang-interpreter.sh
 
@@ -85,22 +79,42 @@ RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"
 # Enable bash completion for git and other installed tools
 RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
 
-# Ensure mounted workspace build directories are writable by the container user.
+# Remap paulbiggar user/group to match mounted workspace owner at runtime.
 RUN sudo tee /usr/local/bin/docker-entrypoint.sh > /dev/null <<'EOF' && sudo chmod +x /usr/local/bin/docker-entrypoint.sh
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 workspace="/Users/paulbiggar/projects/compiler-for-dark"
+target_uid="$(stat -c '%u' "$workspace" 2>/dev/null || id -u paulbiggar)"
+target_gid="$(stat -c '%g' "$workspace" 2>/dev/null || id -g paulbiggar)"
+
+if ! getent group "$target_gid" > /dev/null; then
+  if getent group paulbiggar > /dev/null; then
+    groupmod -o -g "$target_gid" paulbiggar
+  else
+    groupadd -g "$target_gid" paulbiggar
+  fi
+fi
+
+if [ "$(id -u paulbiggar)" != "$target_uid" ]; then
+  usermod -o -u "$target_uid" paulbiggar
+fi
+if [ "$(id -g paulbiggar)" != "$target_gid" ]; then
+  usermod -g "$target_gid" paulbiggar
+fi
+
+# Keep non-source writable state aligned with the remapped identity.
+chown -R "$target_uid:$target_gid" /home/paulbiggar/.nuget || true
 
 for dir in "$workspace/bin" "$workspace/obj"; do
   mkdir -p "$dir"
   if [ ! -w "$dir" ]; then
-    sudo chown -R "$(id -u):$(id -g)" "$dir" || true
+    chown -R "$target_uid:$target_gid" "$dir" || true
     chmod -R u+rwX "$dir" || true
   fi
 done
 
-exec "$@"
+exec runuser -u paulbiggar -- "$@"
 EOF
 
 # Set working directory to match host path
@@ -108,6 +122,9 @@ WORKDIR /Users/paulbiggar/projects/compiler-for-dark
 
 # Container will use volume mount for source code
 # No COPY needed - source comes from host via volume
+
+# Run entrypoint as root so user/group remap can happen before dropping privileges.
+USER root
 
 # Default command: bash shell
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

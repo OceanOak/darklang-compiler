@@ -3,15 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # Override LOCAL_UID/LOCAL_GID when host IDs differ from macOS defaults (501:20)
-      args:
-        LOCAL_UID: ${LOCAL_UID:-501}
-        LOCAL_GID: ${LOCAL_GID:-20}
       platforms:
         - linux/arm64
     image: compiler-for-dark:dev
     container_name: compiler-dev
-    user: "${LOCAL_UID:-501}:${LOCAL_GID:-20}"
 
     # Volume mounts
     volumes:
