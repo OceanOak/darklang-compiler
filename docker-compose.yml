@@ -11,7 +11,7 @@ services:
     # Volume mounts
     volumes:
       # Source code (editable from host) - matches host path
-      - .:/home/dark/c4d:cached
+      - /Users/paulbiggar/projects/c4d:/Users/paulbiggar/projects/c4d:cached
 
       # Codex configuration and session data
       - ~/.codex:/home/dark/.codex:cached
@@ -21,7 +21,7 @@ services:
       # Persist .NET packages across container restarts
       - dotnet-packages:/home/dark/.nuget/packages
 
-    working_dir: /home/dark/c4d
+    working_dir: /Users/paulbiggar/projects/c4d
 
     # Environment variables
     environment:

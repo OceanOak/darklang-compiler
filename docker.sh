@@ -3,6 +3,8 @@
 
 set -e
 
+workspace="/Users/paulbiggar/projects/c4d"
+
 fix_nuget_permissions() {
   echo "Fixing NuGet cache permissions..."
   local target_home
@@ -45,7 +47,7 @@ case "$1" in
 
   shell)
     echo "Entering container shell..."
-    docker compose exec --user dark dev bash
+    docker compose exec --user dark -w "$workspace" dev bash
     ;;
 
   restart)
@@ -62,12 +64,12 @@ case "$1" in
 
   clean)
     echo "Cleaning build artifacts in container..."
-    docker compose exec --user dark dev dotnet clean
+    docker compose exec --user dark -w "$workspace" dev dotnet clean
     ;;
 
   build-compiler)
     echo "Building compiler in container..."
-    docker compose exec --user dark dev dotnet build
+    docker compose exec --user dark -w "$workspace" dev dotnet build
     ;;
 
   status)
