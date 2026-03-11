@@ -157,7 +157,7 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 ./docker.sh shell
 ```
 
-The repo is mounted into the container at `/Users/paulbiggar/projects/c4d`. A `~/c4d` symlink is also provided inside the container for convenience.
+The repo is mounted into the container at `/Users/paulbiggar/projects/c4d`.
 
 ### Using Codex Inside Container
 
@@ -171,14 +171,14 @@ codex login
 # Follow prompts to enter your API key
 
 # Start Codex in the repo workspace
-cd ~/c4d
+cd /Users/paulbiggar/projects/c4d
 codex
 ```
 
 **Subsequent sessions:**
 ```bash
 ./docker.sh shell
-cd ~/c4d
+cd /Users/paulbiggar/projects/c4d
 codex
 ```
 

@@ -34,7 +34,6 @@ RUN mkdir -p /Users/paulbiggar/projects && \
     useradd -m -u 1000 -g 1000 -s /bin/bash dark && \
     echo "dark ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     mkdir -p /home/dark/.nuget/packages /home/dark/.codex /home/dark/.claude && \
-    ln -s /Users/paulbiggar/projects/c4d /home/dark/c4d && \
     chown -R 1000:1000 /home/dark
 
 # Switch to dark user
@@ -74,7 +73,7 @@ RUN git config --global alias.ci commit && \
 
 # Configure nice bash prompt with git branch and short path
 RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> ~/.bashrc && \
-    echo 'short_path() { pwd | sed "s|/Users/paulbiggar/projects/c4d|~/c4d|" | sed "s|$HOME|~|"; }' >> ~/.bashrc && \
+    echo 'short_path() { pwd | sed "s|$HOME|~|"; }' >> ~/.bashrc && \
     echo 'PS1="\[\033[1;32m\]\u@dark\[\033[0m\]:\[\033[1;34m\]\$(short_path)\[\033[0m\]\[\033[1;33m\]\$(parse_git_branch | sed \"s/.*/ (&)/\")\[\033[0m\]\$ "' >> ~/.bashrc
 
 # Enable bash completion for git and other installed tools
