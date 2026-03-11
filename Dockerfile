@@ -28,13 +28,13 @@ RUN apt-get update && apt-get install -y \
 # Install Codex CLI + Claude Code
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
-# Create bootstrap user (remapped at container start to match mounted workspace UID/GID)
+# Create a bootstrap user that can always be remapped to the mounted workspace owner at runtime.
 RUN mkdir -p /Users/paulbiggar/projects && \
-    groupadd -g 1000 dark && \
-    useradd -m -u 1000 -g 1000 -s /bin/bash dark && \
+    if ! getent group dark > /dev/null; then groupadd dark; fi && \
+    if ! id -u dark > /dev/null 2>&1; then useradd -m -g dark -s /bin/bash dark; fi && \
     echo "dark ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     mkdir -p /home/dark/.nuget/packages /home/dark/.codex /home/dark/.claude && \
-    chown -R 1000:1000 /home/dark
+    chown -R dark:dark /home/dark
 
 # Switch to dark user
 USER dark
@@ -62,7 +62,7 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
     echo 'eval $(opam env)' >> ~/.bashrc
 
 # Install darklang interpreter from latest GitHub release
-COPY --chown=1000:1000 scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
+COPY --chown=dark:dark scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
 RUN bash /tmp/install-darklang-interpreter.sh && \
     rm /tmp/install-darklang-interpreter.sh
 
