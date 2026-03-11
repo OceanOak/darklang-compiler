@@ -5,13 +5,23 @@ set -e
 
 fix_nuget_permissions() {
   echo "Fixing NuGet cache permissions..."
-  docker compose exec --user root -T dev bash -lc '
+  local target_home
+  local target_uid
+  local target_gid
+
+  read -r target_home target_uid target_gid < <(
+    docker compose exec --user dark -T dev sh -lc 'printf "%s %s %s\n" "$HOME" "$(id -u)" "$(id -g)"'
+  )
+
+  docker compose exec --user root -T \
+    -e TARGET_HOME="$target_home" \
+    -e TARGET_UID="$target_uid" \
+    -e TARGET_GID="$target_gid" \
+    dev bash -lc '
     set -e
-    uid=$(id -u paulbiggar)
-    gid=$(id -g paulbiggar)
-    mkdir -p /home/paulbiggar/.nuget/packages
-    chown -R "$uid:$gid" /home/paulbiggar/.nuget
-    chmod -R u+rwX /home/paulbiggar/.nuget
+    mkdir -p "$TARGET_HOME/.nuget/packages"
+    chown -R "$TARGET_UID:$TARGET_GID" "$TARGET_HOME/.nuget"
+    chmod -R u+rwX "$TARGET_HOME/.nuget"
   '
 }
 
@@ -35,7 +45,7 @@ case "$1" in
 
   shell)
     echo "Entering container shell..."
-    docker compose exec dev bash
+    docker compose exec --user dark dev bash
     ;;
 
   restart)
@@ -52,12 +62,12 @@ case "$1" in
 
   clean)
     echo "Cleaning build artifacts in container..."
-    docker compose exec dev dotnet clean
+    docker compose exec --user dark dev dotnet clean
     ;;
 
   build-compiler)
     echo "Building compiler in container..."
-    docker compose exec dev dotnet build
+    docker compose exec --user dark dev dotnet build
     ;;
 
   status)

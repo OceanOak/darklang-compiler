@@ -29,24 +29,23 @@ RUN apt-get update && apt-get install -y \
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
 # Create bootstrap user (remapped at container start to match mounted workspace UID/GID)
-RUN mkdir -p /Users/paulbiggar/projects && \
-    groupadd -g 1000 paulbiggar && \
-    useradd -m -u 1000 -g 1000 -s /bin/bash paulbiggar && \
-    echo "paulbiggar ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    mkdir -p /home/paulbiggar/.nuget/packages /home/paulbiggar/.codex /home/paulbiggar/.claude && \
-    chown -R 1000:1000 /Users/paulbiggar /home/paulbiggar
+RUN groupadd -g 1000 dark && \
+    useradd -m -u 1000 -g 1000 -s /bin/bash dark && \
+    echo "dark ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    mkdir -p /home/dark/c4d /home/dark/.nuget/packages /home/dark/.codex /home/dark/.claude && \
+    chown -R 1000:1000 /home/dark
 
-# Switch to paulbiggar user
-USER paulbiggar
+# Switch to dark user
+USER dark
 
 # Use the image-provided .NET installation as the system runtime/SDK
-ENV HOME="/home/paulbiggar"
+ENV HOME="/home/dark"
 ENV DOTNET_ROOT="/usr/share/dotnet"
-ENV DOTNET_CLI_HOME="/home/paulbiggar"
+ENV DOTNET_CLI_HOME="/home/dark"
 ENV DOTNET_MULTILEVEL_LOOKUP="0"
 
 # Add .NET, Rust and local bin to PATH
-ENV PATH="${DOTNET_ROOT}:/home/paulbiggar/.local/bin:/home/paulbiggar/.cargo/bin:${PATH}"
+ENV PATH="${DOTNET_ROOT}:/home/dark/.local/bin:/home/dark/.cargo/bin:${PATH}"
 
 # Pre-download workload advertising manifests so first-run commands don't fail workload verification.
 # Needs elevated privileges because the SDK is installed system-wide under /usr/share/dotnet.
@@ -73,38 +72,38 @@ RUN git config --global alias.ci commit && \
 
 # Configure nice bash prompt with git branch and short path
 RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> ~/.bashrc && \
-    echo 'short_path() { pwd | sed "s|/Users/paulbiggar/projects/compiler-for-dark|~/c4d|" | sed "s|$HOME|~|"; }' >> ~/.bashrc && \
+    echo 'short_path() { pwd | sed "s|$HOME/c4d|~/c4d|" | sed "s|$HOME|~|"; }' >> ~/.bashrc && \
     echo 'PS1="\[\033[1;32m\]\u@dark\[\033[0m\]:\[\033[1;34m\]\$(short_path)\[\033[0m\]\[\033[1;33m\]\$(parse_git_branch | sed \"s/.*/ (&)/\")\[\033[0m\]\$ "' >> ~/.bashrc
 
 # Enable bash completion for git and other installed tools
 RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
 
-# Remap paulbiggar user/group to match mounted workspace owner at runtime.
+# Remap dark user/group to match mounted workspace owner at runtime.
 RUN sudo tee /usr/local/bin/docker-entrypoint.sh > /dev/null <<'EOF' && sudo chmod +x /usr/local/bin/docker-entrypoint.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-workspace="/Users/paulbiggar/projects/compiler-for-dark"
-target_uid="$(stat -c '%u' "$workspace" 2>/dev/null || id -u paulbiggar)"
-target_gid="$(stat -c '%g' "$workspace" 2>/dev/null || id -g paulbiggar)"
+workspace="/home/dark/c4d"
+target_uid="$(stat -c '%u' "$workspace" 2>/dev/null || id -u dark)"
+target_gid="$(stat -c '%g' "$workspace" 2>/dev/null || id -g dark)"
 
 if ! getent group "$target_gid" > /dev/null; then
-  if getent group paulbiggar > /dev/null; then
-    groupmod -o -g "$target_gid" paulbiggar
+  if getent group dark > /dev/null; then
+    groupmod -o -g "$target_gid" dark
   else
-    groupadd -g "$target_gid" paulbiggar
+    groupadd -g "$target_gid" dark
   fi
 fi
 
-if [ "$(id -u paulbiggar)" != "$target_uid" ]; then
-  usermod -o -u "$target_uid" paulbiggar
+if [ "$(id -u dark)" != "$target_uid" ]; then
+  usermod -o -u "$target_uid" dark
 fi
-if [ "$(id -g paulbiggar)" != "$target_gid" ]; then
-  usermod -g "$target_gid" paulbiggar
+if [ "$(id -g dark)" != "$target_gid" ]; then
+  usermod -g "$target_gid" dark
 fi
 
 # Keep non-source writable state aligned with the remapped identity.
-chown -R "$target_uid:$target_gid" /home/paulbiggar/.nuget || true
+chown -R "$target_uid:$target_gid" /home/dark/.nuget || true
 
 for dir in "$workspace/bin" "$workspace/obj"; do
   mkdir -p "$dir"
@@ -114,11 +113,11 @@ for dir in "$workspace/bin" "$workspace/obj"; do
   fi
 done
 
-exec runuser -u paulbiggar -- "$@"
+exec runuser -u dark -- "$@"
 EOF
 
 # Set working directory to match host path
-WORKDIR /Users/paulbiggar/projects/compiler-for-dark
+WORKDIR /home/dark/c4d
 
 # Container will use volume mount for source code
 # No COPY needed - source comes from host via volume

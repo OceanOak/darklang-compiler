@@ -11,17 +11,17 @@ services:
     # Volume mounts
     volumes:
       # Source code (editable from host) - matches host path
-      - .:/Users/paulbiggar/projects/compiler-for-dark:cached
+      - .:/home/dark/c4d:cached
 
       # Codex configuration and session data
-      - ~/.codex:/home/paulbiggar/.codex:cached
+      - ~/.codex:/home/dark/.codex:cached
       # Claude configuration and session data
-      - ~/.claude:/home/paulbiggar/.claude:cached
+      - ~/.claude:/home/dark/.claude:cached
 
       # Persist .NET packages across container restarts
-      - dotnet-packages:/home/paulbiggar/.nuget/packages
+      - dotnet-packages:/home/dark/.nuget/packages
 
-    working_dir: /Users/paulbiggar/projects/compiler-for-dark
+    working_dir: /home/dark/c4d
 
     # Environment variables
     environment:

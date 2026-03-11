@@ -168,15 +168,15 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 codex login
 # Follow prompts to enter your API key
 
-# Start Codex in /workspace
-cd /workspace
+# Start Codex in the repo workspace
+cd ~/c4d
 codex
 ```
 
 **Subsequent sessions:**
 ```bash
 ./docker.sh shell
-cd /workspace
+cd ~/c4d
 codex
 ```
 
@@ -231,7 +231,7 @@ dotnet clean                    # Clean build artifacts
 
 ```bash
 ./docker.sh build           # Build Docker image
-./docker.sh up              # Start container (auto-fixes NuGet volume permissions)
+./docker.sh up              # Start container (auto-remaps dark to the mount owner and fixes NuGet permissions)
 ./docker.sh down            # Stop container
 ./docker.sh shell           # Enter container shell
 ./docker.sh restart         # Restart container
