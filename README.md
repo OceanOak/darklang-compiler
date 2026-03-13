@@ -153,36 +153,41 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 # Start container
 ./docker.sh up
 
-# Enter container
+# From main/
 ./docker.sh shell
+
+# From wt-1/ or wt-2/, run the same command via the shared script
+../main/docker.sh shell
 ```
 
-The repo is mounted into the container at `/Users/paulbiggar/projects/c4d`.
+The `~/projects/c4d` parent directory is bind-mounted into the container at `/workspace`, so the worktrees are available at `/workspace/main`, `/workspace/wt-1`, and `/workspace/wt-2`. The shell runs as the non-root `dark` user.
 
 ### Using Codex Inside Container
 
 **First time setup - Authenticate:**
 ```bash
-# Enter container
+# Enter container from the current worktree directory
 ./docker.sh shell
 
 # Inside container - authenticate Codex
 codex login
 # Follow prompts to enter your API key
 
-# Start Codex in the repo workspace
-cd /Users/paulbiggar/projects/c4d
+# Start Codex in the matching container directory
 codex
 ```
 
 **Subsequent sessions:**
 ```bash
 ./docker.sh shell
-cd /Users/paulbiggar/projects/c4d
+codex
+
+# From wt-1/ or wt-2/
+../main/docker.sh shell
 codex
 ```
 
-Your Codex configuration, conversation history, and session memory are persisted via volume mount at `~/.codex`.
+Your Codex configuration, conversation history, and session memory are persisted in the Docker-managed `codex-home` volume mounted at `~/.codex`.
 
 ### Using Claude Code Inside Container
 
@@ -200,6 +205,10 @@ claude login
 ```bash
 ./docker.sh shell
 claude
+
+# From wt-2/
+../main/docker.sh shell
+claude
 ```
 
 **Once-off install (if you are already inside a running container):**
@@ -207,13 +216,13 @@ claude
 npm install -g @anthropic-ai/claude-code
 ```
 
-Your Claude configuration and session data are persisted via volume mount at `~/.claude`.
+Your Claude configuration and session data are persisted in the Docker-managed `claude-home` volume mounted at `~/.claude`.
 
 ### Development Workflow
 
 **Option A: Using Codex inside container (recommended for full sandboxing)**
 ```bash
-./docker.sh shell
+./docker.sh shell              # Opens the matching /workspace/... path
 codex  # Start Codex session
 # Work with Codex interactively in the sandboxed environment
 ```
@@ -221,8 +230,8 @@ codex  # Start Codex session
 **Option B: Manual development**
 ```bash
 # Inside container
-dotnet build                    # Build compiler
-dotnet clean                    # Clean build artifacts
+dotnet build                    # Build compiler in the current worktree
+dotnet clean                    # Clean build artifacts in the current worktree
 
 # On host (macOS)
 # Edit source files with your normal editor
@@ -233,11 +242,11 @@ dotnet clean                    # Clean build artifacts
 
 ```bash
 ./docker.sh build           # Build Docker image
-./docker.sh up              # Start container (auto-remaps dark to the mount owner and fixes NuGet permissions)
+./docker.sh up              # Start container
 ./docker.sh down            # Stop container
-./docker.sh shell           # Enter container shell
+./docker.sh shell           # Enter the matching c4d path
 ./docker.sh restart         # Restart container
-./docker.sh build-compiler  # Build compiler in container
+./docker.sh build-compiler  # Build compiler in the matching c4d path
 ./docker.sh status          # Show container status
 ```
 
@@ -246,9 +255,11 @@ dotnet clean                    # Clean build artifacts
 - ✅ Codex CLI pre-installed
 - ✅ Claude Code pre-installed
 - ✅ Build compiler DLL in container
-- ✅ Volume mount for source code (edit on host or in container)
-- ✅ Codex config/history persisted via volume mount
-- ✅ Claude config/history persisted via volume mount
+- ✅ Non-root `dark` shell by default
+- ✅ Bind mount for `main`, `wt-1`, and `wt-2` through one parent mount
+- ✅ Codex config/history persisted in a Docker volume
+- ✅ Claude config/history persisted in a Docker volume
+- ✅ NuGet packages persisted in a Docker volume
 - ✅ Full filesystem isolation and sandboxing
 - ✅ Run all tests in container (generates Linux ELF binaries)
 

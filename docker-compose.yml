@@ -7,21 +7,27 @@ services:
         - linux/arm64
     image: compiler-for-dark:dev
     container_name: compiler-dev
+    user: dark
 
     # Volume mounts
     volumes:
-      # Source code (editable from host) - matches host path
-      - /Users/paulbiggar/projects/c4d:/Users/paulbiggar/projects/c4d:cached
+      # Mount the full c4d worktree parent so linked Git worktrees stay intact.
+      - type: bind
+        source: ..
+        target: /workspace
 
-      # Codex configuration and session data
-      - ~/.codex:/home/dark/.codex:cached
-      # Claude configuration and session data
-      - ~/.claude:/home/dark/.claude:cached
+      # Persist tool state inside Docker-managed volumes.
+      - type: volume
+        source: codex-home
+        target: /home/dark/.codex
+      - type: volume
+        source: claude-home
+        target: /home/dark/.claude
+      - type: volume
+        source: nuget-packages
+        target: /home/dark/.nuget/packages
 
-      # Persist .NET packages across container restarts
-      - dotnet-packages:/home/dark/.nuget/packages
-
-    working_dir: /Users/paulbiggar/projects/c4d
+    working_dir: /workspace/main
 
     # Environment variables
     environment:
@@ -38,4 +44,6 @@ services:
     platform: linux/arm64
 
 volumes:
-  dotnet-packages:
+  codex-home:
+  claude-home:
+  nuget-packages:

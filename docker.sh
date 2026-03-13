@@ -3,28 +3,30 @@
 
 set -e
 
-workspace="/Users/paulbiggar/projects/c4d"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+host_workspace_root="$(cd "$script_dir/.." && pwd -P)"
+workspace_root="/workspace"
+default_worktree="main"
 
-fix_nuget_permissions() {
-  echo "Fixing NuGet cache permissions..."
-  local target_home
-  local target_uid
-  local target_gid
+resolve_workspace_from_pwd() {
+  local current_dir
+  current_dir="$(pwd -P)"
 
-  read -r target_home target_uid target_gid < <(
-    docker compose exec --user dark -T dev sh -lc 'printf "%s %s %s\n" "$HOME" "$(id -u)" "$(id -g)"'
-  )
+  case "$current_dir" in
+    "$host_workspace_root")
+      printf "%s\n" "$workspace_root"
+      ;;
 
-  docker compose exec --user root -T \
-    -e TARGET_HOME="$target_home" \
-    -e TARGET_UID="$target_uid" \
-    -e TARGET_GID="$target_gid" \
-    dev bash -lc '
-    set -e
-    mkdir -p "$TARGET_HOME/.nuget/packages"
-    chown -R "$TARGET_UID:$TARGET_GID" "$TARGET_HOME/.nuget"
-    chmod -R u+rwX "$TARGET_HOME/.nuget"
-  '
+    "$host_workspace_root"/*)
+      local relative_path
+      relative_path="${current_dir#"$host_workspace_root"/}"
+      printf "%s/%s\n" "$workspace_root" "$relative_path"
+      ;;
+
+    *)
+      printf "%s/%s\n" "$workspace_root" "$default_worktree"
+      ;;
+  esac
 }
 
 case "$1" in
@@ -36,8 +38,7 @@ case "$1" in
   up)
     echo "Starting container..."
     docker compose up -d
-    fix_nuget_permissions
-    echo "Container started. Use './docker.sh shell' to enter."
+    echo "Container started. Use './docker.sh shell' from any c4d worktree directory to enter the matching path."
     ;;
 
   down)
@@ -46,15 +47,15 @@ case "$1" in
     ;;
 
   shell)
-    echo "Entering container shell..."
-    docker compose exec --user dark -w "$workspace" dev bash
+    workspace="$(resolve_workspace_from_pwd)"
+    echo "Entering container shell at $workspace..."
+    docker compose exec -w "$workspace" dev bash
     ;;
 
   restart)
     echo "Restarting container..."
     docker compose down
     docker compose up -d
-    fix_nuget_permissions
     echo "Container restarted."
     ;;
 
@@ -63,13 +64,15 @@ case "$1" in
     ;;
 
   clean)
+    workspace="$(resolve_workspace_from_pwd)"
     echo "Cleaning build artifacts in container..."
-    docker compose exec --user dark -w "$workspace" dev dotnet clean
+    docker compose exec -w "$workspace" dev dotnet clean
     ;;
 
   build-compiler)
+    workspace="$(resolve_workspace_from_pwd)"
     echo "Building compiler in container..."
-    docker compose exec --user dark -w "$workspace" dev dotnet build
+    docker compose exec -w "$workspace" dev dotnet build
     ;;
 
   status)
@@ -86,11 +89,11 @@ case "$1" in
     echo "  build           Build Docker image"
     echo "  up              Start container (detached)"
     echo "  down            Stop container"
-    echo "  shell           Enter container shell"
+    echo "  shell           Enter a container shell at the matching c4d path"
     echo "  restart         Restart container"
     echo "  logs            View container logs"
-    echo "  clean           Clean build artifacts"
-    echo "  build-compiler  Build compiler in container"
+    echo "  clean           Clean build artifacts at the matching c4d path"
+    echo "  build-compiler  Build compiler at the matching c4d path"
     echo "  status          Show container status"
     exit 1
     ;;

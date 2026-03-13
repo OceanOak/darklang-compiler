@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
 
-# Bootstrap user/group. Entry point remaps this identity to the mounted workspace owner at runtime.
+# Dockerfile - Build a fixed non-root development shell image for local compiler work.
 
 # Install development tools, benchmarking dependencies, and curl for Codex CLI installation
 RUN apt-get update && apt-get install -y \
@@ -28,13 +28,13 @@ RUN apt-get update && apt-get install -y \
 # Install Codex CLI + Claude Code
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
-# Create a bootstrap user that can always be remapped to the mounted workspace owner at runtime.
-RUN mkdir -p /Users/paulbiggar/projects && \
+# Create a fixed non-root user and the writable state directories it owns.
+RUN mkdir -p /workspace && \
     if ! getent group dark > /dev/null; then groupadd dark; fi && \
     if ! id -u dark > /dev/null 2>&1; then useradd -m -g dark -s /bin/bash dark; fi && \
     echo "dark ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     mkdir -p /home/dark/.nuget/packages /home/dark/.codex /home/dark/.claude && \
-    chown -R dark:dark /home/dark
+    chown -R dark:dark /home/dark /workspace
 
 # Switch to dark user
 USER dark
@@ -79,53 +79,8 @@ RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"
 # Enable bash completion for git and other installed tools
 RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
 
-# Remap dark user/group to match mounted workspace owner at runtime.
-RUN sudo tee /usr/local/bin/docker-entrypoint.sh > /dev/null <<'EOF' && sudo chmod +x /usr/local/bin/docker-entrypoint.sh
-#!/usr/bin/env bash
-set -euo pipefail
-
-workspace="/Users/paulbiggar/projects/c4d"
-target_uid="$(stat -c '%u' "$workspace" 2>/dev/null || id -u dark)"
-target_gid="$(stat -c '%g' "$workspace" 2>/dev/null || id -g dark)"
-
-if ! getent group "$target_gid" > /dev/null; then
-  if getent group dark > /dev/null; then
-    groupmod -o -g "$target_gid" dark
-  else
-    groupadd -g "$target_gid" dark
-  fi
-fi
-
-if [ "$(id -u dark)" != "$target_uid" ]; then
-  usermod -o -u "$target_uid" dark
-fi
-if [ "$(id -g dark)" != "$target_gid" ]; then
-  usermod -g "$target_gid" dark
-fi
-
-# Keep non-source writable state aligned with the remapped identity.
-chown -R "$target_uid:$target_gid" /home/dark/.nuget || true
-
-for dir in "$workspace/bin" "$workspace/obj"; do
-  mkdir -p "$dir"
-  if [ ! -w "$dir" ]; then
-    chown -R "$target_uid:$target_gid" "$dir" || true
-    chmod -R u+rwX "$dir" || true
-  fi
-done
-
-exec runuser -u dark -- "$@"
-EOF
-
-# Set working directory to match host path
-WORKDIR /Users/paulbiggar/projects/c4d
-
-# Container will use volume mount for source code
-# No COPY needed - source comes from host via volume
-
-# Run entrypoint as root so user/group remap can happen before dropping privileges.
-USER root
+# Set working directory to the bind-mounted checkout.
+WORKDIR /workspace
 
 # Default command: bash shell
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash"]
