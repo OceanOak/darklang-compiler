@@ -16,6 +16,26 @@ services:
         source: ..
         target: /workspace
 
+      # Keep build outputs off the host bind mount for each worktree.
+      - type: volume
+        source: main-bin
+        target: /workspace/main/bin
+      - type: volume
+        source: main-obj
+        target: /workspace/main/obj
+      - type: volume
+        source: wt-1-bin
+        target: /workspace/wt-1/bin
+      - type: volume
+        source: wt-1-obj
+        target: /workspace/wt-1/obj
+      - type: volume
+        source: wt-2-bin
+        target: /workspace/wt-2/bin
+      - type: volume
+        source: wt-2-obj
+        target: /workspace/wt-2/obj
+
       # Persist tool state inside Docker-managed volumes.
       - type: volume
         source: codex-home
@@ -44,6 +64,12 @@ services:
     platform: linux/arm64
 
 volumes:
+  main-bin:
+  main-obj:
+  wt-1-bin:
+  wt-1-obj:
+  wt-2-bin:
+  wt-2-obj:
   codex-home:
   claude-home:
   nuget-packages:

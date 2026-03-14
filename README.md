@@ -160,7 +160,7 @@ The library surface in `src/DarkCompiler/CompilerLibrary.fs` is intentionally sm
 ../main/docker.sh shell
 ```
 
-The `~/projects/c4d` parent directory is bind-mounted into the container at `/workspace`, so the worktrees are available at `/workspace/main`, `/workspace/wt-1`, and `/workspace/wt-2`. The shell runs as the non-root `dark` user.
+The `~/projects/c4d` parent directory is bind-mounted into the container at `/workspace`, so the worktrees are available at `/workspace/main`, `/workspace/wt-1`, and `/workspace/wt-2`. The shell runs as the non-root `dark` user. Each worktree's top-level `bin/` and `obj/` directories are overlaid with Docker volumes so build artifacts stay inside the container.
 
 ### Using Codex Inside Container
 
@@ -257,6 +257,7 @@ dotnet clean                    # Clean build artifacts in the current worktree
 - ✅ Build compiler DLL in container
 - ✅ Non-root `dark` shell by default
 - ✅ Bind mount for `main`, `wt-1`, and `wt-2` through one parent mount
+- ✅ Separate Docker volumes for `bin/` and `obj/` in each worktree
 - ✅ Codex config/history persisted in a Docker volume
 - ✅ Claude config/history persisted in a Docker volume
 - ✅ NuGet packages persisted in a Docker volume
