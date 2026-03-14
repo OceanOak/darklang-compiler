@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     npm \
     htop \
     jq \
+    shellcheck \
     bash-completion \
     # Benchmarking tools
     python3 \
