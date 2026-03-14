@@ -1,104 +1,162 @@
 # Upstream E2E Enablement Test Plan
 
-Date: 2026-03-06
+Date: 2026-03-13
 
-Disabled files checked:
+This file has been re-evaluated against the current branch instead of preserving the
+2026-03-06 snapshot.
+
+Checked files:
 - `language/apply/eapply.dark`
 - `language/custom-data/aliases.dark`
 - `language/flow-control/epipe.dark`
 - `language/derror.dark`
 - `language/elambda.dark`
 - `stdlib/date.dark`
+- `src/Tests/e2e/upstream/cloud/db.dark` (`--roundtrip-all-dark` blocker from the previous plan)
 
-Method:
-1. Add the target file to `defaultUpstreamDarkPaths` in `src/Tests/test-suite-tooling/TestRunner.fs`.
-2. Remove its per-file line allowlist entry (if present) from `upstreamEnablementLineAllowlist`.
-3. Run `./run-tests`.
-4. Keep enablement only if green; otherwise restore baseline and record blockers.
+Method used on 2026-03-13:
+1. Inspect the current upstream gating state in `src/Tests/test-suite-tooling/TestRunner.fs`.
+2. Run targeted test slices with `./run-tests` for the files above.
+3. Record whether the original blocker still reproduces.
+4. Record the current enablement state:
+   - in default upstream E2E coverage
+   - allowlisted only
+   - still fully blocked
 
-## `language/apply/eapply.dark` (currently disabled)
+## Current enablement snapshot
+
+- `eapply.dark`: partially enabled in the default upstream subset.
+- `aliases.dark`: partially enabled behind a line allowlist only.
+- `epipe.dark`: still blocked.
+- `derror.dark`: still blocked, but the old parser/preamble blockers are no longer the active issue.
+- `elambda.dark`: still blocked by the same `RefCountInsertion` crash.
+- `date.dark`: partially enabled behind a line allowlist only.
+- `cloud/db.dark` roundtrip blocker: no longer reproduces.
+
+## `language/apply/eapply.dark`
+
+Status: partially enabled.
+
+Current runner state:
+- Included in `defaultUpstreamDarkPaths`.
+- Gated by `upstreamEnablementLineAllowlist`.
+- Enabled lines: `1, 4, 7, 10, 19, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 75, 76, 78, 79, 88, 92, 93, 95, 96, 98, 100, 104, 108, 110, 124, 135, 136, 138, 139, 141, 142` (`38` lines).
+
+What is fixed relative to the previous plan:
+- The old roundtrip parser blocker at `L1` no longer reproduces in the current targeted run.
+- The old suite-level preamble build/type-mismatch blocker no longer prevents targeted execution.
+- Multiple `eapply` cases have been promoted into the allowlist since the previous snapshot.
+
+Evidence:
+- `./run-tests --quiet --filter=eapply` passes.
+
+Remaining work:
+- Remove the line allowlist incrementally and continue promoting cases until the whole file can run ungated.
+
+## `language/custom-data/aliases.dark`
+
+Status: partially enabled, but not yet part of the default upstream subset.
+
+Current runner state:
+- Not included in `defaultUpstreamDarkPaths`.
+- Gated by `upstreamEnablementLineAllowlist`.
+- Enabled lines: `6, 9`.
+
+What is fixed relative to the previous plan:
+- The old roundtrip parser blocker for the `L48` preamble snippet no longer blocks the targeted run.
+- The old suite-level preamble type error (`Cannot apply non-function type: String`) no longer blocks the targeted run.
+
+Evidence:
+- `./run-tests --quiet --filter=aliases` passes.
+
+Remaining work:
+- Expand allowlisted coverage beyond `L6` and `L9`.
+- Once enough of the file is green, add it to `defaultUpstreamDarkPaths`.
+
+## `language/flow-control/epipe.dark`
 
 Status: blocked.
 
-Blocking tests/reasons:
-- Roundtrip parser test fails at `L1` (`AstChangedAfterRoundtrip`).
-- E2E preamble build fails for the suite with: `Type mismatch in integer literal: expected String, got Int64`.
-- Representative failing tests from this file when fully enabled: `L1, L2, L3, L6, L9, L11, L18, L19, L21, L22, L25, L26, L30, L39, L43, L47, L51, L55, L60, L65, L69, L75, L76`.
+Current failures from `./run-tests --filter=epipe`:
+- Value mismatch: `L9, L14, L16, L24, L42, L43, L45, L47, L49, L58, L62, L66, L68, L70, L73, L80, L85, L88, L99`
+- Error-message mismatch: `L31`
+- Total current file-local failures: `20`
 
-## `language/custom-data/aliases.dark` (currently disabled)
+Notes:
+- This is still a semantic/runtime issue, not a parser gating issue.
+- The current failure count is `20`, not `19` as in the previous snapshot.
 
-Status: blocked.
-
-Blocking tests/reasons:
-- Roundtrip parser fails for `L48` preamble snippet with: `Expected ',' or '}' after record field`.
-- E2E preamble type error for the suite: `Cannot apply non-function type: String`.
-- Representative failing tests from this file when fully enabled: `L1, L2, L3, L6, L9, L11, L13, L14, L16, L17, L18, L19, L21, L22, L25, L26, L30, L39, L43, L47, L51, L55, L60, L65, L69, L75, L76`.
-
-## `language/flow-control/epipe.dark` (currently disabled)
+## `language/derror.dark`
 
 Status: blocked.
 
-Blocking tests:
-- `L9` value mismatch.
-- `L11` expected error message mismatch (`Uncaught exception: err` not found).
-- `L14` value mismatch.
-- `L16` value mismatch.
-- `L24` value mismatch.
-- `L31` expected runtime-error text mismatch.
-- `L42` expected-value source synthesis failure.
-- `L43` value mismatch.
-- `L47` value mismatch.
-- `L58, L62, L66, L68, L70, L73, L80, L85, L88, L99` value mismatch.
-- Total file-local failures when enabled: `19`.
+What is fixed relative to the previous plan:
+- The old roundtrip parser blocker at `L2` no longer blocks execution.
+- The old suite-level preamble parse error no longer blocks execution.
 
-## `language/derror.dark` (currently disabled)
+Current failures from `./run-tests --filter=derror`:
+- Error-message mismatch at `L2`
+- Runtime error propagation / message mismatches at `L10, L13, L15, L16, L17, L18, L19, L21, L22, L23, L25, L32`
+- Total current file-local failures: `13`
 
-Status: blocked.
+Notes:
+- `derror.dark` has moved from syntax/preamble blockers to semantic error-behavior mismatches.
+- It is still not enabled in the upstream default subset and has no line allowlist yet.
 
-Blocking tests/reasons:
-- Roundtrip parser fails at `L2` snippet with tuple-destructuring lambda parameter (`fun (a, b) -> "1"`).
-- E2E preamble parse error for the suite: `Expected ',' or '}' after record field` (record literal in `ErrorPropagation`).
-- Representative failing tests from this file when fully enabled: `L2, L10, L13, L14, L15, L16, L17, L18, L19, L20, L21, L22, L23, L25, L32, L75, L76`.
-
-## `language/elambda.dark` (currently disabled)
+## `language/elambda.dark`
 
 Status: blocked.
 
-Blocking failure:
-- Enabling this file aborts test execution before per-test reporting with:
+Current blocking failure:
+- `./run-tests --filter=elambda` still aborts before per-test reporting with:
 - `payloadSize: Record type 'runtime' not found in typeReg`
-- Stack root: `passes/2.5_RefCountInsertion.fs` (`payloadSize` / `insertRC*` path).
-- No individual failing test line is emitted before crash.
+- Stack root remains in `passes/2.5_RefCountInsertion.fs` via `ANF.payloadSize`.
 
-## `stdlib/date.dark` (currently disabled)
+Notes:
+- This is the same blocker recorded in the previous plan.
+- No partial enablement is present in `TestRunner.fs`.
 
-Status: blocked.
+## `stdlib/date.dark`
 
-Blocking tests/reasons:
-- Roundtrip parser fails at `L9` preamble snippet (`let p` with `|> Stdlib.Result.map`) with: `Expected '=' after let binding pattern`.
-- E2E preamble type error for the suite: `Stdlib.Result.map expects 2 arguments, but got 3 arguments`.
-- Representative failing tests from this file when fully enabled: `L9, L188, L189, L190, L191, L192, L193, L194, L197, L199, L201, L202, L204, L205, L207, L208, L210, L212, L222, L223, L224, L225, L226, L233, L234, L235, L236, L237, L244, L245, L246, L247, L248, L249, L250, L251`.
+Status: partially enabled, but not yet part of the default upstream subset.
+
+Current runner state:
+- Not included in `defaultUpstreamDarkPaths`.
+- Gated by `upstreamEnablementLineAllowlist`.
+- Enabled line: `216`
+
+What is fixed relative to the previous plan:
+- The old roundtrip parser blocker around the preamble `let p` / `|> Stdlib.Result.map` form no longer blocks the targeted run.
+- The old suite-level preamble type error (`Stdlib.Result.map expects 2 arguments, but got 3 arguments`) no longer blocks the targeted run.
+
+Evidence:
+- `./run-tests --filter=date.dark` passes under the current gate.
+
+Notes:
+- The only allowlisted line is the commented `today_v0` case at `L216`, so the rest of the file remains skipped.
+- This file still needs real line-by-line enablement work before it belongs in the default upstream subset.
 
 ## Additional `--roundtrip-all-dark` blocker
 
-Status: blocked.
+Status: fixed.
 
-Blocking test/reason:
+Previous blocker:
 - File: `src/Tests/e2e/upstream/cloud/db.dark`
 - Test: `L112` (`NestedRecordFieldAccess`)
-- Snippet: `source`
-- Failure: `ParseOriginalFailed`
-- Parse error: `Unexpected tokens after expression (only function definitions can be followed by more definitions)`
-- Source shape uses a parenthesized multiline sequence of expressions where the first statements are bare calls (not `let` bindings):
-  - `Stdlib.DB.set ...`
-  - `Stdlib.DB.set ...`
-  - `let shouldBeJustJoe = ...`
-  - `Stdlib.List.length shouldBeJustJoe`
-- Current interpreter parser does not support this sequencing form as a standalone expression snippet.
+- Failure mode: `ParseOriginalFailed`
 
-## Next Steps
+Current result:
+- The old failure no longer reproduces with:
+- `./run-tests --filter=NestedRecordFieldAccess --roundtrip-all-dark`
+- `./run-tests --filter=db.dark --roundtrip-all-dark`
 
-1. Fix parser compatibility for upstream syntax forms used in blocked files (`fun (a, b) -> ...`, multiline record literals, and the date preamble `Result.map` form).
-2. Fix the `RefCountInsertion.payloadSize` crash path (`runtime` record type missing from `typeReg`) to unlock `elambda.dark`.
-3. Add interpreter parser support for parenthesized multiline expression sequencing with bare call statements (the `cloud/db.dark` `L112` form), or keep this case excluded from all-upstream syntax roundtrip coverage.
-4. Re-run this checklist and only add files to `defaultUpstreamDarkPaths` once `./run-tests` passes with allowlists removed.
+Notes:
+- The targeted all-upstream roundtrip check now completes without reproducing the previous parse failure.
+
+## Next steps
+
+1. Continue incremental ungating for `eapply.dark`, `aliases.dark`, and `date.dark`.
+2. Fix pipe semantics in `epipe.dark`; this is still the largest remaining functional blocker in this set.
+3. Fix runtime error propagation / messaging behavior in `derror.dark`.
+4. Fix the `RefCountInsertion` / `payloadSize` crash to unlock `elambda.dark`.
+5. After each change, re-run `./run-tests` and only remove gates when the file is green without them.
