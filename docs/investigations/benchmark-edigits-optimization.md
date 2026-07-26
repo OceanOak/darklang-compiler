@@ -287,44 +287,12 @@ addWithCarry_L4:
 - `src/ir/rc_insertion.rs` - Add loop-aware RC optimization
 - `src/ir/mir_optimize.rs` - Loop analysis pass
 
-### Optimization 5: Inline Small Stdlib Functions (Low Impact)
-
-**Title:** Inline constant-returning tag functions
-
-**Impact Estimate:** 1.1-1.2x improvement
-
-**Root Cause:**
-Tag functions like `__TAG_SINGLE()` are called repeatedly:
-```
-SaveRegs([], [])
-X19 <- Call(Stdlib.FingerTree.__TAG_SINGLE, [])
-RestoreRegs([], [])
-```
-
-These just return a constant (e.g., `return 1`).
-
-**Evidence from LIR:**
-```
-Stdlib.FingerTree.__TAG_SINGLE:
-    X0 <- Mov(Imm 1)
-    Ret
-```
-
-**Implementation Approach:**
-1. Mark trivial functions (return constant) for mandatory inlining
-2. Replace call sites with immediate values during LIR optimization
-
-**Files to Modify:**
-- `src/ir/lir_optimize.rs` - Add trivial function inlining
-- `src/ir/inline.rs` - Identify trivial functions
-
 ## Priority Ranking
 
 1. **Array Primitive Type** - Critical for this and similar benchmarks
 2. **Tuple Elimination** - High-frequency allocation in pattern matches
 3. **Reference Counting Optimization** - Pervasive overhead
 4. **Inline List Access** - Removes Option overhead
-5. **Inline Tag Functions** - Minor but easy win
 
 ## Expected Improvement
 

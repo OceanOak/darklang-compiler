@@ -380,6 +380,15 @@ let private shouldUseExternalCandidate (info: FunctionInfo) (config: InliningCon
     && Set.isEmpty (collectCalls info.Func.Body)
     && isSimpleExternalExpr info.Func.Body
 
+let private isZeroArgConstantReturn (func: Function) : bool =
+    match func.TypedParams, func.Body with
+    | [], Return (IntLiteral _)
+    | [], Return (BoolLiteral _)
+    | [], Return (FloatLiteral _)
+    | [], Return (StringLiteral _)
+    | [], Return UnitLiteral -> true
+    | _ -> false
+
 let filterExternalCandidates (config: InliningConfig) (functions: Function list) : Function list =
     buildFunctionInfoMap functions
     |> Map.toList
@@ -548,11 +557,16 @@ let inlineProgramWithExternalCandidates
         Map.fold (fun acc name info -> Map.add name info acc) localInfoMap externalInfoMap
     let externalNames =
         externalInfoMap |> Map.toList |> List.map fst |> Set.ofList
+    let mandatoryExternalInfoMap =
+        externalInfoMap
+        |> Map.filter (fun _ info -> isZeroArgConstantReturn info.Func)
+    let localAndMandatoryInfoMap =
+        Map.fold (fun acc name info -> Map.add name info acc) localInfoMap mandatoryExternalInfoMap
     let funcsForBody body =
         if countCallsToNames externalNames body <= config.MaxExternalInlineSites then
             funcInfoMap
         else
-            localInfoMap
+            localAndMandatoryInfoMap
 
     // Find starting VarGen value (must be higher than any existing TempId)
     let startVarGen = VarGen (maxTempIdInProgram program + 1)

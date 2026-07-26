@@ -456,6 +456,55 @@ let optimizeInstrs (instrs: Instr list) : Instr list =
 
     loop instrs
 
+let private constantReturnValue (func: Function) : int64 option =
+    match func.TypedParams with
+    | [] ->
+        match Map.tryFind func.CFG.Entry func.CFG.Blocks with
+        | Some { Instrs = [Mov (_, Imm value)]; Terminator = Ret } -> Some value
+        | Some { Instrs = []; Terminator = Jump target } ->
+            match Map.tryFind target func.CFG.Blocks with
+            | Some { Instrs = [Mov (_, Imm value)]; Terminator = Ret } -> Some value
+            | _ -> None
+        | _ -> None
+    | _ -> None
+
+let private constantReturnFunctions (functions: Function list) : Map<string, int64> =
+    functions
+    |> List.choose (fun func ->
+        constantReturnValue func
+        |> Option.map (fun value -> (func.Name, value)))
+    |> Map.ofList
+
+let private optimizeConstantCalls (constants: Map<string, int64>) (instrs: Instr list) : Instr list =
+    let rec loop remaining =
+        match remaining with
+        | SaveRegs _ :: Call (dest, funcName, []) :: RestoreRegs _ :: Mov (moveDest, Reg (Physical X0)) :: rest
+            when sameReg dest moveDest ->
+            match Map.tryFind funcName constants with
+            | Some value -> Mov (dest, Imm value) :: loop rest
+            | None ->
+                match remaining with
+                | instr :: rest -> instr :: loop rest
+                | [] -> []
+        | Call (dest, funcName, []) :: rest ->
+            match Map.tryFind funcName constants with
+            | Some value -> Mov (dest, Imm value) :: loop rest
+            | None -> Call (dest, funcName, []) :: loop rest
+        | instr :: rest -> instr :: loop rest
+        | [] -> []
+
+    loop instrs
+
+let optimizeConstantReturnCallsInFunctions (functions: Function list) : Function list =
+    let constants = constantReturnFunctions functions
+    functions
+    |> List.map (fun func ->
+        let blocks =
+            func.CFG.Blocks
+            |> Map.map (fun _ block ->
+                { block with Instrs = optimizeConstantCalls constants block.Instrs })
+        { func with CFG = { func.CFG with Blocks = blocks } })
+
 let removeSelfMovesFromInstrs (instrs: Instr list) : Instr list =
     let rec loop remaining =
         match remaining with
@@ -764,8 +813,11 @@ let applyAndBitBranchFusion (instrs: Instr list) (terminator: Terminator) : (Ins
     | None -> (instrs, terminator)
 
 /// Optimize a basic block (returns whether anything changed)
-let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
-    let instrs' = optimizeInstrs block.Instrs
+let optimizeBlockWithConstants (constants: Map<string, int64>) (block: BasicBlock) : BasicBlock * bool =
+    let instrs' =
+        block.Instrs
+        |> optimizeConstantCalls constants
+        |> optimizeInstrs
     let instrsCopyCleaned = removeRedundantFloatingCopyBackMoves instrs'
     // Apply multiply-by-constant strength reduction (Mov + Mul → Lsl + Add/Sub)
     let instrs1 = tryMulByConstant instrsCopyCleaned
@@ -795,15 +847,19 @@ let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
     let block' = { block with Instrs = finalInstrs; Terminator = finalTerminator }
     (block', block' <> block)
 
+let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
+    optimizeBlockWithConstants Map.empty block
+
 /// Optimize a CFG in a single pass (returns whether anything changed)
 let private optimizeCFGOnce
+    (constants: Map<string, int64>)
     (cfg: CFG)
     (domCache: DominatorCache option)
     : CFG * bool * DominatorCache option =
     let (blocks', changed) =
         cfg.Blocks
         |> Map.fold (fun (acc, ch) label block ->
-            let (block', blockChanged) = optimizeBlock block
+            let (block', blockChanged) = optimizeBlockWithConstants constants block
             (Map.add label block' acc, ch || blockChanged)
         ) (Map.empty, false)
     let cfg' = { cfg with Blocks = blocks' }
@@ -811,24 +867,31 @@ let private optimizeCFGOnce
     (cfg'', changed || hoisted, cache')
 
 /// Optimize a CFG until fixed point
-let optimizeCFG (cfg: CFG) : CFG =
+let optimizeCFGWithConstants (constants: Map<string, int64>) (cfg: CFG) : CFG =
     let rec loop current remaining iteration domCache =
         if remaining <= 0 then
             current
         else
-            let (next, changed, nextCache) = optimizeCFGOnce current domCache
+            let (next, changed, nextCache) = optimizeCFGOnce constants current domCache
             if changed then
                 loop next (remaining - 1) (iteration + 1) nextCache
             else
                 next
     loop cfg 10 1 None
 
+let optimizeCFG (cfg: CFG) : CFG =
+    optimizeCFGWithConstants Map.empty cfg
+
 /// Optimize a function
+let optimizeFunctionWithConstants (constants: Map<string, int64>) (func: Function) : Function =
+    { func with CFG = optimizeCFGWithConstants constants func.CFG }
+
 let optimizeFunction (func: Function) : Function =
-    { func with CFG = optimizeCFG func.CFG }
+    optimizeFunctionWithConstants Map.empty func
 
 /// Optimize a program
 let optimizeProgram (program: Program) : Program =
     let (Program (functions, variants, records)) = program
-    let functions' = functions |> List.map optimizeFunction
+    let constants = constantReturnFunctions functions
+    let functions' = functions |> List.map (optimizeFunctionWithConstants constants)
     Program (functions', variants, records)
