@@ -2,8 +2,8 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-14 15:22:42
-**Commit:** `451391dc` - Speed up interpolated expression parsing
+**Last Updated:** 2026-08-14 16:13:07
+**Commit:** `8e609afc` - Speed up grouped parameter parsing
 
 | Benchmark     |           Dark (2.75x) |          Rust |
 |---------------|------------------------|---------------|
@@ -18,8 +18,8 @@ Latest routine-profile Dark performance vs audited Rust references (instruction 
 | mandelbrot    |     17,541,931 (1.29x) |    13,595,721 |
 | matmul        |   2,106,152,079 (132x) |    15,983,852 |
 | merkletrees   |    724,164,728 (5.80x) |   124,776,610 |
-| nbody         |  1,239,502,637 (5.00x) |   247,760,534 |
-| nqueen        |    295,286,940 (2.11x) |   139,988,273 |
+| nbody         |  1,239,502,631 (5.00x) |   247,760,534 |
+| nqueen        |    290,612,051 (2.08x) |   139,988,273 |
 | pisum         |         95,418 (0.00x) |    50,258,602 |
 | primes        |      2,075,924 (1.53x) |     1,358,980 |
 | quicksort     |    378,608,139 (57.6x) |     6,574,976 |

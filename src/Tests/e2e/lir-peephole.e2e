@@ -6,6 +6,13 @@
 // - Loop invariant code motion (LICM)
 // - Bit position calculations
 
+// Direct integer negation must preserve two's-complement wraparound semantics.
+def directNegate(x: Int64) : Int64 = 0 - x
+directNegate(0) = 0
+directNegate(42) = -42
+directNegate(-42) = 42
+directNegate(-9223372036854775808) = -9223372036854775808
+
 // ===================================================================
 // Bit Position Tests (exercises bitPosition function in LIR_Peephole)
 // ===================================================================

@@ -91,6 +91,7 @@ type Instr =
     | Lsr of dest:Reg * src:Reg * shift:Reg
     | Lsl_imm of dest:Reg * src:Reg * shift:int
     | Lsr_imm of dest:Reg * src:Reg * shift:int
+    | Neg of dest:Reg * src:Reg
     | Mvn of dest:Reg * src:Reg
     | Sxtb of dest:Reg * src:Reg
     | Sxth of dest:Reg * src:Reg

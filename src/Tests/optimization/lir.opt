@@ -2,6 +2,20 @@
 // Tests LIR peephole optimizations and loop-invariant code motion.
 
 ---NAME---
+direct_integer_negation
+---INPUT---
+def negate(value: Int64) : Int64 =
+    0 - value
+---EXPECTED---
+negate:
+  StackSize: 0
+  UsedCalleeSaved: []
+  Label "negate_entry":
+    v10001 <- Neg(v0)
+    X0 <- Mov(Reg v10001)
+    Ret
+
+---NAME---
 retarget_dead_float_arithmetic_move
 ---INPUT---
 def add(left: Float, right: Float) : Float =

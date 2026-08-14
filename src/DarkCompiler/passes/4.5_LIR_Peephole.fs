@@ -280,6 +280,7 @@ let isPureLoopInstr (instr: Instr) : bool =
     | Lsr _
     | Lsl_imm _
     | Lsr_imm _
+    | Neg _
     | Mvn _
     | Sxtb _
     | Sxth _
@@ -670,6 +671,7 @@ let private foldRegUses folder state (instr: Instr) =
     | And_imm (_, src, _)
     | Lsl_imm (_, src, _)
     | Lsr_imm (_, src, _)
+    | Neg (_, src)
     | Mvn (_, src)
     | Sxtb (_, src)
     | Sxth (_, src)

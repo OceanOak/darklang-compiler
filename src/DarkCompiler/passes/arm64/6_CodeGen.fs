@@ -3574,6 +3574,12 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.LSR_imm (destReg, srcReg, shift)]))
 
+    | LIR.Neg (dest, src) ->
+        lirRegToARM64Reg dest
+        |> Result.bind (fun destReg ->
+            lirRegToARM64Reg src
+            |> Result.map (fun srcReg -> [ARM64Symbolic.NEG (destReg, srcReg)]))
+
     | LIR.Mvn (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
