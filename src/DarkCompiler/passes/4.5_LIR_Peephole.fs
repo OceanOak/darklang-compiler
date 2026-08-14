@@ -594,6 +594,28 @@ let removeRedundantFloatingCopyBackMoves (instrs: Instr list) : Instr list =
 
     loop Map.empty 0 [] instrs
 
+/// Sink a loop-counter decrement past an accumulator update so its temporary
+/// copy-back becomes a single destructive subtraction. Restrict this late
+/// rewrite to the complete three-instruction block shape, making the temporary
+/// provably dead at the block boundary without rebuilding liveness.
+let sinkImmediateCounterUpdate (instrs: Instr list) : Instr list option =
+    match instrs with
+    | [Sub (temp, counter, Imm amount)
+       Add (accDest, accLeft, Reg accRight)
+       Mov (copyDest, Reg copySource)]
+        when sameReg temp copySource
+             && sameReg counter copyDest
+             && not (sameReg temp counter)
+             && not (sameReg accDest temp)
+             && not (sameReg accDest counter)
+             && not (sameReg accLeft temp)
+             && not (sameReg accRight temp) ->
+        Some [
+            Add (accDest, accLeft, Reg accRight)
+            Sub (counter, counter, Imm amount)
+        ]
+    | _ -> None
+
 let removePostAllocationMovesFromFunction (func: Function) : Function =
     let blocks =
         func.CFG.Blocks
@@ -603,6 +625,18 @@ let removePostAllocationMovesFromFunction (func: Function) : Function =
                     block.Instrs
                     |> removeSelfMovesFromInstrs
                     |> removeRedundantFloatingCopyBackMoves })
+    { func with CFG = { func.CFG with Blocks = blocks } }
+
+let optimizeAllocatedCounterUpdates (func: Function) : Function =
+    let blocks =
+        func.CFG.Blocks
+        |> Map.map (fun _ block ->
+            let cleanedInstrs = removeSelfMovesFromInstrs block.Instrs
+            let instrs =
+                match sinkImmediateCounterUpdate cleanedInstrs with
+                | Some optimized -> optimized
+                | None -> cleanedInstrs
+            { block with Instrs = instrs })
     { func with CFG = { func.CFG with Blocks = blocks } }
 
 let private foldOperandRegUse folder state (operand: Operand) =

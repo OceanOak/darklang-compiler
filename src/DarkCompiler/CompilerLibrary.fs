@@ -1499,7 +1499,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     // Combine reachable stdlib functions with user functions
                                     let allFuncs =
                                         (reachableStdlib @ finalUserFuncs)
-                                        |> List.map LIR_Peephole.removeSelfMovesFromFunction
+                                        |> List.map LIR_Peephole.optimizeAllocatedCounterUpdates
                                     let lirVariantRegistry : LIR.VariantRegistry =
                                         let combinedVariantLookup =
                                             Map.fold

@@ -2,10 +2,10 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-14 19:16:32
-**Commit:** `588ecb5e` - Place ARM64 function parameters directly
+**Last Updated:** 2026-08-14 20:05:47
+**Commit:** `5b802b64` - Fall through ARM64 true branch targets
 
-| Benchmark     |           Dark (2.58x) |          Rust |
+| Benchmark     |           Dark (2.56x) |          Rust |
 |---------------|------------------------|---------------|
 | ackermann     | 10,019,035,943 (2.15x) | 4,651,994,510 |
 | binary_trees  |    645,815,426 (0.35x) | 1,842,791,955 |
@@ -24,5 +24,5 @@ Latest routine-profile Dark performance vs audited Rust references (instruction 
 | primes        |      2,045,879 (1.51x) |     1,358,980 |
 | quicksort     |    360,891,623 (54.9x) |     6,574,976 |
 | spectral_norm |    133,629,025 (25.2x) |     5,297,561 |
-| sum_to_n      |         71,766 (0.28x) |       257,603 |
+| sum_to_n      |         61,766 (0.24x) |       257,603 |
 | tak           |     52,360,511 (1.55x) |    33,730,191 |
