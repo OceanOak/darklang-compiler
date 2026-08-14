@@ -328,6 +328,8 @@ let prettyPrintARM64Instr = function
         $"FMOV_reg({dest}, {src})"
     | ARM64Symbolic.FMOV_imm (dest, value) ->
         $"FMOV_imm({dest}, {value})"
+    | ARM64Symbolic.FMOV_zero dest ->
+        $"FMOV_zero({dest})"
     | ARM64Symbolic.FMOV_to_gp (dest, src) ->
         $"FMOV_to_gp({prettyPrintARM64Reg dest}, {src})"
     | ARM64Symbolic.FMOV_from_gp (dest, src) ->

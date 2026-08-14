@@ -184,6 +184,7 @@ type Instr =
     | FCMP of src1:FReg * src2:FReg
     | FMOV_reg of dest:FReg * src:FReg
     | FMOV_imm of dest:FReg * value:float
+    | FMOV_zero of dest:FReg
     | FMOV_to_gp of dest:Reg * src:FReg
     | FMOV_from_gp of dest:FReg * src:Reg
     | SCVTF of dest:FReg * src:Reg

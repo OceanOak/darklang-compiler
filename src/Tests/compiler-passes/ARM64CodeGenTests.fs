@@ -255,6 +255,7 @@ let testArm64FLoadEncodableConstantsUseImmediate () : TestResult =
             [
                 LIR.FLoad (LIR.FPhysical LIR.D2, 1.0)
                 LIR.FLoad (LIR.FPhysical LIR.D3, 4.0)
+                LIR.FLoad (LIR.FPhysical LIR.D4, 0.0)
             ]
             Map.empty
 
@@ -290,12 +291,32 @@ let testArm64FLoadEncodableConstantsUseImmediate () : TestResult =
                 | _ ->
                     false)
 
+        let hasZeroLiteralLoad =
+            instrs
+            |> List.exists (function
+                | ARM64Symbolic.ADRP (_, ARM64Symbolic.DataLabel (ARM64Symbolic.FloatLiteral 0.0))
+                | ARM64Symbolic.ADD_label (_, _, ARM64Symbolic.DataLabel (ARM64Symbolic.FloatLiteral 0.0))
+                | ARM64Symbolic.LDR_fp (ARM64.D4, ARM64.X9, 0s) ->
+                    true
+                | _ ->
+                    false)
+
+        let hasZeroInstruction =
+            instrs
+            |> List.exists (function
+                | ARM64Symbolic.FMOV_zero ARM64.D4 -> true
+                | _ -> false)
+
         if not hasOneImmediate then
             Error "FLoad 1.0 did not emit a floating-point immediate"
         elif not hasFourImmediate then
             Error "FLoad 4.0 did not emit a floating-point immediate"
         elif hasLiteralLoad then
             Error "Encodable FLoad used a literal-pool load instead of an immediate"
+        elif hasZeroLiteralLoad then
+            Error "Positive-zero FLoad used a literal-pool load"
+        elif not hasZeroInstruction then
+            Error "Positive-zero FLoad did not use FMOV_zero"
         else
             Ok ()
 

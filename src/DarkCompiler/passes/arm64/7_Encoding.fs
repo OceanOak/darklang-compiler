@@ -908,6 +908,11 @@ let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode 
         | None ->
             Crash.crash $"FMOV immediate does not support {value}"
 
+    | ARM64Symbolic.FMOV_zero dest ->
+        // FMOV Dd, XZR copies the zero register's bits into a double register.
+        // Register 31 denotes XZR in this instruction encoding.
+        0x9E6703E0u ||| encodeFReg dest
+
     | ARM64Symbolic.FMOV_to_gp (dest, src) ->
         // FMOV (scalar to GP, double): 1001 1110 01 1 00110 000000 Vn Rd
         // sf=1, ftype=01 (double), rmode=00, opcode=110

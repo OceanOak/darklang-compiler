@@ -4409,7 +4409,9 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
     | LIR.FLoad (dest, value) ->
         lirFRegToARM64FReg dest
         |> Result.map (fun destReg ->
-            if ARM64.tryEncodeFmovFloatImmediate value |> Option.isSome then
+            if System.BitConverter.DoubleToInt64Bits(value) = 0L then
+                [ARM64Symbolic.FMOV_zero destReg]
+            elif ARM64.tryEncodeFmovFloatImmediate value |> Option.isSome then
                 [ARM64Symbolic.FMOV_imm (destReg, value)]
             else
                 let labelRef = floatDataLabel value
@@ -6289,6 +6291,7 @@ let private registerLifetimeStep
     | ARM64Symbolic.FSQRT _
     | ARM64Symbolic.FCMP _
     | ARM64Symbolic.FMOV_reg _
+    | ARM64Symbolic.FMOV_zero _
     | ARM64Symbolic.FMOV_imm _ ->
         Unrelated
     | ARM64Symbolic.BL _

@@ -2,8 +2,8 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-14 04:32:54
-**Commit:** `98c666db` - Align bindings with interpreter semantics
+**Last Updated:** 2026-08-14 15:22:42
+**Commit:** `451391dc` - Speed up interpolated expression parsing
 
 | Benchmark     |           Dark (2.75x) |          Rust |
 |---------------|------------------------|---------------|
@@ -12,17 +12,17 @@ Latest routine-profile Dark performance vs audited Rust references (instruction 
 | collatz       |     81,543,075 (0.83x) |    98,242,178 |
 | edigits       |   6,667,246,304 (489x) |    13,637,551 |
 | factorial     |         64,205 (0.25x) |       257,669 |
-| fasta         |    726,627,707 (35.9x) |    20,252,213 |
+| fasta         |    726,627,703 (35.9x) |    20,252,213 |
 | fib           |    642,006,229 (2.49x) |   257,598,132 |
-| leibniz       |    900,001,513 (1.12x) |   800,257,637 |
-| mandelbrot    |     17,701,931 (1.30x) |    13,595,721 |
+| leibniz       |    900,001,511 (1.12x) |   800,257,637 |
+| mandelbrot    |     17,541,931 (1.29x) |    13,595,721 |
 | matmul        |   2,106,152,079 (132x) |    15,983,852 |
 | merkletrees   |    724,164,728 (5.80x) |   124,776,610 |
 | nbody         |  1,239,502,637 (5.00x) |   247,760,534 |
 | nqueen        |    295,286,940 (2.11x) |   139,988,273 |
-| pisum         |         95,422 (0.00x) |    50,258,602 |
+| pisum         |         95,418 (0.00x) |    50,258,602 |
 | primes        |      2,075,924 (1.53x) |     1,358,980 |
 | quicksort     |    378,608,139 (57.6x) |     6,574,976 |
-| spectral_norm |    143,862,563 (27.2x) |     5,297,561 |
+| spectral_norm |    143,854,517 (27.2x) |     5,297,561 |
 | sum_to_n      |         71,864 (0.28x) |       257,603 |
 | tak           |     63,580,601 (1.88x) |    33,730,191 |
