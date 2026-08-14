@@ -16,6 +16,25 @@ negate:
     Ret
 
 ---NAME---
+positive_constant_modulo_skips_dynamic_sign_checks
+---INPUT---
+def reduce(value: Int64) : Int64 =
+    value % 10
+---EXPECTED---
+reduce:
+  StackSize: 0
+  UsedCalleeSaved: []
+  Label "reduce_entry":
+    v10002 <- Mov(Imm 10)
+    v10003 <- Sdiv(v0, Reg v10002)
+    v10001 <- Msub(v10003, v10002, v0)
+    Cmp(v10001, Imm 0)
+    v10004 <- Cset(LT)
+    v10001 <- Madd(v10004, v10002, v10001)
+    X0 <- Mov(Reg v10001)
+    Ret
+
+---NAME---
 retarget_dead_float_arithmetic_move
 ---INPUT---
 def add(left: Float, right: Float) : Float =

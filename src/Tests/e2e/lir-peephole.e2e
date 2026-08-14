@@ -13,6 +13,12 @@ directNegate(42) = -42
 directNegate(-42) = 42
 directNegate(-9223372036854775808) = -9223372036854775808
 
+// A statically positive divisor uses the specialized Euclidean correction.
+def positiveConstantModulo(x: Int64) : Int64 = x % 10
+positiveConstantModulo(-21) = 9
+positiveConstantModulo(0) = 0
+positiveConstantModulo(21) = 1
+
 // ===================================================================
 // Bit Position Tests (exercises bitPosition function in LIR_Peephole)
 // ===================================================================

@@ -207,6 +207,11 @@ let shouldCheckNegativeDivisor (operandType: AST.Type) : bool =
     | AST.TInt8 | AST.TInt16 | AST.TInt32 | AST.TInt64 -> true
     | _ -> false
 
+let isPositiveIntegerConstant (operand: MIR.Operand) : bool =
+    match operand with
+    | MIR.Int64Const value -> value > 0L
+    | _ -> false
+
 let isUnsignedIntegerType (operandType: AST.Type) : bool =
     match operandType with
     | AST.TUInt8 | AST.TUInt16 | AST.TUInt32 | AST.TUInt64 -> true
@@ -248,6 +253,20 @@ let buildIntegerModuloParts
                   LIR.Msub (destReg, quotReg, rightReg, leftReg)]
                  @ truncInstrs,
                  stateAfterQuot)
+            else if isPositiveIntegerConstant right then
+                // A positive divisor only requires correcting negative remainders.
+                // Avoid both the general sign-mismatch computation and its extra
+                // Boolean conjunction when the divisor's sign is known statically.
+                let (adjustFlagReg, stateAfterAdjustFlag) = freshTempReg stateAfterQuot
+                let (adjustReg, nextState) = freshTempReg stateAfterAdjustFlag
+                ([LIR.Sdiv (quotReg, leftReg, rightReg);
+                  LIR.Msub (destReg, quotReg, rightReg, leftReg);
+                  LIR.Cmp (destReg, LIR.Imm 0L);
+                  LIR.Cset (adjustFlagReg, LIR.LT);
+                  LIR.Mul (adjustReg, adjustFlagReg, rightReg);
+                  LIR.Add (destReg, destReg, LIR.Reg adjustReg)]
+                 @ truncInstrs,
+                 nextState)
             else
                 let (xorReg, stateAfterXor) = freshTempReg stateAfterQuot
                 let (remNonZeroReg, stateAfterRemNonZero) = freshTempReg stateAfterXor
@@ -1770,7 +1789,9 @@ let selectBlocksWithModuloChecks
         | [] -> Ok (blocksRev, counter, currentLabel, currentInstrsRev, currentState)
         | instr :: rest ->
             match instr with
-            | MIR.BinOp (dest, MIR.Mod, left, right, operandType) when shouldCheckNegativeDivisor operandType ->
+            | MIR.BinOp (dest, MIR.Mod, left, right, operandType)
+                when shouldCheckNegativeDivisor operandType
+                     && not (isPositiveIntegerConstant right) ->
                 let lirDest = vregToLIRReg dest
                 match buildIntegerModuloParts lirDest left right operandType currentState with
                 | Error err -> Error err
