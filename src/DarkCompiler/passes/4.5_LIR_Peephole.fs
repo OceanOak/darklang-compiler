@@ -614,6 +614,20 @@ let sinkImmediateCounterUpdate (instrs: Instr list) : Instr list option =
             Add (accDest, accLeft, Reg accRight)
             Sub (counter, counter, Imm amount)
         ]
+    | [Sub (temp, counter, Imm amount)
+       Mul (accDest, accLeft, accRight)
+       Mov (copyDest, Reg copySource)]
+        when sameReg temp copySource
+             && sameReg counter copyDest
+             && not (sameReg temp counter)
+             && not (sameReg accDest temp)
+             && not (sameReg accDest counter)
+             && not (sameReg accLeft temp)
+             && not (sameReg accRight temp) ->
+        Some [
+            Mul (accDest, accLeft, accRight)
+            Sub (counter, counter, Imm amount)
+        ]
     | _ -> None
 
 let removePostAllocationMovesFromFunction (func: Function) : Function =

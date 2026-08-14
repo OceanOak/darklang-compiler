@@ -190,6 +190,21 @@ let testSinkImmediateCounterUpdatePastAccumulator () : TestResult =
     | Some optimized when optimized = expected -> Ok ()
     | other -> Error $"Expected counter update to replace its copy-back move, got: {other}"
 
+let testSinkImmediateCounterUpdatePastProduct () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Mul (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Mul (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected product counter update to replace its copy-back move, got: {other}"
+
 let testMulAddFusionKeepsLiveTempForPrint () : TestResult =
     let instrs = [
         Mul (Virtual 1, Virtual 2, Virtual 3)
@@ -302,6 +317,7 @@ let tests = [
     ("LIR peephole folds dead floating arithmetic copies", testFloatingArithmeticMoveChainsFuseWhenTempsDie)
     ("LIR peephole keeps live floating arithmetic temporaries", testFloatingArithmeticMoveChainKeepsLiveTemp)
     ("LIR peephole sinks immediate counter update", testSinkImmediateCounterUpdatePastAccumulator)
+    ("LIR peephole sinks immediate counter update past product", testSinkImmediateCounterUpdatePastProduct)
     ("LIR peephole keeps MUL temp used by later print", testMulAddFusionKeepsLiveTempForPrint)
     ("LIR peephole fuses dead MUL/SUB temporary into MSUB", testMulSubFusionReplacesDeadTemp)
     ("LIR peephole keeps MUL/SUB temporary used by later print", testMulSubFusionKeepsLiveTempForPrint)
