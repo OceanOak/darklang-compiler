@@ -214,6 +214,23 @@ let testGeneratedCodeEliminatesSelfMoves () : TestResult =
         else
             Ok ()
 
+/// Function-entry parameter placement is not observable in an executable E2E
+/// test, so inspect the symbolic code generated from a typed LIR parameter.
+let testFunctionEntryPlacesAcyclicIntegerParameterDirectly () : TestResult =
+    let func =
+        makeEmptyFunction
+            "direct_param"
+            [{ Reg = LIR.Physical LIR.X19; Type = AST.TInt64 }]
+    let program = LIR.Program ([func], Map.empty, Map.empty)
+
+    match CodeGen.generateARM64 target program with
+    | Error e -> Error e
+    | Ok instrs ->
+        if List.contains (ARM64Symbolic.MOV_reg (ARM64.X19, ARM64.X0)) instrs then
+            Ok ()
+        else
+            Error "Acyclic integer parameter placement was staged through a temporary register"
+
 let testPeepholeFusesBitClearSequence () : TestResult =
     let before = [
         ARM64Symbolic.MOVN (ARM64.X9, 0us, 0)
@@ -1388,6 +1405,7 @@ let testClosureCaptureBoxedSumBytesPayloadUsesReleasePlan () : TestResult =
 let tests : (string * (unit -> TestResult)) list = [
     ("LIR ARM64 codegen reports missing entry block", testReportsMissingEntryBlock)
     ("Generated ARM64 code eliminates self-moves", testGeneratedCodeEliminatesSelfMoves)
+    ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)
     ("ARM64 peephole fuses bit-clear sequence", testPeepholeFusesBitClearSequence)
     ("ARM64 UInt64 runtime zero branches target digit handlers", testPrintUInt64RuntimeZeroBranches)
     ("ARM64 UInt64 runtime preserves trailing newline", testPrintUInt64RuntimePreservesNewline)

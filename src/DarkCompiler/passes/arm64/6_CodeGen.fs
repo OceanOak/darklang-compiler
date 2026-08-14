@@ -6113,9 +6113,7 @@ let convertFunction
 
         // Generate parameter setup: move X0-X7/D0-D7 to allocated parameter registers
         // This must come AFTER the prologue but BEFORE the function body
-        // Strategy: Save all source registers to temp regs first to avoid clobbering
         let argRegs = [ARM64Symbolic.X0; ARM64Symbolic.X1; ARM64Symbolic.X2; ARM64Symbolic.X3; ARM64Symbolic.X4; ARM64Symbolic.X5; ARM64Symbolic.X6; ARM64Symbolic.X7]
-        let tempRegs = [ARM64Symbolic.X9; ARM64Symbolic.X10; ARM64Symbolic.X11; ARM64Symbolic.X12; ARM64Symbolic.X13; ARM64Symbolic.X14; ARM64Symbolic.X15]
 
         // AAPCS64: int and float use SEPARATE register counters
         let paramsWithTypes = func.TypedParams |> List.map (fun tp -> (tp.Reg, tp.Type))
@@ -6133,33 +6131,35 @@ let convertFunction
             |> snd
             |> List.rev
 
-        // Step 1a: Save integer calling convention registers to temps
-        let saveIntToTemps =
+        let integerParamMoves =
             intParamsWithIdx
-            |> List.map (fun (_, intIdx) ->
-                let argReg = List.item intIdx argRegs
-                let tempReg = List.item intIdx tempRegs
-                ARM64Symbolic.MOV_reg (tempReg, argReg))
+            |> List.map (fun (paramReg, intIdx) ->
+                let sourceReg =
+                    match List.tryItem intIdx argRegs with
+                    | Some reg -> reg
+                    | None ->
+                        Crash.crash $"ParamSetup: integer parameter {intIdx} exceeds the eight AAPCS64 argument registers"
+                match lirRegToARM64Reg paramReg with
+                | Ok destReg -> (destReg, sourceReg)
+                | Error msg -> Crash.crash $"ParamSetup: lirRegToARM64Reg failed: {msg}")
+
+        // Most parameter placements are acyclic and need one move each. Resolve
+        // the moves in dependency order, using reserved scratch register X16
+        // only when the allocated registers form a genuine cycle.
+        let getSourceReg (sourceReg: ARM64Symbolic.Reg) = Some sourceReg
+        let paramSetup =
+            ParallelMoves.resolve integerParamMoves getSourceReg
+            |> List.collect (function
+                | ParallelMoves.SaveToTemp sourceReg ->
+                    [ARM64Symbolic.MOV_reg (ARM64Symbolic.X16, sourceReg)]
+                | ParallelMoves.Move (destReg, sourceReg) ->
+                    [ARM64Symbolic.MOV_reg (destReg, sourceReg)]
+                | ParallelMoves.MoveFromTemp destReg ->
+                    [ARM64Symbolic.MOV_reg (destReg, ARM64Symbolic.X16)])
 
         // Note: Float parameter setup is NOT done here - it's handled by RegisterAllocation
         // which inserts FMov instructions at the start of the CFG entry block.
         // Doing it here would corrupt D0/D1 before those CFG instructions run.
-
-        // Step 2a: Move integers from temps to allocated parameter registers
-        let moveIntFromTemps =
-            intParamsWithIdx
-            |> List.map (fun (paramReg, intIdx) ->
-                let tempReg = List.item intIdx tempRegs
-                match lirRegToARM64Reg paramReg with
-                | Ok paramArm64 ->
-                    if paramArm64 = tempReg then
-                        []  // Already in the right place
-                    else
-                        [ARM64Symbolic.MOV_reg (paramArm64, tempReg)]
-                | Error msg -> Crash.crash $"ParamSetup: lirRegToARM64Reg failed: {msg}")
-            |> List.concat
-
-        let paramSetup = saveIntToTemps @ moveIntFromTemps
 
         // Shared cold path for allocation overflow in this function.
         let heapOverflowTrap =
