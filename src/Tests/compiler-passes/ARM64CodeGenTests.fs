@@ -262,6 +262,33 @@ let testListReleaseHelperClearsTagWithImmediateMask () : TestResult =
         else
             Error "ARM64 list release helper did not clear tag bits with one immediate mask"
 
+/// Structural-child tag clearing inside the shared list-release helper is not
+/// observable in an executable E2E test, so inspect its symbolic code directly.
+let testListReleaseHelperClearsChildTagWithImmediateMask () : TestResult =
+    let program =
+        makeSimpleProgramWithVariants
+            [
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    0,
+                    LIR.TaggedList,
+                    Some (rcMetadata (AST.TList AST.TInt64)))
+            ]
+            Map.empty
+
+    match CodeGen.generateARM64 target program with
+    | Error e -> Error e
+    | Ok instrs ->
+        let hasImmediateChildTagClear =
+            instrs
+            |> List.contains
+                (ARM64Symbolic.AND_imm (ARM64.X10, ARM64.X8, 0xFFFFFFFFFFFFFFF8UL))
+
+        if hasImmediateChildTagClear then
+            Ok ()
+        else
+            Error "ARM64 list release helper did not clear structural-child tag bits with one immediate mask"
+
 /// Function-entry parameter placement is not observable in an executable E2E
 /// test, so inspect the symbolic code generated from a typed LIR parameter.
 let testFunctionEntryPlacesAcyclicIntegerParameterDirectly () : TestResult =
@@ -1477,6 +1504,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Generated ARM64 code eliminates self-moves", testGeneratedCodeEliminatesSelfMoves)
     ("ARM64 list retain helper clears tag with immediate mask", testListRetainHelperClearsTagWithImmediateMask)
     ("ARM64 list release helper clears tag with immediate mask", testListReleaseHelperClearsTagWithImmediateMask)
+    ("ARM64 list release helper clears child tag with immediate mask", testListReleaseHelperClearsChildTagWithImmediateMask)
     ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)
     ("ARM64 peephole fuses bit-clear sequence", testPeepholeFusesBitClearSequence)
     ("ARM64 peephole falls through to true branch target", testPeepholeFallsThroughToTrueTarget)
