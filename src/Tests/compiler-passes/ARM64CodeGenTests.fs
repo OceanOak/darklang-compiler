@@ -266,6 +266,28 @@ let testPeepholeFusesBitClearSequence () : TestResult =
     else
         Ok ()
 
+/// Conditional block layout is not observable in an executable E2E test, so
+/// inspect the symbolic branch sequence directly.
+let testPeepholeFallsThroughToTrueTarget () : TestResult =
+    let before = [
+        ARM64Symbolic.B_cond_label (ARM64.LE, "true_target")
+        ARM64Symbolic.B_label "false_target"
+        ARM64Symbolic.Label "true_target"
+    ]
+    let expected = [
+        ARM64Symbolic.B_cond_label (ARM64.GT, "false_target")
+        ARM64Symbolic.Label "true_target"
+    ]
+
+    match CodeGen.peepholeOptimize before with
+    | actual when actual = expected -> Ok ()
+    | actual ->
+        let rendered =
+            actual
+            |> List.map TestDSL.PassTestRunner.prettyPrintARM64Instr
+            |> String.concat "; "
+        Error $"Expected inverted branch with true-target fallthrough, got {rendered}"
+
 let testArm64FLoadEncodableConstantsUseImmediate () : TestResult =
     let program =
         makeSimpleProgramWithVariants
@@ -1407,6 +1429,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Generated ARM64 code eliminates self-moves", testGeneratedCodeEliminatesSelfMoves)
     ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)
     ("ARM64 peephole fuses bit-clear sequence", testPeepholeFusesBitClearSequence)
+    ("ARM64 peephole falls through to true branch target", testPeepholeFallsThroughToTrueTarget)
     ("ARM64 UInt64 runtime zero branches target digit handlers", testPrintUInt64RuntimeZeroBranches)
     ("ARM64 UInt64 runtime preserves trailing newline", testPrintUInt64RuntimePreservesNewline)
     ("ARM64 FLoad encodable constants use immediate", testArm64FLoadEncodableConstantsUseImmediate)

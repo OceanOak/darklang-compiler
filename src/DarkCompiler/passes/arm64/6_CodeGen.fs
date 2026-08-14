@@ -6335,6 +6335,20 @@ let private overwrittenBeforeReadOrEnd
 
     check instrs
 
+/// Return the condition that selects the complementary control-flow edge.
+let private invertCondition (condition: ARM64.Condition) : ARM64.Condition =
+    match condition with
+    | ARM64.EQ -> ARM64.NE
+    | ARM64.NE -> ARM64.EQ
+    | ARM64.LT -> ARM64.GE
+    | ARM64.GT -> ARM64.LE
+    | ARM64.LE -> ARM64.GT
+    | ARM64.GE -> ARM64.LT
+    | ARM64.LO -> ARM64.HS
+    | ARM64.HI -> ARM64.LS
+    | ARM64.LS -> ARM64.HI
+    | ARM64.HS -> ARM64.LO
+
 /// Peephole optimization pass
 /// Patterns:
 /// 1. SUB_imm + CMP #0 → SUBS (fuse subtract and compare)
@@ -6348,6 +6362,7 @@ let private overwrittenBeforeReadOrEnd
 /// 9. AND Xn, Xn, Xn → MOV (AND with self is identity)
 /// 10. ORR Xn, Xn, Xn → MOV (OR with self is identity)
 /// 11. MOVN #0 + EOR + AND → BIC (bit clear when the inverted temporary is overwritten)
+/// 12. B.cond true + B false + true: → B.!cond false + true: (fall through)
 let peepholeOptimize (instrs: ARM64Symbolic.Instr list) : ARM64Symbolic.Instr list =
     let rec optimize acc remaining =
         match remaining with
@@ -6401,6 +6416,15 @@ let peepholeOptimize (instrs: ARM64Symbolic.Instr list) : ARM64Symbolic.Instr li
         // Remove subtract zero
         | ARM64Symbolic.SUB_imm (dest, src, 0us) :: rest when dest = src ->
             optimize acc rest
+        // Make an immediately following true target the fallthrough edge.
+        | ARM64Symbolic.B_cond_label (condition, trueTarget)
+          :: ARM64Symbolic.B_label falseTarget
+          :: ARM64Symbolic.Label label
+          :: rest
+            when trueTarget = label ->
+            let branch =
+                ARM64Symbolic.B_cond_label (invertCondition condition, falseTarget)
+            optimize (ARM64Symbolic.Label label :: branch :: acc) rest
         // AND with self is identity - simplify to MOV if dest differs from operand
         | ARM64Symbolic.AND_reg (dest, src1, src2) :: rest when src1 = src2 ->
             if dest = src1 then
