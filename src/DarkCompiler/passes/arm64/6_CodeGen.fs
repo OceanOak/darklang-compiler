@@ -282,9 +282,8 @@ let private generateListRefCountIncHelper () : ARM64Symbolic.Instr list =
         ARM64Symbolic.CBZ (ARM64Symbolic.X1, helperRet)  // Untagged pointer => not a skew-list node
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X1, 3us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, helperRet)
-        // Clear low tag bits via shifts (AND #~7 is not always encodable as a logical immediate).
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X2, ARM64Symbolic.X2, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
 
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X1, 1us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.EQ, size32)

@@ -197,6 +197,12 @@ let testBICRegisterEncoding () : TestResult =
     | [word] -> Error $"BIC_reg: expected 0x8A220023, got 0x{word:X8}"
     | words -> Error $"BIC_reg: expected 1 word, got {List.length words}"
 
+let testRotatedLogicalImmediateEncoding () : TestResult =
+    match encode (AND_imm (X2, X0, 0xFFFFFFFFFFFFFFF8UL)) with
+    | [word] when word = 0x927DF002u -> Ok ()
+    | [word] -> Error $"AND_imm #~7: expected 0x927DF002, got 0x{word:X8}"
+    | words -> Error $"AND_imm #~7: expected 1 word, got {List.length words}"
+
 let testInvalidAssertDifferentValueIsRejected () : TestResult =
     let content =
         """---INPUT-ARM64---
@@ -224,6 +230,7 @@ let tests = [
     ("move-wide shifts reject invalid values", testMoveWideShiftsRejectInvalidValues)
     ("FMOV immediate encoding", testFMOVImmediateEncoding)
     ("BIC register encoding", testBICRegisterEncoding)
+    ("rotated logical immediate encoding", testRotatedLogicalImmediateEncoding)
     ("invalid ASSERT-DIFFERENT value is rejected", testInvalidAssertDifferentValueIsRejected)
 ]
 
