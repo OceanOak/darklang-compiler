@@ -801,6 +801,14 @@ let testInterpreterParserRejectsCompilerOnlyAdtForms () : TestResult =
                 | Ok _ -> Error $"Expected compiler-only ADT syntax to be rejected, got: {parsed}"
     verify rejectedSources
 
+let testInterpreterParamGroupFlatteningPreservesOrder () : TestResult =
+    let groupsRev =
+        [[("third", AST.TString)]; [("second", AST.TBool)]; [("first", AST.TInt64)]]
+
+    match InterpreterParser.flattenParamGroups groupsRev with
+    | [("first", AST.TInt64); ("second", AST.TBool); ("third", AST.TString)] -> Ok ()
+    | parameters -> Error $"Expected interpreter parameter groups in source order, got {parameters}"
+
 let tests = [
     ("compiler library interpreter parse", testCompilerLibraryParseInterpreterSyntax)
     ("parse interpreter lambda/application", testParseInterpreterLambdaApplication)
@@ -855,4 +863,5 @@ let tests = [
     ("parse constructor over-application chain", testInterpreterParserParsesConstructorOverApplicationChain)
     ("typed lambda parameters are rejected", testInterpreterParserRejectsTypedLambdaParameters)
     ("reject compiler-only ADT forms in interpreter syntax", testInterpreterParserRejectsCompilerOnlyAdtForms)
+    ("interpreter parameter groups retain source order", testInterpreterParamGroupFlatteningPreservesOrder)
 ]
