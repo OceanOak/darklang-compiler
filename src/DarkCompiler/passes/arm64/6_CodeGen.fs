@@ -793,9 +793,8 @@ let private generateListRefCountDecHelperWith
         ARM64Symbolic.CBZ (ARM64Symbolic.X0, popOrRet)
         ARM64Symbolic.AND_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 7UL)
         ARM64Symbolic.CBZ (ARM64Symbolic.X2, popOrRet)
-        // Clear low tag bits via shifts (AND #~7 is not always encodable as a logical immediate).
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X27)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, popOrRet)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X28)
