@@ -957,6 +957,20 @@ let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode 
         let rd = encodeFReg dest
         sf ||| fixedBits ||| opcode1 ||| opcode2 ||| rn ||| rd
 
+    | ARM64Symbolic.CNT_8B (dest, src) ->
+        // CNT Vd.8B, Vn.8B. The SIMD register number occupies the same
+        // encoding field as its scalar D-register view.
+        0x0E205800u ||| ((encodeFReg src) <<< 5) ||| encodeFReg dest
+
+    | ARM64Symbolic.ADDV_8B (dest, src) ->
+        // ADDV Bd, Vn.8B horizontally sums the eight byte lanes.
+        0x0E31B800u ||| ((encodeFReg src) <<< 5) ||| encodeFReg dest
+
+    | ARM64Symbolic.UMOV_byte (dest, src) ->
+        // UMOV Wd, Vn.B[0] zero-extends the selected byte and, by writing Wd,
+        // clears the upper half of the corresponding X register.
+        0x0E013C00u ||| ((encodeFReg src) <<< 5) ||| encodeReg dest
+
     | ARM64Symbolic.SCVTF (dest, src) ->
         // SCVTF (scalar, integer to FP, double): 1001 1110 01 1 00010 000000 Rn Rd
         // sf=1 (64-bit int), ftype=01 (double), rmode=00, opcode=010

@@ -187,6 +187,9 @@ type Instr =
     | FMOV_zero of dest:FReg
     | FMOV_to_gp of dest:Reg * src:FReg
     | FMOV_from_gp of dest:FReg * src:Reg
+    | CNT_8B of dest:FReg * src:FReg
+    | ADDV_8B of dest:FReg * src:FReg
+    | UMOV_byte of dest:Reg * src:FReg
     | SCVTF of dest:FReg * src:Reg
     | FCVTZS of dest:Reg * src:FReg
     | SXTB of dest:Reg * src:Reg

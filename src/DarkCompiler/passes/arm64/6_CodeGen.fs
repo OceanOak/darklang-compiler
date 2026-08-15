@@ -1793,8 +1793,6 @@ let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
     let internalTag = label "internal"
     let leafTag = label "leaf"
     let collisionTag = label "collision"
-    let popcountLoop = label "popcount_loop"
-    let popcountDone = label "popcount_done"
     let haveOffset = label "have_offset"
     let helperRet = label "ret"
 
@@ -1831,14 +1829,12 @@ let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
 
         ARM64Symbolic.Label internalTag
         ARM64Symbolic.LDR (ARM64Symbolic.X4, ARM64Symbolic.X2, 0s) // bitmap
-        ARM64Symbolic.MOVZ (ARM64Symbolic.X3, 0us, 0)              // child count
-        ARM64Symbolic.Label popcountLoop
-        ARM64Symbolic.CBZ (ARM64Symbolic.X4, popcountDone)
-        ARM64Symbolic.SUB_imm (ARM64Symbolic.X5, ARM64Symbolic.X4, 1us)
-        ARM64Symbolic.AND_reg (ARM64Symbolic.X4, ARM64Symbolic.X4, ARM64Symbolic.X5)
-        ARM64Symbolic.ADD_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 1us)
-        ARM64Symbolic.B_label popcountLoop
-        ARM64Symbolic.Label popcountDone
+        // D16 is reserved scratch: count the bitmap bytes, horizontally add
+        // them, and zero-extend the resulting byte into the child count.
+        ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D16, ARM64Symbolic.X4)
+        ARM64Symbolic.CNT_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.ADDV_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.UMOV_byte (ARM64Symbolic.X3, ARM64Symbolic.D16)
         ARM64Symbolic.LSL_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 3)
         ARM64Symbolic.ADD_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 8us)
 
@@ -1910,8 +1906,6 @@ let private generateDictRefCountDecHelper
     let internalTag = label "internal"
     let leafTag = label "leaf"
     let collisionTag = label "collision"
-    let popcountLoop = label "popcount_loop"
-    let popcountDone = label "popcount_done"
     let haveOffset = label "have_offset"
     let collectInternal = label "collect_internal"
     let collectLoop = label "collect_loop"
@@ -2591,14 +2585,12 @@ let private generateDictRefCountDecHelper
 
         ARM64Symbolic.Label internalTag
         ARM64Symbolic.LDR (ARM64Symbolic.X6, ARM64Symbolic.X3, 0s) // bitmap
-        ARM64Symbolic.MOVZ (ARM64Symbolic.X5, 0us, 0)              // child count
-        ARM64Symbolic.Label popcountLoop
-        ARM64Symbolic.CBZ (ARM64Symbolic.X6, popcountDone)
-        ARM64Symbolic.SUB_imm (ARM64Symbolic.X7, ARM64Symbolic.X6, 1us)
-        ARM64Symbolic.AND_reg (ARM64Symbolic.X6, ARM64Symbolic.X6, ARM64Symbolic.X7)
-        ARM64Symbolic.ADD_imm (ARM64Symbolic.X5, ARM64Symbolic.X5, 1us)
-        ARM64Symbolic.B_label popcountLoop
-        ARM64Symbolic.Label popcountDone
+        // D16 is reserved scratch: count the bitmap bytes, horizontally add
+        // them, and zero-extend the resulting byte into the child count.
+        ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D16, ARM64Symbolic.X6)
+        ARM64Symbolic.CNT_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.ADDV_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.UMOV_byte (ARM64Symbolic.X5, ARM64Symbolic.D16)
         ARM64Symbolic.LSL_imm (ARM64Symbolic.X4, ARM64Symbolic.X5, 3)
         ARM64Symbolic.ADD_imm (ARM64Symbolic.X4, ARM64Symbolic.X4, 8us)
 
@@ -2859,7 +2851,7 @@ let lirFRegToARM64FReg (freg: LIR.FReg) : Result<ARM64Symbolic.FReg, string> =
     // Special temp registers for specific purposes
     | LIR.FVirtual 1000 -> Ok ARM64Symbolic.D18  // Left temp for binary ops
     | LIR.FVirtual 1001 -> Ok ARM64Symbolic.D17  // Right temp for binary ops
-    | LIR.FVirtual 2000 -> Ok ARM64Symbolic.D16  // Temp for FPhi cycle resolution
+    | LIR.FVirtual 2000 -> Ok ARM64Symbolic.D16  // Reserved scratch for FPhi cycles and runtime helpers
     | LIR.FVirtual n when n >= 3000 && n < 4000 ->
         // Temps for float call arguments - use D19-D26 (8 registers)
         // These must not collide with each other since up to 8 floats
@@ -4307,8 +4299,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
             let actions = ParallelMoves.resolve armMoves getSrcReg
 
             // Convert actions to ARM64 instructions
-            // Use D16 as temp register for cycle breaking
-            // D16-D31 are the upper half of the SIMD register file, not used elsewhere
+            // Use reserved D16 as the temporary register for cycle breaking.
             actions
             |> List.collect (function
                 | ParallelMoves.SaveToTemp srcReg ->
@@ -6214,6 +6205,7 @@ let private registerLifetimeStep
     | ARM64Symbolic.ADRP (dest, _)
     | ARM64Symbolic.ADR (dest, _)
     | ARM64Symbolic.FMOV_to_gp (dest, _)
+    | ARM64Symbolic.UMOV_byte (dest, _)
     | ARM64Symbolic.FCVTZS (dest, _) ->
         classify [] [dest]
     | ARM64Symbolic.MOVK (dest, _, _) ->
@@ -6297,7 +6289,9 @@ let private registerLifetimeStep
     | ARM64Symbolic.FCMP _
     | ARM64Symbolic.FMOV_reg _
     | ARM64Symbolic.FMOV_zero _
-    | ARM64Symbolic.FMOV_imm _ ->
+    | ARM64Symbolic.FMOV_imm _
+    | ARM64Symbolic.CNT_8B _
+    | ARM64Symbolic.ADDV_8B _ ->
         Unrelated
     | ARM64Symbolic.BL _
     | ARM64Symbolic.BLR _

@@ -312,6 +312,57 @@ let testDictReleaseHelperClearsChildTagWithImmediateMask () : TestResult =
         else
             Error "ARM64 dictionary release helper did not clear structural-child tag bits with one immediate mask"
 
+/// Dictionary-helper bitmap popcount shape is not observable in an executable
+/// E2E test, so ensure both shared helpers avoid a data-dependent counting loop.
+let testDictHelpersUseConstantTimeBitmapPopcount () : TestResult =
+    let dictType = AST.TDict (AST.TInt64, AST.TInt64)
+    let program =
+        makeSimpleProgramWithVariants
+            [
+                LIR.RefCountInc (LIR.Physical LIR.X0, 0, LIR.DictHeap, None)
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    0,
+                    LIR.DictHeap,
+                    Some (rcMetadata dictType))
+            ]
+            Map.empty
+
+    match CodeGen.generateARM64 target program with
+    | Error e -> Error e
+    | Ok instrs ->
+        let hasDataDependentPopcountLoop =
+            instrs
+            |> List.exists (function
+                | ARM64Symbolic.Label label when label.Contains("_popcount_loop") ->
+                    true
+                | _ ->
+                    false)
+
+        if hasDataDependentPopcountLoop then
+            Error "ARM64 dictionary helpers count bitmap bits with a data-dependent loop"
+        else
+            let hasPopcountSequence source result =
+                instrs
+                |> List.windowed 4
+                |> List.exists (function
+                    | [
+                        ARM64Symbolic.FMOV_from_gp (ARM64.D16, actualSource)
+                        ARM64Symbolic.CNT_8B (ARM64.D16, ARM64.D16)
+                        ARM64Symbolic.ADDV_8B (ARM64.D16, ARM64.D16)
+                        ARM64Symbolic.UMOV_byte (actualResult, ARM64.D16)
+                      ] when actualSource = source && actualResult = result ->
+                        true
+                    | _ ->
+                        false)
+
+            if not (hasPopcountSequence ARM64.X4 ARM64.X3) then
+                Error "ARM64 dictionary retain helper omitted constant-time bitmap popcount"
+            else if not (hasPopcountSequence ARM64.X6 ARM64.X5) then
+                Error "ARM64 dictionary release helper omitted constant-time bitmap popcount"
+            else
+                Ok ()
+
 /// The shared list-release helper's traversal instruction shape is not
 /// observable in an executable E2E test, so inspect its symbolic code directly.
 let testListReleaseHelperClearsTagWithImmediateMask () : TestResult =
@@ -1657,6 +1708,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("ARM64 dictionary retain helper clears tag with immediate mask", testDictRetainHelperClearsTagWithImmediateMask)
     ("ARM64 dictionary release helper clears tag with immediate mask", testDictReleaseHelperClearsTagWithImmediateMask)
     ("ARM64 dictionary release helper clears child tag with immediate mask", testDictReleaseHelperClearsChildTagWithImmediateMask)
+    ("ARM64 dictionary helpers use constant-time bitmap popcount", testDictHelpersUseConstantTimeBitmapPopcount)
     ("ARM64 list release helper clears tag with immediate mask", testListReleaseHelperClearsTagWithImmediateMask)
     ("ARM64 list release helper clears child tag with immediate mask", testListReleaseHelperClearsChildTagWithImmediateMask)
     ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)

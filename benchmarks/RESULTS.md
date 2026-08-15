@@ -2,10 +2,10 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-15 08:08:03
-**Commit:** `89deb13c` - Eliminate separated floating add copies
+**Last Updated:** 2026-08-15 09:34:23
+**Commit:** `66b77535` - Eliminate ARM64 multiply-add loop copy-backs
 
-| Benchmark     |           Dark (2.53x) |          Rust |
+| Benchmark     |           Dark (2.44x) |          Rust |
 |---------------|------------------------|---------------|
 | ackermann     | 10,019,035,943 (2.15x) | 4,651,994,510 |
 | binary_trees  |    635,985,626 (0.35x) | 1,842,791,955 |
@@ -16,7 +16,7 @@ Latest routine-profile Dark performance vs audited Rust references (instruction 
 | fib           |    567,354,378 (2.20x) |   257,598,132 |
 | leibniz       |    900,001,393 (1.12x) |   800,257,637 |
 | mandelbrot    |     16,402,878 (1.21x) |    13,595,721 |
-| matmul        |   2,028,343,609 (127x) |    15,983,852 |
+| matmul        |  1,028,848,030 (64.4x) |    15,983,852 |
 | merkletrees   |    658,629,002 (5.28x) |   124,776,610 |
 | nbody         |  1,216,502,521 (4.91x) |   247,760,534 |
 | nqueen        |    230,796,676 (1.65x) |   139,988,273 |
