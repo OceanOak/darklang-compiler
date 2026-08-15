@@ -235,6 +235,21 @@ let testSinkImmediateCounterUpdatePastAnd () : TestResult =
     | Some optimized when optimized = expected -> Ok ()
     | other -> Error $"Expected AND counter update to replace its copy-back move, got: {other}"
 
+let testSinkImmediateCounterUpdatePastOr () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Orr (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Orr (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected OR counter update to replace its copy-back move, got: {other}"
+
 let testSinkImmediateCounterUpdatePastLeftShift () : TestResult =
     let instrs = [
         Sub (Physical X3, Physical X1, Imm 1L)
@@ -380,6 +395,7 @@ let tests = [
     ("LIR peephole sinks immediate counter update past product", testSinkImmediateCounterUpdatePastProduct)
     ("LIR peephole sinks immediate counter update past XOR", testSinkImmediateCounterUpdatePastXor)
     ("LIR peephole sinks immediate counter update past AND", testSinkImmediateCounterUpdatePastAnd)
+    ("LIR peephole sinks immediate counter update past OR", testSinkImmediateCounterUpdatePastOr)
     ("LIR peephole sinks immediate counter update past left shift", testSinkImmediateCounterUpdatePastLeftShift)
     ("LIR peephole sinks immediate counter update past right shift", testSinkImmediateCounterUpdatePastRightShift)
     ("LIR peephole keeps MUL temp used by later print", testMulAddFusionKeepsLiveTempForPrint)
