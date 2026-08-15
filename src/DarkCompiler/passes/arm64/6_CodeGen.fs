@@ -1221,6 +1221,7 @@ let private generateRecursiveSumRefCountDecHelper
             let doneLabel = label $"{path}_variant_done"
             let cases =
                 variants
+                |> List.filter (fun variant -> not (List.isEmpty variant.FieldReleases))
                 |> List.mapi (fun index variant ->
                     let nextLabel = label $"{path}_variant_{index}_next"
                     [

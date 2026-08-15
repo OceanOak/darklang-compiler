@@ -1477,6 +1477,80 @@ let testGenericMixedBoxedSumPayloadDispatchSkipsRemainingCases () : TestResult =
         else
             Error "Generic mixed boxed-sum payload release did not branch past remaining variant cases after a match"
 
+/// Recursive-sum release dispatch shape is not observable in an executable
+/// E2E test. A variant without managed fields must not consume a tag case in
+/// the generated helper, while the recursive variant must remain dispatched.
+let testRecursiveSumReleaseSkipsVariantWithoutManagedFields () : TestResult =
+    let sumName = "Arm64RecursiveReleaseTree"
+    let sumType = AST.TSum (sumName, [])
+    let variants : LIR.VariantRegistry =
+        Map.ofList [
+            (sumName,
+                { TypeParams = []
+                  Variants =
+                    [
+                        { Name = "Arm64RecursiveReleaseLeaf"; Tag = 0; Payload = Some AST.TInt64 }
+                        { Name = "Arm64RecursiveReleaseNode"
+                          Tag = 1
+                          Payload = Some (AST.TTuple [ sumType; sumType ]) }
+                    ] })
+        ]
+    let sumShapes =
+        variants
+        |> Map.map (fun _ typeVariants ->
+            { ANF.TypeParams = typeVariants.TypeParams
+              ANF.Payloads =
+                typeVariants.Variants
+                |> List.sortBy (fun variant -> variant.Tag)
+                |> List.map (fun variant -> variant.Tag, variant.Payload) })
+    let program =
+        makeSimpleProgramWithVariants
+            [
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    16,
+                    LIR.GenericHeap,
+                    Some (rcMetadataWithSumShapes sumShapes sumType))
+            ]
+            variants
+
+    match CodeGen.generateARM64 target program with
+    | Error e ->
+        Error e
+    | Ok instrs ->
+        let rec findHelperBody remaining =
+            match remaining with
+            | ARM64Symbolic.Label helperLabel :: rest
+                when helperLabel.StartsWith("__dark_recursive_sum_rc_dec_") ->
+                Some (rest |> List.takeWhile (fun instr -> instr <> ARM64Symbolic.RET))
+            | _ :: rest ->
+                findHelperBody rest
+            | [] ->
+                None
+
+        match findHelperBody instrs with
+        | None ->
+            Error "Recursive-sum release helper was not generated"
+        | Some helperBody ->
+            let dispatchesLeaf =
+                helperBody
+                |> List.exists (function
+                    | ARM64Symbolic.CBNZ (ARM64.X1, targetLabel)
+                        when targetLabel.Contains("_variant_0_next") ->
+                        true
+                    | _ ->
+                        false)
+            let dispatchesNode =
+                helperBody
+                |> List.contains (ARM64Symbolic.CMP_imm (ARM64.X1, 1us))
+
+            if dispatchesLeaf then
+                Error "Recursive-sum release helper dispatched a variant without managed fields"
+            else if not dispatchesNode then
+                Error "Recursive-sum release helper omitted the recursive variant"
+            else
+                Ok ()
+
 let testClosureCaptureNestedFixedBlockBytesFieldUsesReleasePlan () : TestResult =
     let nestedType = AST.TTuple [ AST.TBytes ]
     let captureType = AST.TTuple [ nestedType ]
@@ -1630,6 +1704,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Generic fixed-block nested immediate field releases child root", testGenericFixedBlockNestedImmediateFieldReleasesChildRoot)
     ("Generic fixed-block nested mixed boxed-sum bytes payload uses variant dispatch", testGenericFixedBlockNestedMixedBoxedSumBytesPayloadUsesVariantDispatch)
     ("Generic mixed boxed-sum payload dispatch skips remaining cases", testGenericMixedBoxedSumPayloadDispatchSkipsRemainingCases)
+    ("Recursive-sum release skips variants without managed fields", testRecursiveSumReleaseSkipsVariantWithoutManagedFields)
     ("Closure capture nested fixed-block bytes field uses release plan", testClosureCaptureNestedFixedBlockBytesFieldUsesReleasePlan)
     ("Closure capture boxed-sum bytes payload uses release plan", testClosureCaptureBoxedSumBytesPayloadUsesReleasePlan)
 ]

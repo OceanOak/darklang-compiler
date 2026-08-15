@@ -2,13 +2,13 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-15 05:46:55
-**Commit:** `3e8906fa` - Eliminate ARM64 division loop copy-backs
+**Last Updated:** 2026-08-15 08:08:03
+**Commit:** `89deb13c` - Eliminate separated floating add copies
 
-| Benchmark     |           Dark (2.54x) |          Rust |
+| Benchmark     |           Dark (2.53x) |          Rust |
 |---------------|------------------------|---------------|
 | ackermann     | 10,019,035,943 (2.15x) | 4,651,994,510 |
-| binary_trees  |    645,815,426 (0.35x) | 1,842,791,955 |
+| binary_trees  |    635,985,626 (0.35x) | 1,842,791,955 |
 | collatz       |     81,142,968 (0.83x) |    98,242,178 |
 | edigits       |   6,066,087,393 (445x) |    13,637,551 |
 | factorial     |         63,906 (0.25x) |       257,669 |
