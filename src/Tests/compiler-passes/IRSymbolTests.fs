@@ -64,9 +64,40 @@ let testMirToLirReportsMissingEntryBlock () : TestResult =
     | Error err -> Error $"Expected missing entry block error, got '{err}'"
     | Ok _ -> Error "Expected MIR→LIR to reject a CFG whose entry block is absent"
 
+let testMirToLirUsesImmediateMaskForListToRawPtr () : TestResult =
+    let label = MIR.Label "entry"
+    let listReg = MIR.VReg 0
+    let rawPtrReg = MIR.VReg 1
+    let block: MIR.BasicBlock =
+        { Label = label
+          Instrs = [MIR.ListToRawPtr (rawPtrReg, MIR.Register listReg)]
+          Terminator = MIR.Ret (MIR.Register rawPtrReg) }
+    let cfg: MIR.CFG = { Entry = label; Blocks = Map.ofList [ (label, block) ] }
+    let func: MIR.Function =
+        { Name = "list_to_raw_ptr"
+          TypedParams = [{ Reg = listReg; Type = AST.TList AST.TInt64 }]
+          ReturnType = AST.TRawPtr
+          CFG = cfg
+          FloatRegs = Set.empty }
+    let program = MIR.Program ([func], Map.empty, Map.empty)
+
+    match MIR_to_LIR.toLIR program with
+    | Error err -> Error $"MIR→LIR failed: {err}"
+    | Ok (LIR.Program ([lirFunc], _, _)) ->
+        let instrs =
+            lirFunc.CFG.Blocks
+            |> Map.toList
+            |> List.collect (fun (_, lirBlock) -> lirBlock.Instrs)
+        if List.contains (LIR.And_imm (LIR.Virtual 1, LIR.Virtual 0, -8L)) instrs then
+            Ok ()
+        else
+            Error $"Expected ListToRawPtr to use an immediate tag mask, got: {instrs}"
+    | Ok _ -> Error "Expected a single LIR function"
+
 let tests = [
     ("mir → lir symbolic operands", testMirToLirSymbolicOperands)
     ("mir → lir reports missing entry block", testMirToLirReportsMissingEntryBlock)
+    ("mir → lir uses immediate list tag mask", testMirToLirUsesImmediateMaskForListToRawPtr)
 ]
 
 /// Run all symbolic LIR unit tests

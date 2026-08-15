@@ -1440,10 +1440,7 @@ let selectInstr
         match ensureInRegister list state with
         | Error err -> Error err
         | Ok (listInstrs, listReg, stateAfterList) ->
-        match ensureInRegister (MIR.Int64Const -8L) stateAfterList with
-        | Error err -> Error err
-        | Ok (maskInstrs, maskReg, nextState) ->
-            Ok (listInstrs @ maskInstrs @ [LIR.And (vregToLIRReg dest, listReg, maskReg)], nextState)
+            Ok (listInstrs @ [LIR.And_imm (vregToLIRReg dest, listReg, -8L)], stateAfterList)
 
     | MIR.RawPtrToList (dest, ptr, tag) ->
         match ensureInRegister ptr state with
