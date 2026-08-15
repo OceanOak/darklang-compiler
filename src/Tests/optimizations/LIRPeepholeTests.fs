@@ -205,6 +205,21 @@ let testSinkImmediateCounterUpdatePastSubtraction () : TestResult =
     | Some optimized when optimized = expected -> Ok ()
     | other -> Error $"Expected subtraction counter update to replace its copy-back move, got: {other}"
 
+let testSinkImmediateCounterUpdatePastDivision () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Sdiv (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Sdiv (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected division counter update to replace its copy-back move, got: {other}"
+
 let testSinkImmediateCounterUpdatePastProduct () : TestResult =
     let instrs = [
         Sub (Physical X3, Physical X1, Imm 1L)
@@ -408,6 +423,7 @@ let tests = [
     ("LIR peephole keeps live floating arithmetic temporaries", testFloatingArithmeticMoveChainKeepsLiveTemp)
     ("LIR peephole sinks immediate counter update", testSinkImmediateCounterUpdatePastAccumulator)
     ("LIR peephole sinks immediate counter update past subtraction", testSinkImmediateCounterUpdatePastSubtraction)
+    ("LIR peephole sinks immediate counter update past division", testSinkImmediateCounterUpdatePastDivision)
     ("LIR peephole sinks immediate counter update past product", testSinkImmediateCounterUpdatePastProduct)
     ("LIR peephole sinks immediate counter update past XOR", testSinkImmediateCounterUpdatePastXor)
     ("LIR peephole sinks immediate counter update past AND", testSinkImmediateCounterUpdatePastAnd)
