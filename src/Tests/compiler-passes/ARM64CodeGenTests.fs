@@ -256,6 +256,34 @@ let testDictRetainHelperClearsTagWithImmediateMask () : TestResult =
         else
             Error "ARM64 dictionary retain helper did not clear tag bits with one immediate mask"
 
+/// The shared dictionary-release helper's instruction shape is not observable
+/// in an executable E2E test, so inspect its symbolic code directly.
+let testDictReleaseHelperClearsTagWithImmediateMask () : TestResult =
+    let dictType = AST.TDict (AST.TInt64, AST.TInt64)
+    let program =
+        makeSimpleProgramWithVariants
+            [
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    0,
+                    LIR.DictHeap,
+                    Some (rcMetadata dictType))
+            ]
+            Map.empty
+
+    match CodeGen.generateARM64 target program with
+    | Error e -> Error e
+    | Ok instrs ->
+        let hasImmediateTagClear =
+            instrs
+            |> List.contains
+                (ARM64Symbolic.AND_imm (ARM64.X3, ARM64.X0, 0xFFFFFFFFFFFFFFF8UL))
+
+        if hasImmediateTagClear then
+            Ok ()
+        else
+            Error "ARM64 dictionary release helper did not clear tag bits with one immediate mask"
+
 /// The shared list-release helper's traversal instruction shape is not
 /// observable in an executable E2E test, so inspect its symbolic code directly.
 let testListReleaseHelperClearsTagWithImmediateMask () : TestResult =
@@ -1525,6 +1553,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Generated ARM64 code eliminates self-moves", testGeneratedCodeEliminatesSelfMoves)
     ("ARM64 list retain helper clears tag with immediate mask", testListRetainHelperClearsTagWithImmediateMask)
     ("ARM64 dictionary retain helper clears tag with immediate mask", testDictRetainHelperClearsTagWithImmediateMask)
+    ("ARM64 dictionary release helper clears tag with immediate mask", testDictReleaseHelperClearsTagWithImmediateMask)
     ("ARM64 list release helper clears tag with immediate mask", testListReleaseHelperClearsTagWithImmediateMask)
     ("ARM64 list release helper clears child tag with immediate mask", testListReleaseHelperClearsChildTagWithImmediateMask)
     ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)
