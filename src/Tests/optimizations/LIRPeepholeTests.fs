@@ -175,6 +175,43 @@ let testFloatingArithmeticMoveChainKeepsLiveTemp () : TestResult =
     else
         Error $"Expected live floating arithmetic temporary to stay available, got: {optimized}"
 
+let testSeparatedFloatAddKeepsLiveTemporary () : TestResult =
+    let instrs = [
+        FAdd (FVirtual 1, FVirtual 2, FVirtual 3)
+        Mov (Virtual 10, Imm 1L)
+        FMov (FVirtual 4, FVirtual 1)
+        PrintFloat (FVirtual 1)
+    ]
+
+    let optimized = retargetSeparatedDeadFAdds instrs
+    if optimized = instrs then
+        Ok ()
+    else
+        Error $"Expected separated FAdd with a live temporary to stay unchanged, got: {optimized}"
+
+let testSinkSeparatedAllocatedFloatAdd () : TestResult =
+    let instrs = [
+        FAdd (FPhysical D4, FPhysical D4, FPhysical D0)
+        FAdd (FPhysical D2, FPhysical D2, FPhysical D2)
+        FMul (FPhysical D2, FPhysical D2, FPhysical D3)
+        FAdd (FPhysical D3, FPhysical D2, FPhysical D1)
+        Add (Physical X1, Physical X1, Imm 1L)
+        FMov (FPhysical D2, FPhysical D4)
+    ]
+    let expected = [
+        FAdd (FPhysical D2, FPhysical D2, FPhysical D2)
+        FMul (FPhysical D2, FPhysical D2, FPhysical D3)
+        FAdd (FPhysical D3, FPhysical D2, FPhysical D1)
+        Add (Physical X1, Physical X1, Imm 1L)
+        FAdd (FPhysical D2, FPhysical D4, FPhysical D0)
+    ]
+
+    let optimized = sinkSeparatedAllocatedFAdds instrs
+    if optimized = expected then
+        Ok ()
+    else
+        Error $"Expected allocated FAdd to replace its separated copy, got: {optimized}"
+
 let testSinkImmediateCounterUpdatePastAccumulator () : TestResult =
     let instrs = [
         Sub (Physical X3, Physical X1, Imm 1L)
@@ -421,6 +458,8 @@ let tests = [
     ("LIR peephole fuses FNeg followed by dead-temp FMov", testFNegMoveChainFusesWhenTempDies)
     ("LIR peephole folds dead floating arithmetic copies", testFloatingArithmeticMoveChainsFuseWhenTempsDie)
     ("LIR peephole keeps live floating arithmetic temporaries", testFloatingArithmeticMoveChainKeepsLiveTemp)
+    ("LIR peephole keeps live separated FAdd temporaries", testSeparatedFloatAddKeepsLiveTemporary)
+    ("LIR peephole sinks separated allocated FAdd", testSinkSeparatedAllocatedFloatAdd)
     ("LIR peephole sinks immediate counter update", testSinkImmediateCounterUpdatePastAccumulator)
     ("LIR peephole sinks immediate counter update past subtraction", testSinkImmediateCounterUpdatePastSubtraction)
     ("LIR peephole sinks immediate counter update past division", testSinkImmediateCounterUpdatePastDivision)

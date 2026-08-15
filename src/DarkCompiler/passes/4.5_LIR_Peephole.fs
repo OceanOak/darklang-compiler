@@ -6,6 +6,7 @@
 // - Constant multiplication optimizations (mul x, y, 0 → mov x, 0)
 // - Dead move elimination
 // - Retarget dead floating-point results into their copy destinations
+// - Retarget separated dead floating-point additions into their copy destinations
 //
 // These optimizations work on individual instructions or small sequences.
 
@@ -458,6 +459,46 @@ let private fRegUsedInInstr (target: FReg) (instr: Instr) : bool =
 let private fRegUsedInInstrs (target: FReg) (instrs: Instr list) : bool =
     instrs |> List.exists (fRegUsedInInstr target)
 
+/// Retarget a dead virtual FAdd result into a later virtual-register copy.
+/// Keeping the producer in place preserves floating-point evaluation order;
+/// virtual LIR is in SSA form, so proving that the copy is the temporary's only
+/// use makes replacing the temporary and copy with one definition safe.
+let retargetSeparatedDeadFAdds (instrs: Instr list) : Instr list =
+    let rec findCopy
+        (temp: FReg)
+        (betweenReversed: Instr list)
+        (remaining: Instr list)
+        : (FReg * Instr list * Instr list) option =
+        match remaining with
+        | FMov (LIR.FVirtual destId, moveSource) :: tail
+            when sameFReg temp moveSource && not (List.isEmpty betweenReversed) ->
+            let dest = LIR.FVirtual destId
+            let between = List.rev betweenReversed
+            if sameFReg temp dest
+               || fRegUsedInInstrs temp tail then
+                None
+            else
+                Some (dest, between, tail)
+        | instr :: _ when fRegUsedInInstr temp instr ->
+            None
+        | instr :: tail ->
+            findCopy temp (instr :: betweenReversed) tail
+        | [] -> None
+
+    let rec loop (acc: Instr list) (remaining: Instr list) : Instr list =
+        match remaining with
+        | FAdd ((LIR.FVirtual _ as temp), left, right) as instr :: rest
+            when not (sameFReg temp left) && not (sameFReg temp right) ->
+            match findCopy temp [] rest with
+            | Some (dest, between, tail)
+                when not (sameFReg dest left) && not (sameFReg dest right) ->
+                loop (List.rev between @ (FAdd (dest, left, right) :: acc)) tail
+            | _ -> loop (instr :: acc) rest
+        | instr :: rest -> loop (instr :: acc) rest
+        | [] -> List.rev acc
+
+    loop [] instrs
+
 let private tryRetargetFloatingResultIntoMove
     (instr: Instr)
     (next: Instr)
@@ -498,7 +539,7 @@ let optimizeInstrs (instrs: Instr list) : Instr list =
             | None -> loop rest
         | [] -> []
 
-    loop instrs
+    loop (retargetSeparatedDeadFAdds instrs)
 
 let removeSelfMovesFromInstrs (instrs: Instr list) : Instr list =
     let rec loop remaining =
@@ -570,6 +611,57 @@ let private clobbersFRegs (instr: Instr) : bool =
     | RestoreRegs _
     | FArgMoves _ -> true
     | _ -> false
+
+let private fRegWrittenByInstr (target: FReg) (instr: Instr) : bool =
+    match instr with
+    | FMov (dest, _) -> sameFReg target dest
+    | _ ->
+        match fRegWriteDest instr with
+        | Some dest -> sameFReg target dest
+        | None -> false
+
+/// Delay a dead allocated FAdd until its later copy and write the copy
+/// destination directly. The crossed instructions must be pure and may not
+/// overwrite any value consumed by the delayed addition.
+let sinkSeparatedAllocatedFAdds (instrs: Instr list) : Instr list =
+    let rec findCopy
+        (temp: FReg)
+        (left: FReg)
+        (right: FReg)
+        (betweenReversed: Instr list)
+        (remaining: Instr list)
+        : (FReg * Instr list * Instr list) option =
+        match remaining with
+        | FMov ((LIR.FPhysical _ as dest), moveSource) :: tail
+            when sameFReg temp moveSource && not (List.isEmpty betweenReversed) ->
+            let between = List.rev betweenReversed
+            let overwritesInput =
+                between
+                |> List.exists (fun instr ->
+                    fRegWrittenByInstr temp instr
+                    || fRegWrittenByInstr left instr
+                    || fRegWrittenByInstr right instr)
+            if overwritesInput || fRegUsedInInstrs temp tail then
+                None
+            else
+                Some (dest, between, tail)
+        | instr :: _ when not (isPureLoopInstr instr) -> None
+        | instr :: _ when fRegUsedInInstr temp instr || fRegWrittenByInstr temp instr -> None
+        | instr :: tail -> findCopy temp left right (instr :: betweenReversed) tail
+        | [] -> None
+
+    let rec loop (acc: Instr list) (remaining: Instr list) : Instr list =
+        match remaining with
+        | FAdd ((LIR.FPhysical _ as temp), left, right) as instr :: rest ->
+            match findCopy temp left right [] rest with
+            | Some (dest, between, tail) ->
+                let acc' = FAdd (dest, left, right) :: (List.rev between @ acc)
+                loop acc' tail
+            | None -> loop (instr :: acc) rest
+        | instr :: rest -> loop (instr :: acc) rest
+        | [] -> List.rev acc
+
+    loop [] instrs
 
 let removeRedundantFloatingCopyBackMoves (instrs: Instr list) : Instr list =
     let rec loop aliases nextValueIdentity acc remaining =
@@ -736,7 +828,8 @@ let removePostAllocationMovesFromFunction (func: Function) : Function =
                 Instrs =
                     block.Instrs
                     |> removeSelfMovesFromInstrs
-                    |> removeRedundantFloatingCopyBackMoves })
+                    |> removeRedundantFloatingCopyBackMoves
+                    |> sinkSeparatedAllocatedFAdds })
     { func with CFG = { func.CFG with Blocks = blocks } }
 
 let optimizeAllocatedCounterUpdates (func: Function) : Function =

@@ -636,7 +636,7 @@ Persistent backlog for audit-driven classic compiler optimization work.
 - Optimization name: Dead floating arithmetic copy elimination
 - Taxonomy category: Instruction combining
 - Priority/rationale: Canonical low-risk result retargeting that removes one floating-point copy from adjacent arithmetic/copy chains without extending the temporary's lifetime.
-- Notes: Implemented for adjacent `FAdd`, `FSub`, `FMul`, or `FDiv` results copied by `FMov` when the arithmetic temporary has no later instruction uses. Direct LIR tests cover all four operations and live-temporary preservation; `retarget_dead_float_arithmetic_move` records the source-to-LIR result. The routine `pisum` benchmark exercises the pattern in its hot loop and fell from 50,015,171 to 45,015,171 instructions (10.0%); all other routine counts were unchanged. The committed aggregate ratio is 7.78x, and applying the measured `pisum` result yields 7.74x pending orchestrator recording.
+- Notes: Implemented for adjacent `FAdd`, `FSub`, `FMul`, or `FDiv` results copied by `FMov` when the arithmetic temporary has no later instruction uses. A later extension retargets separated dead `FAdd` results in virtual LIR and, after allocation, delays them across dependency-free pure instructions to replace the eventual physical-register copy. Language-driven LIR snapshots and direct allocated-register tests cover the rewrite and live-temporary preservation. The full-size Mandelbrot benchmark fell from 17,379,453 to 16,402,878 instructions (5.62%); the other 18 routine counts were unchanged and the aggregate ratio remained 2.54x.
 
 ## Register allocation
 
