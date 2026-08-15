@@ -2,8 +2,8 @@
 
 Latest routine-profile Dark performance vs audited Rust references (instruction counts).
 
-**Last Updated:** 2026-08-15 03:23:37
-**Commit:** `9fa0ceec` - Eliminate ARM64 OR loop copy-backs
+**Last Updated:** 2026-08-15 04:28:13
+**Commit:** `be3c7ce9` - Eliminate ARM64 subtraction loop copy-backs
 
 | Benchmark     |           Dark (2.54x) |          Rust |
 |---------------|------------------------|---------------|
@@ -16,7 +16,7 @@ Latest routine-profile Dark performance vs audited Rust references (instruction 
 | fib           |    567,354,378 (2.20x) |   257,598,132 |
 | leibniz       |    900,001,393 (1.12x) |   800,257,637 |
 | mandelbrot    |     17,379,453 (1.28x) |    13,595,721 |
-| matmul        |   2,031,831,142 (127x) |    15,983,852 |
+| matmul        |   2,028,343,609 (127x) |    15,983,852 |
 | merkletrees   |    658,629,002 (5.28x) |   124,776,610 |
 | nbody         |  1,216,502,521 (4.91x) |   247,760,534 |
 | nqueen        |    230,796,676 (1.65x) |   139,988,273 |
