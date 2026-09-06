@@ -313,6 +313,7 @@ let testBranchFalseEdgeFallsThrough () : TestResult =
         CacheInlineGenericReleaseTemplate = None
         FunctionName = func.Name; InstructionSite = ""; StackSize = 0; UsedCalleeSaved = []
         HeapOverflowLabel = "__heap_oom_arm64_layout"
+        RecordLirOpExpansion = None
     }
     match CodeGen.convertFunction [] ctx func with
     | Error e -> Error e
@@ -397,6 +398,7 @@ let private generatedEntryTransfers
         StackSize = func.StackSize
         UsedCalleeSaved = func.UsedCalleeSaved
         HeapOverflowLabel = $"__heap_oom_{func.Name}"
+        RecordLirOpExpansion = None
     }
 
     CodeGen.convertFunction [] ctx func
@@ -540,6 +542,7 @@ let private convertRawAlloc
         StackSize = 0
         UsedCalleeSaved = []
         HeapOverflowLabel = "__heap_oom_test"
+        RecordLirOpExpansion = None
     }
     CodeGen.convertInstr ctx (LIR.RawAlloc (LIR.Physical dest, LIR.Physical numBytes))
 
@@ -1795,6 +1798,42 @@ let testRejectsUnpreparedCodegenFacts () : TestResult =
     | first, second ->
         Error $"Expected unprepared ARM64 LIR to be rejected, got facts={first}; plan={second}"
 
+let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
+    let observations = ResizeArray<string * int * int64>()
+    let ctx : CodeGen.CodeGenContext = {
+        Target = target
+        Options = CodeGen.defaultOptions
+        SumShapeRegistry = Map.empty
+        RecordRegistry = Map.empty
+        ClosurePayloadSizes = Map.empty
+        ClosureCaptureTypes = Map.empty
+        PlannedListDecHelperLabels = Map.empty
+        InlineGenericReleaseTemplateLabels = Map.empty
+        CacheInlineGenericReleaseTemplate = None
+        FunctionName = "lir_op_profile"
+        InstructionSite = ""
+        StackSize = 0
+        UsedCalleeSaved = []
+        HeapOverflowLabel = "__heap_oom_lir_op_profile"
+        RecordLirOpExpansion =
+            Some (fun opcode instructionCount elapsedTicks ->
+                observations.Add(opcode, instructionCount, elapsedTicks))
+    }
+    let label = LIR.Label "lir_op_profile_entry"
+    let block : LIR.BasicBlock = {
+        Label = label
+        Instrs = [LIR.PrintHeapString (LIR.Physical LIR.X0)]
+        Terminator = LIR.Ret
+    }
+
+    match CodeGen.convertBlock ctx "_epilogue_lir_op_profile" None block with
+    | Error error -> Error error
+    | Ok _ ->
+        match observations |> Seq.toList with
+        | [("PrintHeapString", 16, elapsedTicks)] when elapsedTicks >= 0L -> Ok ()
+        | actual ->
+            Error $"Expected one attributed 16-instruction PrintHeapString expansion, got {actual}"
+
 let tests : (string * (unit -> TestResult)) list = [
     ("LIR ARM64 codegen reports missing entry block", testReportsMissingEntryBlock)
     ("Generated ARM64 code eliminates self-moves", testGeneratedCodeEliminatesSelfMoves)
@@ -1851,4 +1890,5 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Closure capture nested fixed-block bytes field uses release plan", testClosureCaptureNestedFixedBlockBytesFieldUsesReleasePlan)
     ("Closure capture boxed-sum bytes payload uses release plan", testClosureCaptureBoxedSumBytesPayloadUsesReleasePlan)
     ("ARM64 codegen rejects unprepared facts", testRejectsUnpreparedCodegenFacts)
+    ("ARM64 codegen attributes LIR opcode expansion", testLirOpExpansionRecorderAttributesGeneratedInstructions)
 ]

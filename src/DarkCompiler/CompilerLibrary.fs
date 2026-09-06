@@ -144,6 +144,15 @@ type CodegenFunctionMetric = {
     SymbolicInstructionCount: int
 }
 
+/// Aggregate cost of expanding one LIR opcode across freshly generated ARM64
+/// functions. Symbolic instructions are counted before function peepholing.
+type CodegenLirOpMetric = {
+    Opcode: string
+    Occurrences: int
+    SymbolicInstructionCount: int
+    Elapsed: TimeSpan
+}
+
 type private LirFunctionReferenceComparer() =
     interface IEqualityComparer<LIR.Function> with
         member _.Equals(left, right) = Object.ReferenceEquals(left, right)
@@ -281,6 +290,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
             bool * string,
             (ANF.RcReleasePlan * LIR.Arm64ReleasePlanSummary) list>()
     let arm64CodegenMetrics = ResizeArray<CodegenFunctionMetric>()
+    let arm64LirOpMetrics =
+        Dictionary<string, struct (int * int * int64)>(StringComparer.Ordinal)
     let mutable disposed = false
     let mutable arm64CodegenHitCount = 0
     let mutable arm64CodegenMissCount = 0
@@ -361,6 +372,23 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 entries.[config] <- result
                 compiledDependencyMissCount <- compiledDependencyMissCount + 1
                 result
+
+    member internal _.Arm64LirOpExpansionRecorder
+        : CodeGen.LirOpExpansionRecorder option =
+        if disposed || not collectCodegenMetrics then
+            None
+        else
+            Some (fun opcode symbolicInstructionCount elapsedTicks ->
+                match arm64LirOpMetrics.TryGetValue opcode with
+                | true, struct (occurrences, symbolicInstructions, ticks) ->
+                    arm64LirOpMetrics.[opcode] <-
+                        struct (
+                            occurrences + 1,
+                            symbolicInstructions + symbolicInstructionCount,
+                            ticks + elapsedTicks)
+                | false, _ ->
+                    arm64LirOpMetrics.[opcode] <-
+                        struct (1, symbolicInstructionCount, elapsedTicks))
 
     member internal _.CompileStart
         (config: StartCompilationConfig)
@@ -710,6 +738,17 @@ type CompilationSession(collectCodegenMetrics: bool) =
     member _.Arm64ReleasePlanSummaryHitCount = arm64ReleasePlanSummaryHitCount
     member _.Arm64ReleasePlanSummaryMissCount = arm64ReleasePlanSummaryMissCount
     member _.Arm64CodegenMetrics = arm64CodegenMetrics |> Seq.toList
+    member _.Arm64LirOpMetrics =
+        let timestampFrequency = float Stopwatch.Frequency
+        arm64LirOpMetrics
+        |> Seq.map (fun (KeyValue (opcode, struct (occurrences, symbolicInstructions, ticks))) ->
+            {
+                Opcode = opcode
+                Occurrences = occurrences
+                SymbolicInstructionCount = symbolicInstructions
+                Elapsed = TimeSpan.FromSeconds(float ticks / timestampFrequency)
+            })
+        |> Seq.toList
 
     interface IDisposable with
         member _.Dispose() =
@@ -727,6 +766,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             arm64EmissionChunks.Clear()
             arm64ReleasePlanSummaries.Clear()
             arm64CodegenMetrics.Clear()
+            arm64LirOpMetrics.Clear()
             disposed <- true
 
 let private recordPassTiming
@@ -1391,6 +1431,9 @@ let private generateBinary
                         Pass = name
                         Elapsed = TimeSpan.FromMilliseconds elapsedMs
                     })
+        let lirOpExpansionRecorder =
+            session
+            |> Option.bind (fun current -> current.Arm64LirOpExpansionRecorder)
         let codegenResult =
             CodeGen.generateARM64WithOptionsAndCaches
                 arm64Target
@@ -1402,6 +1445,7 @@ let private generateBinary
                 metadataGroupCache
                 helperCache
                 metadataGroups
+                lirOpExpansionRecorder
                 codegenPhaseRecorder
                 allocatedProgram
         match codegenResult with

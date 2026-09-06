@@ -23,6 +23,7 @@ let private context : CodeGen.CodeGenContext = {
     StackSize = 0
     UsedCalleeSaved = []
     HeapOverflowLabel = "__heap_oom_parallel_move_fixture"
+    RecordLirOpExpansion = None
 }
 
 let private render instructions =

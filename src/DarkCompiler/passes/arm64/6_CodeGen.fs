@@ -55,6 +55,11 @@ type ReleasePlanSummaryCache =
         -> (unit -> LIR.Arm64ReleasePlanSummary)
         -> LIR.Arm64ReleasePlanSummary
 
+/// Opt-in attribution for one freshly generated LIR instruction. The elapsed
+/// value uses Stopwatch timestamp ticks, and the instruction count is measured
+/// before the function-level ARM64 peephole pass.
+type LirOpExpansionRecorder = string -> int -> int64 -> unit
+
 /// Code generation context (passed through to instruction conversion)
 type CodeGenContext = {
     Target: ARM64.TargetConfig
@@ -79,6 +84,7 @@ type CodeGenContext = {
     StackSize: int
     UsedCalleeSaved: LIR.PhysReg list
     HeapOverflowLabel: string
+    RecordLirOpExpansion: LirOpExpansionRecorder option
 }
 
 let private rcSumShapeRegistryFromVariantRegistry (variantRegistry: LIR.VariantRegistry) : ANF.RcSumShapeRegistry =
@@ -6628,6 +6634,20 @@ let convertTerminator (epilogueLabel: string) (nextLabel: string option) (termin
 
 /// Convert LIR basic block to ARM64 instructions (with label)
 /// epilogueLabel: passed through to terminator for Ret handling
+let private lirInstructionCaseNames =
+    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<LIR.Instr>)
+    |> Array.map (fun case -> case.Name)
+
+let private readLirInstructionTag =
+    Microsoft.FSharp.Reflection.FSharpValue.PreComputeUnionTagReader(typeof<LIR.Instr>)
+
+let private lirInstructionOpcode (instr: LIR.Instr) : string =
+    let tag = readLirInstructionTag instr
+    if tag < 0 || tag >= lirInstructionCaseNames.Length then
+        Crash.crash $"ARM64 LIR profiling received invalid instruction tag {tag}"
+    else
+        lirInstructionCaseNames.[tag]
+
 let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (nextBlock: LIR.BasicBlock option) (block: LIR.BasicBlock) : Result<ARM64Symbolic.Instr list, string> =
     // Emit label for this block
     let (LIR.Label lbl) = block.Label
@@ -6638,7 +6658,19 @@ let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (nextBlock: LIR.B
         let instructionCtx = {
             ctx with InstructionSite = $"{lbl}_{index}"
         }
-        convertInstr instructionCtx instr)
+        match ctx.RecordLirOpExpansion with
+        | None -> convertInstr instructionCtx instr
+        | Some record ->
+            let started = System.Diagnostics.Stopwatch.GetTimestamp()
+            convertInstr instructionCtx instr
+            |> Result.map (fun instructions ->
+                let elapsedTicks =
+                    System.Diagnostics.Stopwatch.GetTimestamp() - started
+                record
+                    (lirInstructionOpcode instr)
+                    instructions.Length
+                    elapsedTicks
+                instructions))
     |> ResultList.collectResults id
     |> Result.bind (fun instrs ->
         let nextLabel = nextBlock |> Option.map (fun next -> let (LIR.Label label) = next.Label in label)
@@ -7844,6 +7876,7 @@ let private generatePreparedARM64WithOptionsAndCache
     (metadataGroupCache: MetadataGroupCache option)
     (helperCache: HelperCodegenCache option)
     (metadataGroups: MetadataGroup list)
+    (lirOpExpansionRecorder: LirOpExpansionRecorder option)
     (phaseRecorder: (string -> float -> unit) option)
     (program: LIR.Program)
     : Result<GeneratedProgram, string> =
@@ -8223,6 +8256,7 @@ let private generatePreparedARM64WithOptionsAndCache
         StackSize = 0
         UsedCalleeSaved = []
         HeapOverflowLabel = ""
+        RecordLirOpExpansion = lirOpExpansionRecorder
     }
 
     let plannedListDecHelpers = rcHelperRequirements.PlannedListDecHelpers
@@ -8601,6 +8635,7 @@ let generateARM64WithOptionsAndCaches
     (metadataGroupCache: MetadataGroupCache option)
     (helperCache: HelperCodegenCache option)
     (metadataGroups: MetadataGroup list)
+    (lirOpExpansionRecorder: LirOpExpansionRecorder option)
     (phaseRecorder: (string -> float -> unit) option)
     (program: LIR.Program)
     : Result<GeneratedProgram, string> =
@@ -8628,6 +8663,7 @@ let generateARM64WithOptionsAndCaches
             metadataGroupCache
             helperCache
             metadataGroups
+            lirOpExpansionRecorder
             phaseRecorder
             program
 
@@ -8648,6 +8684,7 @@ let generateARM64WithOptionsAndCache
         None
         None
         []
+        None
         phaseRecorder
         program
 

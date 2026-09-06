@@ -122,6 +122,14 @@ type CodegenProfilePhase = {
     percentage_of_codegen: float
 }
 
+type CodegenProfileLirOp = {
+    name: string
+    occurrences: int
+    elapsed_ms: float
+    symbolic_instructions_before_peephole: int
+    average_symbolic_instructions_before_peephole: float
+}
+
 type CodegenProfileSummary = {
     codegen_ms: float
     attributed_function_ms: float
@@ -153,6 +161,7 @@ type CodegenProfilePayload = {
     phases: CodegenProfilePhase array
     categories: CodegenProfileCategory array
     functions: CodegenProfileFunction array
+    lir_ops: CodegenProfileLirOp array
 }
 
 let private milliseconds (elapsed: TimeSpan) : float =
@@ -556,6 +565,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
 
     let runState = TestFramework.createStateWithProgressReporter completedTestReporter
     let codegenMetrics = ResizeArray<CompilerLibrary.CodegenFunctionMetric>()
+    let codegenLirOpMetrics = ResizeArray<CompilerLibrary.CodegenLirOpMetric>()
     let mutable codegenCacheHits = 0
     let mutable codegenCacheMisses = 0
     let mutable releasePlanSummaryCacheHits = 0
@@ -1003,6 +1013,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
 
             if Option.isSome codegenProfileJsonPath then
                 codegenMetrics.AddRange(compilationSession.Arm64CodegenMetrics)
+                codegenLirOpMetrics.AddRange(compilationSession.Arm64LirOpMetrics)
                 codegenCacheHits <- codegenCacheHits + compilationSession.Arm64CodegenHitCount
                 codegenCacheMisses <- codegenCacheMisses + compilationSession.Arm64CodegenMissCount
                 releasePlanSummaryCacheHits <-
@@ -1572,8 +1583,33 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                     generations = entries |> Array.sumBy (fun entry -> entry.generations)
                 })
             |> Array.sortByDescending (fun entry -> entry.elapsed_ms)
+        let lirOpEntries =
+            codegenLirOpMetrics
+            |> Seq.groupBy (fun metric -> metric.Opcode)
+            |> Seq.map (fun (name, metrics) ->
+                let metrics = metrics |> Seq.toArray
+                let occurrences = metrics |> Array.sumBy (fun metric -> metric.Occurrences)
+                let symbolicInstructions =
+                    metrics
+                    |> Array.sumBy (fun metric -> metric.SymbolicInstructionCount)
+                {
+                    name = name
+                    occurrences = occurrences
+                    elapsed_ms =
+                        metrics
+                        |> Array.sumBy (fun metric -> metric.Elapsed.TotalMilliseconds)
+                        |> roundedMilliseconds
+                    symbolic_instructions_before_peephole = symbolicInstructions
+                    average_symbolic_instructions_before_peephole =
+                        if occurrences = 0 then 0.0
+                        else
+                            roundedMilliseconds
+                                (float symbolicInstructions / float occurrences)
+                })
+            |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
+            |> Seq.toArray
         let payload = {
-            schema_version = 4
+            schema_version = 5
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs
@@ -1601,6 +1637,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             phases = phaseEntries
             categories = categoryEntries
             functions = functionEntries
+            lir_ops = lirOpEntries
         }
         let options = JsonSerializerOptions(WriteIndented = true)
         let directory = Path.GetDirectoryName(path)
