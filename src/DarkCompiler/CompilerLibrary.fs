@@ -147,6 +147,7 @@ type CodegenFunctionMetric = {
 /// Aggregate cost of expanding one LIR opcode across freshly generated ARM64
 /// functions. Symbolic instructions are counted before function peepholing.
 type CodegenLirOpMetric = {
+    FunctionName: string
     Opcode: string
     Occurrences: int
     SymbolicInstructionCount: int
@@ -291,7 +292,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             (ANF.RcReleasePlan * LIR.Arm64ReleasePlanSummary) list>()
     let arm64CodegenMetrics = ResizeArray<CodegenFunctionMetric>()
     let arm64LirOpMetrics =
-        Dictionary<string, struct (int * int * int64)>(StringComparer.Ordinal)
+        Dictionary<struct (string * string), struct (int * int * int64)>()
     let mutable disposed = false
     let mutable arm64CodegenHitCount = 0
     let mutable arm64CodegenMissCount = 0
@@ -378,16 +379,17 @@ type CompilationSession(collectCodegenMetrics: bool) =
         if disposed || not collectCodegenMetrics then
             None
         else
-            Some (fun opcode symbolicInstructionCount elapsedTicks ->
-                match arm64LirOpMetrics.TryGetValue opcode with
+            Some (fun functionName opcode symbolicInstructionCount elapsedTicks ->
+                let key = struct (functionName, opcode)
+                match arm64LirOpMetrics.TryGetValue key with
                 | true, struct (occurrences, symbolicInstructions, ticks) ->
-                    arm64LirOpMetrics.[opcode] <-
+                    arm64LirOpMetrics.[key] <-
                         struct (
                             occurrences + 1,
                             symbolicInstructions + symbolicInstructionCount,
                             ticks + elapsedTicks)
                 | false, _ ->
-                    arm64LirOpMetrics.[opcode] <-
+                    arm64LirOpMetrics.[key] <-
                         struct (1, symbolicInstructionCount, elapsedTicks))
 
     member internal _.CompileStart
@@ -741,8 +743,9 @@ type CompilationSession(collectCodegenMetrics: bool) =
     member _.Arm64LirOpMetrics =
         let timestampFrequency = float Stopwatch.Frequency
         arm64LirOpMetrics
-        |> Seq.map (fun (KeyValue (opcode, struct (occurrences, symbolicInstructions, ticks))) ->
+        |> Seq.map (fun (KeyValue (struct (functionName, opcode), struct (occurrences, symbolicInstructions, ticks))) ->
             {
+                FunctionName = functionName
                 Opcode = opcode
                 Occurrences = occurrences
                 SymbolicInstructionCount = symbolicInstructions

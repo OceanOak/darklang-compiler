@@ -130,6 +130,15 @@ type CodegenProfileLirOp = {
     average_symbolic_instructions_before_peephole: float
 }
 
+type CodegenProfileLirOpFunction = {
+    function_name: string
+    category: string
+    opcode: string
+    occurrences: int
+    elapsed_ms: float
+    symbolic_instructions_before_peephole: int
+}
+
 type CodegenProfileSummary = {
     codegen_ms: float
     attributed_function_ms: float
@@ -162,6 +171,7 @@ type CodegenProfilePayload = {
     categories: CodegenProfileCategory array
     functions: CodegenProfileFunction array
     lir_ops: CodegenProfileLirOp array
+    lir_op_functions: CodegenProfileLirOpFunction array
 }
 
 let private milliseconds (elapsed: TimeSpan) : float =
@@ -1608,8 +1618,28 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                 })
             |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
             |> Seq.toArray
+        let lirOpFunctionEntries =
+            codegenLirOpMetrics
+            |> Seq.groupBy (fun metric -> (metric.FunctionName, metric.Opcode))
+            |> Seq.map (fun ((functionName, opcode), metrics) ->
+                let metrics = metrics |> Seq.toArray
+                {
+                    function_name = functionName
+                    category = categoryForFunction functionName
+                    opcode = opcode
+                    occurrences = metrics |> Array.sumBy (fun metric -> metric.Occurrences)
+                    elapsed_ms =
+                        metrics
+                        |> Array.sumBy (fun metric -> metric.Elapsed.TotalMilliseconds)
+                        |> roundedMilliseconds
+                    symbolic_instructions_before_peephole =
+                        metrics
+                        |> Array.sumBy (fun metric -> metric.SymbolicInstructionCount)
+                })
+            |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
+            |> Seq.toArray
         let payload = {
-            schema_version = 5
+            schema_version = 6
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs
@@ -1638,6 +1668,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             categories = categoryEntries
             functions = functionEntries
             lir_ops = lirOpEntries
+            lir_op_functions = lirOpFunctionEntries
         }
         let options = JsonSerializerOptions(WriteIndented = true)
         let directory = Path.GetDirectoryName(path)

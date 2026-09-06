@@ -58,7 +58,7 @@ type ReleasePlanSummaryCache =
 /// Opt-in attribution for one freshly generated LIR instruction. The elapsed
 /// value uses Stopwatch timestamp ticks, and the instruction count is measured
 /// before the function-level ARM64 peephole pass.
-type LirOpExpansionRecorder = string -> int -> int64 -> unit
+type LirOpExpansionRecorder = string -> string -> int -> int64 -> unit
 
 /// Code generation context (passed through to instruction conversion)
 type CodeGenContext = {
@@ -6667,6 +6667,7 @@ let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (nextBlock: LIR.B
                 let elapsedTicks =
                     System.Diagnostics.Stopwatch.GetTimestamp() - started
                 record
+                    ctx.FunctionName
                     (lirInstructionOpcode instr)
                     instructions.Length
                     elapsedTicks
