@@ -134,6 +134,7 @@ type CodegenProfileLirOpFunction = {
     function_name: string
     category: string
     opcode: string
+    detail: string
     occurrences: int
     elapsed_ms: float
     symbolic_instructions_before_peephole: int
@@ -1620,13 +1621,14 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             |> Seq.toArray
         let lirOpFunctionEntries =
             codegenLirOpMetrics
-            |> Seq.groupBy (fun metric -> (metric.FunctionName, metric.Opcode))
-            |> Seq.map (fun ((functionName, opcode), metrics) ->
+            |> Seq.groupBy (fun metric -> (metric.FunctionName, metric.Opcode, metric.Detail))
+            |> Seq.map (fun ((functionName, opcode, detail), metrics) ->
                 let metrics = metrics |> Seq.toArray
                 {
                     function_name = functionName
                     category = categoryForFunction functionName
                     opcode = opcode
+                    detail = detail
                     occurrences = metrics |> Array.sumBy (fun metric -> metric.Occurrences)
                     elapsed_ms =
                         metrics
@@ -1639,7 +1641,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
             |> Seq.toArray
         let payload = {
-            schema_version = 6
+            schema_version = 7
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs

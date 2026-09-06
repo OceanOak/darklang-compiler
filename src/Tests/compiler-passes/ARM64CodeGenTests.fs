@@ -1799,7 +1799,7 @@ let testRejectsUnpreparedCodegenFacts () : TestResult =
         Error $"Expected unprepared ARM64 LIR to be rejected, got facts={first}; plan={second}"
 
 let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
-    let observations = ResizeArray<string * string * int * int64>()
+    let observations = ResizeArray<string * string * string * int * int64>()
     let ctx : CodeGen.CodeGenContext = {
         Target = target
         Options = CodeGen.defaultOptions
@@ -1816,8 +1816,8 @@ let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
         UsedCalleeSaved = []
         HeapOverflowLabel = "__heap_oom_lir_op_profile"
         RecordLirOpExpansion =
-            Some (fun functionName opcode instructionCount elapsedTicks ->
-                observations.Add(functionName, opcode, instructionCount, elapsedTicks))
+            Some (fun functionName opcode detail instructionCount elapsedTicks ->
+                observations.Add(functionName, opcode, detail, instructionCount, elapsedTicks))
     }
     let label = LIR.Label "lir_op_profile_entry"
     let block : LIR.BasicBlock = {
@@ -1830,7 +1830,7 @@ let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
     | Error error -> Error error
     | Ok _ ->
         match observations |> Seq.toList with
-        | [("lir_op_profile", "PrintHeapString", 16, elapsedTicks)] when elapsedTicks >= 0L -> Ok ()
+        | [("lir_op_profile", "PrintHeapString", "", 16, elapsedTicks)] when elapsedTicks >= 0L -> Ok ()
         | actual ->
             Error $"Expected one attributed 16-instruction PrintHeapString expansion, got {actual}"
 

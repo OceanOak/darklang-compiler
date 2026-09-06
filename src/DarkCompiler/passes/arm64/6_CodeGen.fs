@@ -58,7 +58,7 @@ type ReleasePlanSummaryCache =
 /// Opt-in attribution for one freshly generated LIR instruction. The elapsed
 /// value uses Stopwatch timestamp ticks, and the instruction count is measured
 /// before the function-level ARM64 peephole pass.
-type LirOpExpansionRecorder = string -> string -> int -> int64 -> unit
+type LirOpExpansionRecorder = string -> string -> string -> int -> int64 -> unit
 
 /// Code generation context (passed through to instruction conversion)
 type CodeGenContext = {
@@ -6648,6 +6648,18 @@ let private lirInstructionOpcode (instr: LIR.Instr) : string =
     else
         lirInstructionCaseNames.[tag]
 
+let private lirInstructionProfileDetail (instr: LIR.Instr) : string =
+    match instr with
+    | LIR.RefCountInc (_, payloadSize, kind, metadata)
+    | LIR.RefCountDec (_, payloadSize, kind, metadata) ->
+        let sourceType =
+            metadata
+            |> Option.bind (fun value -> value.SourceType)
+            |> Option.map TypeChecking.typeToString
+            |> Option.defaultValue "unknown"
+        $"{kind}:{payloadSize}:{sourceType}"
+    | _ -> ""
+
 let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (nextBlock: LIR.BasicBlock option) (block: LIR.BasicBlock) : Result<ARM64Symbolic.Instr list, string> =
     // Emit label for this block
     let (LIR.Label lbl) = block.Label
@@ -6669,6 +6681,7 @@ let convertBlock (ctx: CodeGenContext) (epilogueLabel: string) (nextBlock: LIR.B
                 record
                     ctx.FunctionName
                     (lirInstructionOpcode instr)
+                    (lirInstructionProfileDetail instr)
                     instructions.Length
                     elapsedTicks
                 instructions))

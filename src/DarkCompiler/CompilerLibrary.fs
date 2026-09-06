@@ -149,6 +149,7 @@ type CodegenFunctionMetric = {
 type CodegenLirOpMetric = {
     FunctionName: string
     Opcode: string
+    Detail: string
     Occurrences: int
     SymbolicInstructionCount: int
     Elapsed: TimeSpan
@@ -292,7 +293,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             (ANF.RcReleasePlan * LIR.Arm64ReleasePlanSummary) list>()
     let arm64CodegenMetrics = ResizeArray<CodegenFunctionMetric>()
     let arm64LirOpMetrics =
-        Dictionary<struct (string * string), struct (int * int * int64)>()
+        Dictionary<struct (string * string * string), struct (int * int * int64)>()
     let mutable disposed = false
     let mutable arm64CodegenHitCount = 0
     let mutable arm64CodegenMissCount = 0
@@ -379,8 +380,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
         if disposed || not collectCodegenMetrics then
             None
         else
-            Some (fun functionName opcode symbolicInstructionCount elapsedTicks ->
-                let key = struct (functionName, opcode)
+            Some (fun functionName opcode detail symbolicInstructionCount elapsedTicks ->
+                let key = struct (functionName, opcode, detail)
                 match arm64LirOpMetrics.TryGetValue key with
                 | true, struct (occurrences, symbolicInstructions, ticks) ->
                     arm64LirOpMetrics.[key] <-
@@ -743,10 +744,11 @@ type CompilationSession(collectCodegenMetrics: bool) =
     member _.Arm64LirOpMetrics =
         let timestampFrequency = float Stopwatch.Frequency
         arm64LirOpMetrics
-        |> Seq.map (fun (KeyValue (struct (functionName, opcode), struct (occurrences, symbolicInstructions, ticks))) ->
+        |> Seq.map (fun (KeyValue (struct (functionName, opcode, detail), struct (occurrences, symbolicInstructions, ticks))) ->
             {
                 FunctionName = functionName
                 Opcode = opcode
+                Detail = detail
                 Occurrences = occurrences
                 SymbolicInstructionCount = symbolicInstructions
                 Elapsed = TimeSpan.FromSeconds(float ticks / timestampFrequency)
