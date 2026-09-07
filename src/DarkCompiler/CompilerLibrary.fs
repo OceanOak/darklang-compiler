@@ -282,7 +282,6 @@ type CompilationSession(collectCodegenMetrics: bool) =
                     ARM64.TargetConfig * CodeGen.CodeGenOptions,
                     Result<ARM64Symbolic.Instr list, string>>>>(ObjectReferenceComparer())
     let arm64StartContextIdentity = System.Object()
-    let arm64InlineGenericReleaseTemplateContextIdentity = System.Object()
     let arm64EmissionChunks =
         Dictionary<
             ARM64Symbolic.Instr list,
@@ -320,9 +319,6 @@ type CompilationSession(collectCodegenMetrics: bool) =
     new() = new CompilationSession(false)
 
     member _.JsonPlanning = jsonPlanning
-    member internal _.Arm64InlineGenericReleaseTemplateContextIdentity =
-        arm64InlineGenericReleaseTemplateContextIdentity
-
     member internal _.ConvertAnfDependencies
         (contextIdentity: obj)
         (key: AnfDependencyKey)
@@ -1033,32 +1029,34 @@ let private lowerToAllocatedLir
                     println $"        {t}ms"
                 compileMirToLir (Platform.archFor target) verbosity options sw passTimingRecorder stageSuffix mirProgram
                 |> Result.bind (fun lirProgram ->
-                    if verbosity >= 1 then println "  [5/7] Register Allocation..."
-                    let allocStart = sw.Elapsed.TotalMilliseconds
                     let (LIR.Program (lirFuncs, _, _)) = lirProgram
-                    let allocatedFuncs =
-                        allocateRegistersForFunctions (Platform.archFor target) lirFuncs
-                    let allocElapsed = sw.Elapsed.TotalMilliseconds - allocStart
-                    recordPassTiming passTimingRecorder "Register Allocation" allocElapsed
-                    if verbosity >= 2 then
-                        let t = System.Math.Round(allocElapsed, 1)
-                        println $"        {t}ms"
                     let metadataPlanningStart = sw.Elapsed.TotalMilliseconds
-                    let funcsWithCodegenFacts =
+                    let funcsPreparedForAllocation =
                         match Platform.archFor target with
                         | Platform.ARM64 ->
-                            CodeGen.attachARM64CodegenFactsToFunctionsWithCache
+                            CodeGen.prepareARM64FunctionsForAllocationWithCache
                                 releasePlanSummaryCache
-                                allocatedFuncs
+                                lirFuncs
                         | Platform.X86_64 ->
-                            allocatedFuncs
+                            lirFuncs
                     let metadataPlanningElapsed =
                         sw.Elapsed.TotalMilliseconds - metadataPlanningStart
                     recordPassTiming
                         passTimingRecorder
                         "ARM64 Function Metadata Planning"
                         metadataPlanningElapsed
-                    Ok funcsWithCodegenFacts)
+                    if verbosity >= 1 then println "  [5/7] Register Allocation..."
+                    let allocStart = sw.Elapsed.TotalMilliseconds
+                    let allocatedFuncs =
+                        allocateRegistersForFunctions
+                            (Platform.archFor target)
+                            funcsPreparedForAllocation
+                    let allocElapsed = sw.Elapsed.TotalMilliseconds - allocStart
+                    recordPassTiming passTimingRecorder "Register Allocation" allocElapsed
+                    if verbosity >= 2 then
+                        let t = System.Math.Round(allocElapsed, 1)
+                        println $"        {t}ms"
+                    Ok allocatedFuncs)
 
     let compileFunctionsWithTiming
         (label: string)
@@ -1386,12 +1384,9 @@ let private generateBinary
             |> Option.map (fun current ->
                 fun func generate ->
                     let contextIdentity =
-                        if CodeGen.isInlineGenericReleaseTemplateCacheKey func then
-                            current.Arm64InlineGenericReleaseTemplateContextIdentity
-                        else
-                            match functionContexts.TryGetValue func with
-                            | true, identity -> identity
-                            | false, _ -> programContextIdentity
+                        match functionContexts.TryGetValue func with
+                        | true, identity -> identity
+                        | false, _ -> programContextIdentity
                     current.CodegenFunction
                         contextIdentity
                         arm64Target

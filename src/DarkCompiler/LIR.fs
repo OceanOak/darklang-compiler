@@ -287,11 +287,21 @@ let rcReleasePlanMemoKey (metadata: ANF.RcMetadata option) : RcReleasePlanMemoKe
 type Arm64ReleasePlanSummary = {
     ListDecHelperLabels: Set<string>
     PlannedListDecHelpers: Map<string, int * ANF.RcReleasePlan>
-    PlannedGenericDecHelpers: Map<string, int * ANF.RcReleasePlan>
+    ExpensiveGenericDecHelper: (string * int * ANF.RcReleasePlan) option
     DictDecHelperLabels: Set<string>
     PlannedDictDecHelpers: Map<string, ANF.RcReleasePlan>
     NeedsClosureRcDecHelper: bool
     NeedsStreamRcDecHelper: bool
+}
+
+/// One allocator-visible helper for a complex generic release. The ownership
+/// policy is semantic: ordinary functions own single-payload sum fields while
+/// most Stdlib functions borrow them.
+type Arm64PlannedGenericDecHelper = {
+    ReleasePlanMemoKey: RcReleasePlanMemoKey
+    PayloadSize: int
+    ReleasePlan: ANF.RcReleasePlan
+    OwnsSinglePayloadSum: bool
 }
 
 /// ARM64 helper requirements already planned for one function. The summary
@@ -300,7 +310,7 @@ type Arm64ReleasePlanSummary = {
 type Arm64RcHelperRequirements = {
     ListDecHelperLabels: Set<string>
     PlannedListDecHelpers: Map<string, int * ANF.RcReleasePlan>
-    PlannedGenericDecHelpers: Map<string, int * ANF.RcReleasePlan>
+    PlannedGenericDecHelpers: Map<string, Arm64PlannedGenericDecHelper>
     PlannedDictDecHelpers: Map<string, ANF.RcReleasePlan>
     DictDecHelperLabels: Set<string>
     NeedsListRcIncHelper: bool

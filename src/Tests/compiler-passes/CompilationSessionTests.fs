@@ -167,7 +167,7 @@ let testArm64ReleasePlanSummaryCacheConfirmsPlanShape (_: CompilerLibrary.Stdlib
     let summary needsClosure needsStream : LIR.Arm64ReleasePlanSummary = {
         ListDecHelperLabels = Set.empty
         PlannedListDecHelpers = Map.empty
-        PlannedGenericDecHelpers = Map.empty
+        ExpensiveGenericDecHelper = None
         DictDecHelperLabels = Set.empty
         PlannedDictDecHelpers = Map.empty
         NeedsClosureRcDecHelper = needsClosure

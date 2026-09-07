@@ -153,36 +153,41 @@ let testSmallGenericReleasePlanRemainsInline () : TestResult =
         else
             Error $"Small generic release plan should cache only the stable entry trampoline, got {Seq.toList generatedCacheEntries}"
 
-let testGenericReleasePlanRemainsInline () : TestResult =
+let testExpensiveGenericReleaseIsPreparedAsCall () : TestResult =
     let valueType = AST.TTuple (List.replicate 32 AST.TString)
+    let source = LIR.Virtual 42
     let program =
         makeSimpleProgramWithVariants
             [
                 LIR.RefCountDec (
-                    LIR.Physical LIR.X0,
+                    source,
                     256,
                     LIR.GenericHeap,
                     Some (rcMetadata valueType))
             ]
             Map.empty
+        |> CodeGen.prepareARM64Program
+    let (LIR.Program (functions, _, _)) = program
+    let instructions =
+        functions
+        |> List.collect (fun func ->
+            func.CFG.Blocks
+            |> Map.values
+            |> Seq.collect (fun block -> block.Instrs)
+            |> Seq.toList)
+    match instructions with
+    | [ LIR.SaveRegs ([], [])
+        LIR.ArgMoves [(LIR.X0, LIR.Reg argMoveSource)]
+        LIR.Call (LIR.Physical LIR.X0, helperLabel, [LIR.Reg callSource])
+        LIR.RestoreRegs ([], []) ]
+        when argMoveSource = source
+             && callSource = source
+             && helperLabel.StartsWith("__dark_generic_refcount_dec_plan_") ->
+        Ok ()
+    | _ ->
+        Error $"Expected an expensive generic release to become one allocator-visible helper call, got {instructions}"
 
-    match generatePreparedARM64 target program with
-    | Error error -> Error $"Generic release lowering failed: {error}"
-    | Ok instructions ->
-        let emitsGenericHelper =
-            instructions
-            |> List.exists (function
-                | ARM64Symbolic.BL label
-                | ARM64Symbolic.Label label ->
-                    label.StartsWith("__dark_generic_refcount_dec_plan_")
-                | _ ->
-                    false)
-        if emitsGenericHelper then
-            Error "Generic release plan emitted an outlined helper"
-        else
-            Ok ()
-
-let testInlineGenericReleaseTemplateCachePreservesInstructions () : TestResult =
+let testGenericReleaseHelperPreservesCachedInstructions () : TestResult =
     let valueType = AST.TTuple (List.replicate 32 AST.TString)
     let metadata = rcMetadata valueType
     let program =
@@ -194,7 +199,7 @@ let testInlineGenericReleaseTemplateCachePreservesInstructions () : TestResult =
             Map.empty
         |> CodeGen.prepareARM64Program
     let target = ARM64.targetConfigFor Platform.LinuxARM64
-    let generatedTemplates = ResizeArray<string>()
+    let generatedFunctions = ResizeArray<string>()
     let entries =
         System.Collections.Generic.Dictionary<
             LIR.Function,
@@ -208,7 +213,7 @@ let testInlineGenericReleaseTemplateCachePreservesInstructions () : TestResult =
             result
         | false, _ ->
             let result = generate ()
-            generatedTemplates.Add func.Name
+            generatedFunctions.Add func.Name
             entries.[func] <- result
             result
 
@@ -221,32 +226,166 @@ let testInlineGenericReleaseTemplateCachePreservesInstructions () : TestResult =
               program with
     | Error error, _
     | _, Error error ->
-        Error $"Inline generic release template lowering failed: {error}"
+        Error $"Generic release helper lowering failed: {error}"
     | Ok uncachedProgram, Ok cachedProgram ->
         let uncached = CodeGen.generatedProgramInstructions uncachedProgram
         let cached = CodeGen.generatedProgramInstructions cachedProgram
-        let inlineTemplateNames =
-            generatedTemplates
-            |> Seq.filter (fun name ->
-                name.StartsWith("__dark_inline_generic_release_template_"))
-            |> Seq.toList
-        let emitsGenericHelper =
+        let plannedCalls =
             cached
-            |> List.exists (function
-                | ARM64Symbolic.BL label
-                | ARM64Symbolic.Label label ->
-                    label.StartsWith("__dark_generic_refcount_dec_plan_")
-                | _ ->
-                    false)
+            |> List.choose (function
+                | ARM64Symbolic.BL label when label.StartsWith("__dark_generic_refcount_dec_plan_") ->
+                    Some label
+                | _ -> None)
+        let plannedLabels =
+            cached
+            |> List.choose (function
+                | ARM64Symbolic.Label label when label.StartsWith("__dark_generic_refcount_dec_plan_") ->
+                    Some label
+                | _ -> None)
 
         if cached <> uncached then
-            Error "Cached inline generic releases changed the generated instructions"
-        elif emitsGenericHelper then
-            Error "Cached inline generic releases emitted an outlined helper"
-        elif List.length inlineTemplateNames <> 1 then
-            Error $"Expected one cached inline generic release template, got {inlineTemplateNames}"
+            Error "Caching changed outlined generic release instructions"
+        elif Seq.toList generatedFunctions <> ["_start"] then
+            Error $"Expected only the caller function in the function cache, got {Seq.toList generatedFunctions}"
         else
+            match plannedCalls, plannedLabels with
+            | [firstCall; secondCall], [helperLabel]
+                when firstCall = helperLabel && secondCall = helperLabel ->
+                Ok ()
+            | _ ->
+                Error
+                    $"Expected two calls to one generic release helper, got calls={plannedCalls}; labels={plannedLabels}"
+
+let testOutlinedGenericReleaseUsesAllocatorLiveness () : TestResult =
+    let valueType = AST.TTuple (List.replicate 32 AST.TString)
+    let liveAcrossCall = LIR.Virtual 40
+    let released = LIR.Virtual 41
+    let result = LIR.Virtual 42
+    let prepared =
+        makeSimpleProgramWithVariants
+            [
+                LIR.Mov (liveAcrossCall, LIR.Imm 10L)
+                LIR.Mov (released, LIR.Imm 0L)
+                LIR.RefCountDec (
+                    released,
+                    256,
+                    LIR.GenericHeap,
+                    Some (rcMetadata valueType))
+                LIR.Add (result, liveAcrossCall, LIR.Imm 1L)
+            ]
+            Map.empty
+        |> CodeGen.prepareARM64Program
+    let (LIR.Program (functions, variants, records)) = prepared
+    let allocatedFunctions =
+        functions
+        |> List.map (RegisterAllocation.allocateRegisters Platform.ARM64)
+    let allocatedProgram = LIR.Program (allocatedFunctions, variants, records)
+    let allocatedInstrs =
+        allocatedFunctions
+        |> List.collect (fun func ->
+            func.CFG.Blocks
+            |> Map.values
+            |> Seq.collect (fun block -> block.Instrs)
+            |> Seq.toList)
+    let saves =
+        allocatedInstrs
+        |> List.choose (function
+            | LIR.SaveRegs (intRegs, floatRegs) -> Some (intRegs, floatRegs)
+            | _ -> None)
+
+    match CodeGen.generateARM64 target allocatedProgram with
+    | Error error ->
+        Error $"Allocated generic release helper lowering failed: {error}"
+    | Ok generated ->
+        let instructions = CodeGen.generatedProgramInstructions generated
+        let savesEveryAllocatableRegister =
+            instructions
+            |> List.exists (function
+                | ARM64Symbolic.STP_pre (_, _, stackReg, offset)
+                    when stackReg = ARM64Symbolic.SP && offset = -128s -> true
+                | _ -> false)
+        match saves with
+        | [(intRegs, [])] when List.length intRegs < 7 && not savesEveryAllocatableRegister ->
             Ok ()
+        | _ ->
+            Error
+                $"Expected allocator-selected caller saves, got saves={saves}; emittedSaveAll={savesEveryAllocatableRegister}"
+
+let testGenericReleaseHelpersPreserveOwnershipPolicy () : TestResult =
+    let sumName = "ARM64OutlinedOwnership"
+    let payloadType = AST.TTuple (List.replicate 32 AST.TString)
+    let sumType = AST.TSum (sumName, [])
+    let variants : LIR.VariantRegistry =
+        Map.ofList [
+            (sumName,
+             { TypeParams = []
+               Variants = [
+                   { Name = "Only"; Tag = 0; Payload = Some payloadType }
+               ] })
+        ]
+    let sumShapes : ANF.RcSumShapeRegistry =
+        Map.ofList [
+            (sumName,
+             { TypeParams = []
+               Payloads = [0, Some payloadType] })
+        ]
+    let metadata = rcMetadataWithSumShapes sumShapes sumType
+    let makeFunction (name: string) : LIR.Function =
+        let entry = LIR.Label $"{name}_entry"
+        { Name = name
+          TypedParams = []
+          CFG = {
+              Entry = entry
+              Blocks =
+                  Map.ofList [
+                      (entry,
+                       { Label = entry
+                         Instrs = [
+                             LIR.RefCountDec (
+                                 LIR.Physical LIR.X0,
+                                 264,
+                                 LIR.GenericHeap,
+                                 Some metadata)
+                         ]
+                         Terminator = LIR.Ret })
+                  ]
+          }
+          StackSize = 0
+          UsedCalleeSaved = []
+          CodegenFacts = None }
+    let prepared =
+        LIR.Program (
+            [ makeFunction "User.owns"; makeFunction "Stdlib.List.borrows" ],
+            variants,
+            Map.empty)
+        |> CodeGen.prepareARM64Program
+    let (LIR.Program (functions, _, _)) = prepared
+    let helperInfo
+        (func: LIR.Function)
+        : string option * LIR.Arm64PlannedGenericDecHelper list =
+        let callLabel =
+            func.CFG.Blocks
+            |> Map.values
+            |> Seq.collect (fun block -> block.Instrs)
+            |> Seq.tryPick (function
+                | LIR.Call (_, label, _) when label.StartsWith("__dark_generic_refcount_dec_plan_") ->
+                    Some label
+                | _ -> None)
+        let specs =
+            func.CodegenFacts
+            |> Option.bind (fun facts -> facts.Arm64RcHelperRequirements)
+            |> Option.map (fun requirements -> requirements.PlannedGenericDecHelpers |> Map.values |> Seq.toList)
+            |> Option.defaultValue []
+        callLabel, specs
+    match functions |> List.map helperInfo with
+    | [ (Some ownedLabel, [ownedSpec]); (Some borrowedLabel, [borrowedSpec]) ]
+        when ownedLabel.EndsWith("_owned")
+             && borrowedLabel.EndsWith("_borrowed")
+             && ownedSpec.OwnsSinglePayloadSum
+             && not borrowedSpec.OwnsSinglePayloadSum ->
+        Ok ()
+    | actual ->
+        Error $"Expected distinct owned and borrowed generic release helpers, got {actual}"
 
 let private uint64ZeroBranchTargetsDigit (instrs: ARM64.Instr list) : bool =
     instrs
@@ -309,8 +448,6 @@ let testBranchFalseEdgeFallsThrough () : TestResult =
     let ctx : CodeGen.CodeGenContext = {
         Target = target; Options = CodeGen.defaultOptions; SumShapeRegistry = Map.empty; RecordRegistry = Map.empty
         ClosurePayloadSizes = Map.empty; ClosureCaptureTypes = Map.empty; PlannedListDecHelperLabels = Map.empty
-        InlineGenericReleaseTemplateLabels = Map.empty
-        CacheInlineGenericReleaseTemplate = None
         FunctionName = func.Name; InstructionSite = ""; StackSize = 0; UsedCalleeSaved = []
         HeapOverflowLabel = "__heap_oom_arm64_layout"
         RecordLirOpExpansion = None
@@ -391,8 +528,6 @@ let private generatedEntryTransfers
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
         PlannedListDecHelperLabels = Map.empty
-        InlineGenericReleaseTemplateLabels = Map.empty
-        CacheInlineGenericReleaseTemplate = None
         FunctionName = func.Name
         InstructionSite = ""
         StackSize = func.StackSize
@@ -535,8 +670,6 @@ let private convertRawAlloc
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
         PlannedListDecHelperLabels = Map.empty
-        InlineGenericReleaseTemplateLabels = Map.empty
-        CacheInlineGenericReleaseTemplate = None
         FunctionName = "test"
         InstructionSite = "test_0"
         StackSize = 0
@@ -1808,8 +1941,6 @@ let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
         PlannedListDecHelperLabels = Map.empty
-        InlineGenericReleaseTemplateLabels = Map.empty
-        CacheInlineGenericReleaseTemplate = None
         FunctionName = "lir_op_profile"
         InstructionSite = ""
         StackSize = 0
@@ -1849,8 +1980,10 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Runtime print string length uses full immediate", testRuntimePrintStringLengthUsesFullImmediate)
     ("RawSlotInit pure enum skips generic retain", testRawSlotInitPureEnumDoesNotEmitGenericRetain)
     ("Small generic release plan remains inline", testSmallGenericReleasePlanRemainsInline)
-    ("Generic release plan remains inline", testGenericReleasePlanRemainsInline)
-    ("Inline generic release template cache preserves instructions", testInlineGenericReleaseTemplateCachePreservesInstructions)
+    ("Expensive generic release is prepared as a call", testExpensiveGenericReleaseIsPreparedAsCall)
+    ("Generic release helper preserves cached instructions", testGenericReleaseHelperPreservesCachedInstructions)
+    ("Outlined generic release uses allocator liveness", testOutlinedGenericReleaseUsesAllocatorLiveness)
+    ("Generic release helpers preserve ownership policy", testGenericReleaseHelpersPreserveOwnershipPolicy)
     ("List tuple3 bytes/list/dict-list uses typed dict helper", testListTuple3BytesListDictListValueUsesTypedDictHelper)
     ("List tuple3 string/list/dict-list uses typed dict helper", testListTuple3StringListDictListValueUsesTypedDictHelper)
     ("List tuple3 closure/list/dict-list uses typed dict helper", testListTuple3ClosureListDictListValueUsesTypedDictHelper)
