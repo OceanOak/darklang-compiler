@@ -245,8 +245,10 @@ let testGenericReleaseHelperPreservesCachedInstructions () : TestResult =
 
         if cached <> uncached then
             Error "Caching changed outlined generic release instructions"
-        elif Seq.toList generatedFunctions <> ["_start"] then
-            Error $"Expected only the caller function in the function cache, got {Seq.toList generatedFunctions}"
+        elif generatedFunctions.Count <> 2
+             || generatedFunctions.[0] <> "_start"
+             || not (generatedFunctions.[1].StartsWith("__dark_generic_refcount_dec_plan_")) then
+            Error $"Expected the caller and one generic helper in the function cache, got {Seq.toList generatedFunctions}"
         else
             match plannedCalls, plannedLabels with
             | [firstCall; secondCall], [helperLabel]

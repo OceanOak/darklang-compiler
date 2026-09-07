@@ -282,6 +282,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
                     ARM64.TargetConfig * CodeGen.CodeGenOptions,
                     Result<ARM64Symbolic.Instr list, string>>>>(ObjectReferenceComparer())
     let arm64StartContextIdentity = System.Object()
+    let arm64GenericReleaseHelperContextIdentity = System.Object()
     let arm64EmissionChunks =
         Dictionary<
             ARM64Symbolic.Instr list,
@@ -319,6 +320,9 @@ type CompilationSession(collectCodegenMetrics: bool) =
     new() = new CompilationSession(false)
 
     member _.JsonPlanning = jsonPlanning
+    member internal _.Arm64GenericReleaseHelperContextIdentity =
+        arm64GenericReleaseHelperContextIdentity
+
     member internal _.ConvertAnfDependencies
         (contextIdentity: obj)
         (key: AnfDependencyKey)
@@ -1384,9 +1388,12 @@ let private generateBinary
             |> Option.map (fun current ->
                 fun func generate ->
                     let contextIdentity =
-                        match functionContexts.TryGetValue func with
-                        | true, identity -> identity
-                        | false, _ -> programContextIdentity
+                        if CodeGen.isPlannedGenericRefCountDecHelperCacheKey func then
+                            current.Arm64GenericReleaseHelperContextIdentity
+                        else
+                            match functionContexts.TryGetValue func with
+                            | true, identity -> identity
+                            | false, _ -> programContextIdentity
                     current.CodegenFunction
                         contextIdentity
                         arm64Target

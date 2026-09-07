@@ -6557,6 +6557,36 @@ let private generatePlannedGenericRefCountDecHelper
     | Error error ->
         Crash.crash $"ARM64 generic release helper generation failed for {helperLabel}: {error}"
 
+/// The compilation-session function cache also stores immutable generic
+/// release helpers. Their reserved stable label fully identifies the planned
+/// body; the cache separately keys target and codegen options.
+let private plannedGenericRefCountDecHelperCacheKey
+    (helperLabel: string)
+    : LIR.Function =
+    let entry = LIR.Label "cache_entry"
+    let block : LIR.BasicBlock = {
+        Label = entry
+        Instrs = []
+        Terminator = LIR.Ret
+    }
+    {
+        Name = helperLabel
+        TypedParams = []
+        CFG = {
+            Entry = entry
+            Blocks = Map.ofList [entry, block]
+        }
+        StackSize = 0
+        UsedCalleeSaved = []
+        CodegenFacts = None
+    }
+
+let isPlannedGenericRefCountDecHelperCacheKey
+    (func: LIR.Function)
+    : bool =
+    Option.isNone func.CodegenFacts
+    && func.Name.StartsWith(plannedGenericRefCountDecHelperLabelPrefix)
+
 /// Convert LIR terminator to ARM64 instructions
 /// epilogueLabel: the label to jump to for function return (handles stack cleanup)
 let convertTerminator (epilogueLabel: string) (nextLabel: string option) (terminator: LIR.Terminator) : Result<ARM64Symbolic.Instr list, string> =
@@ -8618,7 +8648,22 @@ let private generatePreparedARM64WithOptionsAndCache
                 plannedGenericDecHelpers
                 |> Map.toList
                 |> List.collect (fun (helperLabel, spec) ->
-                    generatePlannedGenericRefCountDecHelper helperLabel spec ctx)
+                    let generate () =
+                        generatePlannedGenericRefCountDecHelper helperLabel spec ctx
+                        |> Ok
+                    let generated =
+                        match functionCache with
+                        | Some cache ->
+                            cache
+                                (plannedGenericRefCountDecHelperCacheKey helperLabel)
+                                generate
+                        | None ->
+                            generate ()
+                    match generated with
+                    | Ok instructions -> instructions
+                    | Error error ->
+                        Crash.crash
+                            $"ARM64 cached generic release helper generation failed for {helperLabel}: {error}")
             recordPhase "ARM64 Helper Generic Release Generation" genericHelperTimer
             let dictHelperTimer = startPhase ()
             let dictRcHelpers =
