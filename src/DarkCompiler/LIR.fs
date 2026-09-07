@@ -298,7 +298,7 @@ type Arm64ReleasePlanSummary = {
 /// policy is semantic: ordinary functions own single-payload sum fields while
 /// most Stdlib functions borrow them.
 type Arm64PlannedGenericDecHelper = {
-    ReleasePlanMemoKey: RcReleasePlanMemoKey
+    ReleasePlanMemoKeys: Set<RcReleasePlanMemoKey>
     PayloadSize: int
     ReleasePlan: ANF.RcReleasePlan
     OwnsSinglePayloadSum: bool

@@ -7408,11 +7408,22 @@ let private mergePrecomputedPlannedGenericHelpers
     (right: Map<string, LIR.Arm64PlannedGenericDecHelper>)
     : Map<string, LIR.Arm64PlannedGenericDecHelper> =
     Map.fold
-        (fun acc label spec ->
+        (fun acc label (spec: LIR.Arm64PlannedGenericDecHelper) ->
             match Map.tryFind label acc with
-            | Some existing when existing <> spec ->
+            | Some (existing: LIR.Arm64PlannedGenericDecHelper)
+                when existing.PayloadSize <> spec.PayloadSize
+                     || existing.ReleasePlan <> spec.ReleasePlan
+                     || existing.OwnsSinglePayloadSum <> spec.OwnsSinglePayloadSum ->
                 Crash.crash $"planned generic RC helper label collision for {label}"
-            | Some _ -> acc
+            | Some (existing: LIR.Arm64PlannedGenericDecHelper) ->
+                Map.add
+                    label
+                    { existing with
+                        ReleasePlanMemoKeys =
+                            Set.union
+                                existing.ReleasePlanMemoKeys
+                                spec.ReleasePlanMemoKeys }
+                    acc
             | None -> Map.add label spec acc)
         left
         right
@@ -7471,15 +7482,28 @@ let private addPrecomputedPlannedGenericHelper
     let label =
         specializePlannedGenericDecHelperLabel ownsSinglePayloadSum baseLabel
     let spec : LIR.Arm64PlannedGenericDecHelper = {
-        ReleasePlanMemoKey = memoKey
+        ReleasePlanMemoKeys = Set.singleton memoKey
         PayloadSize = payloadSize
         ReleasePlan = releasePlan
         OwnsSinglePayloadSum = ownsSinglePayloadSum
     }
     match Map.tryFind label requirements.PlannedGenericDecHelpers with
-    | Some existing when existing <> spec ->
+    | Some existing
+        when existing.PayloadSize <> spec.PayloadSize
+             || existing.ReleasePlan <> spec.ReleasePlan
+             || existing.OwnsSinglePayloadSum <> spec.OwnsSinglePayloadSum ->
         Crash.crash $"planned generic RC helper label collision for {label}"
-    | Some _ -> requirements
+    | Some existing ->
+        { requirements with
+            PlannedGenericDecHelpers =
+                requirements.PlannedGenericDecHelpers
+                |> Map.add
+                    label
+                    { existing with
+                        ReleasePlanMemoKeys =
+                            Set.union
+                                existing.ReleasePlanMemoKeys
+                                spec.ReleasePlanMemoKeys } }
     | None ->
         { requirements with
             PlannedGenericDecHelpers =
@@ -7854,7 +7878,10 @@ let private outlineExpensiveGenericReleasesInFunction
         | Some requirements ->
             requirements.PlannedGenericDecHelpers
             |> Map.toList
-            |> List.map (fun (label, spec) -> spec.ReleasePlanMemoKey, label)
+            |> List.collect (fun (label, spec) ->
+                spec.ReleasePlanMemoKeys
+                |> Set.toList
+                |> List.map (fun memoKey -> memoKey, label))
             |> Map.ofList
     let outlineInstr instr =
         match instr with
