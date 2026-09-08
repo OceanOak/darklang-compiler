@@ -500,15 +500,52 @@ let testBuildsParseableUniversalBatchSource () : TestResult =
                     Error $"Generated batch did not encode the final result bit:\n{source}"
                 | Ok _ -> Ok ())
 
+let testBuildsParseableMultiChunkBatchSource () : TestResult =
+    let testSource = "1L + 1L = 2L\n"
+
+    withTempFileNamed "ordinary.e2e" testSource (fun path ->
+        match parseE2ETestFile path with
+        | Error msg -> Error $"Expected batch fixture to parse, but got error: {msg}"
+        | Ok tests ->
+            match tests |> List.choose tryPrepareBatchTest with
+            | [ prepared ] ->
+                let source = buildBatchSource (List.replicate 33 prepared)
+                match CompilerLibrary.parseProgram false source with
+                | Error msg -> Error $"Generated multi-chunk batch source did not parse: {msg}\n{source}"
+                | Ok _ when not (source.EndsWith("then 1L else 0L)))")) ->
+                    Error $"Generated batch did not encode its second result chunk:\n{source}"
+                | Ok _ -> Ok ()
+            | prepared -> Error $"Expected 1 universally batchable test, got {prepared.Length}")
+
 let testParsesBatchBitmaskResults () : TestResult =
     match tryParseBatchBoolResults 3 "ignored output\n5\n" with
     | Some [true; false; true] -> Ok ()
     | other -> Error $"Expected bitmask 5 to decode as [true; false; true], got {other}"
 
+let testParsesMultiChunkBatchBitmaskResults () : TestResult =
+    match tryParseBatchBoolResults 65 "ignored output\n(2147483649, 2, 1)\n" with
+    | Some values ->
+        let trueIndexes =
+            values
+            |> List.indexed
+            |> List.choose (fun (index, value) -> if value then Some index else None)
+        if values.Length = 65 && trueIndexes = [0; 31; 33; 64] then
+            Ok ()
+        else
+            Error $"Expected selected result bits at [0; 31; 33; 64], got {trueIndexes}"
+    | other -> Error $"Expected three result chunks to decode selected bits, got {other}"
+
 let testRejectsInvalidBatchBitmaskResults () : TestResult =
     match tryParseBatchBoolResults 3 "8\n" with
     | None -> Ok ()
     | Some values -> Error $"Expected out-of-range result bits to be rejected, got {values}"
+
+let testRejectsInvalidMultiChunkBatchBitmaskResults () : TestResult =
+    let wrongChunkCount = tryParseBatchBoolResults 65 "(0, 0)\n"
+    let outOfRangeFinalBit = tryParseBatchBoolResults 65 "(0, 0, 2)\n"
+    match wrongChunkCount, outOfRangeFinalBit with
+    | None, None -> Ok ()
+    | other -> Error $"Expected invalid multi-chunk result vectors to be rejected, got {other}"
 
 let testDoesNotBatchTestsWithProcessInputs () : TestResult =
     let testSource = "Stdlib.Cli.Args.int64(0I) = Ok(100L) arg=\"100\"\n"
@@ -550,8 +587,11 @@ let tests = [
     ("parses escaped backslash before n as literal text", testParsesEscapedBackslashBeforeNAsLiteralText)
     ("parses repeated process arguments in order", testParsesRepeatedProcessArgumentsInOrder)
     ("builds parseable universal batch source", testBuildsParseableUniversalBatchSource)
+    ("builds parseable multi-chunk batch source", testBuildsParseableMultiChunkBatchSource)
     ("parses batch bitmask results", testParsesBatchBitmaskResults)
+    ("parses multi-chunk batch bitmask results", testParsesMultiChunkBatchBitmaskResults)
     ("rejects invalid batch bitmask results", testRejectsInvalidBatchBitmaskResults)
+    ("rejects invalid multi-chunk batch bitmask results", testRejectsInvalidMultiChunkBatchBitmaskResults)
     ("does not batch tests with process inputs", testDoesNotBatchTestsWithProcessInputs)
     ("batches equality inside explicit result binding", testBatchesEqualityInsideExplicitResultBinding)
 ]

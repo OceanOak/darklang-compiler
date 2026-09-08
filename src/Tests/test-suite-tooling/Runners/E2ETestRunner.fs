@@ -143,10 +143,15 @@ type E2EBatchExecution = {
     Results: (E2ETest * E2ETestResult) list
 }
 
-// Larger synthetic entry functions currently exceed an ARM64 backend branch
-// encoding limit in some JSON-heavy programs. Keep the public bound at the
-// largest size exercised successfully by the complete suite.
-let maxSupportedBatchSize = 32
+// Keep the bound finite so an accidental command-line value cannot synthesize
+// an arbitrarily large compiler input. The complete range is exercised by the
+// batching correctness sweep.
+let maxSupportedBatchSize = 128
+
+// Each result chunk deliberately uses only the low 32 bits of an Int64. This
+// keeps every printed mask non-negative and makes the final partial chunk easy
+// to validate without relying on signed overflow behavior.
+let private batchResultChunkSize = 32
 
 let private canEmbedBatchEqualitySource
     (allowInternal: bool)
@@ -1087,13 +1092,28 @@ let buildBatchSource (tests: PreparedE2EBatchTest list) : string =
         |> List.mapi (fun index _ ->
             $"let {prefix}Result{index} = {prefix}Check{index}(0L) in")
         |> String.concat "\n"
-    let mask =
+    let masks =
         tests
-        |> List.mapi (fun index _ ->
-            let bit = 1L <<< index
-            $"(if {prefix}Result{index} then {bit}L else 0L)")
-        |> String.concat "\n+ "
-    $"{checkFunctions}\n\n{resultBindings}\n{mask}"
+        |> List.indexed
+        |> List.chunkBySize batchResultChunkSize
+        |> List.map (fun chunk ->
+            chunk
+            |> List.map (fun (index, _) ->
+                let bit = 1L <<< (index % batchResultChunkSize)
+                $"(if {prefix}Result{index} then {bit}L else 0L)")
+            |> String.concat "\n+ ")
+
+    let resultVector =
+        match masks with
+        | [ mask ] -> mask
+        | _ ->
+            let maskList =
+                masks
+                |> List.map (fun mask -> $"({mask})")
+                |> String.concat ",\n"
+            $"({maskList})"
+
+    $"{checkFunctions}\n\n{resultBindings}\n{resultVector}"
 
 let tryParseBatchBoolResults
     (expectedCount: int)
@@ -1104,18 +1124,58 @@ let tryParseBatchBoolResults
         |> Array.tryLast
         |> Option.map (fun line -> line.Trim())
 
-    match lastLine with
-    | Some line ->
-        match Int64.TryParse line with
-        | true, mask when expectedCount > 0 && expectedCount <= maxSupportedBatchSize ->
-            let allowedBits = (1L <<< expectedCount) - 1L
-            if mask < 0L || (mask &&& (~~~allowedBits)) <> 0L then
-                None
+    let expectedChunkCount =
+        (expectedCount + batchResultChunkSize - 1) / batchResultChunkSize
+
+    let tryParseMasks (line: string) : int64 list option =
+        let parts =
+            if expectedChunkCount = 1 then
+                [| line |]
+            elif line.StartsWith("(") && line.EndsWith(")") then
+                line.Substring(1, line.Length - 2).Split(',')
+                |> Array.map (fun part -> part.Trim())
             else
-                List.init expectedCount (fun index -> (mask &&& (1L <<< index)) <> 0L)
+                [||]
+
+        let parsed =
+            parts
+            |> Array.map Int64.TryParse
+
+        if parsed.Length = expectedChunkCount
+           && parsed |> Array.forall fst then
+            parsed |> Array.map snd |> Array.toList |> Some
+        else
+            None
+
+    match lastLine with
+    | Some line when expectedCount > 0 && expectedCount <= maxSupportedBatchSize ->
+        match tryParseMasks line with
+        | Some masks ->
+            let finalChunkBits =
+                let remainder = expectedCount % batchResultChunkSize
+                if remainder = 0 then batchResultChunkSize else remainder
+
+            let masksAreValid =
+                masks
+                |> List.mapi (fun index mask ->
+                    let bits =
+                        if index = expectedChunkCount - 1 then finalChunkBits
+                        else batchResultChunkSize
+                    let allowedBits = (1L <<< bits) - 1L
+                    mask >= 0L && (mask &&& (~~~allowedBits)) = 0L)
+                |> List.forall id
+
+            if masksAreValid then
+                masks
+                |> List.collect (fun mask ->
+                    List.init batchResultChunkSize (fun bit ->
+                        (mask &&& (1L <<< bit)) <> 0L))
+                |> List.truncate expectedCount
                 |> Some
-        | _ -> None
-    | None -> None
+            else
+                None
+        | None -> None
+    | _ -> None
 
 let private splitDuration
     (count: int)
