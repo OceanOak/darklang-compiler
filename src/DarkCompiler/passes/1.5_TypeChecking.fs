@@ -658,7 +658,9 @@ type Substitution = Map<string, Type>
 type TypeCheckEnv = {
     TypeReg: TypeRegistry
     IndexedTypeReg: IndexedTypeRegistry
+    RecordTypeNames: Set<string>
     VariantLookup: VariantLookup
+    SumTypeNames: Set<string>
     FuncEnv: TypeEnv
     FuncParamNames: FuncParamNameRegistry
     GenericFuncReg: GenericFuncRegistry
@@ -675,7 +677,9 @@ let mergeTypeCheckEnv (baseEnv: TypeCheckEnv) (overlay: TypeCheckEnv) : TypeChec
     {
         TypeReg = mergeMap baseEnv.TypeReg overlay.TypeReg
         IndexedTypeReg = mergeMap baseEnv.IndexedTypeReg overlay.IndexedTypeReg
+        RecordTypeNames = Set.union baseEnv.RecordTypeNames overlay.RecordTypeNames
         VariantLookup = mergeMap baseEnv.VariantLookup overlay.VariantLookup
+        SumTypeNames = Set.union baseEnv.SumTypeNames overlay.SumTypeNames
         FuncEnv = mergeMap baseEnv.FuncEnv overlay.FuncEnv
         FuncParamNames = mergeMap baseEnv.FuncParamNames overlay.FuncParamNames
         GenericFuncReg = {
@@ -8243,15 +8247,20 @@ let private checkResolvedProgramInternal
                 |> canonicalizeBareSumTypeRefsWithNames availableSumTypeNames
             TFunction (List.map canonicalize paramTypes, canonicalize returnType))
 
+    let programIndexedTypeReg =
+        indexTypeRegistry
+            canonicalVariantLookup
+            declarationSummary.RecordTypeParams
+            canonicalProgramTypeReg
+
     // Build the type check environment for THIS program
     let programEnv : TypeCheckEnv = {
         TypeReg = canonicalProgramTypeReg
-        IndexedTypeReg =
-            indexTypeRegistry
-                canonicalVariantLookup
-                declarationSummary.RecordTypeParams
-                canonicalProgramTypeReg
+        IndexedTypeReg = programIndexedTypeReg
+        RecordTypeNames = programIndexedTypeReg |> Map.keys |> Set.ofSeq
         VariantLookup = canonicalProgramVariantLookup
+        SumTypeNames =
+            sumTypeNamesFromVariantLookup canonicalProgramVariantLookup
         FuncEnv = programFuncEnv
         FuncParamNames = declarationSummary.FuncParamNames
         GenericFuncReg = programGenericFuncReg
@@ -8452,7 +8461,7 @@ let private checkResolvedExpressionWithBaseEnv
                 baseEnv.GenericFuncReg.RequireExplicitTypeArgsForBareCalls
                 || requireExplicitTypeArgsForBareCalls
     }
-    let sumTypeNames = sumTypeNamesFromVariantLookup baseEnv.VariantLookup
+    let sumTypeNames = baseEnv.SumTypeNames
 
     checkExprWithParamNamesAndSumTypeNames
         baseEnv.FuncParamNames
@@ -8562,7 +8571,13 @@ let private checkProgramInternalWithTrace
                 | Some existingEnv -> existingEnv.ModuleRegistry
                 | None -> Stdlib.buildModuleRegistry ()
             let localResolutionEnv =
-                declarationResolutionEnvironment topLevels moduleRegistry (Option.isNone baseEnv)
+                match baseEnv, topLevels with
+                | Some _, [Expression _] -> NameResolution.empty
+                | _ ->
+                    declarationResolutionEnvironment
+                        topLevels
+                        moduleRegistry
+                        (Option.isNone baseEnv)
             let resolutionEnv =
                 match baseEnv with
                 | Some existingEnv when hideCompilerImplementationNames ->
@@ -8601,7 +8616,7 @@ let private checkProgramInternalWithTrace
                     |> Set.ofList
                 let recordTypeNames =
                     match baseEnv with
-                    | Some existing -> Set.union localRecordTypeNames (existing.IndexedTypeReg |> Map.keys |> Set.ofSeq)
+                    | Some existing -> Set.union localRecordTypeNames existing.RecordTypeNames
                     | None -> localRecordTypeNames
                 let resolvedNames =
                     measure "TypeCheck: Symbol Resolution" (fun () ->
