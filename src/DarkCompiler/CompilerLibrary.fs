@@ -870,7 +870,19 @@ let private compileMirToLir
 
     if verbosity >= 1 then println $"  [3.1/7] SSA Construction{suffix}..."
     let ssaStart = sw.Elapsed.TotalMilliseconds
-    let ssaProgram = SSA_Construction.convertToSSA mirProgram
+    let ssaProgram =
+        match passTimingRecorder with
+        | None -> SSA_Construction.convertToSSA mirProgram
+        | Some recorder ->
+            let (converted, timings) =
+                SSA_Construction.convertToSSAWithTiming mirProgram
+            timings
+            |> List.iter (fun timing ->
+                recorder {
+                    Pass = timing.Phase
+                    Elapsed = TimeSpan.FromMilliseconds timing.ElapsedMs
+                })
+            converted
     let ssaElapsed = sw.Elapsed.TotalMilliseconds - ssaStart
     recordPassTiming passTimingRecorder "SSA Construction" ssaElapsed
     if verbosity >= 2 then
@@ -962,12 +974,25 @@ let private compileMirToLir
 /// Allocate registers for a list of symbolic LIR functions.
 let private allocateRegistersForFunctions
     (arch: Platform.Arch)
+    (passTimingRecorder: PassTimingRecorder option)
     (functions: LIR.Function list)
     : LIR.Function list =
     functions
     |> List.map (fun func ->
-        func
-        |> RegisterAllocation.allocateRegisters arch
+        let allocatedFunc =
+            match passTimingRecorder with
+            | None -> RegisterAllocation.allocateRegisters arch func
+            | Some recorder ->
+                let (allocated, timings) =
+                    RegisterAllocation.allocateRegistersWithTiming arch func
+                timings
+                |> List.iter (fun timing ->
+                    recorder {
+                        Pass = timing.Phase
+                        Elapsed = TimeSpan.FromMilliseconds timing.ElapsedMs
+                    })
+                allocated
+        allocatedFunc
         |> LIR_Peephole.removeSelfMovesFromFunction)
 
 /// Run MIR+LIR passes (including register allocation) from ANF functions
@@ -1054,6 +1079,7 @@ let private lowerToAllocatedLir
                     let allocatedFuncs =
                         allocateRegistersForFunctions
                             (Platform.archFor target)
+                            passTimingRecorder
                             funcsPreparedForAllocation
                     let allocElapsed = sw.Elapsed.TotalMilliseconds - allocStart
                     recordPassTiming passTimingRecorder "Register Allocation" allocElapsed
@@ -2063,11 +2089,25 @@ let private tryStartProcess (info: ProcessStartInfo) : Result<Process, string> =
     with ex -> Error ex.Message
 
 let private checkProgramWithBaseEnv
+    (passTimingRecorder: PassTimingRecorder option)
     (warningSettings: AST.WarningSettings)
     (baseEnv: TypeChecking.TypeCheckEnv)
     (program: AST.Program)
     : Result<AST.Type * AST.Program * TypeChecking.TypeCheckEnv, TypeChecking.TypeError> =
-    TypeChecking.checkProgramWithBaseEnvAndSettings baseEnv true warningSettings program
+    match passTimingRecorder with
+    | None ->
+        TypeChecking.checkProgramWithBaseEnvAndSettings baseEnv true warningSettings program
+    | Some recorder ->
+        TypeChecking.checkProgramWithBaseEnvAndSettingsWithTrace
+            (fun phase elapsedMs ->
+                recorder {
+                    Pass = phase
+                    Elapsed = TimeSpan.FromMilliseconds elapsedMs
+                })
+            baseEnv
+            true
+            warningSettings
+            program
 
 let private checkSyntheticPreambleWithBaseEnv
     (warningSettings: AST.WarningSettings)
@@ -2978,6 +3018,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                 if plan.Verbosity >= 1 then println plan.Labels.TypeCheck
                 let typeCheckResult =
                     checkProgramWithBaseEnv
+                        plan.PassTimingRecorder
                         plan.Options.Warnings
                         plan.BaseContext.TypeCheckEnv
                         userAst

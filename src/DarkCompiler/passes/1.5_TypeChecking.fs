@@ -7492,18 +7492,23 @@ let private resolveProgramNames
     (program: Program)
     : Result<Program, TypeError> =
     let resolveName context localNames spelling =
-        let environment =
-            localNames
-            |> Set.toList
-            |> List.fold (fun env localName ->
-                requiredCandidate
-                    localName
-                    (NameResolution.LocalValue localName)
-                    (NameResolution.LexicalBinding localName)
-                |> fun candidate -> NameResolution.addCandidate candidate env) resolutionEnv
-        NameResolution.resolve context spelling environment
-        |> Result.map (fun resolution -> NameResolution.canonicalSpelling resolution.Identity)
-        |> Result.mapError ResolutionFailure
+        let lexicalHit =
+            match context with
+            | NameResolution.ResolutionContext.Value
+            | NameResolution.ResolutionContext.Callable -> Set.contains spelling localNames
+            | NameResolution.ResolutionContext.Constructor
+            | NameResolution.ResolutionContext.Type -> false
+        if lexicalHit then
+            // Lexical values have the highest precedence in both applicable
+            // contexts, and their canonical spelling is the source spelling.
+            Ok spelling
+        else
+            // A lexical candidate's visible name is exactly its binding name.
+            // If none matched above, adding every in-scope binding cannot affect
+            // this lookup.
+            NameResolution.resolve context spelling resolutionEnv
+            |> Result.map (fun resolution -> NameResolution.canonicalSpelling resolution.Identity)
+            |> Result.mapError ResolutionFailure
 
     let rec resolveTypeRefs typ =
         let recurse = resolveTypeRefs
@@ -7812,7 +7817,7 @@ let private resolveProgramNames
 
     let (Program topLevels) = program
     ResultList.traverse resolveTopLevel topLevels
-    |> Result.map (resolveRecursiveDeclarationGroups >> Program)
+    |> Result.map Program
 
 let private typeDefName (typeDef: TypeDef) : string =
     match typeDef with
@@ -8504,7 +8509,8 @@ let private checkResolvedExpressionWithBaseEnv
             }
             (exprType, Program topLevelsWithEqHelpers, checkedEnv)))
 
-let private checkProgramInternal
+let private checkProgramInternalWithTrace
+    (phaseRecorder: (string -> float -> unit) option)
     (baseEnv: TypeCheckEnv option)
     (hideCompilerImplementationNames: bool)
     (requireExplicitTypeArgsForBareCalls: bool)
@@ -8513,6 +8519,15 @@ let private checkProgramInternal
     (warningSettings: WarningSettings)
     (program: Program)
     : Result<Type * Program * TypeCheckEnv, TypeError> =
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let measure phase operation =
+        match phaseRecorder with
+        | None -> operation ()
+        | Some record ->
+            let start = sw.Elapsed.TotalMilliseconds
+            let result = operation ()
+            record phase (sw.Elapsed.TotalMilliseconds - start)
+            result
     // These declarations exist only to implement retained portable stdlib APIs.
     // They are checked while the stdlib is built in isolation, but must never
     // become candidates while resolving a separately compiled source program.
@@ -8533,73 +8548,106 @@ let private checkProgramInternal
         | NameResolution.CompilerExtension name -> Set.contains name compilerImplementationNames
         | _ -> false
     let (Program topLevels) = program
-    let declarationValidation =
-        if validateDeclarations then
-            validateTopLevelTypeDeclarations baseEnv topLevels
-        else
-            // Only synthetic test preambles skip this: they concatenate
-            // declarations that do not coexist in an original source unit.
-            Ok ()
-    let moduleRegistry =
-        match baseEnv with
-        | Some existingEnv -> existingEnv.ModuleRegistry
-        | None -> Stdlib.buildModuleRegistry ()
-    let localResolutionEnv =
-        declarationResolutionEnvironment topLevels moduleRegistry (Option.isNone baseEnv)
-    let resolutionEnv =
-        match baseEnv with
-        | Some existingEnv when hideCompilerImplementationNames ->
-            existingEnv.ResolutionEnv
-            |> NameResolution.filterCandidates (isCompilerImplementationCandidate >> not)
-            |> fun publicBaseEnv -> NameResolution.merge publicBaseEnv localResolutionEnv
-        | Some existingEnv -> NameResolution.merge existingEnv.ResolutionEnv localResolutionEnv
-        | None -> localResolutionEnv
+    let (declarationValidation, resolutionEnv) =
+        measure "TypeCheck: Environment Preparation" (fun () ->
+            let declarationValidation =
+                if validateDeclarations then
+                    validateTopLevelTypeDeclarations baseEnv topLevels
+                else
+                    // Only synthetic test preambles skip this: they concatenate
+                    // declarations that do not coexist in an original source unit.
+                    Ok ()
+            let moduleRegistry =
+                match baseEnv with
+                | Some existingEnv -> existingEnv.ModuleRegistry
+                | None -> Stdlib.buildModuleRegistry ()
+            let localResolutionEnv =
+                declarationResolutionEnvironment topLevels moduleRegistry (Option.isNone baseEnv)
+            let resolutionEnv =
+                match baseEnv with
+                | Some existingEnv when hideCompilerImplementationNames ->
+                    existingEnv.ResolutionEnv
+                    |> NameResolution.filterCandidates (isCompilerImplementationCandidate >> not)
+                    |> fun publicBaseEnv -> NameResolution.merge publicBaseEnv localResolutionEnv
+                | Some existingEnv -> NameResolution.merge existingEnv.ResolutionEnv localResolutionEnv
+                | None -> localResolutionEnv
+            (declarationValidation, resolutionEnv))
 
-    declarationValidation
-    |> Result.bind (fun () ->
-        let winningTypeDefs =
-            topLevels
-            |> List.choose (function
-                | TypeDef typeDef -> Some typeDef
-                | _ -> None)
-            |> List.rev
-            |> List.distinctBy typeDefName
-            |> List.rev
-        let localAliases =
-            winningTypeDefs
-            |> List.choose (function
-                | TypeAlias (name, typeParams, target) -> Some (name, (typeParams, target))
-                | _ -> None)
-            |> Map.ofList
-        let aliases =
-            match baseEnv with
-            | Some existing -> Map.fold (fun acc name value -> Map.add name value acc) existing.AliasReg localAliases
-            | None -> localAliases
-        let localRecordTypeNames =
-            winningTypeDefs
-            |> List.choose (function RecordDef (name, _, _) -> Some name | _ -> None)
-            |> Set.ofList
-        let recordTypeNames =
-            match baseEnv with
-            | Some existing -> Set.union localRecordTypeNames (existing.IndexedTypeReg |> Map.keys |> Set.ofSeq)
-            | None -> localRecordTypeNames
-        resolveProgramNames resolutionEnv aliases recordTypeNames program)
+    let resolvedProgramResult =
+        measure "TypeCheck: Name Resolution" (fun () ->
+            declarationValidation
+            |> Result.bind (fun () ->
+                let winningTypeDefs =
+                    topLevels
+                    |> List.choose (function
+                        | TypeDef typeDef -> Some typeDef
+                        | _ -> None)
+                    |> List.rev
+                    |> List.distinctBy typeDefName
+                    |> List.rev
+                let localAliases =
+                    winningTypeDefs
+                    |> List.choose (function
+                        | TypeAlias (name, typeParams, target) -> Some (name, (typeParams, target))
+                        | _ -> None)
+                    |> Map.ofList
+                let aliases =
+                    match baseEnv with
+                    | Some existing -> Map.fold (fun acc name value -> Map.add name value acc) existing.AliasReg localAliases
+                    | None -> localAliases
+                let localRecordTypeNames =
+                    winningTypeDefs
+                    |> List.choose (function RecordDef (name, _, _) -> Some name | _ -> None)
+                    |> Set.ofList
+                let recordTypeNames =
+                    match baseEnv with
+                    | Some existing -> Set.union localRecordTypeNames (existing.IndexedTypeReg |> Map.keys |> Set.ofSeq)
+                    | None -> localRecordTypeNames
+                let resolvedNames =
+                    measure "TypeCheck: Symbol Resolution" (fun () ->
+                        resolveProgramNames resolutionEnv aliases recordTypeNames program)
+                resolvedNames
+                |> Result.map (fun (Program resolvedTopLevels) ->
+                    measure "TypeCheck: Recursive Group Resolution" (fun () ->
+                        Program (resolveRecursiveDeclarationGroups resolvedTopLevels)))))
+
+    resolvedProgramResult
     |> Result.bind (fun resolvedProgram ->
-        match baseEnv, requireEntry, resolvedProgram with
-        | Some existingEnv, true, Program [Expression expr] ->
-            checkResolvedExpressionWithBaseEnv
-                existingEnv
-                resolutionEnv
-                requireExplicitTypeArgsForBareCalls
-                warningSettings
-                expr
-        | _ ->
-            checkResolvedProgramInternal
-                baseEnv
-                requireExplicitTypeArgsForBareCalls
-                warningSettings
-                requireEntry
-                resolvedProgram)
+        measure "TypeCheck: Semantic Checking" (fun () ->
+            match baseEnv, requireEntry, resolvedProgram with
+            | Some existingEnv, true, Program [Expression expr] ->
+                checkResolvedExpressionWithBaseEnv
+                    existingEnv
+                    resolutionEnv
+                    requireExplicitTypeArgsForBareCalls
+                    warningSettings
+                    expr
+            | _ ->
+                checkResolvedProgramInternal
+                    baseEnv
+                    requireExplicitTypeArgsForBareCalls
+                    warningSettings
+                    requireEntry
+                    resolvedProgram))
+
+let private checkProgramInternal
+    (baseEnv: TypeCheckEnv option)
+    (hideCompilerImplementationNames: bool)
+    (requireExplicitTypeArgsForBareCalls: bool)
+    (validateDeclarations: bool)
+    (requireEntry: bool)
+    (warningSettings: WarningSettings)
+    (program: Program)
+    : Result<Type * Program * TypeCheckEnv, TypeError> =
+    checkProgramInternalWithTrace
+        None
+        baseEnv
+        hideCompilerImplementationNames
+        requireExplicitTypeArgsForBareCalls
+        validateDeclarations
+        requireEntry
+        warningSettings
+        program
 
 /// Type-check a program
 /// Returns the type of the main expression and the transformed program
@@ -8645,6 +8693,23 @@ let checkProgramWithBaseEnvAndSettings
     (program: Program)
     : Result<Type * Program * TypeCheckEnv, TypeError> =
     checkProgramInternal (Some baseEnv) false requireExplicitTypeArgsForBareCalls true true warningSettings program
+
+let checkProgramWithBaseEnvAndSettingsWithTrace
+    (phaseRecorder: string -> float -> unit)
+    (baseEnv: TypeCheckEnv)
+    (requireExplicitTypeArgsForBareCalls: bool)
+    (warningSettings: WarningSettings)
+    (program: Program)
+    : Result<Type * Program * TypeCheckEnv, TypeError> =
+    checkProgramInternalWithTrace
+        (Some phaseRecorder)
+        (Some baseEnv)
+        false
+        requireExplicitTypeArgsForBareCalls
+        true
+        true
+        warningSettings
+        program
 
 let checkDeclarationProgramWithBaseEnvAndSettings
     (baseEnv: TypeCheckEnv)

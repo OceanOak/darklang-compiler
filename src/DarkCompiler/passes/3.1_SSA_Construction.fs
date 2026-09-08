@@ -30,6 +30,25 @@ type private PhiTypeEvidence =
     | KnownPhiType of AST.Type
     | ConflictingPhiTypes
 
+type SSAConstructionTiming = {
+    Phase: string
+    ElapsedMs: float
+}
+
+let private timePhase
+    (swOpt: System.Diagnostics.Stopwatch option)
+    (phase: string)
+    (timingsRev: SSAConstructionTiming list)
+    (operation: unit -> 'a)
+    : 'a * SSAConstructionTiming list =
+    match swOpt with
+    | None -> (operation (), timingsRev)
+    | Some sw ->
+        let start = sw.Elapsed.TotalMilliseconds
+        let result = operation ()
+        let elapsedMs = sw.Elapsed.TotalMilliseconds - start
+        (result, { Phase = phase; ElapsedMs = elapsedMs } :: timingsRev)
+
 let private buildLabelIndex (cfg: CFG) : LabelIndex =
     let labels = cfg.Blocks |> Map.keys |> Seq.toArray
     let indexOf =
@@ -95,7 +114,7 @@ let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
                         | Jump target -> [target]
                         | Branch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
                     | None -> []
-                findReachable (rest @ successors) visited'
+                findReachable (successors @ rest) visited'
 
     let reachableBlocks = findReachable [entry] Set.empty
     let reachableLabels = labels |> List.filter (fun l -> Set.contains l reachableBlocks)
@@ -520,30 +539,73 @@ let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
                     Crash.crash
                         $"SSA: Missing label index for {labelName successor} while computing liveness successor"))
 
-    // Iterate over dense arrays. Each block allocates one compact result bitset per
-    // round instead of persistent tree nodes for every union and difference.
-    let rec fixpoint (liveOut: Bitset.Bitset array) : Bitset.Bitset array =
-        let updated =
-            Array.init labelCount (fun blockIdx ->
-                Array.init vregIndex.WordCount (fun wordIdx ->
-                    successorIndices.[blockIdx]
-                    |> List.fold (fun word successorIdx ->
-                        word
-                        ||| blockUses.[successorIdx].[wordIdx]
-                        ||| (liveOut.[successorIdx].[wordIdx]
-                             &&& (~~~blockDefs.[successorIdx].[wordIdx]))) 0UL))
-        if Array.forall2 Bitset.equal liveOut updated then updated else fixpoint updated
+    let entryIndex =
+        match Map.tryFind cfg.Entry labelIndex.IndexOf with
+        | Some idx -> idx
+        | None -> Crash.crash "SSA: Missing entry label index while ordering liveness"
 
-    let finalLiveOut =
-        Array.init labelCount (fun _ -> Bitset.empty vregIndex.WordCount)
-        |> fixpoint
+    // Liveness flows from successors to predecessors. Postorder solves an
+    // acyclic region in one pass, while the surrounding fixed point retains
+    // exact behavior for loop backedges. The explicit work stack keeps CFG
+    // ordering stack-safe for large generated functions.
+    let backwardDataflowOrder =
+        let roots = entryIndex :: [0 .. labelCount - 1]
+        let rec visit
+            (work: (int * bool) list)
+            (visited: Set<int>)
+            (postorderRev: int list)
+            : int list =
+            match work with
+            | [] -> List.rev postorderRev
+            | (blockIdx, expanded) :: remaining ->
+                if expanded then
+                    visit remaining visited (blockIdx :: postorderRev)
+                elif Set.contains blockIdx visited then
+                    visit remaining visited postorderRev
+                else
+                    let successors =
+                        successorIndices.[blockIdx]
+                        |> List.map (fun successorIdx -> (successorIdx, false))
+                    visit
+                        (successors @ ((blockIdx, true) :: remaining))
+                        (Set.add blockIdx visited)
+                        postorderRev
+        visit (roots |> List.map (fun blockIdx -> (blockIdx, false))) Set.empty []
 
+    let emptyBits = Bitset.empty vregIndex.WordCount
+    let getLiveIn (liveInByIndex: Map<int, Bitset.Bitset>) (blockIdx: int) =
+        Map.tryFind blockIdx liveInByIndex |> Option.defaultValue emptyBits
+    let computeLiveOut (liveInByIndex: Map<int, Bitset.Bitset>) (blockIdx: int) =
+        Array.init vregIndex.WordCount (fun wordIdx ->
+            successorIndices.[blockIdx]
+            |> List.fold (fun word successorIdx ->
+                word ||| (getLiveIn liveInByIndex successorIdx).[wordIdx]) 0UL)
+    let computeLiveIn (blockIdx: int) (liveOut: Bitset.Bitset) =
+        Array.init vregIndex.WordCount (fun wordIdx ->
+            blockUses.[blockIdx].[wordIdx]
+            ||| (liveOut.[wordIdx] &&& (~~~blockDefs.[blockIdx].[wordIdx])))
+
+    // Within each round, predecessors see successor values computed earlier in
+    // the same postorder traversal instead of waiting for another global round.
+    let rec fixpoint (liveInByIndex: Map<int, Bitset.Bitset>) =
+        let (changed, updated) =
+            backwardDataflowOrder
+            |> List.fold (fun (changed, current) blockIdx ->
+                let newLiveIn =
+                    computeLiveOut current blockIdx |> computeLiveIn blockIdx
+                let oldLiveIn = getLiveIn current blockIdx
+                if Bitset.equal oldLiveIn newLiveIn then
+                    (changed, current)
+                else
+                    (true, Map.add blockIdx newLiveIn current)
+            ) (false, liveInByIndex)
+        if changed then fixpoint updated else updated
+
+    let finalLiveInByIndex = fixpoint Map.empty
     let liveIn =
-        Array.init labelCount (fun blockIdx ->
-            Array.init vregIndex.WordCount (fun wordIdx ->
-                blockUses.[blockIdx].[wordIdx]
-                ||| (finalLiveOut.[blockIdx].[wordIdx]
-                     &&& (~~~blockDefs.[blockIdx].[wordIdx]))))
+        Array.init labelCount (getLiveIn finalLiveInByIndex)
+    let finalLiveOut =
+        Array.init labelCount (computeLiveOut finalLiveInByIndex)
 
     let bitsetsToMap (bitsets: Bitset.Bitset array) : Map<Label, Set<VReg>> =
         Array.map2 (fun label bits ->
@@ -1202,28 +1264,59 @@ let renameCFG (cfg: CFG) (idoms: Dominators) (floatRegs: Set<int>) (paramRegs: V
     (resultCfg, finalState.FloatRegs)
 
 /// Convert a function to SSA form
-let convertFunctionToSSA (func: Function) : Function =
+let private convertFunctionToSSAInternal
+    (swOpt: System.Diagnostics.Stopwatch option)
+    (func: Function)
+    : Function * SSAConstructionTiming list =
     let cfg = func.CFG
-    let preds = buildPredecessors cfg
-    let idoms = computeDominators cfg preds
-    let df = computeDominanceFrontier cfg preds idoms
+    let (preds, timingsRev) =
+        timePhase swOpt "SSA: Predecessors" [] (fun () -> buildPredecessors cfg)
+    let (idoms, timingsRev) =
+        timePhase swOpt "SSA: Dominators" timingsRev (fun () -> computeDominators cfg preds)
+    let (df, timingsRev) =
+        timePhase swOpt "SSA: Dominance Frontier" timingsRev (fun () -> computeDominanceFrontier cfg preds idoms)
 
     // Compute liveness to only insert phi nodes for live variables
-    let (liveIn, _) = computeLiveness cfg
+    let ((liveIn, _), timingsRev) =
+        timePhase swOpt "SSA: Liveness" timingsRev (fun () -> computeLiveness cfg)
 
     // Insert phi nodes (only for live variables)
     // Pass function params so they're treated as defined at entry (for self-recursive functions)
     let paramRegs = func.TypedParams |> List.map (fun tp -> tp.Reg)
     let paramTypes = func.TypedParams |> List.map (fun tp -> tp.Type)
-    let cfgWithPhis = insertPhiNodes cfg df preds liveIn paramRegs paramTypes
+    let (cfgWithPhis, timingsRev) =
+        timePhase swOpt "SSA: Phi Insertion" timingsRev (fun () ->
+            insertPhiNodes cfg df preds liveIn paramRegs paramTypes)
 
     // Rename variables and update floatRegs with SSA versions
-    let (ssaCFG, updatedFloatRegs) = renameCFG cfgWithPhis idoms func.FloatRegs paramRegs
+    let ((ssaCFG, updatedFloatRegs), timingsRev) =
+        timePhase swOpt "SSA: Renaming" timingsRev (fun () ->
+            renameCFG cfgWithPhis idoms func.FloatRegs paramRegs)
 
-    { func with CFG = ssaCFG; FloatRegs = updatedFloatRegs }
+    ({ func with CFG = ssaCFG; FloatRegs = updatedFloatRegs }, List.rev timingsRev)
+
+/// Convert a function to SSA form.
+let convertFunctionToSSA (func: Function) : Function =
+    convertFunctionToSSAInternal None func |> fst
 
 /// Convert a program to SSA form
 let convertToSSA (program: Program) : Program =
     let (Program (functions, variants, records)) = program
     let functions' = functions |> List.map convertFunctionToSSA
     Program (functions', variants, records)
+
+/// Convert a program to SSA form and collect aggregate phase timings.
+let convertToSSAWithTiming (program: Program) : Program * SSAConstructionTiming list =
+    let (Program (functions, variants, records)) = program
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let (functionsRev, timingsRev) =
+        functions
+        |> List.fold (fun (converted, collectedTimingsRev) func ->
+            let (convertedFunc, functionTimings) =
+                convertFunctionToSSAInternal (Some sw) func
+            let collectedTimingsRev =
+                functionTimings
+                |> List.fold (fun acc timing -> timing :: acc) collectedTimingsRev
+            (convertedFunc :: converted, collectedTimingsRev)
+        ) ([], [])
+    (Program (List.rev functionsRev, variants, records), List.rev timingsRev)

@@ -793,7 +793,12 @@ let buildSuiteContexts
             passTimingRecorder
             |> Option.map (fun outer ->
                 fun (timing: CompilerLibrary.PassTiming) ->
-                    if not (Set.contains timing.Pass overlappingTimingNames) then
+                    if
+                        not (Set.contains timing.Pass overlappingTimingNames)
+                        && not (timing.Pass.StartsWith("TypeCheck: "))
+                        && not (timing.Pass.StartsWith("SSA: "))
+                        && not (timing.Pass.StartsWith("RegAlloc: "))
+                    then
                         nestedPassTime <- nestedPassTime + timing.Elapsed
                     outer timing)
         let timer = Diagnostics.Stopwatch.StartNew()

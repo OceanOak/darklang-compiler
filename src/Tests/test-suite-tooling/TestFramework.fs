@@ -147,7 +147,11 @@ let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<stri
             "ARM64 Codegen Peephole"
         ]
     passTimings
-    |> Map.filter (fun name _ -> not (Set.contains name overlapTimingNames))
+    |> Map.filter (fun name _ ->
+        not (Set.contains name overlapTimingNames)
+        && not (name.StartsWith("TypeCheck: "))
+        && not (name.StartsWith("SSA: "))
+        && not (name.StartsWith("RegAlloc: ")))
 
 let calculatePassTimingsTotalForOverhead (passTimings: Map<string, TimeSpan>) : TimeSpan =
     passTimings

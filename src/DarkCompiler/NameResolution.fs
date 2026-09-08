@@ -54,7 +54,12 @@ type Candidate = {
     Provenance: CandidateProvenance
 }
 
-type ResolutionEnvironment = private ResolutionEnvironment of Candidate list
+type ResolutionEnvironment = private {
+    OrderedCandidates: Candidate list
+    CandidatesByVisibleName: Map<QualifiedName, Candidate list>
+    ImportedOrderedCandidates: Candidate list
+    ImportedCandidatesByVisibleName: Map<QualifiedName, Candidate list>
+}
 
 type SuccessfulResolution = {
     OriginalName: QualifiedName
@@ -131,29 +136,95 @@ let canonicalSpelling (identity: SymbolIdentity) : string =
     | UserType name
     | BuiltinType name -> name
 
-let empty : ResolutionEnvironment = ResolutionEnvironment []
+let private importCandidate (candidate: Candidate) : Candidate =
+    let provenance =
+        match candidate.Provenance with
+        | SourceDeclaration name
+        | ModuleDeclaration name -> PackageDeclaration name
+        | other -> other
+    { candidate with Provenance = provenance }
 
-let candidates (ResolutionEnvironment candidates) : Candidate list = candidates
+let empty : ResolutionEnvironment = {
+    OrderedCandidates = []
+    CandidatesByVisibleName = Map.empty
+    ImportedOrderedCandidates = []
+    ImportedCandidatesByVisibleName = Map.empty
+}
 
-let addCandidate (candidate: Candidate) (ResolutionEnvironment candidates) : ResolutionEnvironment =
-    ResolutionEnvironment (candidate :: candidates)
+let candidates (environment: ResolutionEnvironment) : Candidate list =
+    environment.OrderedCandidates
 
-let addCandidates (newCandidates: Candidate list) (ResolutionEnvironment candidates) : ResolutionEnvironment =
-    ResolutionEnvironment (newCandidates @ candidates)
+let addCandidate
+    (candidate: Candidate)
+    (environment: ResolutionEnvironment)
+    : ResolutionEnvironment =
+    let sameName =
+        Map.tryFind candidate.VisibleName environment.CandidatesByVisibleName
+        |> Option.defaultValue []
+    let importedCandidate = importCandidate candidate
+    let importedSameName =
+        Map.tryFind
+            importedCandidate.VisibleName
+            environment.ImportedCandidatesByVisibleName
+        |> Option.defaultValue []
+    {
+        OrderedCandidates = candidate :: environment.OrderedCandidates
+        CandidatesByVisibleName =
+            Map.add
+                candidate.VisibleName
+                (candidate :: sameName)
+                environment.CandidatesByVisibleName
+        ImportedOrderedCandidates =
+            importedCandidate :: environment.ImportedOrderedCandidates
+        ImportedCandidatesByVisibleName =
+            Map.add
+                importedCandidate.VisibleName
+                (importedCandidate :: importedSameName)
+                environment.ImportedCandidatesByVisibleName
+    }
+
+let addCandidates
+    (newCandidates: Candidate list)
+    (environment: ResolutionEnvironment)
+    : ResolutionEnvironment =
+    List.foldBack addCandidate newCandidates environment
 
 /// Keep only candidates accepted by a compilation boundary.
-let filterCandidates (predicate: Candidate -> bool) (ResolutionEnvironment candidates) : ResolutionEnvironment =
-    candidates |> List.filter predicate |> ResolutionEnvironment
+let filterCandidates
+    (predicate: Candidate -> bool)
+    (environment: ResolutionEnvironment)
+    : ResolutionEnvironment =
+    environment.OrderedCandidates
+    |> List.filter predicate
+    |> fun filtered -> addCandidates filtered empty
 
-let merge (ResolutionEnvironment baseCandidates) (ResolutionEnvironment overlayCandidates) : ResolutionEnvironment =
-    let imported (candidate: Candidate) : Candidate =
-        let provenance =
-            match candidate.Provenance with
-            | SourceDeclaration name
-            | ModuleDeclaration name -> PackageDeclaration name
-            | other -> other
-        { candidate with Provenance = provenance }
-    ResolutionEnvironment (overlayCandidates @ List.map imported baseCandidates)
+let merge
+    (baseEnvironment: ResolutionEnvironment)
+    (overlayEnvironment: ResolutionEnvironment)
+    : ResolutionEnvironment =
+    let mergeCandidateMaps baseCandidates overlayCandidates =
+        overlayCandidates
+        |> Map.fold (fun combined visibleName candidates ->
+            let baseCandidates =
+                Map.tryFind visibleName combined |> Option.defaultValue []
+            Map.add visibleName (candidates @ baseCandidates) combined
+        ) baseCandidates
+    {
+        OrderedCandidates =
+            overlayEnvironment.OrderedCandidates
+            @ baseEnvironment.ImportedOrderedCandidates
+        CandidatesByVisibleName =
+            mergeCandidateMaps
+                baseEnvironment.ImportedCandidatesByVisibleName
+                overlayEnvironment.CandidatesByVisibleName
+        ImportedOrderedCandidates =
+            overlayEnvironment.ImportedOrderedCandidates
+            @ baseEnvironment.ImportedOrderedCandidates
+        ImportedCandidatesByVisibleName =
+            mergeCandidateMaps
+                baseEnvironment.ImportedCandidatesByVisibleName
+                overlayEnvironment.ImportedCandidatesByVisibleName
+    }
 
 let candidate
     (visibleName: string)
@@ -209,11 +280,11 @@ let private orderedDistinctCandidates (candidates: Candidate list) : Candidate l
 let resolveQualified
     (context: ResolutionContext)
     (name: QualifiedName)
-    (ResolutionEnvironment inventory)
+    (environment: ResolutionEnvironment)
     : Result<SuccessfulResolution, ResolutionError> =
     let matching =
-        inventory
-        |> List.filter (fun candidate -> candidate.VisibleName = name)
+        Map.tryFind name environment.CandidatesByVisibleName
+        |> Option.defaultValue []
         |> List.choose (fun candidate ->
             precedence context candidate.Identity
             |> Option.map (fun rank -> ((rank, provenancePrecedence candidate.Provenance), candidate)))

@@ -938,6 +938,37 @@ let private computeCombinedLivenessBitsFromFacts
     let floatPhiUsesBits = collectFPhiUsesByPred floatDomain blockIndex classifiedBlocks
     let intLiveness = Array.init classifiedBlocks.Length (fun _ -> { LiveIn = emptyIntBits; LiveOut = emptyIntBits })
     let floatLiveness = Array.init classifiedBlocks.Length (fun _ -> { LiveIn = emptyFloatBits; LiveOut = emptyFloatBits })
+    // Liveness flows from successors to predecessors. Visiting a CFG in
+    // postorder therefore settles acyclic regions in one sweep; the fixed
+    // point below only has to revisit loop backedges. The explicit work stack
+    // keeps this traversal stack-safe for large generated functions.
+    let backwardDataflowOrder =
+        let roots =
+            blockIndex.EntryIndex
+            :: [0 .. classifiedBlocks.Length - 1]
+        let rec visit
+            (work: (int * bool) list)
+            (visited: Set<int>)
+            (postorderRev: int list)
+            : int list =
+            match work with
+            | [] -> List.rev postorderRev
+            | (blockIdx, expanded) :: remaining ->
+                if expanded then
+                    visit remaining visited (blockIdx :: postorderRev)
+                elif Set.contains blockIdx visited then
+                    visit remaining visited postorderRev
+                else
+                    let successors =
+                        classifiedBlocks.[blockIdx].Block.Terminator
+                        |> getSuccessors
+                        |> List.choose (tryBlockIndex blockIndex)
+                        |> List.map (fun successorIdx -> (successorIdx, false))
+                    visit
+                        (successors @ ((blockIdx, true) :: remaining))
+                        (Set.add blockIdx visited)
+                        postorderRev
+        visit (roots |> List.map (fun blockIdx -> (blockIdx, false))) Set.empty []
     let phiUsesForEdge (phiUses: (int * BitSet) list array) (emptyBits: BitSet) (succIdx: int) (predIdx: int) : BitSet =
         match phiUses.[succIdx] |> List.tryFind (fun (idx, _) -> idx = predIdx) with
         | Some (_, bits) -> bits
@@ -945,7 +976,7 @@ let private computeCombinedLivenessBitsFromFacts
     let mutable changed = true
     while changed do
         changed <- false
-        for blockIdx in 0 .. classifiedBlocks.Length - 1 do
+        for blockIdx in backwardDataflowOrder do
             let block = classifiedBlocks.[blockIdx].Block
             let successors = getSuccessors block.Terminator
             let mutable intLiveOutAccumulator = NoUnionBits
