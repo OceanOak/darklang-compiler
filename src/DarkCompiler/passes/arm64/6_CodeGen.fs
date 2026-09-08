@@ -8159,6 +8159,36 @@ let private generatePreparedARM64WithOptionsAndCache
         RcHelperRequirements = emptyRcHelperRequirements
     }
 
+    let hasRcHelperRequirements (requirements: RcHelperRequirements) =
+        not (Set.isEmpty requirements.ListDecHelperLabels)
+        || not (Map.isEmpty requirements.PlannedListDecHelpers)
+        || not (Map.isEmpty requirements.PlannedGenericDecHelpers)
+        || not (Map.isEmpty requirements.PlannedDictDecHelpers)
+        || not (Set.isEmpty requirements.DictDecHelperLabels)
+        || requirements.NeedsListRcIncHelper
+        || requirements.NeedsDictRcIncHelper
+        || requirements.NeedsClosureRcIncHelper
+        || requirements.NeedsClosureRcDecHelper
+        || requirements.NeedsStreamRcDecHelper
+        || not (Map.isEmpty requirements.ReleasePlanSummaries)
+
+    let contributesProgramMetadata (func: LIR.Function) =
+        let facts =
+            match func.CodegenFacts with
+            | Some facts -> facts
+            | None -> Crash.crash "ARM64 codegen invariant: missing validated function facts"
+        let contributesRcHelpers =
+            match facts.Arm64RcHelperRequirements with
+            | Some requirements -> hasRcHelperRequirements requirements
+            | None -> Crash.crash "ARM64 codegen invariant: missing validated RC helper requirements"
+        Option.isSome facts.ClosurePayloadSizeFromParams
+        || not (List.isEmpty facts.ClosurePayloadSizesFromAllocs)
+        || not (Set.isEmpty facts.RecursiveReleaseTypes)
+        || not (Set.isEmpty facts.RawSlotInitTypes)
+        || facts.NeedsCliArgvHelper
+        || facts.NeedsCliExecuteHelper
+        || contributesRcHelpers
+
     let releasePlanSummary = precomputedReleasePlanSummary
     let addReleasePlanRequirements = addPrecomputedReleasePlanRequirements
 
@@ -8365,15 +8395,21 @@ let private generatePreparedARM64WithOptionsAndCache
     let programMetadata =
         groups
         |> List.fold (fun metadata group ->
+            // Functions with no contribution are the identity element. Leaving
+            // them out makes cache keys reflect metadata semantics rather than
+            // incidental reachability, so overlapping stdlib subsets reuse the
+            // same immutable summary.
+            let contributingFunctions =
+                group.Functions |> List.filter contributesProgramMetadata
             let groupMetadata =
                 match metadataGroupCache with
                 | Some cache ->
                     cache
                         group.ContextIdentity
-                        group.Functions
-                        (fun () -> summarizeGroup group.Functions)
+                        contributingFunctions
+                        (fun () -> summarizeGroup contributingFunctions)
                 | None ->
-                    summarizeGroup group.Functions
+                    summarizeGroup contributingFunctions
             mergeMetadata metadata groupMetadata) emptyProgramMetadata
     recordPhase "ARM64 Metadata Group Composition" groupCompositionTimer
 
