@@ -121,6 +121,39 @@ let testComputeLivenessReportsMissingSuccessorBlock () : TestResult =
         else
             Error $"Expected contextual SSA missing-block message, got: {ex.Message}"
 
+let testComputeDominatorsHandlesJoinLoopAndUnreachableBlock () : TestResult =
+    let entry = label "entry"
+    let left = label "left"
+    let right = label "right"
+    let join = label "join"
+    let header = label "header"
+    let body = label "body"
+    let exit = label "exit"
+    let unreachable = label "unreachable"
+    let blocks =
+        [ makeBlock entry [] (Branch (Register (vreg 0), left, right))
+          makeBlock left [] (Jump join)
+          makeBlock right [] (Jump join)
+          makeBlock join [] (Jump header)
+          makeBlock header [] (Branch (Register (vreg 1), body, exit))
+          makeBlock body [] (Jump header)
+          makeBlock exit [] (Ret (Int64Const 0L))
+          makeBlock unreachable [] (Ret (Int64Const 1L)) ]
+    let cfg =
+        { Entry = entry
+          Blocks = blocks |> List.map (fun block -> (block.Label, block)) |> Map.ofList }
+    let expected =
+        [ (left, entry)
+          (right, entry)
+          (join, entry)
+          (header, join)
+          (body, header)
+          (exit, header) ]
+        |> Map.ofList
+    let actual = computeDominators cfg (buildPredecessors cfg)
+    if actual = expected then Ok ()
+    else Error $"Expected immediate dominators {expected}, got {actual}"
+
 let testSSAVersionsStartAboveParameterRegisters () : TestResult =
     let entry = label "entry"
     let parameter = { Reg = vreg 10000; Type = AST.TInt64 }
@@ -174,6 +207,7 @@ let testDeferredPhiUpdatesPreserveInstructionAndSourceOrder () : TestResult =
 let tests = [
     ("getBlockUses covers every operand position", testGetBlockUsesCoversEveryOperandPosition)
     ("computeLiveness reports missing successor block", testComputeLivenessReportsMissingSuccessorBlock)
+    ("computeDominators handles join, loop, and unreachable block", testComputeDominatorsHandlesJoinLoopAndUnreachableBlock)
     ("SSA versions start above parameter registers", testSSAVersionsStartAboveParameterRegisters)
     ("deferred phi updates preserve instruction and source order", testDeferredPhiUpdatesPreserveInstructionAndSourceOrder)
 ]

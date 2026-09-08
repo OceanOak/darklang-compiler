@@ -85,145 +85,92 @@ let buildPredecessors (cfg: CFG) : Predecessors =
             preds |> addEdge label trueLabel |> addEdge label falseLabel
     ) Map.empty
 
-/// Compute immediate dominators using iterative dataflow
+/// Compute immediate dominators in reverse postorder.
 /// Returns map from label to its immediate dominator
 type Dominators = Map<Label, Label>
 
 let computeDominators (cfg: CFG) (preds: Predecessors) : Dominators =
-    let labelIndex = buildLabelIndex cfg
-    let labels = labelIndex.Labels |> Array.toList
     let entry = cfg.Entry
 
-    // First, compute reachable blocks from entry using BFS
-    // This is critical because unreachable blocks have no well-defined dominators
-    // and would cause cycles in the idom tree if included
-    let rec findReachable (queue: Label list) (visited: Set<Label>) : Set<Label> =
-        match queue with
-        | [] -> visited
-        | current :: rest ->
-            if Set.contains current visited then
-                findReachable rest visited
+    // Cooper-Harvey-Kennedy converges quickly when blocks are visited in
+    // reverse postorder. Keep the DFS stack explicit because generated test
+    // functions can contain thousands of blocks.
+    let rec buildReversePostorder
+        (work: (Label * bool) list)
+        (visited: Set<Label>)
+        (reversePostorder: Label list)
+        : Label list =
+        match work with
+        | [] -> reversePostorder
+        | (label, expanded) :: remaining ->
+            if expanded then
+                buildReversePostorder remaining visited (label :: reversePostorder)
+            elif Set.contains label visited then
+                buildReversePostorder remaining visited reversePostorder
             else
-                let visited' = Set.add current visited
-                let block = Map.tryFind current cfg.Blocks
                 let successors =
-                    match block with
+                    match Map.tryFind label cfg.Blocks with
                     | Some b ->
                         match b.Terminator with
                         | Ret _ -> []
                         | Jump target -> [target]
                         | Branch (_, trueLabel, falseLabel) -> [trueLabel; falseLabel]
                     | None -> []
-                findReachable (successors @ rest) visited'
+                let successorWork =
+                    successors |> List.map (fun successor -> (successor, false))
+                buildReversePostorder
+                    (successorWork @ ((label, true) :: remaining))
+                    (Set.add label visited)
+                    reversePostorder
 
-    let reachableBlocks = findReachable [entry] Set.empty
-    let reachableLabels = labels |> List.filter (fun l -> Set.contains l reachableBlocks)
-    let reachableLabelIndices =
-        reachableLabels
-        |> List.map (fun label ->
-            match Map.tryFind label labelIndex.IndexOf with
-            | Some idx -> (label, idx)
-            | None -> Crash.crash $"SSA: Missing label index for {label}")
+    let reversePostorder =
+        buildReversePostorder [(entry, false)] Set.empty []
+        |> List.filter (fun label -> Map.containsKey label cfg.Blocks)
+    let positions =
+        reversePostorder
+        |> List.mapi (fun index label -> (label, index))
+        |> Map.ofList
 
-    let wordCount = Bitset.wordCount labelIndex.Labels.Length
-    let reachableMask =
-        let bits = Bitset.empty wordCount
-        reachableLabelIndices |> List.iter (fun (_, idx) -> Bitset.addIndexInPlace idx bits)
-        bits
-    let entryIndex =
-        match Map.tryFind entry labelIndex.IndexOf with
-        | Some idx -> idx
-        | None -> Crash.crash $"SSA: Missing entry label index for {entry}"
-    let entryBits = Bitset.singleton wordCount entryIndex
-
-    let reachablePredecessorIndices =
-        labelIndex.Labels
-        |> Array.map (fun label ->
-            Map.tryFind label preds
-            |> Option.defaultValue []
-            |> List.choose (fun predecessor ->
-                match Map.tryFind predecessor labelIndex.IndexOf with
-                | Some predecessorIdx when Bitset.containsIndex predecessorIdx reachableMask ->
-                    Some predecessorIdx
-                | Some _ -> None
-                | None -> Crash.crash $"SSA: Missing predecessor label index for {predecessor}"))
-
-    // Initialize: entry dominates itself, other reachable blocks dominated by all reachable
-    // Unreachable blocks are NOT included in the dominator computation
-    let initialDoms =
-        Array.init labelIndex.Labels.Length (fun idx ->
-            if idx = entryIndex then
-                entryBits
-            else if Bitset.containsIndex idx reachableMask then
-                Bitset.clone reachableMask  // Initially dominated by all reachable
-            else
-                Bitset.empty wordCount)
-
-    // Keep fixed-point state in label-index order so each iteration can update
-    // predecessor and current-block bitsets without rebuilding persistent maps.
-    let rec iterate (doms: Bitset.Bitset array) =
-        let changed =
-            reachableLabelIndices
-            |> List.fold (fun changed (_, labelIdx) ->
-                if labelIdx = entryIndex then
-                    changed
-                else
-                    let predIndices = reachablePredecessorIndices.[labelIdx]
-                    if List.isEmpty predIndices then
-                        changed
-                    else
-                        // Dom(n) = {n} union (intersection of Dom(p) for all predecessors p)
-                        let predDoms =
-                            predIndices
-                            |> List.map (fun predecessorIdx -> doms.[predecessorIdx])
-                        let intersection =
-                            match predDoms with
-                            | [] -> Bitset.empty wordCount
-                            | first :: rest -> Bitset.intersectMany first rest
-                        let newDom = Bitset.add labelIdx intersection
-                        let oldDom = doms.[labelIdx]
-                        if Bitset.equal newDom oldDom then
-                            changed
-                        else
-                            doms.[labelIdx] <- newDom
-                            true
-            ) false
-        if changed then iterate doms else doms
-
-    let allDoms = iterate initialDoms
-
-    // Extract immediate dominator from dominator sets
-    // idom(n) is the dominator of n that is dominated by all other dominators of n (closest one)
-    // Only process reachable blocks
-    reachableLabelIndices
-    |> List.fold (fun idoms (label, labelIdx) ->
-        if label = entry then
-            idoms  // Entry has no immediate dominator
+    let position label =
+        match Map.tryFind label positions with
+        | Some index -> index
+        | None -> Crash.crash $"SSA: Missing reverse-postorder position for {label}"
+    let parent (idoms: Dominators) label =
+        match Map.tryFind label idoms with
+        | Some immediateDominator -> immediateDominator
+        | None -> Crash.crash $"SSA: Missing immediate dominator for {label}"
+    let rec intersect (idoms: Dominators) left right =
+        if left = right then
+            left
+        elif position left > position right then
+            intersect idoms (parent idoms left) right
         else
-            let doms = allDoms.[labelIdx]
-            // Remove self from dominators
-            let strictDoms = Bitset.diff doms (Bitset.singleton wordCount labelIdx)
-            if Bitset.isEmpty strictDoms then
-                idoms
-            else
-                // idom is the unique strict dominator that is dominated by all other strict dominators
-                // In other words, it's the "closest" dominator to the node
-                let strictIndices = Bitset.indicesToList strictDoms
-                let idomIdx =
-                    strictIndices
-                    |> List.tryFind (fun dIdx ->
-                        let dDoms = allDoms.[dIdx]
-                        // d is idom if all other strict dominators dominate d
-                        // i.e., all other strict dominators are in Dom(d)
-                        strictIndices
-                        |> List.forall (fun otherIdx ->
-                            otherIdx = dIdx || Bitset.containsIndex otherIdx dDoms)
-                    )
-                match idomIdx with
-                | Some dIdx -> Map.add label labelIndex.Labels.[dIdx] idoms
-                | None ->
-                    Crash.crash $"SSA: Could not find immediate dominator for block {label} (malformed CFG)"
-    ) Map.empty
+            intersect idoms left (parent idoms right)
+
+    // Mapping entry to itself gives intersect a sentinel root. Remove it from
+    // the public result after the fixed point settles.
+    let rec iterate (nonEntryLabels: Label list) (idoms: Dominators) =
+        let (changed, updated) =
+            nonEntryLabels
+            |> List.fold (fun (changed, current) label ->
+                let processedPredecessors =
+                    Map.tryFind label preds
+                    |> Option.defaultValue []
+                    |> List.filter (fun predecessor -> Map.containsKey predecessor current)
+                match processedPredecessors with
+                | [] -> (changed, current)
+                | first :: rest ->
+                    let newIdom = rest |> List.fold (intersect current) first
+                    match Map.tryFind label current with
+                    | Some oldIdom when oldIdom = newIdom -> (changed, current)
+                    | _ -> (true, Map.add label newIdom current)
+            ) (false, idoms)
+        if changed then iterate nonEntryLabels updated else updated
+
+    match reversePostorder with
+    | [] -> Map.empty
+    | _ :: nonEntryLabels ->
+        iterate nonEntryLabels (Map.ofList [(entry, entry)]) |> Map.remove entry
 
 /// Dominance frontier: blocks where dominance ends
 /// DF(n) = blocks that n dominates a predecessor of, but not the block itself
