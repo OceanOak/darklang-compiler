@@ -31,7 +31,7 @@ let printHelp () =
     println "  --parser-pretty-roundtrip  Legacy no-op (parser/pretty corpus roundtrip runs by default)"
     println "  --roundtrip-all-dark  Include all upstream .dark files in parser/pretty corpus roundtrip"
     println "  --all-test-timings  Print timing for every test in final timing summary"
-    println "  --e2e-batch-size=N  Compile up to N compatible E2E checks together (default 1; max 128)"
+    println "  --e2e-batch-size=N  Compile up to N compatible E2E checks together (default 1; max 8192)"
     println "  --timings-json=PATH  Write machine-readable timing data to PATH"
     println "  --codegen-profile-json=PATH  Write opt-in per-function ARM64 codegen metrics"
     println "  --json-benchmark=PATH  Run the focused JSON benchmark and write JSON results"

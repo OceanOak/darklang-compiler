@@ -144,9 +144,9 @@ type E2EBatchExecution = {
 }
 
 // Keep the bound finite so an accidental command-line value cannot synthesize
-// an arbitrarily large compiler input. The complete range is exercised by the
-// batching correctness sweep.
-let maxSupportedBatchSize = 128
+// an arbitrarily large compiler input. This is larger than the complete E2E
+// corpus, allowing a requested batch to contain every compatible test.
+let maxSupportedBatchSize = 8192
 
 // Each result chunk deliberately uses only the low 32 bits of an Int64. This
 // keeps every printed mask non-negative and makes the final partial chunk easy

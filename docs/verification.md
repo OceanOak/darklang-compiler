@@ -15,7 +15,7 @@ For compiler repository changes, the default verification commands are:
 ```
 
 The E2E runner compiles each value-equality check separately by default. Use
-`--e2e-batch-size=16` (or another value through 128) only as a diagnostic for
+`--e2e-batch-size=16` (or another value through 8192) only as a diagnostic for
 finding fixed, repeated, or superlinear compiler work. In a batch, each check
 remains a separately compiled function while the caller and executable are
 shared. Timing JSON records the configured size, logical/eligible test counts,

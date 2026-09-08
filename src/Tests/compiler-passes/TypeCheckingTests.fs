@@ -366,6 +366,36 @@ let testRecursiveGroupsReceiveStableTypedIdentities () : TestResult =
                  && [evenMember.GroupIndex; oddMember.GroupIndex] = [0; 1] -> Ok ()
         | actual -> Error $"Unexpected recursive group identities: {actual}")
 
+/// Regression for the largest compatible E2E batch: the type checker must not
+/// multiply top-level traversal depth by the depth of its final let chain.
+let testManyTopLevelFunctionsAndLetsAreStackSafe () : TestResult =
+    let programSize = 373
+    let functions =
+        List.init programSize (fun index ->
+            FunctionDef {
+                Name = $"stackSafeTypeCheck{index}"
+                TypeParams = []
+                Params = NonEmptyList.singleton ("value", TInt64)
+                ReturnType = TInt64
+                Body = Var "value"
+                Recursion = None
+            })
+    let expression =
+        List.foldBack
+            (fun index body ->
+                Let (
+                    LPVariable $"stackSafeResult{index}",
+                    Call ($"stackSafeTypeCheck{index}", NonEmptyList.singleton (Int64Literal (int64 index))),
+                    body
+                ))
+            [0 .. programSize - 1]
+            (Int64Literal 0L)
+    let program = Program (functions @ [Expression expression])
+    match checkProgram program with
+    | Ok (TInt64, _) -> Ok ()
+    | Ok (typ, _) -> Error $"Expected Int64 result, got {typeToString typ}"
+    | Error error -> Error $"Expected large program to type check, got: {typeErrorToString error}"
+
 let tests = [
     ("Integer literal", testInt64Literal)
     ("Int128 literal", testInt128Literal)
@@ -386,6 +416,7 @@ let tests = [
     ("Invalid declaration type references rejected", testInvalidDeclarationTypeReferencesRejected)
     ("Constructor identity collision rejected", testConstructorIdentityCollisionRejected)
     ("Recursive groups receive stable typed identities", testRecursiveGroupsReceiveStableTypedIdentities)
+    ("Many top-level functions and lets are stack-safe", testManyTopLevelFunctionsAndLetsAreStackSafe)
 ]
 
 /// Run all type checking unit tests

@@ -36,13 +36,13 @@ let testJsonBenchmarkParsesPath () : TestResult =
     | Error msg -> Error $"Expected valid JSON benchmark path, got error: {msg}"
 
 let testE2EBatchSizeParsesBoundedSize () : TestResult =
-    match parseE2EBatchSizeArg [| "--e2e-batch-size=128" |] with
-    | Ok value -> expectEqual (Some 128) value
+    match parseE2EBatchSizeArg [| "--e2e-batch-size=8192" |] with
+    | Ok value -> expectEqual (Some 8192) value
     | Error msg -> Error $"Expected valid E2E batch size, got error: {msg}"
 
 let testE2EBatchSizeRejectsInvalidValues () : TestResult =
     let results =
-        [ "0"; "129"; "many" ]
+        [ "0"; "8193"; "many" ]
         |> List.map (fun value -> parseE2EBatchSizeArg [| $"--e2e-batch-size={value}" |])
     if results |> List.forall Result.isError then Ok ()
     else Error $"Expected invalid E2E batch sizes to fail, got {results}"

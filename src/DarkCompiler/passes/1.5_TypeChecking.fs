@@ -2984,43 +2984,83 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                 (bodyType, RecursiveLet (typedRecursion, value', body'))))
 
     | Let (pattern, value, body) ->
-        // The RHS is checked in the incoming environment. Only a completely
-        // validated and type-compatible pattern extends the continuation.
-        let valueExpectedType =
-            match pattern, value with
-            | LPVariable name, Lambda (parameters, _, _) ->
-                tryFindFunctionValueExpectation name body
-                |> Option.orElseWith (fun () ->
-                    tryFindCallArguments name body
-                    |> Option.bind (inferFunctionExpectationFromArguments (parameters |> NonEmptyList.toList |> List.length)))
-            | _, ListLiteral [] -> Some (TList (TVar "t"))
-            | _ -> None
+        // Checking a long sequence through recursive Result.bind calls retains
+        // one host stack frame per binding. Large generated programs combine
+        // that depth with their top-level functions, so walk consecutive lets
+        // iteratively and rebuild their typed form after checking the tail.
+        let rebuildLets checkedLets typedBody =
+            checkedLets
+            |> List.fold (fun currentBody (checkedPattern, checkedValue) ->
+                Let (checkedPattern, checkedValue, currentBody)) typedBody
 
-        checkExpr value env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg valueExpectedType
-        |> Result.bind (fun (valueType, value') ->
-            let valueType = canonicalizeBareSumTypeRefsWithNames sumTypeNames valueType
-            match validateBinders (LetBinderPatterns [pattern]) with
-            | Error message -> Error (GenericError message)
-            | Ok _ ->
-                match bindLetPatternTypes pattern valueType with
-                | None ->
-                    let renderedValue =
-                        tryFormatLiteralValue value'
-                        |> Option.defaultValue $"<{typeToString valueType}>"
-                    let message =
-                        $"Could not deconstruct value {renderedValue} into pattern {formatLetDeconstructionPattern pattern}"
-                    Ok (TRuntimeError, Let (pattern, value', RuntimeError message))
-                | Some bindings ->
-                    let env' =
-                        bindings |> List.fold (fun current (name, typ) -> Map.add name typ current) env
-                    let bodyForChecking =
-                        match pattern, value' with
-                        | LPVariable name, (FloatLiteral _ | Int64Literal _) ->
-                            substituteInterpolationLiteral name value' body
-                        | _ -> body
-                    checkExpr bodyForChecking env' typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg expectedType
-                    |> Result.map (fun (bodyType, body') ->
-                        (bodyType, Let (pattern, value', body'))))
+        let rec checkLetChain currentEnv checkedLets currentPattern currentValue currentBody =
+            // The RHS is checked in the incoming environment. Only a completely
+            // validated and type-compatible pattern extends the continuation.
+            let valueExpectedType =
+                match currentPattern, currentValue with
+                | LPVariable name, Lambda (parameters, _, _) ->
+                    tryFindFunctionValueExpectation name currentBody
+                    |> Option.orElseWith (fun () ->
+                        tryFindCallArguments name currentBody
+                        |> Option.bind (inferFunctionExpectationFromArguments (parameters |> NonEmptyList.toList |> List.length)))
+                | _, ListLiteral [] -> Some (TList (TVar "t"))
+                | _ -> None
+
+            match
+                checkExpr
+                    currentValue
+                    currentEnv
+                    typeReg
+                    variantLookup
+                    genericFuncReg
+                    warningSettings
+                    moduleRegistry
+                    aliasReg
+                    valueExpectedType
+            with
+            | Error error -> Error error
+            | Ok (valueType, value') ->
+                let valueType = canonicalizeBareSumTypeRefsWithNames sumTypeNames valueType
+                match validateBinders (LetBinderPatterns [currentPattern]) with
+                | Error message -> Error (GenericError message)
+                | Ok _ ->
+                    match bindLetPatternTypes currentPattern valueType with
+                    | None ->
+                        let renderedValue =
+                            tryFormatLiteralValue value'
+                            |> Option.defaultValue $"<{typeToString valueType}>"
+                        let message =
+                            $"Could not deconstruct value {renderedValue} into pattern {formatLetDeconstructionPattern currentPattern}"
+                        let runtimeError = Let (currentPattern, value', RuntimeError message)
+                        Ok (TRuntimeError, rebuildLets checkedLets runtimeError)
+                    | Some bindings ->
+                        let nextEnv =
+                            bindings
+                            |> List.fold (fun current (name, typ) -> Map.add name typ current) currentEnv
+                        let bodyForChecking =
+                            match currentPattern, value' with
+                            | LPVariable name, (FloatLiteral _ | Int64Literal _) ->
+                                substituteInterpolationLiteral name value' currentBody
+                            | _ -> currentBody
+                        let nextCheckedLets = (currentPattern, value') :: checkedLets
+                        match bodyForChecking with
+                        | Let (nextPattern, nextValue, nextBody) ->
+                            checkLetChain nextEnv nextCheckedLets nextPattern nextValue nextBody
+                        | _ ->
+                            checkExpr
+                                bodyForChecking
+                                nextEnv
+                                typeReg
+                                variantLookup
+                                genericFuncReg
+                                warningSettings
+                                moduleRegistry
+                                aliasReg
+                                expectedType
+                            |> Result.map (fun (bodyType, body') ->
+                                (bodyType, rebuildLets nextCheckedLets body'))
+
+        checkLetChain env [] pattern value body
 
     | Var name ->
         if isBuiltinTestNanName name then
@@ -8234,45 +8274,51 @@ let private checkResolvedProgramInternal
 
     // Third pass: type check all function definitions and collect transformed top-levels
     // The accumulator contains (type option * TopLevel) pairs where the type is Some for expressions
-    let rec checkAllTopLevelsWithTypes remaining accTopLevels =
-        match remaining with
-        | [] -> Ok (List.rev accTopLevels)
-        | topLevel :: rest ->
-            match topLevel with
-            | FunctionDef funcDef ->
-                checkFunctionDefWithSumTypeNames
-                    funcParamNameReg
-                    sumTypeNames
-                    funcDef
-                    funcEnv
-                    typeReg
-                    variantLookup
-                    genericFuncReg
-                    warningSettings
-                    moduleRegistry
-                    mergedAliasReg
-                |> Result.bind (fun funcDef' ->
-                    checkAllTopLevelsWithTypes rest ((None, FunctionDef funcDef') :: accTopLevels))
-            | TypeDef _ ->
-                checkAllTopLevelsWithTypes rest ((None, topLevel) :: accTopLevels)
-            | Expression expr ->
-                checkExprWithParamNamesAndSumTypeNames
-                    funcParamNameReg
-                    sumTypeNames
-                    expr
-                    funcEnv
-                    typeReg
-                    variantLookup
-                    genericFuncReg
-                    warningSettings
-                    moduleRegistry
-                    mergedAliasReg
-                    None
-                |> Result.bind (fun (exprType, expr') ->
-                    checkAllTopLevelsWithTypes rest ((Some exprType, Expression expr') :: accTopLevels))
+    let checkTopLevelWithType topLevel =
+        match topLevel with
+        | FunctionDef funcDef ->
+            checkFunctionDefWithSumTypeNames
+                funcParamNameReg
+                sumTypeNames
+                funcDef
+                funcEnv
+                typeReg
+                variantLookup
+                genericFuncReg
+                warningSettings
+                moduleRegistry
+                mergedAliasReg
+            |> Result.map (fun funcDef' -> (None, FunctionDef funcDef'))
+        | TypeDef _ ->
+            Ok (None, topLevel)
+        | Expression expr ->
+            checkExprWithParamNamesAndSumTypeNames
+                funcParamNameReg
+                sumTypeNames
+                expr
+                funcEnv
+                typeReg
+                variantLookup
+                genericFuncReg
+                warningSettings
+                moduleRegistry
+                mergedAliasReg
+                None
+            |> Result.map (fun (exprType, expr') -> (Some exprType, Expression expr'))
+
+    let checkAllTopLevelsWithTypes =
+        topLevels
+        |> List.fold
+            (fun result topLevel ->
+                result
+                |> Result.bind (fun accTopLevels ->
+                    checkTopLevelWithType topLevel
+                    |> Result.map (fun checkedTopLevel -> checkedTopLevel :: accTopLevels)))
+            (Ok [])
+        |> Result.map List.rev
 
     // Type check all top-levels
-    checkAllTopLevelsWithTypes topLevels []
+    checkAllTopLevelsWithTypes
     |> Result.bind (fun topLevelsWithTypes ->
         // Extract just the top-levels
         let topLevels' = topLevelsWithTypes |> List.map snd
