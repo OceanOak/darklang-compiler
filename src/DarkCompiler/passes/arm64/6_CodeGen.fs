@@ -7974,28 +7974,31 @@ let private outlineExpensiveGenericReleasesInFunction
                 |> Set.toList
                 |> List.map (fun memoKey -> memoKey, label))
             |> Map.ofList
-    let outlineInstr instr =
-        match instr with
-        | LIR.RefCountDec (addr, _, LIR.GenericHeap, metadata) ->
-            match Map.tryFind (LIR.rcReleasePlanMemoKey metadata) helperLabelsByMemoKey with
-            | Some helperLabel ->
-                [
-                    LIR.SaveRegs ([], [])
-                    LIR.ArgMoves [(LIR.X0, LIR.Reg addr)]
-                    // The physical destination declares that this effect has no
-                    // virtual result while retaining normal call liveness.
-                    LIR.Call (LIR.Physical LIR.X0, helperLabel, [LIR.Reg addr])
-                    LIR.RestoreRegs ([], [])
-                ]
+    if Map.isEmpty helperLabelsByMemoKey then
+        func
+    else
+        let outlineInstr instr =
+            match instr with
+            | LIR.RefCountDec (addr, _, LIR.GenericHeap, metadata) ->
+                match Map.tryFind (LIR.rcReleasePlanMemoKey metadata) helperLabelsByMemoKey with
+                | Some helperLabel ->
+                    [
+                        LIR.SaveRegs ([], [])
+                        LIR.ArgMoves [(LIR.X0, LIR.Reg addr)]
+                        // The physical destination declares that this effect has no
+                        // virtual result while retaining normal call liveness.
+                        LIR.Call (LIR.Physical LIR.X0, helperLabel, [LIR.Reg addr])
+                        LIR.RestoreRegs ([], [])
+                    ]
+                | _ ->
+                    [instr]
             | _ ->
                 [instr]
-        | _ ->
-            [instr]
-    let blocks =
-        func.CFG.Blocks
-        |> Map.map (fun _ block ->
-            { block with Instrs = List.collect outlineInstr block.Instrs })
-    { func with CFG = { func.CFG with Blocks = blocks } }
+        let blocks =
+            func.CFG.Blocks
+            |> Map.map (fun _ block ->
+                { block with Instrs = List.collect outlineInstr block.Instrs })
+        { func with CFG = { func.CFG with Blocks = blocks } }
 
 /// Plan ARM64 helpers from finalized symbolic LIR, then expose expensive
 /// generic releases as ordinary calls before register allocation. Attached
