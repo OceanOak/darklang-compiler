@@ -2346,6 +2346,42 @@ type ExprKey =
     | ScalarHeapLoadExpr of VReg * int * AST.Type
     | DirectCallExpr of funcName:string * args:Operand list * returnType:AST.Type
 
+type private ExprAvailability = {
+    Arithmetic: Map<ExprKey, VReg>
+    ScalarHeapLoads: Map<ExprKey, VReg>
+    DirectCalls: Map<ExprKey, VReg>
+}
+
+let private emptyExprAvailability = {
+    Arithmetic = Map.empty
+    ScalarHeapLoads = Map.empty
+    DirectCalls = Map.empty
+}
+
+let private tryFindAvailable
+    (key: ExprKey)
+    (available: ExprAvailability)
+    : VReg option =
+    match key with
+    | BinExpr _
+    | UnaryExpr _ -> Map.tryFind key available.Arithmetic
+    | ScalarHeapLoadExpr _ -> Map.tryFind key available.ScalarHeapLoads
+    | DirectCallExpr _ -> Map.tryFind key available.DirectCalls
+
+let private addAvailable
+    (key: ExprKey)
+    (dest: VReg)
+    (available: ExprAvailability)
+    : ExprAvailability =
+    match key with
+    | BinExpr _
+    | UnaryExpr _ ->
+        { available with Arithmetic = Map.add key dest available.Arithmetic }
+    | ScalarHeapLoadExpr _ ->
+        { available with ScalarHeapLoads = Map.add key dest available.ScalarHeapLoads }
+    | DirectCallExpr _ ->
+        { available with DirectCalls = Map.add key dest available.DirectCalls }
+
 /// Check if a binary operation is commutative (order of operands doesn't matter)
 let isCommutative (op: BinOp) : bool =
     match op with
@@ -2382,36 +2418,32 @@ let private isCrossBlockCSEType (opType: AST.Type) : bool =
 
 /// Calls, memory operations, and ownership operations invalidate heap-load
 /// availability without discarding independent arithmetic expression keys.
-let private clearScalarHeapLoadAvailability (available: Map<ExprKey, VReg>) : Map<ExprKey, VReg> =
-    available
-    |> Map.filter (fun key _ ->
-        match key with
-        | ScalarHeapLoadExpr _ -> false
-        | _ -> true)
+let private clearScalarHeapLoadAvailability
+    (available: ExprAvailability)
+    : ExprAvailability =
+    { available with ScalarHeapLoads = Map.empty }
 
-let private clearDirectCallAvailability (available: Map<ExprKey, VReg>) : Map<ExprKey, VReg> =
-    available
-    |> Map.filter (fun key _ ->
-        match key with
-        | DirectCallExpr _ -> false
-        | _ -> true)
+let private clearDirectCallAvailability
+    (available: ExprAvailability)
+    : ExprAvailability =
+    { available with DirectCalls = Map.empty }
 
 let private clearHeapLoadAndDirectCallAvailability
-    (available: Map<ExprKey, VReg>)
-    : Map<ExprKey, VReg> =
-    available
-    |> Map.filter (fun key _ ->
-        match key with
-        | ScalarHeapLoadExpr _
-        | DirectCallExpr _ -> false
-        | _ -> true)
+    (available: ExprAvailability)
+    : ExprAvailability =
+    { available with
+        ScalarHeapLoads = Map.empty
+        DirectCalls = Map.empty }
 
 /// Apply CSE to a CFG, carrying available expressions into dominated blocks.
 let applyCSEWithEffectFreeCalls
     (effectFreeFunctions: Set<string>)
     (cfg: CFG)
     : CFG * bool =
-    let optimizeBlock (available: Map<ExprKey, VReg>) (block: BasicBlock) : BasicBlock * Map<ExprKey, VReg> * bool =
+    let optimizeBlock
+        (available: ExprAvailability)
+        (block: BasicBlock)
+        : BasicBlock * ExprAvailability * bool =
         let (instrs', _, exported', changed) =
             block.Instrs
             |> List.fold (fun (instrs, exprMap, exported, ch) instr ->
@@ -2423,36 +2455,37 @@ let applyCSEWithEffectFreeCalls
                             exprMap
                         else
                             clearScalarHeapLoadAvailability exprMap
-                    match Map.tryFind key available' with
+                    match tryFindAvailable key available' with
                     | Some prevDest ->
                         (Mov (dest, Register prevDest, None) :: instrs, available', exported, true)
                     | None ->
                         let exported' =
-                            if isCrossBlockCSEType opType then Map.add key dest exported else Map.empty
-                        (instr :: instrs, Map.add key dest available', exported', ch)
+                            if isCrossBlockCSEType opType then addAvailable key dest exported
+                            else emptyExprAvailability
+                        (instr :: instrs, addAvailable key dest available', exported', ch)
                 | UnaryOp (dest, op, src) ->
                     let key = makeUnaryExprKey op src
-                    match Map.tryFind key exprMap with
+                    match tryFindAvailable key exprMap with
                     | Some prevDest ->
                         (Mov (dest, Register prevDest, None) :: instrs, exprMap, exported, true)
                     | None ->
-                        (instr :: instrs, Map.add key dest exprMap, Map.add key dest exported, ch)
+                        (instr :: instrs, addAvailable key dest exprMap, addAvailable key dest exported, ch)
                 | HeapLoad (dest, addr, offset, Some valueType) when isCrossBlockCSEType valueType ->
                     let key = makeScalarHeapLoadExprKey addr offset valueType
-                    match Map.tryFind key exprMap with
+                    match tryFindAvailable key exprMap with
                     | Some prevDest ->
                         (Mov (dest, Register prevDest, Some valueType) :: instrs, exprMap, exported, true)
                     | None ->
-                        (instr :: instrs, Map.add key dest exprMap, Map.add key dest exported, ch)
+                        (instr :: instrs, addAvailable key dest exprMap, addAvailable key dest exported, ch)
                 | HeapLoad _ ->
                     // Unknown and non-scalar values can carry ownership edges;
                     // do not make earlier scalar loads available past them.
-                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, emptyExprAvailability, ch)
                 | Call (dest, funcName, args, _, returnType)
                     when Set.contains funcName effectFreeFunctions
                          && isCrossBlockCSEType returnType ->
                     let key = DirectCallExpr (funcName, args, returnType)
-                    match Map.tryFind key exprMap with
+                    match tryFindAvailable key exprMap with
                     | Some prevDest ->
                         // Exact callee, operand, and scalar-result identity plus
                         // the whole-program effect proof make reuse safe.
@@ -2463,26 +2496,26 @@ let applyCSEWithEffectFreeCalls
                         let exprMap' =
                             exprMap
                             |> clearDirectCallAvailability
-                            |> Map.add key dest
+                            |> addAvailable key dest
                         let exported' =
                             exported
                             |> clearDirectCallAvailability
-                            |> Map.add key dest
+                            |> addAvailable key dest
                         (instr :: instrs, exprMap', exported', ch)
                 | Call _ ->
                     // Unproven calls may affect memory and observable state.
-                    (instr :: instrs, clearHeapLoadAndDirectCallAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearHeapLoadAndDirectCallAvailability exprMap, emptyExprAvailability, ch)
                 | RefCountDec _
                 | RefCountDecString _
                 | RefCountDecBlob _
                 | RawFree _ ->
                     // A previously computed raw address can outlive its managed
                     // owner if reuse removes the later use that kept it alive.
-                    (instr :: instrs, Map.empty, Map.empty, ch)
+                    (instr :: instrs, emptyExprAvailability, emptyExprAvailability, ch)
                 | Mov (_, _, Some valueType) when not (isCrossBlockCSEType valueType) ->
-                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, emptyExprAvailability, ch)
                 | Phi (_, _, Some valueType) when not (isCrossBlockCSEType valueType) ->
-                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearScalarHeapLoadAvailability exprMap, emptyExprAvailability, ch)
                 | Mov _
                 | Phi _ ->
                     (instr :: instrs, exprMap, exported, ch)
@@ -2491,12 +2524,12 @@ let applyCSEWithEffectFreeCalls
                     // remain reusable locally. Preserve the existing conservative
                     // boundary for calls, and do not lengthen live ranges into
                     // dominated blocks.
-                    (instr :: instrs, clearDirectCallAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearDirectCallAvailability exprMap, emptyExprAvailability, ch)
                 | _ ->
                     // Do not extend a new cross-block live range across calls,
                     // allocations, memory operations, or other runtime lowering.
                     // Local CSE remains available through exprMap.
-                    (instr :: instrs, clearHeapLoadAndDirectCallAvailability exprMap, Map.empty, ch)
+                    (instr :: instrs, clearHeapLoadAndDirectCallAvailability exprMap, emptyExprAvailability, ch)
             ) ([], available, available, false)
 
         ({ block with Instrs = List.rev instrs' }, exported', changed)
@@ -2513,7 +2546,7 @@ let applyCSEWithEffectFreeCalls
     // is cleared by the barriers above, and the same immutable map is passed to
     // siblings so expressions never flow between non-dominating paths.
     let rec optimizeDominatorSubtree
-        (available: Map<ExprKey, VReg>)
+        (available: ExprAvailability)
         (label: Label)
         (blocks: Map<Label, BasicBlock>, changed: bool)
         : Map<Label, BasicBlock> * bool =
@@ -2529,7 +2562,7 @@ let applyCSEWithEffectFreeCalls
             ) state
 
     let (reachableBlocks, reachableChanged) =
-        optimizeDominatorSubtree Map.empty cfg.Entry (Map.empty, false)
+        optimizeDominatorSubtree emptyExprAvailability cfg.Entry (Map.empty, false)
 
     // Dominators are undefined for unreachable blocks. Retain local CSE there so
     // this transformation remains complete when invoked independently.
@@ -2539,7 +2572,7 @@ let applyCSEWithEffectFreeCalls
             if Map.containsKey label blocks then
                 (blocks, ch)
             else
-                let (block', _, blockChanged) = optimizeBlock Map.empty block
+                let (block', _, blockChanged) = optimizeBlock emptyExprAvailability block
                 (Map.add label block' blocks, ch || blockChanged)
         ) (reachableBlocks, reachableChanged)
 
