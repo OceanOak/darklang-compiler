@@ -493,7 +493,10 @@ let private requireBlock (context: string) (blocks: Map<Label, BasicBlock>) (lab
 /// Returns (liveIn, liveOut) maps from Label to Set<VReg>
 /// A variable is live-in at a block if it may be used before being defined
 /// A variable is live-out at a block if it's live-in at any successor
-let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
+let private computeLivenessForVRegs
+    (trackedVRegs: Set<VReg> option)
+    (cfg: CFG)
+    : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
     let labelIndex = buildLabelIndex cfg
     let labels = labelIndex.Labels
     let labelCount = labels.Length
@@ -502,7 +505,11 @@ let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
         labels
         |> Array.map (fun label ->
             let block = requireBlock "precomputing liveness" cfg.Blocks label
-            (getBlockUses block, getBlockDefs block))
+            let restrict vregs =
+                match trackedVRegs with
+                | Some tracked -> Set.intersect tracked vregs
+                | None -> vregs
+            (getBlockUses block |> restrict, getBlockDefs block |> restrict))
 
     let allVRegs =
         usesAndDefs
@@ -619,6 +626,9 @@ let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
         |> Map.ofList
 
     (bitsetsToMap liveIn, bitsetsToMap finalLiveOut)
+
+let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
+    computeLivenessForVRegs None cfg
 
 /// Insert phi nodes at dominance frontiers
 /// For each variable v defined in block b:
@@ -1276,14 +1286,36 @@ let private convertFunctionToSSAInternal
     let (df, timingsRev) =
         timePhase swOpt "SSA: Dominance Frontier" timingsRev (fun () -> computeDominanceFrontier cfg preds idoms)
 
-    // Compute liveness to only insert phi nodes for live variables
+    let paramRegs = func.TypedParams |> List.map (fun tp -> tp.Reg)
+    let paramTypes = func.TypedParams |> List.map (fun tp -> tp.Type)
+    let phiCandidateVRegs =
+        let definitionSites =
+            paramRegs
+            |> List.fold (fun defs vreg ->
+                let existing =
+                    Map.tryFind vreg defs |> Option.defaultValue Set.empty
+                Map.add vreg (Set.add cfg.Entry existing) defs
+            ) (getAllDefs cfg)
+        definitionSites
+        |> Map.fold (fun candidates vreg sites ->
+            let hasDominanceFrontier =
+                sites
+                |> Set.exists (fun site ->
+                    Map.tryFind site df
+                    |> Option.map (Set.isEmpty >> not)
+                    |> Option.defaultValue false)
+            if hasDominanceFrontier then Set.add vreg candidates else candidates
+        ) Set.empty
+
+    // Phi placement only asks whether candidate variables are live. Liveness
+    // is independent per variable, so unrelated single-definition temporaries
+    // need not widen every block bitset.
     let ((liveIn, _), timingsRev) =
-        timePhase swOpt "SSA: Liveness" timingsRev (fun () -> computeLiveness cfg)
+        timePhase swOpt "SSA: Liveness" timingsRev (fun () ->
+            computeLivenessForVRegs (Some phiCandidateVRegs) cfg)
 
     // Insert phi nodes (only for live variables)
     // Pass function params so they're treated as defined at entry (for self-recursive functions)
-    let paramRegs = func.TypedParams |> List.map (fun tp -> tp.Reg)
-    let paramTypes = func.TypedParams |> List.map (fun tp -> tp.Type)
     let (cfgWithPhis, timingsRev) =
         timePhase swOpt "SSA: Phi Insertion" timingsRev (fun () ->
             insertPhiNodes cfg df preds liveIn paramRegs paramTypes)
