@@ -1996,34 +1996,51 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
 ///   pred1: ...; Ret v1
 ///   pred2: ...; Ret v2
 /// and removes `join`.
-let simplifyRetPhiJoins (cfg: CFG) : CFG * bool =
+let private simplifyRetPhiJoinLayer (cfg: CFG) : CFG * bool =
     let preds = buildPredecessors cfg
 
     let candidateMappings : Map<Label, Map<Label, Operand>> =
         cfg.Blocks
         |> Map.toList
         |> List.choose (fun (joinLabel, joinBlock) ->
-            match joinBlock.Instrs, joinBlock.Terminator with
-            | [Phi (phiDest, sources, _)], Ret (Register retReg) when phiDest = retReg ->
-                let predLabels = Map.tryFind joinLabel preds |> Option.defaultValue []
-                let predSet = predLabels |> Set.ofList
-                let sourceSet = sources |> List.map snd |> Set.ofList
+            match joinBlock.Terminator with
+            | Ret (Register retReg) ->
+                let localCopies =
+                    joinBlock.Instrs
+                    |> List.fold (fun copies instr ->
+                        match instr with
+                        | Mov (dest, source, _) -> Map.add dest source copies
+                        | _ -> copies) Map.empty
+                let returnedPhiDest = resolveCopy localCopies (Register retReg)
+                let returnPhis, otherInstructions =
+                    joinBlock.Instrs
+                    |> List.partition (function
+                        | Phi (phiDest, _, _) -> returnedPhiDest = Register phiDest
+                        | _ -> false)
+                match returnPhis with
+                | [Phi (_, sources, _)]
+                    when otherInstructions |> List.forall (not << hasSideEffects) ->
+                    let predLabels = Map.tryFind joinLabel preds |> Option.defaultValue []
+                    let predSet = predLabels |> Set.ofList
+                    let sourceSet = sources |> List.map snd |> Set.ofList
 
-                // Require exact predecessor/source match and direct jumps to join.
-                let allJumpToJoin =
-                    predLabels
-                    |> List.forall (fun predLabel ->
-                        match Map.tryFind predLabel cfg.Blocks with
-                        | Some predBlock ->
-                            match predBlock.Terminator with
-                            | Jump target -> target = joinLabel
-                            | _ -> false
-                        | None -> false)
+                    // Require exact predecessor/source match and direct jumps to join.
+                    let allJumpToJoin =
+                        predLabels
+                        |> List.forall (fun predLabel ->
+                            match Map.tryFind predLabel cfg.Blocks with
+                            | Some predBlock ->
+                                match predBlock.Terminator with
+                                | Jump target -> target = joinLabel
+                                | _ -> false
+                            | None -> false)
 
-                if predSet = sourceSet && allJumpToJoin then
-                    let sourceMap = sources |> List.map (fun (op, lbl) -> (lbl, op)) |> Map.ofList
-                    Some (joinLabel, sourceMap)
-                else
+                    if predSet = sourceSet && allJumpToJoin then
+                        let sourceMap = sources |> List.map (fun (op, lbl) -> (lbl, op)) |> Map.ofList
+                        Some (joinLabel, sourceMap)
+                    else
+                        None
+                | _ ->
                     None
             | _ ->
                 None)
@@ -2063,6 +2080,13 @@ let simplifyRetPhiJoins (cfg: CFG) : CFG * bool =
                     block)
 
         ({ cfg with Blocks = blocks' }, true)
+
+let simplifyRetPhiJoins (cfg: CFG) : CFG * bool =
+    let rec collapse current changed =
+        match simplifyRetPhiJoinLayer current with
+        | next, true -> collapse next true
+        | next, false -> (next, changed)
+    collapse cfg false
 
 /// Simplify branches whose target is independent of their condition
 let simplifyConstantBranches (cfg: CFG) : CFG * bool =

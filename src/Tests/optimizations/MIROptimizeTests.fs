@@ -790,6 +790,59 @@ let testCfgSimplifyRemovesRetPhiJoin () : TestResult =
             let actual = formatMIR (Program ([optimizedFunc], Map.empty, Map.empty))
             Error $"Expected ret-phi join simplification.\nActual:\n{actual}"
 
+let testCfgSimplifyCollapsesCopyWrappedRetPhiChain () : TestResult =
+    let left = Label "left"
+    let right = Label "right"
+    let innerJoin = Label "inner_join"
+    let outerElse = Label "outer_else"
+    let outerJoin = Label "outer_join"
+    let block label instrs terminator : BasicBlock = {
+        Label = label
+        Instrs = instrs
+        Terminator = terminator
+    }
+    let cfg = {
+        Entry = left
+        Blocks =
+            Map.ofList [
+                (left, block left [] (Jump innerJoin))
+                (right, block right [] (Jump innerJoin))
+                (innerJoin,
+                 block
+                     innerJoin
+                     [Phi (
+                         VReg 2,
+                         [(Int64Const 1L, left); (Int64Const 2L, right)],
+                         Some AST.TInt64)
+                      Mov (VReg 4, Register (VReg 2), Some AST.TInt64)]
+                     (Jump outerJoin))
+                (outerElse, block outerElse [] (Jump outerJoin))
+                (outerJoin,
+                 block
+                     outerJoin
+                     [Phi (
+                         VReg 3,
+                         [(Register (VReg 4), innerJoin); (Int64Const 3L, outerElse)],
+                         Some AST.TInt64)]
+                     (Ret (Register (VReg 3))))
+            ]
+    }
+
+    let optimized, changed = simplifyRetPhiJoins cfg
+    let blocks = optimized.Blocks
+    let returns label expected =
+        Map.tryFind label blocks
+        |> Option.exists (fun current -> current.Terminator = Ret (Int64Const expected))
+    if changed
+       && not (Map.containsKey innerJoin blocks)
+       && not (Map.containsKey outerJoin blocks)
+       && returns left 1L
+       && returns right 2L
+       && returns outerElse 3L then
+        Ok ()
+    else
+        Error "Expected local copies not to force another whole optimizer iteration"
+
 let testEmptyBlockRemovalRewritesPhiSourceToPredecessor () : TestResult =
     let entry = Label "entry"
     let empty = Label "empty"
@@ -1307,6 +1360,7 @@ let tests = [
     ("MIR CSE does not keep direct calls available across FloatSqrt", testCseDoesNotKeepDirectCallsAvailableAcrossFloatSqrt)
     ("MIR optimize removes dead self-referential phi", testDceRemovesSelfReferentialDeadPhi)
     ("MIR optimize removes ret-phi join blocks", testCfgSimplifyRemovesRetPhiJoin)
+    ("MIR optimize collapses copy-wrapped ret-phi chains", testCfgSimplifyCollapsesCopyWrappedRetPhiChain)
     ("MIR empty block removal rewrites phi source to predecessor", testEmptyBlockRemovalRewritesPhiSourceToPredecessor)
     ("MIR linear block merge preserves phi sources", testLinearBlockMergePreservesPhiSources)
     ("MIR linear block merge exposes local CSE", testLinearBlockMergeExposesLocalCSE)
