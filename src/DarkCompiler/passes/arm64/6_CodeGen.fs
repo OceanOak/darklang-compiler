@@ -109,16 +109,6 @@ let private closureRefCountIncHelperLabel = "__dark_closure_refcount_inc_helper"
 let private closureRefCountDecHelperLabel = "__dark_closure_refcount_dec_helper"
 let private streamRefCountDecHelperLabel = "__dark_stream_refcount_dec_helper"
 
-let private stableRcReleasePlanHash (releasePlan: ANF.RcReleasePlan) : string =
-    let fnvOffset = 14695981039346656037UL
-    let fnvPrime = 1099511628211UL
-
-    $"{releasePlan}"
-    |> Seq.fold (fun hash ch ->
-        (hash ^^^ uint64 (int ch)) * fnvPrime)
-        fnvOffset
-    |> fun hash -> hash.ToString("x16")
-
 // Small fixed blocks are cheaper to build directly than to name and cache.
 // Stop counting as soon as repeated recursive expansion becomes the dominant
 // cost and an outlined helper is worthwhile.
@@ -134,21 +124,18 @@ let private callerOwnsSinglePayloadSum (functionName: string) : bool =
     || not (functionName.StartsWith("Stdlib."))
 
 let private recursiveSumRefCountDecHelperLabel (sourceType: AST.Type) : string =
-    let hash =
-        $"{sourceType}"
-        |> Seq.fold (fun hash ch ->
-            (hash ^^^ (uint64 (int ch))) * 1099511628211UL)
-            14695981039346656037UL
-        |> fun value -> value.ToString("x16")
-    $"__dark_recursive_sum_rc_dec_{hash}"
+    $"__dark_recursive_sum_rc_dec_{ANF.rcSourceTypeFingerprint sourceType}"
+
+let private plannedListDecHelperLabelForFingerprint (fingerprint: string) : string =
+    $"{plannedListRefCountDecHelperLabelPrefix}{fingerprint}"
 
 let private plannedListDecHelperLabelForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
-    $"{plannedListRefCountDecHelperLabelPrefix}{stableRcReleasePlanHash releasePlan}"
+    releasePlan
+    |> ANF.rcReleasePlanFingerprint
+    |> plannedListDecHelperLabelForFingerprint
 
-let private plannedGenericDecHelperBaseLabelForReleasePlan
-    (releasePlan: ANF.RcReleasePlan)
-    : string =
-    $"{plannedGenericRefCountDecHelperLabelPrefix}{ANF.rcReleasePlanFingerprint releasePlan}"
+let private plannedGenericDecHelperBaseLabelForFingerprint (fingerprint: string) : string =
+    $"{plannedGenericRefCountDecHelperLabelPrefix}{fingerprint}"
 
 let private specializePlannedGenericDecHelperLabel
     (ownsSinglePayloadSum: bool)
@@ -157,8 +144,13 @@ let private specializePlannedGenericDecHelperLabel
     let ownership = if ownsSinglePayloadSum then "owned" else "borrowed"
     $"{baseLabel}_{ownership}"
 
+let private plannedDictDecHelperLabelForFingerprint (fingerprint: string) : string =
+    $"{plannedDictRefCountDecHelperLabelPrefix}{fingerprint}"
+
 let private plannedDictDecHelperLabelForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
-    $"{plannedDictRefCountDecHelperLabelPrefix}{stableRcReleasePlanHash releasePlan}"
+    releasePlan
+    |> ANF.rcReleasePlanFingerprint
+    |> plannedDictDecHelperLabelForFingerprint
 
 type private SlotInitRootRetainTarget =
     | SlotInitListRootRetain
@@ -1952,9 +1944,10 @@ let private releasePlanDynamicOperationAt
     | _ ->
         false
 
-let private listDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
-    match releasePlan with
-    | ANF.RootRelease (_, _, ANF.TaggedListPayloadRelease elementRelease) ->
+let private listDecHelperForElementRelease
+    (elementFingerprint: string)
+    (elementRelease: ANF.RcReleasePlan)
+    : string =
         match elementRelease with
         | ANF.NoReleasePlan ->
             listRefCountDecHelperLabel
@@ -1964,8 +1957,8 @@ let private listDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : strin
             listRefCountDecBlobHelperLabel
         | ANF.DynamicBufferRelease _ ->
             listRefCountDecHelperLabel
-        | ANF.RecursiveRelease sourceType ->
-            plannedListDecHelperLabelForReleasePlan (ANF.RecursiveRelease sourceType)
+        | ANF.RecursiveRelease _ ->
+            plannedListDecHelperLabelForFingerprint elementFingerprint
         | ANF.RootRelease (_, ANF.TaggedList, _) ->
             listRefCountDecListHelperLabel
         | ANF.RootRelease (
@@ -1976,7 +1969,7 @@ let private listDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : strin
               _,
               ANF.DictHeap,
               ANF.DictPayloadRelease (_, ANF.DynamicBufferRelease _)) ->
-            plannedListDecHelperLabelForReleasePlan elementRelease
+            plannedListDecHelperLabelForFingerprint elementFingerprint
         | ANF.RootRelease (_, ANF.DictHeap, _) when releasePlanIsDictWithListValue elementRelease ->
             listRefCountDecDictListHelperLabel
         | ANF.RootRelease (_, ANF.DictHeap, _) ->
@@ -1984,9 +1977,16 @@ let private listDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : strin
         | ANF.RootRelease (_, ANF.ClosureHeap, _) ->
             listRefCountDecClosureHelperLabel
         | ANF.RootRelease (_, ANF.StreamHeap, _) ->
-            plannedListDecHelperLabelForReleasePlan elementRelease
+            plannedListDecHelperLabelForFingerprint elementFingerprint
         | ANF.RootRelease (_, ANF.GenericHeap, _) ->
-            plannedListDecHelperLabelForReleasePlan elementRelease
+            plannedListDecHelperLabelForFingerprint elementFingerprint
+
+let private listDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
+    match releasePlan with
+    | ANF.RootRelease (_, _, ANF.TaggedListPayloadRelease elementRelease) ->
+        listDecHelperForElementRelease
+            (ANF.rcReleasePlanFingerprint elementRelease)
+            elementRelease
     | _ ->
         listRefCountDecHelperLabel
 
@@ -2009,11 +2009,14 @@ let private dictPayloadReleaseNeedsPlannedHelper (keyRelease: ANF.RcReleasePlan)
     | _ ->
         false
 
-let rec private dictDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
+let private dictDecHelperForReleasePlanWithFingerprint
+    (releasePlanFingerprint: string)
+    (releasePlan: ANF.RcReleasePlan)
+    : string =
     match releasePlan with
     | ANF.RootRelease (_, ANF.DictHeap, ANF.DictPayloadRelease (keyRelease, valueRelease))
         when dictPayloadReleaseNeedsPlannedHelper keyRelease valueRelease ->
-        plannedDictDecHelperLabelForReleasePlan releasePlan
+        plannedDictDecHelperLabelForFingerprint releasePlanFingerprint
     | ANF.RootRelease (_, ANF.DictHeap, ANF.DictPayloadRelease (_, valueRelease)) ->
         match valueRelease with
         | ANF.RootRelease (_, ANF.TaggedList, _) ->
@@ -2038,6 +2041,11 @@ let rec private dictDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : s
             dictRefCountDecHelperLabel
     | _ ->
         dictRefCountDecHelperLabel
+
+let private dictDecHelperForReleasePlan (releasePlan: ANF.RcReleasePlan) : string =
+    dictDecHelperForReleasePlanWithFingerprint
+        (ANF.rcReleasePlanFingerprint releasePlan)
+        releasePlan
 
 let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
     let label (name: string) : string = $"__dark_dict_rc_inc_{name}"
@@ -7526,10 +7534,11 @@ let private mergePrecomputedPlannedDictHelpers
 
 let private addPrecomputedPlannedListHelper
     payloadSize
+    elementFingerprint
     elementRelease
     (summary: RcReleasePlanSummary)
     : RcReleasePlanSummary =
-    let label = plannedListDecHelperLabelForReleasePlan elementRelease
+    let label = plannedListDecHelperLabelForFingerprint elementFingerprint
     match Map.tryFind label summary.PlannedListDecHelpers with
     | Some existing when existing <> (payloadSize, elementRelease) ->
         Crash.crash $"planned list RC helper label collision for {label}"
@@ -7540,10 +7549,14 @@ let private addPrecomputedPlannedListHelper
                 Map.add label (payloadSize, elementRelease) summary.PlannedListDecHelpers }
 
 let private addPrecomputedPlannedDictHelper
+    releasePlanFingerprint
     releasePlan
     (summary: RcReleasePlanSummary)
     : RcReleasePlanSummary =
-    let label = dictDecHelperForReleasePlan releasePlan
+    let label =
+        dictDecHelperForReleasePlanWithFingerprint
+            releasePlanFingerprint
+            releasePlan
     match Map.tryFind label summary.PlannedDictDecHelpers with
     | Some existing when existing <> releasePlan ->
         Crash.crash $"planned dict RC helper label collision for {label}"
@@ -7600,7 +7613,7 @@ let rec private collectPrecomputedReleasePlanSummary
     (collectClosureNeed: bool)
     (summary: RcReleasePlanSummary)
     (releasePlan: ANF.RcReleasePlan)
-    : RcReleasePlanSummary =
+    : RcReleasePlanSummary * uint64 =
     let summary =
         match releasePlan with
         | ANF.RootRelease (_, ANF.ClosureHeap, _) when collectClosureNeed ->
@@ -7609,19 +7622,69 @@ let rec private collectPrecomputedReleasePlanSummary
             { summary with NeedsStreamRcDecHelper = true }
         | _ -> summary
 
+    let collectFields
+        childListLabels
+        childPlannedListHelpers
+        childDictLabels
+        childPlannedDictHelpers
+        childClosureNeed
+        initialSummary
+        fieldReleases =
+        fieldReleases
+        |> List.fold
+            (fun (summary, childFingerprintsRev) (ANF.FieldRelease (_, fieldReleasePlan)) ->
+                let nextSummary, childFingerprint =
+                    collectPrecomputedReleasePlanSummary
+                        includeStaticRootDependencies
+                        childListLabels
+                        childPlannedListHelpers
+                        childDictLabels
+                        childPlannedDictHelpers
+                        childClosureNeed
+                        summary
+                        fieldReleasePlan
+                (nextSummary, childFingerprint :: childFingerprintsRev))
+            (initialSummary, [])
+        |> fun (collectedSummary, childFingerprintsRev) ->
+            (collectedSummary, List.rev childFingerprintsRev)
+
     match releasePlan with
     | ANF.RootRelease (_, _, ANF.TaggedListPayloadRelease elementRelease) ->
+        let summary, elementFingerprint =
+            collectPrecomputedReleasePlanSummary
+                includeStaticRootDependencies
+                collectListLabels
+                collectPlannedListHelpers
+                collectDictLabels
+                collectPlannedDictHelpers
+                false
+                summary
+                elementRelease
+        let fingerprint =
+            ANF.rcReleasePlanFingerprintHashFromChildren
+                releasePlan
+                [elementFingerprint]
+        let elementFingerprintString =
+            ANF.rcReleasePlanFingerprintString elementFingerprint
         let summary =
             if collectListLabels then
                 { summary with
                     ListDecHelperLabels =
-                        Set.add (listDecHelperForReleasePlan releasePlan) summary.ListDecHelperLabels }
+                        Set.add
+                            (listDecHelperForElementRelease
+                                elementFingerprintString
+                                elementRelease)
+                            summary.ListDecHelperLabels }
             else summary
         let summary =
             match collectPlannedListHelpers, elementRelease with
             | true, ANF.RootRelease (payloadSize, ANF.GenericHeap, _)
             | true, ANF.RootRelease (payloadSize, ANF.StreamHeap, _) ->
-                addPrecomputedPlannedListHelper payloadSize elementRelease summary
+                addPrecomputedPlannedListHelper
+                    payloadSize
+                    elementFingerprintString
+                    elementRelease
+                    summary
             | true, ANF.RootRelease (
                   payloadSize,
                   ANF.DictHeap,
@@ -7630,34 +7693,23 @@ let rec private collectPrecomputedReleasePlanSummary
                   payloadSize,
                   ANF.DictHeap,
                   ANF.DictPayloadRelease (_, ANF.DynamicBufferRelease _)) ->
-                addPrecomputedPlannedListHelper payloadSize elementRelease summary
+                addPrecomputedPlannedListHelper
+                    payloadSize
+                    elementFingerprintString
+                    elementRelease
+                    summary
             | true, ANF.RecursiveRelease _ ->
-                addPrecomputedPlannedListHelper 8 elementRelease summary
+                addPrecomputedPlannedListHelper
+                    8
+                    elementFingerprintString
+                    elementRelease
+                    summary
             | _ -> summary
-        collectPrecomputedReleasePlanSummary
-            includeStaticRootDependencies
-            collectListLabels
-            collectPlannedListHelpers
-            collectDictLabels
-            collectPlannedDictHelpers
-            false
-            summary
-            elementRelease
+        (summary, fingerprint)
     | ANF.RootRelease (_, kind, ANF.DictPayloadRelease (keyRelease, valueRelease)) ->
         if collectPlannedDictHelpers && kind <> ANF.DictHeap then
             Crash.crash $"ARM64 planned dict dependency collection saw DictPayloadRelease for non-dict kind {kind}"
         else
-            let summary =
-                if collectDictLabels && kind = ANF.DictHeap then
-                    { summary with
-                        DictDecHelperLabels =
-                            Set.add (dictDecHelperForReleasePlan releasePlan) summary.DictDecHelperLabels }
-                else summary
-            let summary =
-                if collectPlannedDictHelpers
-                   && dictPayloadReleaseNeedsPlannedHelper keyRelease valueRelease then
-                    addPrecomputedPlannedDictHelper releasePlan summary
-                else summary
             let childDictLabels =
                 collectDictLabels
                 && (includeStaticRootDependencies || kind <> ANF.DictHeap)
@@ -7671,46 +7723,105 @@ let rec private collectPrecomputedReleasePlanSummary
                     false
                     summary
                     childRelease
-            collectChild (collectChild summary keyRelease) valueRelease
-    | ANF.RootRelease (_, kind, ANF.FixedBlockPayloadRelease (_, fieldReleases))
-    | ANF.RootRelease (_, kind, ANF.BoxedSumPayloadRelease (_, fieldReleases, _)) ->
+            let summary, keyFingerprint = collectChild summary keyRelease
+            let summary, valueFingerprint = collectChild summary valueRelease
+            let fingerprint =
+                ANF.rcReleasePlanFingerprintHashFromChildren
+                    releasePlan
+                    [keyFingerprint; valueFingerprint]
+            let fingerprintString =
+                ANF.rcReleasePlanFingerprintString fingerprint
+            let summary =
+                if collectDictLabels && kind = ANF.DictHeap then
+                    { summary with
+                        DictDecHelperLabels =
+                            Set.add
+                                (dictDecHelperForReleasePlanWithFingerprint
+                                    fingerprintString
+                                    releasePlan)
+                                summary.DictDecHelperLabels }
+                else summary
+            let summary =
+                if collectPlannedDictHelpers
+                   && dictPayloadReleaseNeedsPlannedHelper keyRelease valueRelease then
+                    addPrecomputedPlannedDictHelper
+                        fingerprintString
+                        releasePlan
+                        summary
+                else summary
+            (summary, fingerprint)
+    | ANF.RootRelease (_, kind, ANF.FixedBlockPayloadRelease (_, fieldReleases)) ->
         let collectStaticOrGeneric = includeStaticRootDependencies || kind = ANF.GenericHeap
-        fieldReleases
-        |> List.fold
-            (fun summary (ANF.FieldRelease (_, fieldReleasePlan)) ->
-                collectPrecomputedReleasePlanSummary
-                    includeStaticRootDependencies
-                    (collectListLabels && collectStaticOrGeneric)
-                    (collectPlannedListHelpers && kind = ANF.GenericHeap)
-                    (collectDictLabels && collectStaticOrGeneric)
-                    (collectPlannedDictHelpers && kind = ANF.GenericHeap)
-                    (collectClosureNeed && kind = ANF.GenericHeap)
-                    summary
-                    fieldReleasePlan)
-            summary
+        let summary, childFingerprints =
+            collectFields
+                (collectListLabels && collectStaticOrGeneric)
+                (collectPlannedListHelpers && kind = ANF.GenericHeap)
+                (collectDictLabels && collectStaticOrGeneric)
+                (collectPlannedDictHelpers && kind = ANF.GenericHeap)
+                (collectClosureNeed && kind = ANF.GenericHeap)
+                summary
+                fieldReleases
+        (summary,
+         ANF.rcReleasePlanFingerprintHashFromChildren
+             releasePlan
+             childFingerprints)
+    | ANF.RootRelease (_, kind, ANF.BoxedSumPayloadRelease (_, fieldReleases, variants)) ->
+        let collectStaticOrGeneric = includeStaticRootDependencies || kind = ANF.GenericHeap
+        let summary, fieldFingerprints =
+            collectFields
+                (collectListLabels && collectStaticOrGeneric)
+                (collectPlannedListHelpers && kind = ANF.GenericHeap)
+                (collectDictLabels && collectStaticOrGeneric)
+                (collectPlannedDictHelpers && kind = ANF.GenericHeap)
+                (collectClosureNeed && kind = ANF.GenericHeap)
+                summary
+                fieldReleases
+        // Variant-specific fields are already represented by the combined
+        // release fields above. They still contribute to the stable helper
+        // identity, so fingerprint their disjoint subtrees without collecting
+        // the same requirements twice.
+        let variantFingerprints =
+            variants
+            |> List.collect (fun variant ->
+                variant.FieldReleases
+                |> List.map (fun (ANF.FieldRelease (_, childReleasePlan)) ->
+                    ANF.rcReleasePlanFingerprintHash childReleasePlan))
+        (summary,
+         ANF.rcReleasePlanFingerprintHashFromChildren
+             releasePlan
+             (fieldFingerprints @ variantFingerprints))
     | ANF.RootRelease (_, _, ANF.ClosurePayloadRelease fieldReleases) ->
-        fieldReleases
-        |> List.fold
-            (fun summary (ANF.FieldRelease (_, fieldReleasePlan)) ->
-                collectPrecomputedReleasePlanSummary
-                    includeStaticRootDependencies
-                    collectListLabels
-                    collectPlannedListHelpers
-                    collectDictLabels
-                    collectPlannedDictHelpers
-                    false
-                    summary
-                    fieldReleasePlan)
-            summary
+        let summary, childFingerprints =
+            collectFields
+                collectListLabels
+                collectPlannedListHelpers
+                collectDictLabels
+                collectPlannedDictHelpers
+                false
+                summary
+                fieldReleases
+        (summary,
+         ANF.rcReleasePlanFingerprintHashFromChildren
+             releasePlan
+             childFingerprints)
     | ANF.RootRelease (_, ANF.DictHeap, _)
         when collectDictLabels && not includeStaticRootDependencies ->
-        { summary with
+        let fingerprint = ANF.rcReleasePlanFingerprintHash releasePlan
+        let fingerprintString = ANF.rcReleasePlanFingerprintString fingerprint
+        ({ summary with
             DictDecHelperLabels =
-                Set.add (dictDecHelperForReleasePlan releasePlan) summary.DictDecHelperLabels }
-    | _ -> summary
+                Set.add
+                    (dictDecHelperForReleasePlanWithFingerprint
+                        fingerprintString
+                        releasePlan)
+                    summary.DictDecHelperLabels },
+         fingerprint)
+    | _ ->
+        (summary,
+         ANF.rcReleasePlanFingerprintHashFromChildren releasePlan [])
 
 let private summarizePrecomputedReleasePlan includeStaticRootDependencies releasePlan =
-    let summary =
+    let summary, releasePlanFingerprint =
         collectPrecomputedReleasePlanSummary
             includeStaticRootDependencies
             true
@@ -7729,7 +7840,8 @@ let private summarizePrecomputedReleasePlan includeStaticRootDependencies releas
         { summary with
             ExpensiveGenericDecHelper =
                 Some (
-                    plannedGenericDecHelperBaseLabelForReleasePlan releasePlan,
+                    plannedGenericDecHelperBaseLabelForFingerprint
+                        (ANF.rcReleasePlanFingerprintString releasePlanFingerprint),
                     payloadSize,
                     releasePlan) }
     | _ ->
@@ -8005,16 +8117,29 @@ let private outlineExpensiveGenericReleasesInFunction
 /// facts still describe the original release effects and survive allocation.
 let prepareARM64FunctionsForAllocationWithCache
     (summaryCache: ReleasePlanSummaryCache option)
+    (phaseRecorder: (string -> float -> unit) option)
     (functions: LIR.Function list)
     : LIR.Function list =
-    functions
-    |> attachARM64CodegenFactsToFunctionsWithCache summaryCache
-    |> List.map outlineExpensiveGenericReleasesInFunction
+    let recordPhase name (timer: System.Diagnostics.Stopwatch) =
+        match phaseRecorder with
+        | Some record ->
+            timer.Stop()
+            record name timer.Elapsed.TotalMilliseconds
+        | None -> ()
+    let factsTimer = System.Diagnostics.Stopwatch.StartNew()
+    let functionsWithFacts =
+        functions |> attachARM64CodegenFactsToFunctionsWithCache summaryCache
+    recordPhase "ARM64 Function Facts Planning" factsTimer
+    let outliningTimer = System.Diagnostics.Stopwatch.StartNew()
+    let outlinedFunctions =
+        functionsWithFacts |> List.map outlineExpensiveGenericReleasesInFunction
+    recordPhase "ARM64 Generic Release Outlining" outliningTimer
+    outlinedFunctions
 
 let prepareARM64FunctionsForAllocation
     (functions: LIR.Function list)
     : LIR.Function list =
-    prepareARM64FunctionsForAllocationWithCache None functions
+    prepareARM64FunctionsForAllocationWithCache None None functions
 
 /// Explicit preparation entry point for tools that construct LIR directly.
 /// Production performs the same preparation before register allocation.

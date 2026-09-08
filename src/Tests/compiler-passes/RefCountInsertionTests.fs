@@ -409,6 +409,74 @@ let testRcSourceTypeFingerprintIsStructuralAndStable () : TestResult =
     else
         Ok ()
 
+let testRcReleasePlanFingerprintIsCompositionalAndStable () : TestResult =
+    let nestedList =
+        RootRelease (
+            24,
+            TaggedList,
+            TaggedListPayloadRelease (DynamicBufferRelease DynamicStringBuffer))
+    let samples = [
+        NoReleasePlan
+        DynamicBufferRelease DynamicBlobBuffer
+        RecursiveRelease (AST.TSum ("Tree", [AST.TString]))
+        nestedList
+        RootRelease (
+            16,
+            DictHeap,
+            DictPayloadRelease (DynamicBufferRelease DynamicStringBuffer, nestedList))
+        RootRelease (
+            24,
+            GenericHeap,
+            BoxedSumPayloadRelease (
+                24,
+                [FieldRelease (8, nestedList)],
+                [{ Tag = 0; FieldReleases = [] }
+                 { Tag = 1
+                   FieldReleases =
+                       [FieldRelease (16, DynamicBufferRelease DynamicBlobBuffer)] }]))
+    ]
+    let directChildren releasePlan =
+        match releasePlan with
+        | RootRelease (_, _, payload) ->
+            match payload with
+            | NoPayloadRelease -> []
+            | FixedBlockPayloadRelease (_, fields)
+            | ClosurePayloadRelease fields ->
+                fields
+                |> List.map (fun (FieldRelease (_, childPlan)) -> childPlan)
+            | BoxedSumPayloadRelease (_, fields, variants) ->
+                let fieldChildren =
+                    fields
+                    |> List.map (fun (FieldRelease (_, childPlan)) -> childPlan)
+                let variantChildren =
+                    variants
+                    |> List.collect (fun variant ->
+                        variant.FieldReleases
+                        |> List.map (fun (FieldRelease (_, childPlan)) -> childPlan))
+                fieldChildren @ variantChildren
+            | TaggedListPayloadRelease elementRelease -> [elementRelease]
+            | DictPayloadRelease (keyRelease, valueRelease) ->
+                [keyRelease; valueRelease]
+        | NoReleasePlan
+        | DynamicBufferRelease _
+        | RecursiveRelease _ -> []
+    let compositionalFingerprints =
+        samples
+        |> List.map (fun releasePlan ->
+            directChildren releasePlan
+            |> List.map rcReleasePlanFingerprintHash
+            |> rcReleasePlanFingerprintHashFromChildren releasePlan
+            |> rcReleasePlanFingerprintString)
+    let recursiveFingerprints = samples |> List.map rcReleasePlanFingerprint
+    if compositionalFingerprints <> recursiveFingerprints then
+        Error "Composed RC release-plan fingerprints differed from recursive fingerprints"
+    elif recursiveFingerprints <> (samples |> List.map rcReleasePlanFingerprint) then
+        Error "RC release-plan fingerprints were not deterministic"
+    elif (recursiveFingerprints |> List.distinct |> List.length) <> List.length samples then
+        Error $"Distinct RC release plans produced duplicate fingerprints: {List.zip samples recursiveFingerprints}"
+    else
+        Ok ()
+
 let testRcReleasePlanCacheKeyOnlyFingerprintsLargePlans () : TestResult =
     let smallType = AST.TTuple [AST.TString; AST.TInt64]
     let smallPlan = rcReleasePlanOfType Map.empty smallType
@@ -2627,6 +2695,7 @@ let tests = [
     ("RcShape ownership helpers classify recursive release", testRcShapeOwnershipHelpersClassifyRecursiveRelease)
     ("RcShape release plan classifies field cleanup", testRcShapeReleasePlanClassifiesFieldCleanup)
     ("Rc source type fingerprints are structural and stable", testRcSourceTypeFingerprintIsStructuralAndStable)
+    ("Rc release-plan fingerprints are compositional and stable", testRcReleasePlanFingerprintIsCompositionalAndStable)
     ("Rc release-plan cache keys are compact only for large plans", testRcReleasePlanCacheKeyOnlyFingerprintsLargePlans)
     ("RcReleasePlan of type uses record metadata", testRcReleasePlanOfTypeUsesRecordMetadata)
     ("RcReleasePlan of type uses sum payload metadata", testRcReleasePlanOfTypeUsesSumPayloadMetadata)

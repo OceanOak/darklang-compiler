@@ -1065,6 +1065,13 @@ let private lowerToAllocatedLir
                         | Platform.ARM64 ->
                             CodeGen.prepareARM64FunctionsForAllocationWithCache
                                 releasePlanSummaryCache
+                                (passTimingRecorder
+                                 |> Option.map (fun recorder ->
+                                     fun name elapsedMs ->
+                                         recorder {
+                                             Pass = name
+                                             Elapsed = TimeSpan.FromMilliseconds elapsedMs
+                                         }))
                                 lirFuncs
                         | Platform.X86_64 ->
                             lirFuncs

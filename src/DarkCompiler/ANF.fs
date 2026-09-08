@@ -320,44 +320,25 @@ let rcSourceTypeFingerprint (sourceType: AST.Type) : string =
     addType sourceType
     finishRcReleasePlanFingerprint state
 
-/// Deterministic allocation-light identity for a release plan.
-let rcReleasePlanFingerprint (releasePlan: RcReleasePlan) : string =
+/// Build one release-plan fingerprint node from already-fingerprinted direct
+/// children. Keeping the hash compositional lets consumers that already walk
+/// a plan compute every nested helper identity in one bottom-up pass.
+let rcReleasePlanFingerprintHashFromChildren
+    (releasePlan: RcReleasePlan)
+    (childFingerprints: uint64 list)
+    : uint64 =
     let state = newRcReleasePlanFingerprintState ()
     let addByte = addRcReleasePlanFingerprintByte state
     let addInt = addRcReleasePlanFingerprintInt state
     let addString = addRcReleasePlanFingerprintString state
     let addKind = addRcReleasePlanFingerprintKind state
 
-    let rec addPlan plan =
-        match plan with
-        | NoReleasePlan ->
-            addByte 0uy
-        | DynamicBufferRelease operation ->
-            addByte 1uy
-            match operation with
-            | FixedSizeRoot (payloadSize, kind) ->
-                addByte 0uy
-                addInt payloadSize
-                addKind kind
-            | DynamicStringBuffer -> addByte 1uy
-            | DynamicBlobBuffer -> addByte 2uy
-        | RecursiveRelease sourceType ->
-            addByte 2uy
-            addString $"{sourceType}"
-        | RootRelease (payloadSize, kind, payload) ->
-            addByte 3uy
-            addInt payloadSize
-            addKind kind
-            addPayload payload
-
-    and addFields fields =
+    let addFields fields =
         addInt (List.length fields)
         fields
-        |> List.iter (fun (FieldRelease (offset, plan)) ->
-            addInt offset
-            addPlan plan)
+        |> List.iter (fun (FieldRelease (offset, _)) -> addInt offset)
 
-    and addPayload payload =
+    let addPayload payload =
         match payload with
         | NoPayloadRelease ->
             addByte 0uy
@@ -374,19 +355,83 @@ let rcReleasePlanFingerprint (releasePlan: RcReleasePlan) : string =
             |> List.iter (fun variant ->
                 addInt variant.Tag
                 addFields variant.FieldReleases)
-        | TaggedListPayloadRelease elementRelease ->
+        | TaggedListPayloadRelease _ ->
             addByte 3uy
-            addPlan elementRelease
-        | DictPayloadRelease (keyRelease, valueRelease) ->
+        | DictPayloadRelease _ ->
             addByte 4uy
-            addPlan keyRelease
-            addPlan valueRelease
         | ClosurePayloadRelease captureReleases ->
             addByte 5uy
             addFields captureReleases
 
-    addPlan releasePlan
-    finishRcReleasePlanFingerprint state
+    match releasePlan with
+    | NoReleasePlan ->
+        addByte 0uy
+    | DynamicBufferRelease operation ->
+        addByte 1uy
+        match operation with
+        | FixedSizeRoot (payloadSize, kind) ->
+            addByte 0uy
+            addInt payloadSize
+            addKind kind
+        | DynamicStringBuffer -> addByte 1uy
+        | DynamicBlobBuffer -> addByte 2uy
+    | RecursiveRelease sourceType ->
+        addByte 2uy
+        addString (rcSourceTypeFingerprint sourceType)
+    | RootRelease (payloadSize, kind, payload) ->
+        addByte 3uy
+        addInt payloadSize
+        addKind kind
+        addPayload payload
+
+    addInt (List.length childFingerprints)
+    childFingerprints
+    |> List.fold
+        (fun hash childFingerprint ->
+            (hash ^^^ childFingerprint) * 1099511628211UL)
+        state.Hash
+
+let rcReleasePlanFingerprintString (fingerprint: uint64) : string =
+    fingerprint.ToString("x16")
+
+let rec rcReleasePlanFingerprintHash (releasePlan: RcReleasePlan) : uint64 =
+    let childFingerprints =
+        match releasePlan with
+        | RootRelease (_, _, payload) ->
+            match payload with
+            | NoPayloadRelease -> []
+            | FixedBlockPayloadRelease (_, fields)
+            | ClosurePayloadRelease fields ->
+                fields
+                |> List.map (fun (FieldRelease (_, childPlan)) ->
+                    rcReleasePlanFingerprintHash childPlan)
+            | BoxedSumPayloadRelease (_, fields, variants) ->
+                let fieldChildren =
+                    fields
+                    |> List.map (fun (FieldRelease (_, childPlan)) ->
+                        rcReleasePlanFingerprintHash childPlan)
+                let variantChildren =
+                    variants
+                    |> List.collect (fun variant ->
+                        variant.FieldReleases
+                        |> List.map (fun (FieldRelease (_, childPlan)) ->
+                            rcReleasePlanFingerprintHash childPlan))
+                fieldChildren @ variantChildren
+            | TaggedListPayloadRelease elementRelease ->
+                [rcReleasePlanFingerprintHash elementRelease]
+            | DictPayloadRelease (keyRelease, valueRelease) ->
+                [rcReleasePlanFingerprintHash keyRelease
+                 rcReleasePlanFingerprintHash valueRelease]
+        | NoReleasePlan
+        | DynamicBufferRelease _
+        | RecursiveRelease _ -> []
+    rcReleasePlanFingerprintHashFromChildren releasePlan childFingerprints
+
+/// Deterministic allocation-light identity for a release plan.
+let rcReleasePlanFingerprint (releasePlan: RcReleasePlan) : string =
+    releasePlan
+    |> rcReleasePlanFingerprintHash
+    |> rcReleasePlanFingerprintString
 
 /// True once a release plan contains more than the requested number of nodes.
 /// Traversal stops at the limit so callers can cheaply choose a compact memo
