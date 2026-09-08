@@ -657,6 +657,7 @@ let isBorrowingExpr (cexpr: CExpr) : bool =
     | BlobToRawPtr _ -> true      // RawPtr view is borrowed from the dynamic buffer
     | DictToRawPtr _ -> true       // RawPtr view is borrowed from the tagged container
     | ListToRawPtr _ -> true       // RawPtr view is borrowed from the tagged container
+    | BorrowedCall _ -> true       // Callee returns an alias kept alive by one of its arguments
     | Atom (Var _) -> true         // Alias/copy of existing variable - don't double-dec
     | TypedAtom (Var _, _) -> true // TypedAtom wrapping a variable - also borrowed
     | _ -> false
@@ -1416,8 +1417,12 @@ let rec insertRCWithAnalysis
                     false
 
             let bindingDec =
+                let materializesBorrowedCall =
+                    match cexpr with
+                    | BorrowedCall _ -> true
+                    | _ -> false
                 if bindingNeedsShapeAutomaticDec ctx cexpr inferredType
-                   && not (isBorrowingExpr cexpr)
+                   && (not (isBorrowingExpr cexpr) || materializesBorrowedCall)
                    && not (cexprProducesNonRcSentinel cexpr)
                    && not skipReturnDecForMapHelperLists
                    && not consumedByImmediateI64Push then
@@ -1707,6 +1712,11 @@ let rec insertRCWithAnalysis
                         false
 
                 match cexpr with
+                | BorrowedCall _ when shapeNeedsBorrowedRetain ctx inferredType ->
+                    // A borrowed call has no owned result edge to transfer from
+                    // its callee. Materialize one for the local binding; its
+                    // ordinary pending decrement then balances this retain.
+                    Some inferredType
                 | IfValue (_, thenAtom, elseAtom) ->
                     // IfValue selects one of two existing heap values.
                     // Materialize ownership on the selected temp before source temps are decref'd.
@@ -1899,6 +1909,34 @@ let collectMissingTempIdsInFunction
         |> List.fold (fun acc tp -> if isTempMissing typeMap tp.Id then tp.Id :: acc else acc) acc
     collectMissingTempIdsInExpr typeMap func.Body acc'
 
+/// Find the greatest TempId defined by an ANF expression. ANF variables are
+/// introduced only by function parameters and Let bindings, so definitions
+/// are sufficient to place a fresh-variable generator beyond every use.
+let rec private maxDefinedTempIdInExpr (expr: AExpr) : int =
+    match expr with
+    | Return _ -> -1
+    | Let (TempId tempId, _, body) ->
+        max tempId (maxDefinedTempIdInExpr body)
+    | If (_, thenBranch, elseBranch) ->
+        max
+            (maxDefinedTempIdInExpr thenBranch)
+            (maxDefinedTempIdInExpr elseBranch)
+
+let private maxDefinedTempIdInFunction (func: Function) : int =
+    let paramMax =
+        func.TypedParams
+        |> List.fold (fun current param ->
+            let (TempId tempId) = param.Id
+            max current tempId) -1
+    max paramMax (maxDefinedTempIdInExpr func.Body)
+
+let private freshVarGenAfterProgram (Program (functions, mainExpr)) : VarGen =
+    let functionMax =
+        functions
+        |> List.fold (fun current func ->
+            max current (maxDefinedTempIdInFunction func)) -1
+    VarGen (max functionMax (maxDefinedTempIdInExpr mainExpr) + 1)
+
 /// Verify that all defined TempIds have types in the TypeMap
 /// Returns a list of TempIds that are missing from the TypeMap
 let verifyTypeMapCompleteness (program: ANF.Program) (typeMap: ANF.TypeMap) : TempId list =
@@ -1928,7 +1966,10 @@ let private insertRCInProgramInternal
     let ctx = createContext result
     recordPhase "Reference Count Context" contextTimer
     let (ANF.Program (functions, mainExpr)) = result.Program
-    let varGen = VarGen 1000  // Start high to avoid conflicts
+    // Inlining and generated JSON helpers can produce thousands of existing
+    // temporaries. A fixed starting value eventually collides with them, and
+    // sibling-branch type state can then suppress a required retain.
+    let varGen = freshVarGenAfterProgram result.Program
 
     // Process all functions, accumulating types
     let rec processFuncs

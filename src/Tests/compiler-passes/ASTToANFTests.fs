@@ -92,6 +92,77 @@ let rec private findCallArgs (funcName: string) (expr: ANF.AExpr) : ANF.Atom lis
     | ANF.Return _ ->
         None
 
+let rec private containsCExpr (predicate: ANF.CExpr -> bool) (expr: ANF.AExpr) : bool =
+    match expr with
+    | ANF.Let (_, cexpr, rest) ->
+        predicate cexpr || containsCExpr predicate rest
+    | ANF.If (_, thenBranch, elseBranch) ->
+        containsCExpr predicate thenBranch || containsCExpr predicate elseBranch
+    | ANF.Return _ ->
+        false
+
+let private lowerTwoElementListPattern (elementType: AST.Type) : Result<ANF.AExpr, string> =
+    let listType = AST.TList elementType
+    let env : VarEnv =
+        Map.ofList [("value", (ANF.TempId 0, AST.TTuple [listType; AST.TInt64]))]
+    let matchCase : AST.MatchCase = {
+        Patterns =
+            AST.NonEmptyList.singleton
+                (AST.PTuple [AST.PList [AST.PVar "head"; AST.PWildcard]; AST.PWildcard])
+        Guard = None
+        Body = AST.Var "head"
+    }
+    let expr = AST.Match (AST.Var "value", [matchCase])
+
+    toANF expr ANF.initialVarGen env emptyTypeReg emptyVariantLookup emptyFuncReg emptyModuleRegistry
+    |> Result.map fst
+
+let testErasedListHeadPatternLowersToBorrowedCall () : TestResult =
+    match lowerTwoElementListPattern (AST.TDict (AST.TString, AST.TString)) with
+    | Error err ->
+        Error $"Unexpected conversion error: {err}"
+    | Ok anfExpr ->
+        let hasBorrowedErasedHead =
+            anfExpr
+            |> containsCExpr (function
+                | ANF.BorrowedCall ("Stdlib.Internal.SkewList.headUnsafe_i64", _) -> true
+                | _ -> false)
+        let hasOwnedErasedHead =
+            anfExpr
+            |> containsCExpr (function
+                | ANF.Call ("Stdlib.Internal.SkewList.headUnsafe_i64", _) -> true
+                | _ -> false)
+
+        if not hasBorrowedErasedHead then
+            Error "Managed erased list-head pattern did not lower to BorrowedCall"
+        elif hasOwnedErasedHead then
+            Error "Managed erased list-head pattern also emitted an owned Call"
+        else
+            Ok ()
+
+let testTypedListHeadPatternRemainsOwnedCall () : TestResult =
+    match lowerTwoElementListPattern AST.TFloat64 with
+    | Error err ->
+        Error $"Unexpected conversion error: {err}"
+    | Ok anfExpr ->
+        let hasOwnedTypedHead =
+            anfExpr
+            |> containsCExpr (function
+                | ANF.Call ("Stdlib.List.__headUnsafeFloat", _) -> true
+                | _ -> false)
+        let hasBorrowedTypedHead =
+            anfExpr
+            |> containsCExpr (function
+                | ANF.BorrowedCall ("Stdlib.List.__headUnsafeFloat", _) -> true
+                | _ -> false)
+
+        if not hasOwnedTypedHead then
+            Error "Typed float list-head pattern did not lower to an owned Call"
+        elif hasBorrowedTypedHead then
+            Error "Typed float list-head pattern incorrectly lowered to BorrowedCall"
+        else
+            Ok ()
+
 let testSyntheticNullaryCallLowersToZeroArgs () : TestResult =
     let funcName = "Stdlib.Internal.SkewList.__TAG_SINGLE"
     let expr = AST.Call (funcName, AST.NonEmptyList.singleton AST.UnitLiteral)
@@ -141,4 +212,6 @@ let tests = [
     ("Mangled function type preserves synthetic interpreter type variables", testMangledFunctionTypePreservesSyntheticInterpreterTypeVariables)
     ("Synthetic nullary call lowers to zero args", testSyntheticNullaryCallLowersToZeroArgs)
     ("Synthetic unit param lowers function to zero params", testSyntheticUnitParamLowersFunctionToZeroParams)
+    ("Erased list-head pattern lowers to borrowed call", testErasedListHeadPatternLowersToBorrowedCall)
+    ("Typed list-head pattern remains owned call", testTypedListHeadPatternRemainsOwnedCall)
 ]

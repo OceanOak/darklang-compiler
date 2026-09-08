@@ -2228,7 +2228,7 @@ let testClosurePushBackRetainsImmediateClosureCallResult () : TestResult =
     else
         Error "ClosureCall result passed directly to typed closure-list pushBack should get a local dec because raw storage retains the edge"
 
-let testBorrowedCallStillGetsAutoDecUnderConservativePolicy () : TestResult =
+let testBorrowedCallMaterializesOwnedLocal () : TestResult =
     let nodeType = AST.TList AST.TInt64
     let funcReg : AST_to_ANF.FunctionRegistry =
         Map.ofList [
@@ -2274,10 +2274,54 @@ let testBorrowedCallStillGetsAutoDecUnderConservativePolicy () : TestResult =
 
     let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
 
-    if hasRefCountDecForTemp childTemp transformed.Body then
+    if not (hasRefCountIncForTemp childTemp transformed.Body) then
+        Error "BorrowedCall must retain its borrowed result when materializing a local value"
+    elif not (hasRefCountDecForTemp childTemp transformed.Body) then
+        Error "Materialized BorrowedCall local must release its retained ownership edge"
+    else
+        Ok ()
+
+let testReturnedBorrowedCallMaterializesOwnership () : TestResult =
+    let nodeType = AST.TList AST.TInt64
+    let funcReg : AST_to_ANF.FunctionRegistry =
+        Map.ofList [
+            ("project", AST.TFunction ([nodeType], nodeType))
+            ("borrowChild", AST.TFunction ([nodeType], nodeType))
+        ]
+
+    let ctx : TypeContext = {
+        TypeReg = Map.empty
+        VariantLookup = Map.empty
+        SumShapeReg = Map.empty
+        FuncReg = funcReg
+        FuncParams = Map.empty
+        TempTypes = Map.empty
+        ClosureFuncs = Map.empty
+    }
+
+    let nodeParam = TempId 0
+    let childTemp = TempId 1
+    let func : Function = {
+        Name = "project"
+        TypedParams = [
+            { Id = nodeParam; Type = nodeType }
+        ]
+        ReturnType = nodeType
+        ReturnOwnership = OwnedReturn
+        Body =
+            Let (
+                childTemp,
+                BorrowedCall ("borrowChild", [Var nodeParam]),
+                Return (Var childTemp)
+            )
+    }
+
+    let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
+
+    if hasRefCountIncForTemp childTemp transformed.Body then
         Ok ()
     else
-        Error "BorrowedCall should be treated as owned result under conservative policy and get automatic RefCountDec"
+        Error "Returning a BorrowedCall result must retain it to materialize owned return storage"
 
 let testCallReturningClosureGetsAutoDecAfterUse () : TestResult =
     let closureType = AST.TFunction ([AST.TInt64], AST.TInt64)
@@ -2458,6 +2502,62 @@ let testGenericPureEnumBindingDoesNotGetAutomaticDec () : TestResult =
     else
         Ok ()
 
+let testProgramRcFreshTempsFollowExistingProgramTemps () : TestResult =
+    let lowTemp = TempId 1000
+    let highTemp = TempId 6000
+    let func : Function = {
+        Name = "freshTempBoundary"
+        TypedParams = []
+        ReturnType = AST.TUnit
+        ReturnOwnership = OwnedReturn
+        Body =
+            Let (
+                lowTemp,
+                Atom (IntLiteral (Int64 0L)),
+                Let (
+                    highTemp,
+                    Call ("makeString", []),
+                    Return UnitLiteral
+                )
+            )
+    }
+    let conversion : AST_to_ANF.ConversionResult = {
+        Program = Program ([func], Return UnitLiteral)
+        RecursiveMembers = Map.empty
+        TypeReg = Map.empty
+        RecordFieldsReg = Map.empty
+        RecordTypeParamsReg = Map.empty
+        VariantLookup = Map.empty
+        RcSumShapeReg = Map.empty
+        FuncReg = Map.ofList [("makeString", AST.TFunction ([], AST.TString))]
+        FuncParams = Map.empty
+        ModuleRegistry = Map.empty
+    }
+
+    let rec definedTemps (expr: AExpr) : TempId list =
+        match expr with
+        | Return _ -> []
+        | Let (tempId, _, body) -> tempId :: definedTemps body
+        | If (_, thenBranch, elseBranch) ->
+            definedTemps thenBranch @ definedTemps elseBranch
+
+    match insertRCInProgram conversion with
+    | Error err -> Error $"Expected RC insertion to succeed, got {err}"
+    | Ok (Program ([transformed], _), _) ->
+        let definitions = definedTemps transformed.Body
+        let distinctDefinitions = Set.ofList definitions
+        let greatestDefinition =
+            definitions
+            |> List.map (fun (TempId tempId) -> tempId)
+            |> List.max
+        if Set.count distinctDefinitions <> List.length definitions then
+            Error $"RC insertion reused an existing TempId: {definitions}"
+        elif greatestDefinition <= 6000 then
+            Error $"Expected an RC temporary after t6000, greatest was t{greatestDefinition}"
+        else
+            Ok ()
+    | Ok _ -> Error "Expected the transformed program to contain one function"
+
 let testBareSumTypeRefsAreCanonicalizedForRcSourceTypes () : TestResult =
     let payloadType = AST.TRecord ("Payload", [])
     let dictType = AST.TDict (AST.TInt64, payloadType)
@@ -2565,10 +2665,12 @@ let tests = [
     ("map helper closure-producing call retains borrowed source", testMapHelperClosureProducingCallRetainsBorrowedSource)
     ("map helper closure source to value keeps source borrowed", testMapHelperClosureSourceToValueKeepsSourceBorrowed)
     ("closure pushBack retains immediate closure-call result", testClosurePushBackRetainsImmediateClosureCallResult)
-    ("borrowed call still gets auto-dec under conservative policy", testBorrowedCallStillGetsAutoDecUnderConservativePolicy)
+    ("borrowed call materializes owned local", testBorrowedCallMaterializesOwnedLocal)
+    ("returned borrowed call materializes ownership", testReturnedBorrowedCallMaterializesOwnership)
     ("call returning closure gets auto-dec after use", testCallReturningClosureGetsAutoDecAfterUse)
     ("closure call returning closure gets auto-dec after use", testClosureCallReturningClosureGetsAutoDecAfterUse)
     ("pure enum binding does not get automatic dec", testPureEnumBindingDoesNotGetAutomaticDec)
     ("generic pure enum binding does not get automatic dec", testGenericPureEnumBindingDoesNotGetAutomaticDec)
+    ("program RC fresh temps follow existing program temps", testProgramRcFreshTempsFollowExistingProgramTemps)
     ("bare sum type refs are canonicalized for RC source types", testBareSumTypeRefsAreCanonicalizedForRcSourceTypes)
 ]

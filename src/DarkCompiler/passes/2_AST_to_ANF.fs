@@ -636,6 +636,21 @@ let private listHeadUnsafeFunction
     | _ when elementType = AST.TFloat64 -> "Stdlib.List.__headUnsafeFloat"
     | _ -> "Stdlib.Internal.SkewList.headUnsafe_i64"
 
+/// Pattern matching reads list payloads without taking an ownership edge.
+/// Typed accessors materialize owned return values in their callee; the erased
+/// i64 accessor cannot, because its compiled return type carries no managed
+/// payload shape for reference-count insertion.
+let private listHeadUnsafeExpr
+    (funcReg: FunctionRegistry)
+    (elementType: AST.Type)
+    (listAtom: ANF.Atom)
+    : ANF.CExpr =
+    let functionName = listHeadUnsafeFunction funcReg elementType
+    if functionName = "Stdlib.Internal.SkewList.headUnsafe_i64" then
+        ANF.BorrowedCall (functionName, [listAtom])
+    else
+        ANF.Call (functionName, [listAtom])
+
 /// Alias registry - maps type alias names to their type params and target types
 /// For simple record aliases: "Vec" -> ([], TRecord "Point")
 type AliasRegistry = Map<string, string list * AST.Type>
@@ -6611,7 +6626,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are SkewLists - use headUnsafe/tail to extract
                                     let (headVar, vg1) = ANF.freshVar vg
-                                    let headExpr = ANF.Call (listHeadUnsafeFunction funcReg elemType, [currentList])
+                                    let headExpr = listHeadUnsafeExpr funcReg elemType currentList
                                     let headBinding = (headVar, headExpr)
                                     collectPatternBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                     |> Result.bind (fun (env', bindings', vg') ->
@@ -6641,7 +6656,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are SkewLists - use headUnsafe/tail to extract
                                     let (rawHeadVar, vg1) = ANF.freshVar vg
-                                    let rawHeadExpr = ANF.Call (listHeadUnsafeFunction funcReg elemType, [currentList])
+                                    let rawHeadExpr = listHeadUnsafeExpr funcReg elemType currentList
                                     let rawHeadBinding = (rawHeadVar, rawHeadExpr)
                                     // Wrap with TypedAtom to preserve correct element type in TypeMap
                                     let (headVar, vg1') = ANF.freshVar vg1
@@ -6792,13 +6807,12 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                     else
                         // Traverse exact-list patterns through the representation API.
                         let listType = AST.TList elemType
-                        let headFuncName = listHeadUnsafeFunction funcReg elemType
                         let rec extractElements (pats: AST.Pattern list) (currentList: ANF.Atom) (env: VarEnv) (bindings: (ANF.TempId * ANF.CExpr) list) (vg: ANF.VarGen) : Result<VarEnv * (ANF.TempId * ANF.CExpr) list * ANF.VarGen, string> =
                             match pats with
                             | [] -> Ok (env, bindings, vg)
                             | pat :: rest ->
                                 let (rawValueVar, vg1) = ANF.freshVar vg
-                                let rawValueExpr = ANF.Call (headFuncName, [currentList])
+                                let rawValueExpr = listHeadUnsafeExpr funcReg elemType currentList
                                 let (typedValueVar, vg2) = ANF.freshVar vg1
                                 let typedValueExpr = ANF.TypedAtom (ANF.Var rawValueVar, elemType)
                                 let (rawTailVar, vg3) = ANF.freshVar vg2
@@ -6858,7 +6872,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Extract head using SkewList.headUnsafe_i64
                             let (rawHeadVar, vg1) = ANF.freshVar vg
-                            let rawHeadExpr = ANF.Call (listHeadUnsafeFunction funcReg elemType, [listAtom])
+                            let rawHeadExpr = listHeadUnsafeExpr funcReg elemType listAtom
                             let rawHeadBinding = (rawHeadVar, rawHeadExpr)
                             // Wrap with TypedAtom to preserve correct element type in TypeMap
                             let (headVar, vg1') = ANF.freshVar vg1
@@ -7153,7 +7167,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are SkewLists - use headUnsafe/tail to extract
                                     let (headVar, vg1) = ANF.freshVar vg
-                                    let headExpr = ANF.Call (listHeadUnsafeFunction funcReg elemType, [currentList])
+                                    let headExpr = listHeadUnsafeExpr funcReg elemType currentList
                                     let headBinding = (headVar, headExpr)
                                     collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                     |> Result.bind (fun (env', bindings', vg') ->
@@ -7194,7 +7208,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                                 | p :: rest ->
                                     // Lists are SkewLists - use headUnsafe/tail to extract
                                     let (headVar, vg1) = ANF.freshVar vg
-                                    let headExpr = ANF.Call (listHeadUnsafeFunction funcReg elemType, [currentList])
+                                    let headExpr = listHeadUnsafeExpr funcReg elemType currentList
                                     let headBinding = (headVar, headExpr)
                                     collectBindings p (ANF.Var headVar) elemType env (headBinding :: bindings) vg1
                                     |> Result.bind (fun (env', bindings', vg') ->
@@ -7711,7 +7725,6 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             Error $"PList nested binding expects list source type, got {typeToString sourceType}"
                     elemTypeResult
                     |> Result.bind (fun elemType ->
-                        let headFuncName = listHeadUnsafeFunction funcReg elemType
                         let rec loop
                             (remaining: AST.Pattern list)
                             (currentList: ANF.Atom)
@@ -7723,7 +7736,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | [] -> Ok (currentEnv, currentBindings, currentVg)
                             | pat :: rest ->
                                 let (headVar, vg1) = ANF.freshVar currentVg
-                                let headExpr = ANF.Call (headFuncName, [currentList])
+                                let headExpr = listHeadUnsafeExpr funcReg elemType currentList
                                 collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr)]) vg1
                                 |> Result.bind (fun (env', bindings', vg') ->
                                     if List.isEmpty rest then
@@ -7745,7 +7758,6 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             Error $"PListCons nested binding expects list source type, got {typeToString sourceType}"
                     elemTypeResult
                     |> Result.bind (fun elemType ->
-                        let headFuncName = listHeadUnsafeFunction funcReg elemType
                         let rec collectHeads
                             (remaining: AST.Pattern list)
                             (currentList: ANF.Atom)
@@ -7757,7 +7769,7 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                             | [] -> Ok (currentEnv, currentBindings, currentList, currentVg)
                             | pat :: rest ->
                                 let (headVar, vg1) = ANF.freshVar currentVg
-                                let headExpr = ANF.Call (headFuncName, [currentList])
+                                let headExpr = listHeadUnsafeExpr funcReg elemType currentList
                                 let (tailVar, vg2) = ANF.freshVar vg1
                                 let tailExpr = ANF.Call ("Stdlib.Internal.SkewList.tail_i64", [currentList])
                                 collectNestedPatternBindings pat (ANF.Var headVar) elemType currentEnv (currentBindings @ [(headVar, headExpr); (tailVar, tailExpr)]) vg2
@@ -8546,8 +8558,8 @@ let rec toANF (expr: AST.Expr) (varGen: ANF.VarGen) (env: VarEnv) (typeReg: Type
                         | pat :: rest ->
                             // Call head to get current element
                             let (headResultVar, vg1) = ANF.freshVar vg
-                            let headCallName = listHeadUnsafeFunction funcReg elemType
-                            let headCallExpr = ANF.Call (headCallName, [ANF.Var currentListVar])
+                            let headCallExpr =
+                                listHeadUnsafeExpr funcReg elemType (ANF.Var currentListVar)
                             // Call tail to get rest
                             let (tailResultVar, vg2) = ANF.freshVar vg1
                             let tailCallExpr = ANF.Call ("Stdlib.Internal.SkewList.tail_i64", [ANF.Var currentListVar])

@@ -1083,6 +1083,36 @@ let testListDictListValueUsesTypedDictHelper () : TestResult =
         (AST.TDict (AST.TInt64, AST.TList AST.TInt64))
         "List of dict<int, list<int>>"
 
+let testListDictStringPayloadUsesPlannedDictHelper () : TestResult =
+    let listType = AST.TList (AST.TDict (AST.TString, AST.TString))
+    let program =
+        makeSimpleProgramWithVariants
+            [
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    0,
+                    LIR.TaggedList,
+                    Some (rcMetadata listType))
+            ]
+            Map.empty
+
+    match generatePreparedARM64 target program with
+    | Error e ->
+        Error e
+    | Ok instrs ->
+        let callsPlannedDictHelper =
+            instrs
+            |> List.exists (function
+                | ARM64Symbolic.BL label when label.StartsWith("__dark_dict_refcount_dec_plan_") -> true
+                | _ -> false)
+
+        if not (emitsPlannedListHelperLabel instrs) then
+            Error "List<Dict<String, String>> did not emit a planned list release helper"
+        elif not callsPlannedDictHelper then
+            Error "List<Dict<String, String>> did not call a planned dictionary release helper"
+        else
+            Ok ()
+
 let testListNestedTupleDictListValueUsesTypedDictHelper () : TestResult =
     assertListElementUsesTypedDictListHelper
         (AST.TTuple [
@@ -1622,6 +1652,49 @@ let testPlannedListRecordPayloadUsesPlannedHelper () : TestResult =
         else
             Error "ARM64 record list payload did not emit a planned list helper"
 
+let testPlannedListRecordNestedStringDictUsesPlannedListHelper () : TestResult =
+    let recordType = AST.TRecord ("ARM64PlannedListRecordNestedStringDict", [])
+    let records =
+        Map.ofList [
+            ("ARM64PlannedListRecordNestedStringDict",
+             [ ("items", AST.TList (AST.TDict (AST.TString, AST.TString))) ])
+        ]
+    let program =
+        makeSimpleProgramWithRecords
+            [
+                LIR.RefCountDec (
+                    LIR.Physical LIR.X0,
+                    0,
+                    LIR.TaggedList,
+                    Some (rcMetadataWithRecords records (AST.TList recordType)))
+            ]
+            records
+
+    match generatePreparedARM64 target program with
+    | Error e ->
+        Error e
+    | Ok instrs ->
+        let callsLegacyDictListHelper =
+            instrs
+            |> List.exists (function
+                | ARM64Symbolic.BL "__dark_list_refcount_dec_dict_helper" -> true
+                | _ -> false)
+        let plannedListHelperCount =
+            instrs
+            |> List.choose (function
+                | ARM64Symbolic.Label label when label.StartsWith("__dark_list_refcount_dec_plan_") ->
+                    Some label
+                | _ -> None)
+            |> Set.ofList
+            |> Set.count
+
+        if callsLegacyDictListHelper then
+            Error "Nested List<Dict<String, String>> called the unplanned legacy list/dict helper"
+        elif plannedListHelperCount < 2 then
+            Error $"Expected outer-record and inner-dict planned list helpers, found {plannedListHelperCount}"
+        else
+            Ok ()
+
 let testPlannedListTuple5PayloadUsesPlannedHelper () : TestResult =
     let tupleType =
         AST.TTuple [
@@ -1993,6 +2066,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("List tuple4 closure/string/list/dict-list uses typed dict helper", testListTuple4ClosureStringListDictListValueUsesTypedDictHelper)
     ("List tuple4 closure/bytes/list/dict-list uses typed dict helper", testListTuple4ClosureBytesListDictListValueUsesTypedDictHelper)
     ("List dict-list uses typed dict helper", testListDictListValueUsesTypedDictHelper)
+    ("List dict-string payload uses planned dict helper", testListDictStringPayloadUsesPlannedDictHelper)
     ("List nested tuple dict-list uses typed dict helper", testListNestedTupleDictListValueUsesTypedDictHelper)
     ("List tuple2 nested tuple dict-list uses typed dict helper", testListTuple2NestedTupleDictListValueUsesTypedDictHelper)
     ("List tuple4 nested tuple dynamic dict-list uses typed dict helper", testListTuple4NestedTupleDynamicDictListValueUsesTypedDictHelper)
@@ -2017,6 +2091,7 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Planned list nested generic release preserves block pointer", testPlannedListNestedGenericReleasePreservesBlockPointer)
     ("Planned list tuple payload uses planned helper", testPlannedListTuplePayloadUsesPlannedHelper)
     ("Planned list record payload uses planned helper", testPlannedListRecordPayloadUsesPlannedHelper)
+    ("Planned list record nested string-dict uses planned list helper", testPlannedListRecordNestedStringDictUsesPlannedListHelper)
     ("Planned list tuple5 payload uses planned helper", testPlannedListTuple5PayloadUsesPlannedHelper)
     ("Planned list record5 payload uses planned helper", testPlannedListRecord5PayloadUsesPlannedHelper)
     ("Generic fixed-block nested immediate field releases child root", testGenericFixedBlockNestedImmediateFieldReleasesChildRoot)
