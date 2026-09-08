@@ -1535,6 +1535,14 @@ let private buildBaseFuncNames
     registries.FuncParams
     |> Map.fold (fun acc name _ -> Set.add name acc) Set.empty
 
+let private reserveBaseFunctionParams
+    (funcParams: Map<string, (string * AST.Type) list>)
+    (baseFuncNames: Set<string>)
+    : Map<string, (string * AST.Type) list> =
+    baseFuncNames
+    |> Set.fold (fun acc name ->
+        if Map.containsKey name acc then acc else Map.add name [] acc) funcParams
+
 let private mergeReturnTypes
     (baseReturnTypes: Map<string, AST.Type>)
     (overlayReturnTypes: Map<string, AST.Type>)
@@ -1579,6 +1587,9 @@ type PipelineContext = {
     SpecRegistry: AST_to_ANF.SpecRegistry
     Registries: AST_to_ANF.Registries
     BaseFuncNames: Set<string>
+    LambdaLiftFuncParams: Map<string, (string * AST.Type) list>
+    LambdaLiftTypeReg: AST_to_ANF.TypeRegistry
+    LambdaLiftVariantLookup: AST_to_ANF.VariantLookup
     ReturnTypes: Map<string, AST.Type>
     PackageCatalogGenericCallers: Set<string>
 }
@@ -1592,6 +1603,10 @@ let private buildContext
     (returnTypes: Map<string, AST.Type>)
     : PipelineContext =
     let baseFuncNames = buildBaseFuncNames registries
+    let (lambdaLiftTypeReg, lambdaLiftVariantLookup) =
+        AST_to_ANF.prepareLambdaLiftBaseTypes
+            registries.TypeReg
+            registries.VariantLookup
     {
         Target = target
         TypeCheckEnv = typeCheckEnv
@@ -1599,6 +1614,10 @@ let private buildContext
         SpecRegistry = specRegistry
         Registries = registries
         BaseFuncNames = baseFuncNames
+        LambdaLiftFuncParams =
+            reserveBaseFunctionParams registries.FuncParams baseFuncNames
+        LambdaLiftTypeReg = lambdaLiftTypeReg
+        LambdaLiftVariantLookup = lambdaLiftVariantLookup
         ReturnTypes = returnTypes
         PackageCatalogGenericCallers =
             buildPackageCatalogGenericCallers genericFuncDefs
@@ -1746,24 +1765,26 @@ let private emptyRegistries (moduleRegistry: AST.ModuleRegistry) : AST_to_ANF.Re
     }
 
 let private liftLambdasWithBase
-    (baseRegistries: AST_to_ANF.Registries)
-    (baseFuncNames: Set<string>)
+    (baseTypeReg: AST_to_ANF.TypeRegistry)
+    (baseVariantLookup: AST_to_ANF.VariantLookup)
+    (baseFuncParams: Map<string, (string * AST.Type) list>)
+    (baseFuncReturnTypes: Map<string, AST.Type>)
+    (passTimingRecorder: PassTimingRecorder option)
     (program: AST.Program)
     : Result<AST.Program, string> =
-    let baseFuncReturnTypes = extractReturnTypes baseRegistries.FuncReg
-    let baseFuncParamsWithReservedNames =
-        baseFuncNames
-        |> Set.fold (fun acc name ->
-            if Map.containsKey name acc then
-                acc
-            else
-                Map.add name [] acc) baseRegistries.FuncParams
-    AST_to_ANF.liftLambdasInProgram
-        baseRegistries.TypeReg
-        baseRegistries.VariantLookup
-        baseFuncParamsWithReservedNames
-        baseFuncReturnTypes
-        program
+    let measure name operation =
+        let timer = Stopwatch.StartNew()
+        let result = operation ()
+        timer.Stop()
+        recordPassTiming passTimingRecorder name timer.Elapsed.TotalMilliseconds
+        result
+    measure "AST -> ANF Preparation: Lambda Lifting" (fun () ->
+        AST_to_ANF.liftLambdasInProgram
+            baseTypeReg
+            baseVariantLookup
+            baseFuncParams
+            baseFuncReturnTypes
+            program)
 
 let private mergeSpecRegistries
     (baseRegistry: AST_to_ANF.SpecRegistry)
@@ -1793,44 +1814,66 @@ type private MonomorphizationMode =
 
 let private prepareProgramForAnf
     (monomorphization: MonomorphizationMode)
-    (baseRegistries: AST_to_ANF.Registries)
+    (baseTypeReg: AST_to_ANF.TypeRegistry)
+    (baseVariantLookup: AST_to_ANF.VariantLookup)
     (baseFuncNames: Set<string>)
+    (baseFuncParams: Map<string, (string * AST.Type) list>)
+    (baseFuncReturnTypes: Map<string, AST.Type>)
+    (passTimingRecorder: PassTimingRecorder option)
     (program: AST.Program)
     : Result<AST.Program, string> =
+    let measure name operation =
+        let timer = Stopwatch.StartNew()
+        let result = operation ()
+        timer.Stop()
+        recordPassTiming passTimingRecorder name timer.Elapsed.TotalMilliseconds
+        result
     let monomorphizedResult =
-        match monomorphization with
-        | Monomorphize None ->
-            Ok (AST_to_ANF.monomorphize program)
-        | Monomorphize (Some defs) ->
-            Ok (AST_to_ANF.monomorphizeWithExternalDefs defs program)
-        | ReplaceTypeApps specRegistry ->
-            AST_to_ANF.replaceTypeAppsInProgramWithRegistry specRegistry program
-        | SpecializeLocalAndReplace specRegistry ->
-            let localGenericDefs = AST_to_ANF.extractGenericFuncDefs program
-            if Map.isEmpty localGenericDefs then
+        measure "AST -> ANF Preparation: Monomorphization" (fun () ->
+            match monomorphization with
+            | Monomorphize None ->
+                Ok (AST_to_ANF.monomorphize program)
+            | Monomorphize (Some defs) ->
+                Ok (AST_to_ANF.monomorphizeWithExternalDefs defs program)
+            | ReplaceTypeApps specRegistry ->
                 AST_to_ANF.replaceTypeAppsInProgramWithRegistry specRegistry program
-            else
-                let localSpecs = collectLocalSpecs localGenericDefs program
-                let specialization = AST_to_ANF.specializeFromSpecs localGenericDefs localSpecs
-                let combinedSpecRegistry =
-                    mergeSpecRegistries specRegistry specialization.SpecRegistry
-                let (AST.Program items) = program
-                let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
-                let programWithSpecializations = AST.Program (specializedTopLevels @ items)
-                AST_to_ANF.replaceTypeAppsInProgramWithRegistry combinedSpecRegistry programWithSpecializations
+            | SpecializeLocalAndReplace specRegistry ->
+                let localGenericDefs = AST_to_ANF.extractGenericFuncDefs program
+                if Map.isEmpty localGenericDefs then
+                    AST_to_ANF.replaceTypeAppsInProgramWithRegistry specRegistry program
+                else
+                    let localSpecs = collectLocalSpecs localGenericDefs program
+                    let specialization = AST_to_ANF.specializeFromSpecs localGenericDefs localSpecs
+                    let combinedSpecRegistry =
+                        mergeSpecRegistries specRegistry specialization.SpecRegistry
+                    let (AST.Program items) = program
+                    let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
+                    let programWithSpecializations = AST.Program (specializedTopLevels @ items)
+                    AST_to_ANF.replaceTypeAppsInProgramWithRegistry combinedSpecRegistry programWithSpecializations)
     match monomorphizedResult with
     | Error err -> Error err
     | Ok monomorphized ->
-        let (AST.Program topLevels) = monomorphized
-        let localFuncNames =
-            topLevels
-            |> List.choose (function AST.FunctionDef f -> Some f.Name | _ -> None)
-            |> Set.ofList
-        let knownFuncNames = Set.union baseFuncNames localFuncNames
-        let needsLowering = AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized
+        let needsLowering =
+            measure "AST -> ANF Preparation: Lambda Analysis" (fun () ->
+                let (AST.Program topLevels) = monomorphized
+                let localFuncNames =
+                    topLevels
+                    |> List.choose (function AST.FunctionDef f -> Some f.Name | _ -> None)
+                    |> Set.ofList
+                let knownFuncNames = Set.union baseFuncNames localFuncNames
+                AST_to_ANF.programNeedsLambdaLowering knownFuncNames monomorphized)
         if needsLowering then
-            let inlined = AST_to_ANF.inlineLambdasInProgram monomorphized
-            liftLambdasWithBase baseRegistries baseFuncNames inlined
+            measure "AST -> ANF Preparation: Lambda Lowering" (fun () ->
+                let inlined =
+                    measure "AST -> ANF Preparation: Lambda Inlining" (fun () ->
+                        AST_to_ANF.inlineLambdasInProgram monomorphized)
+                liftLambdasWithBase
+                    baseTypeReg
+                    baseVariantLookup
+                    baseFuncParams
+                    baseFuncReturnTypes
+                    passTimingRecorder
+                    inlined)
         else
             Ok monomorphized
 
@@ -1887,7 +1930,32 @@ let private convertTypedDeclarations
         baseContext
         |> Option.map (fun context -> context.BaseFuncNames)
         |> Option.defaultValue (buildBaseFuncNames baseRegistries)
-    prepareProgramForAnf monomorphization baseRegistries baseFuncNames typedProgram
+    let baseFuncParams =
+        baseContext
+        |> Option.map (fun context -> context.LambdaLiftFuncParams)
+        |> Option.defaultWith (fun () ->
+            reserveBaseFunctionParams baseRegistries.FuncParams baseFuncNames)
+    let baseFuncReturnTypes =
+        baseContext
+        |> Option.map (fun context -> context.ReturnTypes)
+        |> Option.defaultWith (fun () -> extractReturnTypes baseRegistries.FuncReg)
+    let (baseTypeReg, baseVariantLookup) =
+        match baseContext with
+        | Some context ->
+            (context.LambdaLiftTypeReg, context.LambdaLiftVariantLookup)
+        | None ->
+            AST_to_ANF.prepareLambdaLiftBaseTypes
+                baseRegistries.TypeReg
+                baseRegistries.VariantLookup
+    prepareProgramForAnf
+        monomorphization
+        baseTypeReg
+        baseVariantLookup
+        baseFuncNames
+        baseFuncParams
+        baseFuncReturnTypes
+        None
+        typedProgram
     |> Result.bind (fun liftedProgram ->
         splitDeclarations liftedProgram
         |> Result.bind (fun (typeDefs, functions) ->
@@ -1910,7 +1978,15 @@ let private convertTypedProgramToConversionResult
     : Result<AST_to_ANF.ConversionResult, string> =
     let baseRegistries = emptyRegistries moduleRegistry
     let baseFuncNames = buildBaseFuncNames baseRegistries
-    prepareProgramForAnf (Monomorphize None) baseRegistries baseFuncNames typedProgram
+    prepareProgramForAnf
+        (Monomorphize None)
+        Map.empty
+        Map.empty
+        baseFuncNames
+        baseRegistries.FuncParams
+        Map.empty
+        None
+        typedProgram
     |> Result.bind (fun liftedProgram ->
         AST_to_ANF.splitTopLevels liftedProgram
         |> Result.bind (fun (typeDefs, functions, expr) ->
@@ -2008,7 +2084,15 @@ let private convertTypedProgramToUserOnlyWithMode
             | Monomorphize _ -> (typedProgram, monomorphization, Set.empty))
     let baseFuncNames = baseContext.BaseFuncNames
     measure "AST -> ANF Program Preparation" (fun () ->
-        prepareProgramForAnf monomorphization baseContext.Registries baseFuncNames typedProgram)
+        prepareProgramForAnf
+            monomorphization
+            baseContext.LambdaLiftTypeReg
+            baseContext.LambdaLiftVariantLookup
+            baseFuncNames
+            baseContext.LambdaLiftFuncParams
+            baseContext.ReturnTypes
+            passTimingRecorder
+            typedProgram)
     |> Result.bind (fun liftedProgram ->
         measure "AST -> ANF Registry Construction" (fun () ->
             AST_to_ANF.splitTopLevels liftedProgram
@@ -2391,9 +2475,15 @@ let buildStdlibWithTrace
                         tcoFunctions
                         |> List.map (fun f -> f.Name)
                         |> Set.ofList
+                    let baseFuncNames =
+                        Set.union context.BaseFuncNames stdlibLiftedFuncNames
                     let contextWithLiftedNames = {
                         context with
-                            BaseFuncNames = Set.union context.BaseFuncNames stdlibLiftedFuncNames
+                            BaseFuncNames = baseFuncNames
+                            LambdaLiftFuncParams =
+                                reserveBaseFunctionParams
+                                    context.Registries.FuncParams
+                                    baseFuncNames
                     }
                     let stdlibANFCallGraph = ANFDeadCodeElimination.buildCallGraph tcoFunctions
 
@@ -2516,8 +2606,12 @@ let buildStdlibSpecializations
                     )
                 prepareProgramForAnf
                     (ReplaceTypeApps combinedSpecRegistry)
-                    stdlib.Context.Registries
+                    stdlib.Context.LambdaLiftTypeReg
+                    stdlib.Context.LambdaLiftVariantLookup
                     stdlib.Context.BaseFuncNames
+                    stdlib.Context.LambdaLiftFuncParams
+                    stdlib.Context.ReturnTypes
+                    passTimingRecorder
                     specializationProgram
                 |> Result.bind AST_to_ANF.splitDeclarations
                 |> Result.bind (fun (preparedTypeDefs, preparedFunctions) ->
@@ -2591,11 +2685,20 @@ let buildStdlibSpecializations
                                     Set.union
                                         stdlib.Context.BaseFuncNames
                                         (Set.union (buildBaseFuncNames registries) specializedFuncNames)
+                                let lambdaLiftFuncParams =
+                                    reserveBaseFunctionParams registries.FuncParams baseFuncNames
+                                let (lambdaLiftTypeReg, lambdaLiftVariantLookup) =
+                                    AST_to_ANF.prepareLambdaLiftBaseTypes
+                                        registries.TypeReg
+                                        registries.VariantLookup
                                 let updatedContext = {
                                     stdlib.Context with
                                         Registries = registries
                                         SpecRegistry = combinedSpecRegistry
                                         BaseFuncNames = baseFuncNames
+                                        LambdaLiftFuncParams = lambdaLiftFuncParams
+                                        LambdaLiftTypeReg = lambdaLiftTypeReg
+                                        LambdaLiftVariantLookup = lambdaLiftVariantLookup
                                         ReturnTypes = externalReturnTypes
                                 }
                                 Ok {
@@ -3629,10 +3732,15 @@ let buildPreambleContext
                                 tcoFunctions
                                 |> List.map (fun func -> func.Name)
                                 |> Set.ofList
+                            let baseFuncNames =
+                                Set.union pipelineContext.BaseFuncNames preambleLiftedFuncNames
                             let pipelineContextWithLiftedNames = {
                                 pipelineContext with
-                                    BaseFuncNames =
-                                        Set.union pipelineContext.BaseFuncNames preambleLiftedFuncNames
+                                    BaseFuncNames = baseFuncNames
+                                    LambdaLiftFuncParams =
+                                        reserveBaseFunctionParams
+                                            pipelineContext.Registries.FuncParams
+                                            baseFuncNames
                             }
 
                             // Merge TypeMaps (stdlib + preamble)

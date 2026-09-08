@@ -796,6 +796,7 @@ let buildSuiteContexts
                     if
                         not (Set.contains timing.Pass overlappingTimingNames)
                         && not (timing.Pass.StartsWith("TypeCheck: "))
+                        && not (timing.Pass.StartsWith("AST -> ANF Preparation: "))
                         && not (timing.Pass.StartsWith("SSA: "))
                         && not (timing.Pass.StartsWith("RegAlloc: "))
                     then

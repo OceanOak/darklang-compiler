@@ -150,6 +150,7 @@ let filterPassTimingsForOverhead (passTimings: Map<string, TimeSpan>) : Map<stri
     |> Map.filter (fun name _ ->
         not (Set.contains name overlapTimingNames)
         && not (name.StartsWith("TypeCheck: "))
+        && not (name.StartsWith("AST -> ANF Preparation: "))
         && not (name.StartsWith("SSA: "))
         && not (name.StartsWith("RegAlloc: ")))
 

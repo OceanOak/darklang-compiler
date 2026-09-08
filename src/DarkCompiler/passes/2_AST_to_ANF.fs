@@ -3738,6 +3738,42 @@ let private collectEscapingFunctionParams
                 Set.empty
     collect Set.empty typ
 
+/// Canonical type view reused by lambda lifting when a compilation unit adds
+/// no local type declarations. Context builders compute it once; units with
+/// local declarations still rebuild the merged view below.
+let prepareLambdaLiftBaseTypes
+    (baseTypeReg: TypeRegistry)
+    (baseVariantLookup: VariantLookup)
+    : TypeRegistry * VariantLookup =
+    let canonicalVariantLookup =
+        baseVariantLookup
+        |> Map.map (fun _ (typeName, typeParams, tag, payloadType) ->
+            let isCatalogBoundaryType =
+                typeName.StartsWith("Darklang.LanguageTools.ProgramTypes.")
+                || typeName.StartsWith("Darklang.LanguageTools.RuntimeTypes.")
+            (typeName,
+             typeParams,
+             tag,
+             if isCatalogBoundaryType then
+                 payloadType
+                 |> Option.map (canonicalizeBareSumTypeRefs baseVariantLookup)
+             else
+                 payloadType))
+    let recordNames = baseTypeReg |> Map.keys |> Set.ofSeq
+    let canonicalTypeReg =
+        baseTypeReg
+        |> Map.map (fun _ info ->
+            { info with
+                Fields =
+                    info.Fields
+                    |> List.map (fun (fieldName, fieldType) ->
+                        (fieldName,
+                         canonicalizeNamedTypeRefs
+                            recordNames
+                            canonicalVariantLookup
+                            fieldType)) })
+    (canonicalTypeReg, canonicalVariantLookup)
+
 /// Lift lambdas in a program, generating new top-level functions
 let rec liftLambdasInProgram
     (baseTypeReg: TypeRegistry)
@@ -3797,29 +3833,35 @@ let rec liftLambdasInProgram
     let mergedTypeReg = mergeMapsLocal baseTypeReg typeReg
     let rawMergedVariantLookup = mergeMapsLocal baseVariantLookup variantLookup
     let mergedVariantLookup =
-        rawMergedVariantLookup
-        |> Map.map (fun _ (typeName, typeParams, tag, payloadType) ->
-            let isCatalogBoundaryType =
-                typeName.StartsWith("Darklang.LanguageTools.ProgramTypes.")
-                || typeName.StartsWith("Darklang.LanguageTools.RuntimeTypes.")
-            (typeName,
-             typeParams,
-             tag,
-             if isCatalogBoundaryType then
-                 payloadType
-                 |> Option.map (canonicalizeBareSumTypeRefs rawMergedVariantLookup)
-             else
-                 payloadType))
+        if Map.isEmpty variantLookup then
+            baseVariantLookup
+        else
+            rawMergedVariantLookup
+            |> Map.map (fun _ (typeName, typeParams, tag, payloadType) ->
+                let isCatalogBoundaryType =
+                    typeName.StartsWith("Darklang.LanguageTools.ProgramTypes.")
+                    || typeName.StartsWith("Darklang.LanguageTools.RuntimeTypes.")
+                (typeName,
+                 typeParams,
+                 tag,
+                 if isCatalogBoundaryType then
+                     payloadType
+                     |> Option.map (canonicalizeBareSumTypeRefs rawMergedVariantLookup)
+                 else
+                     payloadType))
     let canonicalMergedTypeReg =
-        let recordNames = mergedTypeReg |> Map.keys |> Set.ofSeq
-        mergedTypeReg
-        |> Map.map (fun _ info ->
-            { info with
-                Fields =
-                    info.Fields
-                    |> List.map (fun (fieldName, fieldType) ->
-                        (fieldName,
-                         canonicalizeNamedTypeRefs recordNames mergedVariantLookup fieldType)) })
+        if Map.isEmpty typeReg && Map.isEmpty variantLookup then
+            baseTypeReg
+        else
+            let recordNames = mergedTypeReg |> Map.keys |> Set.ofSeq
+            mergedTypeReg
+            |> Map.map (fun _ info ->
+                { info with
+                    Fields =
+                        info.Fields
+                        |> List.map (fun (fieldName, fieldType) ->
+                            (fieldName,
+                             canonicalizeNamedTypeRefs recordNames mergedVariantLookup fieldType)) })
 
     // First pass: collect all function definitions and their parameters
     let userFuncParams : Map<string, (string * AST.Type) list> =
