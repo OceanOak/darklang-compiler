@@ -483,23 +483,37 @@ let private tryRetargetFloatingResultIntoMove
     | _ -> None
 
 /// Optimize a list of instructions (single-pass peephole)
-let optimizeInstrs (instrs: Instr list) : Instr list =
-    let rec loop remaining =
+let private optimizeInstrsWithChange (instrs: Instr list) : Instr list * bool =
+    let rec loop changed remaining =
         match remaining with
         | instr :: next :: rest ->
             match tryRetargetFloatingResultIntoMove instr next rest with
-            | Some folded -> folded :: loop rest
+            | Some folded ->
+                let (optimizedRest, _) = loop true rest
+                (folded :: optimizedRest, true)
             | None ->
                 match optimizeInstr instr with
-                | Some instr' -> instr' :: loop (next :: rest)
-                | None -> loop (next :: rest)
+                | Some instr' ->
+                    let changed' =
+                        changed || not (obj.ReferenceEquals(instr, instr'))
+                    let (optimizedRest, restChanged) =
+                        loop changed' (next :: rest)
+                    (instr' :: optimizedRest, restChanged)
+                | None -> loop true (next :: rest)
         | instr :: rest ->
             match optimizeInstr instr with
-            | Some instr' -> instr' :: loop rest
-            | None -> loop rest
-        | [] -> []
+            | Some instr' ->
+                let changed' =
+                    changed || not (obj.ReferenceEquals(instr, instr'))
+                let (optimizedRest, restChanged) = loop changed' rest
+                (instr' :: optimizedRest, restChanged)
+            | None -> loop true rest
+        | [] -> ([], changed)
 
-    loop instrs
+    loop false instrs
+
+let optimizeInstrs (instrs: Instr list) : Instr list =
+    optimizeInstrsWithChange instrs |> fst
 
 let removeSelfMovesFromInstrs (instrs: Instr list) : Instr list =
     let rec loop remaining =
@@ -572,16 +586,24 @@ let private clobbersFRegs (instr: Instr) : bool =
     | FArgMoves _ -> true
     | _ -> false
 
-let removeRedundantFloatingCopyBackMoves (instrs: Instr list) : Instr list =
-    let rec loop aliases nextValueIdentity acc remaining =
+let private removeRedundantFloatingCopyBackMovesWithChange
+    (instrs: Instr list)
+    : Instr list * bool =
+    let rec loop aliases nextValueIdentity acc changed remaining =
         match remaining with
-        | [] -> List.rev acc
+        | [] -> (List.rev acc, changed)
         | FMov (dest, src) as instr :: rest ->
             let srcValue = currentFRegValue src aliases
             let destValue = currentFRegValue dest aliases
             let aliases' = Map.add dest srcValue aliases
-            let acc' = if destValue = srcValue then acc else instr :: acc
-            loop aliases' nextValueIdentity acc' rest
+            let redundant = destValue = srcValue
+            let acc' = if redundant then acc else instr :: acc
+            loop
+                aliases'
+                nextValueIdentity
+                acc'
+                (changed || redundant)
+                rest
         | instr :: rest ->
             let (aliases', nextValueIdentity') =
                 if clobbersFRegs instr then
@@ -591,9 +613,12 @@ let removeRedundantFloatingCopyBackMoves (instrs: Instr list) : Instr list =
                     | Some dest ->
                         (recordFRegWrite dest nextValueIdentity aliases, nextValueIdentity + 1)
                     | None -> (aliases, nextValueIdentity)
-            loop aliases' nextValueIdentity' (instr :: acc) rest
+            loop aliases' nextValueIdentity' (instr :: acc) changed rest
 
-    loop Map.empty 0 [] instrs
+    loop Map.empty 0 [] false instrs
+
+let removeRedundantFloatingCopyBackMoves (instrs: Instr list) : Instr list =
+    removeRedundantFloatingCopyBackMovesWithChange instrs |> fst
 
 let removePostAllocationMovesFromFunction (func: Function) : Function =
     let blocks =
@@ -834,16 +859,16 @@ let private mulByConstantCandidates (instrs: Instr list) : Set<Reg> =
 /// Pattern: Mov temp, Imm n; Mul dest, x, temp → Lsl_imm temp, x, shift; Add/Sub dest, x, Reg temp
 /// This converts multiplication by constants like 3, 5, 7, 9 to shift+add/sub sequences
 /// which ARM64 can execute in a single ADD_shifted/SUB_shifted instruction
-let tryMulByConstant (instrs: Instr list) : Instr list =
+let private tryMulByConstantWithChange (instrs: Instr list) : Instr list * bool =
     let candidates = mulByConstantCandidates instrs
     if Set.isEmpty candidates then
-        instrs
+        (instrs, false)
     else
         let lastUses = lastRelevantRegUses candidates instrs
-        let rec loop index acc remaining =
+        let rec loop index acc changed remaining =
             match remaining with
-            | [] -> List.rev acc
-            | [single] -> List.rev (single :: acc)
+            | [] -> (List.rev acc, changed)
+            | [single] -> (List.rev (single :: acc), changed)
             | Mov (constReg, Imm n) :: Mul (mulDest, mulLeft, mulRight) :: rest
                 when sameReg constReg mulRight && not (sameReg constReg mulLeft) ->
                 match tryMulConstantPattern n with
@@ -854,9 +879,13 @@ let tryMulByConstant (instrs: Instr list) : Instr list =
                             Add (mulDest, mulLeft, Reg constReg)
                         else
                             Sub (mulDest, constReg, Reg mulLeft)
-                    loop (index + 2) (combineInstr :: shiftInstr :: acc) rest
+                    loop (index + 2) (combineInstr :: shiftInstr :: acc) true rest
                 | _ ->
-                    loop (index + 1) (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
+                    loop
+                        (index + 1)
+                        (Mov (constReg, Imm n) :: acc)
+                        changed
+                        (Mul (mulDest, mulLeft, mulRight) :: rest)
             | Mov (constReg, Imm n) :: Mul (mulDest, mulLeft, mulRight) :: rest
                 when sameReg constReg mulLeft && not (sameReg constReg mulRight) ->
                 match tryMulConstantPattern n with
@@ -867,11 +896,18 @@ let tryMulByConstant (instrs: Instr list) : Instr list =
                             Add (mulDest, mulRight, Reg constReg)
                         else
                             Sub (mulDest, constReg, Reg mulRight)
-                    loop (index + 2) (combineInstr :: shiftInstr :: acc) rest
+                    loop (index + 2) (combineInstr :: shiftInstr :: acc) true rest
                 | _ ->
-                    loop (index + 1) (Mov (constReg, Imm n) :: acc) (Mul (mulDest, mulLeft, mulRight) :: rest)
-            | instr :: rest -> loop (index + 1) (instr :: acc) rest
-        loop 0 [] instrs
+                    loop
+                        (index + 1)
+                        (Mov (constReg, Imm n) :: acc)
+                        changed
+                        (Mul (mulDest, mulLeft, mulRight) :: rest)
+            | instr :: rest -> loop (index + 1) (instr :: acc) changed rest
+        loop 0 [] false instrs
+
+let tryMulByConstant (instrs: Instr list) : Instr list =
+    tryMulByConstantWithChange instrs |> fst
 
 let private mulAddCandidates (instrs: Instr list) : Set<Reg> =
     let rec loop candidates remaining =
@@ -887,30 +923,33 @@ let private mulAddCandidates (instrs: Instr list) : Set<Reg> =
 /// Try to fuse MUL + ADD into MADD (multiply-add)
 /// Pattern: MUL temp, a, b; ADD dest, temp, Reg c → MADD dest, a, b, c
 /// Or:      MUL temp, a, b; ADD dest, Reg c, temp → MADD dest, a, b, c (commutative)
-let tryFuseMulAdd (instrs: Instr list) : Instr list =
+let private tryFuseMulAddWithChange (instrs: Instr list) : Instr list * bool =
     let candidates = mulAddCandidates instrs
     if Set.isEmpty candidates then
-        instrs
+        (instrs, false)
     else
         let lastUses = lastRelevantRegUses candidates instrs
-        let rec loop index acc remaining =
+        let rec loop index acc changed remaining =
             match remaining with
-            | [] -> List.rev acc
-            | [single] -> List.rev (single :: acc)
+            | [] -> (List.rev acc, changed)
+            | [single] -> (List.rev (single :: acc), changed)
             | Mul (mulDest, mulLeft, mulRight) :: Add (addDest, addLeft, Reg addRight) :: rest
                 when sameReg mulDest addLeft && not (sameReg mulDest addRight) ->
                 if not (regUsedAfter lastUses (index + 1) mulDest) then
-                    loop (index + 2) (Madd (addDest, mulLeft, mulRight, addRight) :: acc) rest
+                    loop (index + 2) (Madd (addDest, mulLeft, mulRight, addRight) :: acc) true rest
                 else
-                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) (Add (addDest, addLeft, Reg addRight) :: rest)
+                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) changed (Add (addDest, addLeft, Reg addRight) :: rest)
             | Mul (mulDest, mulLeft, mulRight) :: Add (addDest, addLeft, Reg addRight) :: rest
                 when sameReg mulDest addRight && not (sameReg mulDest addLeft) ->
                 if not (regUsedAfter lastUses (index + 1) mulDest) then
-                    loop (index + 2) (Madd (addDest, mulLeft, mulRight, addLeft) :: acc) rest
+                    loop (index + 2) (Madd (addDest, mulLeft, mulRight, addLeft) :: acc) true rest
                 else
-                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) (Add (addDest, addLeft, Reg addRight) :: rest)
-            | instr :: rest -> loop (index + 1) (instr :: acc) rest
-        loop 0 [] instrs
+                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) changed (Add (addDest, addLeft, Reg addRight) :: rest)
+            | instr :: rest -> loop (index + 1) (instr :: acc) changed rest
+        loop 0 [] false instrs
+
+let tryFuseMulAdd (instrs: Instr list) : Instr list =
+    tryFuseMulAddWithChange instrs |> fst
 
 let private mulSubCandidates (instrs: Instr list) : Set<Reg> =
     let rec loop candidates remaining =
@@ -924,24 +963,27 @@ let private mulSubCandidates (instrs: Instr list) : Set<Reg> =
 
 /// Try to fuse MUL + SUB into MSUB (multiply-subtract)
 /// Pattern: MUL temp, a, b; SUB dest, minuend, Reg temp → MSUB dest, a, b, minuend
-let tryFuseMulSub (instrs: Instr list) : Instr list =
+let private tryFuseMulSubWithChange (instrs: Instr list) : Instr list * bool =
     let candidates = mulSubCandidates instrs
     if Set.isEmpty candidates then
-        instrs
+        (instrs, false)
     else
         let lastUses = lastRelevantRegUses candidates instrs
-        let rec loop index acc remaining =
+        let rec loop index acc changed remaining =
             match remaining with
-            | [] -> List.rev acc
-            | [single] -> List.rev (single :: acc)
+            | [] -> (List.rev acc, changed)
+            | [single] -> (List.rev (single :: acc), changed)
             | Mul (mulDest, mulLeft, mulRight) :: Sub (subDest, minuend, Reg subtrahend) :: rest
                 when sameReg mulDest subtrahend && not (sameReg mulDest minuend) ->
                 if not (regUsedAfter lastUses (index + 1) mulDest) then
-                    loop (index + 2) (Msub (subDest, mulLeft, mulRight, minuend) :: acc) rest
+                    loop (index + 2) (Msub (subDest, mulLeft, mulRight, minuend) :: acc) true rest
                 else
-                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) (Sub (subDest, minuend, Reg subtrahend) :: rest)
-            | instr :: rest -> loop (index + 1) (instr :: acc) rest
-        loop 0 [] instrs
+                    loop (index + 1) (Mul (mulDest, mulLeft, mulRight) :: acc) changed (Sub (subDest, minuend, Reg subtrahend) :: rest)
+            | instr :: rest -> loop (index + 1) (instr :: acc) changed rest
+        loop 0 [] false instrs
+
+let tryFuseMulSub (instrs: Instr list) : Instr list =
+    tryFuseMulSubWithChange instrs |> fst
 
 /// Try to fuse Cset + Branch into CondBranch
 /// Pattern: last instruction is Cset dest, cond; terminator is Branch dest, trueL, falseL
@@ -1055,50 +1097,68 @@ let private optimizeBlockWithRegUseCounts
     (regUseCounts: Map<Reg, int>)
     (block: BasicBlock)
     : BasicBlock * bool =
-    let instrs' = optimizeInstrs block.Instrs
-    let instrsCopyCleaned = removeRedundantFloatingCopyBackMoves instrs'
+    let (instrs', instructionChanged) =
+        optimizeInstrsWithChange block.Instrs
+    let (instrsCopyCleaned, floatingCopyChanged) =
+        removeRedundantFloatingCopyBackMovesWithChange instrs'
     let containsMultiply =
         instrsCopyCleaned
         |> List.exists (function Mul _ -> true | _ -> false)
-    let instrs'' =
+    let (instrs'', multiplyChanged) =
         if not containsMultiply then
-            instrsCopyCleaned
+            (instrsCopyCleaned, false)
         else
             // Apply multiply-by-constant strength reduction (Mov + Mul → Lsl + Add/Sub)
-            let instrs1 = tryMulByConstant instrsCopyCleaned
+            let (instrs1, mulByConstantChanged) =
+                tryMulByConstantWithChange instrsCopyCleaned
             // Apply MUL + ADD → MADD fusion
-            let instrs2 = tryFuseMulAdd instrs1
+            let (instrs2, mulAddChanged) = tryFuseMulAddWithChange instrs1
             // Apply MUL + SUB → MSUB fusion
-            tryFuseMulSub instrs2
+            let (instrs3, mulSubChanged) = tryFuseMulSubWithChange instrs2
+            (instrs3,
+             mulByConstantChanged || mulAddChanged || mulSubChanged)
 
     // Drop a materialized Boolean negation when the branch can swap its edges.
-    let (instrsBeforeCondBranch, terminatorBeforeCondBranch) =
+    let (instrsBeforeCondBranch, terminatorBeforeCondBranch, booleanNotChanged) =
         match tryFuseBooleanNotBranch instrs'' block.Terminator with
-        | Some (fusedInstrs, fusedTerminator) -> (fusedInstrs, fusedTerminator)
-        | None -> (instrs'', block.Terminator)
+        | Some (fusedInstrs, fusedTerminator) ->
+            (fusedInstrs, fusedTerminator, true)
+        | None ->
+            (instrs'', block.Terminator, false)
 
     // Try to fuse Cset + Branch into CondBranch
-    let (instrs''', terminator') =
+    let (instrs''', terminator', conditionalBranchChanged) =
         match tryFuseCondBranch regUseCounts instrsBeforeCondBranch terminatorBeforeCondBranch with
         | Some (fusedInstrs, fusedTerminator) ->
             // After fusing Cset + Branch → CondBranch, try to fuse CMP #0 + CondBranch → CBZ/CBNZ
             match tryFuseCmpZeroBranch fusedInstrs fusedTerminator with
             | Some (fusedInstrs2, fusedTerminator2) ->
-                (fusedInstrs2, fusedTerminator2)
+                (fusedInstrs2, fusedTerminator2, true)
             | None ->
-                (fusedInstrs, fusedTerminator)
+                (fusedInstrs, fusedTerminator, true)
         | None ->
             // Also try CMP #0 + CondBranch fusion on the original terminator
             match tryFuseCmpZeroBranch instrsBeforeCondBranch terminatorBeforeCondBranch with
             | Some (fusedInstrs, fusedTerminator) ->
-                (fusedInstrs, fusedTerminator)
+                (fusedInstrs, fusedTerminator, true)
             | None ->
-                (instrsBeforeCondBranch, terminatorBeforeCondBranch)
+                (instrsBeforeCondBranch, terminatorBeforeCondBranch, false)
 
     // Try to fuse AND_imm (power-of-2) + BranchZero/Branch → TBZ/TBNZ
-    let (finalInstrs, finalTerminator) = applyAndBitBranchFusion instrs''' terminator'
+    let (finalInstrs, finalTerminator, bitBranchChanged) =
+        match tryFuseAndBitBranch instrs''' terminator' with
+        | Some (fusedInstrs, fusedTerminator) ->
+            (fusedInstrs, fusedTerminator, true)
+        | None ->
+            (instrs''', terminator', false)
     let block' = { block with Instrs = finalInstrs; Terminator = finalTerminator }
-    (block', block' <> block)
+    (block',
+     instructionChanged
+     || floatingCopyChanged
+     || multiplyChanged
+     || booleanNotChanged
+     || conditionalBranchChanged
+     || bitBranchChanged)
 
 let optimizeBlock (block: BasicBlock) : BasicBlock * bool =
     optimizeBlockWithRegUseCounts Map.empty block
