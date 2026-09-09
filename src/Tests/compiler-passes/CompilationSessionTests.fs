@@ -92,6 +92,52 @@ let testSsaFunctionCacheReusesStructuralFunctions
     else
         Error $"Expected structurally identical MIR functions to share SSA conversion, got conversions={conversions.Count}, cached={session.CachedSsaFunctionCount}, hits={session.SsaFunctionHitCount}, misses={session.SsaFunctionMissCount}"
 
+let testSsaFunctionCacheIgnoresFunctionLocalRegisterOffsets
+    (_: CompilerLibrary.StdlibResult)
+    ()
+    : TestResult =
+    use session = new CompilerLibrary.CompilationSession()
+    let makeFunction registerOffset : MIR.Function =
+        let entry = MIR.Label "offset_mir_function_entry"
+        let parameter = MIR.VReg registerOffset
+        let result = MIR.VReg (registerOffset + 1)
+        {
+            Name = "offset_mir_function"
+            TypedParams = [{ Reg = parameter; Type = TInt64 }]
+            ReturnType = TInt64
+            CFG = {
+                Entry = entry
+                Blocks =
+                    Map.ofList [
+                        entry,
+                        {
+                            Label = entry
+                            Instrs = [MIR.Mov (result, MIR.Register parameter, Some TInt64)]
+                            Terminator = MIR.Ret (MIR.Register result)
+                        }
+                    ]
+            }
+            FloatRegs = Set.empty
+        }
+    let firstInput = makeFunction 100
+    let secondInput = makeFunction 400
+    let conversions = ResizeArray<unit>()
+    let convert func () =
+        conversions.Add ()
+        SSA_Construction.convertFunctionToSSA func
+    let first =
+        session.ConvertMirFunctionToSsa firstInput (convert firstInput)
+    let second =
+        session.ConvertMirFunctionToSsa secondInput (convert secondInput)
+    if conversions.Count = 1
+       && obj.ReferenceEquals(first, second)
+       && session.CachedSsaFunctionCount = 1
+       && session.SsaFunctionHitCount = 1
+       && session.SsaFunctionMissCount = 1 then
+        Ok ()
+    else
+        Error $"Expected function-local MIR register offsets to share SSA conversion, got conversions={conversions.Count}, cached={session.CachedSsaFunctionCount}, hits={session.SsaFunctionHitCount}, misses={session.SsaFunctionMissCount}"
+
 let testMirOptimizationCacheReusesStructuralFunctions
     (_: CompilerLibrary.StdlibResult)
     ()
@@ -607,6 +653,7 @@ let tests (stdlib: CompilerLibrary.StdlibResult) = [
     ("compilation session segregates ARM64 target options and coverage", testArm64CodegenCacheSegregatesTargetOptionsAndCoverage stdlib)
     ("compilation session codegen metrics are opt-in", testArm64CodegenMetricsAreOptIn stdlib)
     ("compilation session reuses structural SSA functions", testSsaFunctionCacheReusesStructuralFunctions stdlib)
+    ("compilation session ignores function-local MIR register offsets", testSsaFunctionCacheIgnoresFunctionLocalRegisterOffsets stdlib)
     ("compilation session reuses structural MIR optimizations", testMirOptimizationCacheReusesStructuralFunctions stdlib)
     ("compilation session reuses structural LIR allocation", testAllocatedLirFunctionCacheReusesStructuralFunctions stdlib)
     ("compilation session segregates ARM64 registry contexts", testArm64CodegenCacheSegregatesCompilationContexts stdlib)
