@@ -243,6 +243,10 @@ type CompilationSession(collectCodegenMetrics: bool) =
         Dictionary<
             obj,
             Dictionary<Set<string>, LIR.Function list>>(ObjectReferenceComparer())
+    let reachableStdlibNamesByRootAndContext =
+        Dictionary<
+            obj,
+            Dictionary<string, Set<string>>>(ObjectReferenceComparer())
     let mirRegistriesByContext =
         Dictionary<
             obj,
@@ -420,6 +424,12 @@ type CompilationSession(collectCodegenMetrics: bool) =
             userFunctions
             |> List.fold (fun calls func ->
                 Set.union calls (DeadCodeElimination.getCalledFunctions func)) Set.empty
+            // Calls between user functions cannot lead into the stdlib graph:
+            // every direct user-to-stdlib edge is already present in this set.
+            // Excluding those user-local names makes equivalent stdlib queries
+            // share one session entry instead of fragmenting the cache by each
+            // compilation's generated function names.
+            |> Set.filter (fun name -> Map.containsKey name stdlibCallGraph)
         if disposed then
             let reachable = DeadCodeElimination.findReachable stdlibCallGraph directCalls
             stdlibFunctions
@@ -437,7 +447,27 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 stdlibReachabilityHitCount <- stdlibReachabilityHitCount + 1
                 functions
             | false, _ ->
-                let reachable = DeadCodeElimination.findReachable stdlibCallGraph directCalls
+                let rootEntries =
+                    match reachableStdlibNamesByRootAndContext.TryGetValue contextIdentity with
+                    | true, entries -> entries
+                    | false, _ ->
+                        let entries = Dictionary<string, Set<string>>()
+                        reachableStdlibNamesByRootAndContext.[contextIdentity] <- entries
+                        entries
+                let reachable =
+                    directCalls
+                    |> Set.fold (fun reachable root ->
+                        let fromRoot =
+                            match rootEntries.TryGetValue root with
+                            | true, names -> names
+                            | false, _ ->
+                                let names =
+                                    DeadCodeElimination.findReachable
+                                        stdlibCallGraph
+                                        (Set.singleton root)
+                                rootEntries.[root] <- names
+                                names
+                        Set.union reachable fromRoot) Set.empty
                 let functions =
                     stdlibFunctions
                     |> List.filter (fun func -> Set.contains func.Name reachable)
@@ -762,6 +792,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             compiledDependenciesByIdentity.Clear()
             compiledStartFunctions.Clear()
             reachableStdlibFunctionsByContext.Clear()
+            reachableStdlibNamesByRootAndContext.Clear()
             mirRegistriesByContext.Clear()
             arm64MetadataGroupsByContext.Clear()
             arm64FunctionGroupsByContext.Clear()

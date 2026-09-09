@@ -333,15 +333,20 @@ let testStdlibReachabilityIsReused
     ()
     : TestResult =
     use session = new CompilerLibrary.CompilationSession()
-    let source = "Stdlib.Json.parse<List<Int64>>(\"[1,2,3]\")"
-    expectCompiled (compile stdlib session CompilerLibrary.defaultOptions source)
-    |> Result.bind (fun () -> expectCompiled (compile stdlib session CompilerLibrary.defaultOptions source))
+    let source functionName =
+        $"let {functionName}(value: Int64) : String =\n"
+        + $"    if value <= 0L then Stdlib.Int64.toString(value)\n"
+        + $"    else {functionName}(value - 1L)\n\n"
+        + $"{functionName}(1L)"
+    expectCompiled (compile stdlib session CompilerLibrary.defaultOptions (source "first_user_function"))
+    |> Result.bind (fun () ->
+        expectCompiled (compile stdlib session CompilerLibrary.defaultOptions (source "second_user_function")))
     |> Result.bind (fun () ->
         if session.StdlibReachabilityHitCount > 0
            && session.StdlibReachabilityMissCount > 0 then
             Ok ()
         else
-            Error $"Expected identical stdlib roots to reuse reachability, got hits={session.StdlibReachabilityHitCount}, misses={session.StdlibReachabilityMissCount}")
+            Error $"Expected equivalent stdlib roots with different user-local calls to reuse reachability, got hits={session.StdlibReachabilityHitCount}, misses={session.StdlibReachabilityMissCount}")
 
 let testArm64HelpersAreReused
     (stdlib: CompilerLibrary.StdlibResult)
