@@ -156,6 +156,8 @@ type CodegenProfileSummary = {
     compiled_dependency_cache_misses: int
     ssa_function_cache_hits: int
     ssa_function_cache_misses: int
+    mir_optimization_cache_hits: int
+    mir_optimization_cache_misses: int
     compiled_start_cache_hits: int
     compiled_start_cache_misses: int
     stdlib_reachability_cache_hits: int
@@ -591,6 +593,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
     let mutable compiledDependencyCacheMisses = 0
     let mutable ssaFunctionCacheHits = 0
     let mutable ssaFunctionCacheMisses = 0
+    let mutable mirOptimizationCacheHits = 0
+    let mutable mirOptimizationCacheMisses = 0
     let mutable compiledStartCacheHits = 0
     let mutable compiledStartCacheMisses = 0
     let mutable stdlibReachabilityCacheHits = 0
@@ -1051,6 +1055,10 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                     ssaFunctionCacheHits + compilationSession.SsaFunctionHitCount
                 ssaFunctionCacheMisses <-
                     ssaFunctionCacheMisses + compilationSession.SsaFunctionMissCount
+                mirOptimizationCacheHits <-
+                    mirOptimizationCacheHits + compilationSession.MirOptimizationHitCount
+                mirOptimizationCacheMisses <-
+                    mirOptimizationCacheMisses + compilationSession.MirOptimizationMissCount
                 compiledStartCacheHits <-
                     compiledStartCacheHits + compilationSession.CompiledStartHitCount
                 compiledStartCacheMisses <-
@@ -1649,7 +1657,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
             |> Seq.toArray
         let payload = {
-            schema_version = 8
+            schema_version = 9
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs
@@ -1666,6 +1674,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                 compiled_dependency_cache_misses = compiledDependencyCacheMisses
                 ssa_function_cache_hits = ssaFunctionCacheHits
                 ssa_function_cache_misses = ssaFunctionCacheMisses
+                mir_optimization_cache_hits = mirOptimizationCacheHits
+                mir_optimization_cache_misses = mirOptimizationCacheMisses
                 compiled_start_cache_hits = compiledStartCacheHits
                 compiled_start_cache_misses = compiledStartCacheMisses
                 stdlib_reachability_cache_hits = stdlibReachabilityCacheHits

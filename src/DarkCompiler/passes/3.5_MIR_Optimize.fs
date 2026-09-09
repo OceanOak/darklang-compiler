@@ -106,12 +106,20 @@ let hasSideEffects (instr: Instr) : bool =
 /// unproven functions computes the greatest fixed point, so mutually recursive
 /// and self-recursive components remain provable without assuming unknown calls
 /// are safe.
-let private analyzeEffectFreeFunctions (functions: Function list) : Set<string> =
-    let directCallee instr =
-        match instr with
-        | Call (_, funcName, _, _, _)
-        | TailCall (funcName, _, _, _) -> Some funcName
-        | _ -> None
+let private directCallee instr =
+    match instr with
+    | Call (_, funcName, _, _, _)
+    | TailCall (funcName, _, _, _) -> Some funcName
+    | _ -> None
+
+let private directCallees (func: Function) : Set<string> =
+    func.CFG.Blocks
+    |> Map.toList
+    |> List.collect (fun (_, block) -> block.Instrs)
+    |> List.choose directCallee
+    |> Set.ofList
+
+let analyzeEffectFreeFunctions (functions: Function list) : Set<string> =
 
     let locallyEffectFree func =
         func.CFG.Blocks
@@ -121,13 +129,6 @@ let private analyzeEffectFreeFunctions (functions: Function list) : Set<string> 
                 match directCallee instr with
                 | Some _ -> true
                 | None -> not (hasSideEffects instr)))
-
-    let directCallees func =
-        func.CFG.Blocks
-        |> Map.toList
-        |> List.collect (fun (_, block) -> block.Instrs)
-        |> List.choose directCallee
-        |> Set.ofList
 
     let candidates = functions |> List.filter locallyEffectFree
 
@@ -145,6 +146,14 @@ let private analyzeEffectFreeFunctions (functions: Function list) : Set<string> 
     |> List.map (fun func -> func.Name)
     |> Set.ofList
     |> removeCallersOfUnprovenFunctions
+
+/// Only direct callees can affect optimization of this function. Restricting
+/// the whole-program result to those names gives a compositional cache key.
+let effectFreeCallsForFunction
+    (effectFreeFunctions: Set<string>)
+    (func: Function)
+    : Set<string> =
+    Set.intersect effectFreeFunctions (directCallees func)
 
 /// Get the destination VReg of an instruction (if any)
 let getInstrDest (instr: Instr) : VReg option =
@@ -2814,6 +2823,20 @@ let private optimizeFunctionWithEffectFreeCalls
     : Function =
     let cfg' = optimizeCFGWithEffectFreeCalls effectFreeFunctions options None func.CFG
     withOptimizedCFG func cfg'
+
+let optimizeFunctionWithEffectFreeCallsAndTickTrace
+    (phaseTickRecorder: (string -> int64 -> unit) option)
+    (effectFreeFunctions: Set<string>)
+    (options: OptimizeOptions)
+    (func: Function)
+    : Function =
+    let cfg =
+        optimizeCFGWithEffectFreeCalls
+            effectFreeFunctions
+            options
+            phaseTickRecorder
+            func.CFG
+    withOptimizedCFG func cfg
 
 let optimizeFunction (func: Function) : Function =
     let cfg' = optimizeCFG func.CFG

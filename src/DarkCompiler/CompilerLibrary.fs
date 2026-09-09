@@ -196,6 +196,25 @@ type internal StartCompilationConfig = {
 type internal SsaFunctionCache =
     MIR.Function -> (unit -> MIR.Function) -> MIR.Function
 
+[<NoComparison>]
+type MirOptimizationKey = {
+    Function: MIR.Function
+    Options: MIR_Optimize.OptimizeOptions
+    EffectFreeCalls: Set<string>
+}
+
+type private MirOptimizationKeyNameHashComparer() =
+    interface IEqualityComparer<MirOptimizationKey> with
+        member _.Equals(left, right) =
+            left.Function = right.Function
+            && left.Options = right.Options
+            && left.EffectFreeCalls = right.EffectFreeCalls
+        member _.GetHashCode(key) =
+            StringComparer.Ordinal.GetHashCode(key.Function.Name)
+
+type internal MirOptimizationCache =
+    MirOptimizationKey -> (unit -> MIR.Function) -> MIR.Function
+
 type private Arm64InstructionChunkReferenceComparer() =
     interface IEqualityComparer<ARM64Symbolic.Instr list> with
         member _.Equals(left, right) = Object.ReferenceEquals(left, right)
@@ -249,6 +268,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
         Dictionary<StartCompilationConfig, Result<LIR.Function list, string>>()
     let ssaFunctions =
         Dictionary<MIR.Function, MIR.Function>(MirFunctionNameHashComparer())
+    let optimizedMirFunctions =
+        Dictionary<MirOptimizationKey, MIR.Function>(MirOptimizationKeyNameHashComparer())
     let reachableStdlibFunctionsByContext =
         Dictionary<
             obj,
@@ -321,6 +342,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
     let mutable compiledStartMissCount = 0
     let mutable ssaFunctionHitCount = 0
     let mutable ssaFunctionMissCount = 0
+    let mutable mirOptimizationHitCount = 0
+    let mutable mirOptimizationMissCount = 0
     let mutable stdlibReachabilityHitCount = 0
     let mutable stdlibReachabilityMissCount = 0
     let mutable mirRegistryProjectionHitCount = 0
@@ -442,6 +465,23 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 ssaFunctions.[func] <- converted
                 ssaFunctionMissCount <- ssaFunctionMissCount + 1
                 converted
+
+    member _.OptimizeMirFunction
+        (key: MirOptimizationKey)
+        (optimize: unit -> MIR.Function)
+        : MIR.Function =
+        if disposed then
+            optimize ()
+        else
+            match optimizedMirFunctions.TryGetValue key with
+            | true, optimized ->
+                mirOptimizationHitCount <- mirOptimizationHitCount + 1
+                optimized
+            | false, _ ->
+                let optimized = optimize ()
+                optimizedMirFunctions.[key] <- optimized
+                mirOptimizationMissCount <- mirOptimizationMissCount + 1
+                optimized
 
     member internal _.ReachableStdlibFunctions
         (contextIdentity: obj)
@@ -760,6 +800,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
         else compiledDependenciesByIdentity.Values |> Seq.sumBy (fun entries -> entries.Count)
     member _.CachedCompiledStartCount = if disposed then 0 else compiledStartFunctions.Count
     member _.CachedSsaFunctionCount = if disposed then 0 else ssaFunctions.Count
+    member _.CachedMirOptimizationCount = if disposed then 0 else optimizedMirFunctions.Count
     member _.CachedStdlibReachabilityCount =
         if disposed then 0
         else reachableStdlibFunctionsByContext.Values |> Seq.sumBy (fun entries -> entries.Count)
@@ -787,6 +828,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
     member _.CompiledStartMissCount = compiledStartMissCount
     member _.SsaFunctionHitCount = ssaFunctionHitCount
     member _.SsaFunctionMissCount = ssaFunctionMissCount
+    member _.MirOptimizationHitCount = mirOptimizationHitCount
+    member _.MirOptimizationMissCount = mirOptimizationMissCount
     member _.StdlibReachabilityHitCount = stdlibReachabilityHitCount
     member _.StdlibReachabilityMissCount = stdlibReachabilityMissCount
     member _.MirRegistryProjectionHitCount = mirRegistryProjectionHitCount
@@ -824,6 +867,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             compiledDependenciesByIdentity.Clear()
             compiledStartFunctions.Clear()
             ssaFunctions.Clear()
+            optimizedMirFunctions.Clear()
             reachableStdlibFunctionsByContext.Clear()
             reachableStdlibNamesByRootAndContext.Clear()
             mirRegistriesByContext.Clear()
@@ -927,6 +971,7 @@ let private compileMirToLir
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
     (ssaFunctionCache: SsaFunctionCache option)
+    (mirOptimizationCache: MirOptimizationCache option)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
     : Result<LIR.Function list, string> =
@@ -980,18 +1025,52 @@ let private compileMirToLir
     let mirOptStart = sw.Elapsed.TotalMilliseconds
     let optimizedProgram =
         if shouldRunMIROptimize mirOptions then
-            let mirOptPhaseRecorder =
-                passTimingRecorder
-                |> Option.map (fun recorder ->
-                    fun name (elapsedMs: float) ->
-                        recorder {
-                            Pass = name
-                            Elapsed = TimeSpan.FromMilliseconds elapsedMs
-                        })
-            MIR_Optimize.optimizeProgramWithOptionsAndTrace
-                mirOptPhaseRecorder
-                mirOptions
-                ssaProgram
+            let accumulatedTicks = Dictionary<string, int64>()
+            let addTicks name ticks =
+                match accumulatedTicks.TryGetValue name with
+                | true, existing -> accumulatedTicks.[name] <- existing + ticks
+                | false, _ -> accumulatedTicks.[name] <- ticks
+            let phaseTickRecorder =
+                passTimingRecorder |> Option.map (fun _ -> addTicks)
+            let effectAnalysisStart = Stopwatch.GetTimestamp()
+            let effectFreeFunctions =
+                if mirOptions.EnableLICM || mirOptions.EnableCSE then
+                    MIR_Optimize.analyzeEffectFreeFunctions
+                        (let (MIR.Program (functions, _, _)) = ssaProgram in functions)
+                else
+                    Set.empty
+            let effectAnalysisTicks =
+                Stopwatch.GetTimestamp() - effectAnalysisStart
+            addTicks "MIR Effect Analysis" effectAnalysisTicks
+            let optimizeFunction func =
+                let optimize () =
+                    MIR_Optimize.optimizeFunctionWithEffectFreeCallsAndTickTrace
+                        phaseTickRecorder
+                        effectFreeFunctions
+                        mirOptions
+                        func
+                let key = {
+                    Function = func
+                    Options = mirOptions
+                    EffectFreeCalls =
+                        MIR_Optimize.effectFreeCallsForFunction effectFreeFunctions func
+                }
+                match mirOptimizationCache with
+                | Some cache -> cache key optimize
+                | None -> optimize ()
+            let (MIR.Program (functions, variants, records)) = ssaProgram
+            let optimized =
+                MIR.Program (functions |> List.map optimizeFunction, variants, records)
+            match passTimingRecorder with
+            | Some recorder ->
+                let tickFrequency = float Stopwatch.Frequency
+                for KeyValue (name, ticks) in accumulatedTicks do
+                    recorder {
+                        Pass = name
+                        Elapsed = TimeSpan.FromMilliseconds(float ticks * 1000.0 / tickFrequency)
+                    }
+            | None -> ()
+            optimized
         else
             ssaProgram
     let mirOptElapsed = sw.Elapsed.TotalMilliseconds - mirOptStart
@@ -1098,6 +1177,7 @@ let private lowerToAllocatedLir
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
     (ssaFunctionCache: SsaFunctionCache option)
+    (mirOptimizationCache: MirOptimizationCache option)
     (releasePlanSummaryCache: CodeGen.ReleasePlanSummaryCache option)
     (stageSuffix: string)
     (functions: ANF.Function list)
@@ -1159,6 +1239,7 @@ let private lowerToAllocatedLir
                     sw
                     passTimingRecorder
                     ssaFunctionCache
+                    mirOptimizationCache
                     stageSuffix
                     mirProgram
                 |> Result.bind (fun lirFuncs ->
@@ -2606,6 +2687,7 @@ let buildStdlibWithTrace
                         passTimingRecorder
                         None
                         None
+                        None
                         "stdlib"
                         tcoFunctions
                         typeMap
@@ -2764,6 +2846,7 @@ let buildStdlibSpecializations
                                 stdlibOptions
                                 sw
                                 passTimingRecorder
+                                None
                                 None
                                 None
                                 "stdlib_specializations"
@@ -3377,6 +3460,12 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             |> Option.map (fun current ->
                                 fun func convert ->
                                     current.ConvertMirFunctionToSsa func convert)
+                        let dependencyMirOptimizationCache : MirOptimizationCache option =
+                            plan.Session
+                            |> Option.filter (fun _ -> not plan.Options.EnableCoverage)
+                            |> Option.map (fun current ->
+                                fun key optimize ->
+                                    current.OptimizeMirFunction key optimize)
                         let mirRegistryTimer = Stopwatch.StartNew()
                         let projectedMirRegistries =
                             match plan.Session with
@@ -3421,6 +3510,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     sw
                                     plan.PassTimingRecorder
                                     dependencySsaFunctionCache
+                                    dependencyMirOptimizationCache
                                     releasePlanSummaryCache
                                     plan.Labels.StageSuffix
                                     tcoDependencies
@@ -3507,6 +3597,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         sw
                                         plan.PassTimingRecorder
                                         None
+                                        None
                                         releasePlanSummaryCache
                                         plan.Labels.StageSuffix
                                         tcoProgramFunctions
@@ -3559,6 +3650,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                             plan.Options
                                             sw
                                             plan.PassTimingRecorder
+                                            None
                                             None
                                             releasePlanSummaryCache
                                             plan.Labels.StageSuffix
@@ -3829,6 +3921,7 @@ let buildPreambleContext
                             passTimingRecorder
                             None
                             None
+                            None
                             "preamble"
                             tcoFunctions
                             typeMap
@@ -3931,6 +4024,7 @@ let buildPreambleContextFromAnalysis
                 preambleOptions
                 sw
                 passTimingRecorder
+                None
                 None
                 None
                 "preamble"
