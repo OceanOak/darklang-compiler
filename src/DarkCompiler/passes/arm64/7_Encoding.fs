@@ -1475,18 +1475,14 @@ let private computeFloatLiteralOffsets (codeFileOffset: int) (codeSize: int) (fl
     if floatPool.Floats.IsEmpty then
         Map.empty
     else
-        // Map enumeration is already ordered by the pool index.
-        let sortedFloats =
-            floatPool.Floats
-            |> Map.toList
-
-        // Build label map with offsets using fold
         // Floats start after headers + code, 8-byte aligned
         let startOffset = codeFileOffset + codeSize
         let alignedStart = (startOffset + 7) &&& (~~~7)
 
-        sortedFloats
-        |> List.fold (fun (offset, offsetMap) (_idx, floatValue) ->
+        // Map.fold visits the pool in index order, preserving its layout
+        // without materializing an intermediate ordered list.
+        floatPool.Floats
+        |> Map.fold (fun (offset, offsetMap) _idx floatValue ->
             let bits = System.BitConverter.DoubleToInt64Bits floatValue
             let newMap = Map.add bits offset offsetMap
             (offset + 8, newMap))  // Each double is 8 bytes
@@ -1503,20 +1499,16 @@ let private computeStringLiteralOffsets (codeFileOffset: int) (codeSize: int) (f
     if stringPool.Strings.IsEmpty then
         Map.empty
     else
-        // Map enumeration is already ordered by the pool index.
-        let sortedStrings =
-            stringPool.Strings
-            |> Map.toList
-
-        // Build label map with offsets using fold
         // Strings start after headers + code + floats
         // Float pool is 8-byte aligned, so account for alignment
         let floatStart = (codeFileOffset + codeSize + 7) &&& (~~~7)
         let startOffset = floatStart + floatPoolSize
 
         // Each string has format: [length:8][data:N][padding:P][refcount:8]
-        sortedStrings
-        |> List.fold (fun (offset, offsetMap) (_idx, (str, len)) ->
+        // Map.fold visits the pool in index order, preserving its layout
+        // without materializing an intermediate ordered list.
+        stringPool.Strings
+        |> Map.fold (fun (offset, offsetMap) _idx (str, len) ->
             let newMap = Map.add str offset offsetMap
             let alignedLen = ((len + 7) / 8) * 8
             (offset + 8 + alignedLen + 8, newMap))
@@ -1526,13 +1518,10 @@ let private computeStringLiteralOffsets (codeFileOffset: int) (codeSize: int) (f
 /// Compute the size of the string pool in bytes
 /// Each string has format: [length:8][data:N][padding:P][refcount:8]
 let getStringPoolSize (stringPool: LiteralPool.StringPool) : int =
-    if stringPool.Strings.IsEmpty then 0
-    else
-        stringPool.Strings
-        |> Map.toList
-        |> List.sumBy (fun (_, (_, len)) ->
+    stringPool.Strings
+    |> Map.fold (fun size _idx (_str, len) ->
             let alignedLen = ((len + 7) / 8) * 8
-            8 + alignedLen + 8)
+            size + 8 + alignedLen + 8) 0
 
 /// Compute the platform-specific code file offset for encoding
 let private computeCodeFileOffset
