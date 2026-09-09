@@ -938,10 +938,22 @@ let private computeCombinedLivenessBitsFromFacts
     let floatPhiUsesBits = collectFPhiUsesByPred floatDomain blockIndex classifiedBlocks
     let intLiveness = Array.init classifiedBlocks.Length (fun _ -> { LiveIn = emptyIntBits; LiveOut = emptyIntBits })
     let floatLiveness = Array.init classifiedBlocks.Length (fun _ -> { LiveIn = emptyFloatBits; LiveOut = emptyFloatBits })
+    let successorIndices =
+        Array.init classifiedBlocks.Length (fun blockIdx ->
+            classifiedBlocks.[blockIdx].Block.Terminator
+            |> getSuccessors
+            |> List.choose (tryBlockIndex blockIndex)
+            |> List.toArray)
+    let predecessorIndices =
+        Array.init classifiedBlocks.Length (fun _ -> ResizeArray<int>())
+    for predIdx in 0 .. successorIndices.Length - 1 do
+        for succIdx in successorIndices.[predIdx] do
+            predecessorIndices.[succIdx].Add predIdx
     // Liveness flows from successors to predecessors. Visiting a CFG in
     // postorder therefore settles acyclic regions in one sweep; the fixed
-    // point below only has to revisit loop backedges. The explicit work stack
-    // keeps this traversal stack-safe for large generated functions.
+    // point below only has to revisit loop backedges. Successor and predecessor
+    // indices are retained so the solver only revisits blocks affected by a
+    // changed successor instead of rescanning the entire CFG.
     let backwardDataflowOrder =
         let roots =
             blockIndex.EntryIndex
@@ -960,9 +972,8 @@ let private computeCombinedLivenessBitsFromFacts
                     visit remaining visited postorderRev
                 else
                     let successors =
-                        classifiedBlocks.[blockIdx].Block.Terminator
-                        |> getSuccessors
-                        |> List.choose (tryBlockIndex blockIndex)
+                        successorIndices.[blockIdx]
+                        |> Array.toList
                         |> List.map (fun successorIdx -> (successorIdx, false))
                     visit
                         (successors @ ((blockIdx, true) :: remaining))
@@ -973,36 +984,44 @@ let private computeCombinedLivenessBitsFromFacts
         match phiUses.[succIdx] |> List.tryFind (fun (idx, _) -> idx = predIdx) with
         | Some (_, bits) -> bits
         | None -> emptyBits
-    let mutable changed = true
-    while changed do
-        changed <- false
-        for blockIdx in backwardDataflowOrder do
-            let block = classifiedBlocks.[blockIdx].Block
-            let successors = getSuccessors block.Terminator
-            let mutable intLiveOutAccumulator = NoUnionBits
-            let mutable floatLiveOutAccumulator = NoUnionBits
-            for succLabel in successors do
-                match tryBlockIndex blockIndex succLabel with
-                | Some succIdx ->
-                    intLiveOutAccumulator <- bitsetAccumulateUnion intLiveOutAccumulator intLiveness.[succIdx].LiveIn
-                    intLiveOutAccumulator <- bitsetAccumulateUnion intLiveOutAccumulator (phiUsesForEdge intPhiUsesBits emptyIntBits succIdx blockIdx)
-                    floatLiveOutAccumulator <- bitsetAccumulateUnion floatLiveOutAccumulator floatLiveness.[succIdx].LiveIn
-                    floatLiveOutAccumulator <- bitsetAccumulateUnion floatLiveOutAccumulator (phiUsesForEdge floatPhiUsesBits emptyFloatBits succIdx blockIdx)
-                | None -> ()
-            let (intGen, intKill) = intGenKillBits.[blockIdx]
-            let oldIntLiveness = intLiveness.[blockIdx]
-            let newIntLiveOut = bitsetFinishUnion emptyIntBits intLiveOutAccumulator
-            let newIntLiveIn = bitsetUnion intGen (bitsetDiff newIntLiveOut intKill)
-            let (floatGen, floatKill) = floatGenKillBits.[blockIdx]
-            let oldFloatLiveness = floatLiveness.[blockIdx]
-            let newFloatLiveOut = bitsetFinishUnion emptyFloatBits floatLiveOutAccumulator
-            let newFloatLiveIn = bitsetUnion floatGen (bitsetDiff newFloatLiveOut floatKill)
-            if not (bitsetEqual newIntLiveIn oldIntLiveness.LiveIn) || not (bitsetEqual newIntLiveOut oldIntLiveness.LiveOut) then
-                changed <- true
-                intLiveness.[blockIdx] <- { LiveIn = newIntLiveIn; LiveOut = newIntLiveOut }
-            if not (bitsetEqual newFloatLiveIn oldFloatLiveness.LiveIn) || not (bitsetEqual newFloatLiveOut oldFloatLiveness.LiveOut) then
-                changed <- true
-                floatLiveness.[blockIdx] <- { LiveIn = newFloatLiveIn; LiveOut = newFloatLiveOut }
+    let work = System.Collections.Generic.Queue<int>()
+    let queued = Array.create classifiedBlocks.Length false
+    for blockIdx in backwardDataflowOrder do
+        work.Enqueue blockIdx
+        queued.[blockIdx] <- true
+    while work.Count > 0 do
+        let blockIdx = work.Dequeue()
+        queued.[blockIdx] <- false
+        let mutable intLiveOutAccumulator = NoUnionBits
+        let mutable floatLiveOutAccumulator = NoUnionBits
+        for succIdx in successorIndices.[blockIdx] do
+            intLiveOutAccumulator <- bitsetAccumulateUnion intLiveOutAccumulator intLiveness.[succIdx].LiveIn
+            intLiveOutAccumulator <- bitsetAccumulateUnion intLiveOutAccumulator (phiUsesForEdge intPhiUsesBits emptyIntBits succIdx blockIdx)
+            floatLiveOutAccumulator <- bitsetAccumulateUnion floatLiveOutAccumulator floatLiveness.[succIdx].LiveIn
+            floatLiveOutAccumulator <- bitsetAccumulateUnion floatLiveOutAccumulator (phiUsesForEdge floatPhiUsesBits emptyFloatBits succIdx blockIdx)
+        let (intGen, intKill) = intGenKillBits.[blockIdx]
+        let oldIntLiveness = intLiveness.[blockIdx]
+        let newIntLiveOut = bitsetFinishUnion emptyIntBits intLiveOutAccumulator
+        let newIntLiveIn = bitsetClone newIntLiveOut
+        bitsetDiffInPlace newIntLiveIn intKill
+        bitsetUnionInPlace newIntLiveIn intGen
+        let intLiveInChanged = not (bitsetEqual newIntLiveIn oldIntLiveness.LiveIn)
+        if intLiveInChanged || not (bitsetEqual newIntLiveOut oldIntLiveness.LiveOut) then
+            intLiveness.[blockIdx] <- { LiveIn = newIntLiveIn; LiveOut = newIntLiveOut }
+        let (floatGen, floatKill) = floatGenKillBits.[blockIdx]
+        let oldFloatLiveness = floatLiveness.[blockIdx]
+        let newFloatLiveOut = bitsetFinishUnion emptyFloatBits floatLiveOutAccumulator
+        let newFloatLiveIn = bitsetClone newFloatLiveOut
+        bitsetDiffInPlace newFloatLiveIn floatKill
+        bitsetUnionInPlace newFloatLiveIn floatGen
+        let floatLiveInChanged = not (bitsetEqual newFloatLiveIn oldFloatLiveness.LiveIn)
+        if floatLiveInChanged || not (bitsetEqual newFloatLiveOut oldFloatLiveness.LiveOut) then
+            floatLiveness.[blockIdx] <- { LiveIn = newFloatLiveIn; LiveOut = newFloatLiveOut }
+        if intLiveInChanged || floatLiveInChanged then
+            for predIdx in predecessorIndices.[blockIdx] do
+                if not queued.[predIdx] then
+                    work.Enqueue predIdx
+                    queued.[predIdx] <- true
 
     (intDomain, intLiveness, floatDomain, floatLiveness)
 
