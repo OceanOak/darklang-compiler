@@ -2148,12 +2148,14 @@ let private checkCallArgLimits (mirFuncs: MIR.Function list) : Result<unit, stri
     | Some err -> Error err
     | None -> Ok ()
 
-/// Convert a MIR program to LIR for a concrete target architecture.
-let toLIRForWithTrace
+/// Convert MIR functions to LIR for a concrete target architecture.
+let private convertFunctionsForWithTrace
     (phaseRecorder: (string -> float -> unit) option)
     (arch: Platform.Arch)
-    (program: MIR.Program)
-    : Result<LIR.Program, string> =
+    (mirFuncs: MIR.Function list)
+    (variantRegistry: MIR.VariantRegistry)
+    (recordRegistry: MIR.RecordRegistry)
+    : Result<LIR.Function list, string> =
     let startPhase () =
         phaseRecorder |> Option.map (fun _ -> System.Diagnostics.Stopwatch.StartNew())
     let recordPhase name timer =
@@ -2162,8 +2164,6 @@ let toLIRForWithTrace
             timer.Stop()
             record name timer.Elapsed.TotalMilliseconds
         | _ -> ()
-    let (MIR.Program (mirFuncs, variantRegistry, recordRegistry)) = program
-
     // Pre-check: verify all functions have ≤8 parameters and calls have ≤8 arguments
     match checkParameterLimits mirFuncs with
     | Error err -> Error err
@@ -2201,9 +2201,40 @@ let toLIRForWithTrace
     let functionTimer = startPhase ()
     let convertedFunctions = mapResults convertFunc mirFuncs
     recordPhase "MIR -> LIR Function Conversion" functionTimer
-    match convertedFunctions with
-    | Error err -> Error err
-    | Ok lirFuncs ->
+    convertedFunctions
+
+/// Convert only MIR functions when the caller already owns the projected type
+/// registries. This avoids rebuilding registry representations that would be
+/// immediately discarded by function-only compilation paths.
+let toLIRFunctionsForWithTrace
+    (phaseRecorder: (string -> float -> unit) option)
+    (arch: Platform.Arch)
+    (MIR.Program (mirFuncs, variantRegistry, recordRegistry))
+    : Result<LIR.Function list, string> =
+    convertFunctionsForWithTrace
+        phaseRecorder
+        arch
+        mirFuncs
+        variantRegistry
+        recordRegistry
+
+/// Convert a MIR program to LIR for a concrete target architecture.
+let toLIRForWithTrace
+    (phaseRecorder: (string -> float -> unit) option)
+    (arch: Platform.Arch)
+    (program: MIR.Program)
+    : Result<LIR.Program, string> =
+    let startPhase () =
+        phaseRecorder |> Option.map (fun _ -> System.Diagnostics.Stopwatch.StartNew())
+    let recordPhase name timer =
+        match phaseRecorder, timer with
+        | Some record, Some (timer: System.Diagnostics.Stopwatch) ->
+            timer.Stop()
+            record name timer.Elapsed.TotalMilliseconds
+        | _ -> ()
+    let (MIR.Program (_, variantRegistry, recordRegistry)) = program
+    toLIRFunctionsForWithTrace phaseRecorder arch program
+    |> Result.map (fun lirFuncs ->
         let registryTimer = startPhase ()
         let lirVariantRegistry : LIR.VariantRegistry =
             variantRegistry
@@ -2221,7 +2252,7 @@ let toLIRForWithTrace
             |> Map.map (fun _ fields ->
                 fields |> List.map (fun field -> (field.Name, field.Type)))
         recordPhase "MIR -> LIR Registry Projection" registryTimer
-        Ok (LIR.Program (lirFuncs, lirVariantRegistry, lirRecordRegistry))
+        LIR.Program (lirFuncs, lirVariantRegistry, lirRecordRegistry))
 
 let toLIRFor (arch: Platform.Arch) (program: MIR.Program) : Result<LIR.Program, string> =
     toLIRForWithTrace None arch program

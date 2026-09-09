@@ -895,7 +895,7 @@ let private compileMirToLir
     (passTimingRecorder: PassTimingRecorder option)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
-    : Result<LIR.Program, string> =
+    : Result<LIR.Function list, string> =
 
     let suffix = if stageSuffix = "" then "" else $" ({stageSuffix})"
 
@@ -969,14 +969,34 @@ let private compileMirToLir
                     Elapsed = TimeSpan.FromMilliseconds elapsedMs
                 })
     let lirResult =
-        MIR_to_LIR.toLIRForWithTrace lirPhaseRecorder arch optimizedProgram
+        MIR_to_LIR.toLIRFunctionsForWithTrace lirPhaseRecorder arch optimizedProgram
     match lirResult with
     | Error err -> Error $"LIR conversion error: {err}"
-    | Ok lirProgram ->
+    | Ok lirFuncs ->
         let lirElapsed = sw.Elapsed.TotalMilliseconds - lirStart
         recordPassTiming passTimingRecorder "MIR -> LIR" lirElapsed
+        let (MIR.Program (_, mirVariants, mirRecords)) = optimizedProgram
+        let lirProgramForDump =
+            lazy (
+                let variants : LIR.VariantRegistry =
+                    mirVariants
+                    |> Map.map (fun _ typeVariants ->
+                        {
+                            LIR.TypeParams = typeVariants.TypeParams
+                            LIR.Variants =
+                                typeVariants.Variants
+                                |> List.map (fun variant ->
+                                    ({ Name = variant.Name
+                                       Tag = variant.Tag
+                                       Payload = variant.Payload } : LIR.VariantInfo))
+                        })
+                let records =
+                    mirRecords
+                    |> Map.map (fun _ fields ->
+                        fields |> List.map (fun field -> (field.Name, field.Type)))
+                LIR.Program (lirFuncs, variants, records))
         if shouldDumpIR verbosity options.DumpLIR then
-            printLIRProgram "=== LIR (Low-level IR with CFG) ===" lirProgram
+            printLIRProgram "=== LIR (Low-level IR with CFG) ===" lirProgramForDump.Value
         if verbosity >= 2 then
             let t = System.Math.Round(lirElapsed, 1)
             println $"        {t}ms"
@@ -987,11 +1007,11 @@ let private compileMirToLir
                 [("peephole", not options.DisableLIROpt && not options.DisableLIRPeephole)]
         if verbosity >= 1 then println $"  [4.5/7] {lirPassLabel}{suffix}..."
         let lirOptStart = sw.Elapsed.TotalMilliseconds
-        let optimizedLir =
+        let optimizedFuncs =
             if options.DisableLIROpt || options.DisableLIRPeephole then
-                lirProgram
+                lirFuncs
             else
-                LIR_Peephole.optimizeProgram lirProgram
+                lirFuncs |> List.map LIR_Peephole.optimizeFunction
         let lirOptElapsed = sw.Elapsed.TotalMilliseconds - lirOptStart
         recordPassTiming passTimingRecorder "LIR Peephole" lirOptElapsed
         if verbosity >= 2 then
@@ -1000,7 +1020,7 @@ let private compileMirToLir
         // Summarize finalized symbolic LIR once. The facts remain attached to
         // functions through allocation and tree shaking, so each executable
         // only unions metadata for its reachable compilation unit.
-        Ok (LIR.attachCodegenFacts optimizedLir)
+        Ok (optimizedFuncs |> List.map LIR.attachFunctionCodegenFacts)
 
 /// Allocate registers for a list of symbolic LIR functions.
 let private allocateRegistersForFunctions
@@ -1088,8 +1108,7 @@ let private lowerToAllocatedLir
                     let t = System.Math.Round(mirElapsed, 1)
                     println $"        {t}ms"
                 compileMirToLir (Platform.archFor target) verbosity options sw passTimingRecorder stageSuffix mirProgram
-                |> Result.bind (fun lirProgram ->
-                    let (LIR.Program (lirFuncs, _, _)) = lirProgram
+                |> Result.bind (fun lirFuncs ->
                     let metadataPlanningStart = sw.Elapsed.TotalMilliseconds
                     let funcsPreparedForAllocation =
                         match Platform.archFor target with
