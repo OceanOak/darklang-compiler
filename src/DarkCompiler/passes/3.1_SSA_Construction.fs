@@ -22,7 +22,7 @@ type private LabelIndex = {
 
 type private VRegIndex = {
     VRegs: VReg array
-    IndexOf: Map<VReg, int>
+    IndexOf: System.Collections.Generic.Dictionary<VReg, int>
     WordCount: int
 }
 
@@ -60,11 +60,8 @@ let private buildLabelIndex (cfg: CFG) : LabelIndex =
 
 let private buildVRegIndex (vregs: Set<VReg>) : VRegIndex =
     let values = vregs |> Set.toArray
-    let indexOf =
-        values
-        |> Array.mapi (fun idx vreg -> (vreg, idx))
-        |> Array.toList
-        |> Map.ofList
+    let indexOf = System.Collections.Generic.Dictionary<VReg, int>()
+    values |> Array.iteri (fun idx vreg -> indexOf.[vreg] <- idx)
     { VRegs = values
       IndexOf = indexOf
       WordCount = Bitset.wordCount values.Length }
@@ -454,28 +451,24 @@ let private computeLivenessForVRegs
         labels
         |> Array.map (fun label ->
             let block = requireBlock "precomputing liveness" cfg.Blocks label
-            let restrict vregs =
-                match trackedVRegs with
-                | Some tracked -> Set.intersect tracked vregs
-                | None -> vregs
-            (getBlockUses block |> restrict, getBlockDefs block |> restrict))
+            (getBlockUses block, getBlockDefs block))
 
     let allVRegs =
-        usesAndDefs
-        |> Array.fold (fun all (uses, defs) ->
-            all |> Set.union uses |> Set.union defs) Set.empty
+        match trackedVRegs with
+        | Some tracked -> tracked
+        | None ->
+            usesAndDefs
+            |> Array.fold (fun all (uses, defs) ->
+                all |> Set.union uses |> Set.union defs) Set.empty
     let vregIndex = buildVRegIndex allVRegs
-
-    let requireVRegIndex (vreg: VReg) : int =
-        match Map.tryFind vreg vregIndex.IndexOf with
-        | Some idx -> idx
-        | None -> Crash.crash $"SSA: Missing VReg index for {vreg} while computing liveness"
 
     let setToBits (vregs: Set<VReg>) : Bitset.Bitset =
         let bits = Bitset.empty vregIndex.WordCount
         vregs
         |> Set.iter (fun vreg ->
-            Bitset.addIndexInPlace (requireVRegIndex vreg) bits)
+            match vregIndex.IndexOf.TryGetValue vreg with
+            | true, idx -> Bitset.addIndexInPlace idx bits
+            | false, _ -> ())
         bits
 
     let blockUses = usesAndDefs |> Array.map (fst >> setToBits)
