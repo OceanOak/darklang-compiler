@@ -3478,41 +3478,50 @@ let applyToBlockWithLiveness
         else
             saveRegsLiveness |> List.map (fun _ -> [])
 
-    // First pass: find SaveRegs/RestoreRegs pairs and compute the registers to save.
-    // Each SaveRegs uses continuation liveness captured at its matching RestoreRegs,
-    // plus any registers needed as backing for ARM64 argument parallel moves.
-    let allocatedInstrGroups, (_, remainingLiveness, remainingArgMoveBacking) =
-        block.Instrs
-        |> List.mapFold (fun (savedRegsStack, remainingLiveness, remainingArgMoveBacking) instr ->
-            match instr with
-            | LIR.SaveRegs ([], []) ->
-                match remainingLiveness, remainingArgMoveBacking with
-                | (liveAfter, floatLiveAfter) :: remainingLiveness,
-                  argMoveBacking :: remainingArgMoveBacking ->
-                    let liveCallerSaved = getLiveCallerSavedRegs mapping liveAfter
-                    let intRegs =
-                        liveCallerSaved @ argMoveBacking
-                        |> List.distinct
-                        |> List.sort
-                    let liveCallerSavedFloat =
-                        getLiveCallerSavedFloatRegs arch floatLiveAfter floatAllocation
-                    let regs = (intRegs, liveCallerSavedFloat)
-                    let allocated = applyToInstr arch mapping (LIR.SaveRegs regs)
-                    (allocated, (regs :: savedRegsStack, remainingLiveness, remainingArgMoveBacking))
-                | [], _ ->
-                    Crash.crash "Missing liveness snapshot for SaveRegs"
-                | _, [] ->
-                    Crash.crash "Missing argument-move backing for SaveRegs"
-            | LIR.RestoreRegs ([], []) ->
-                match savedRegsStack with
-                | regs :: savedRegsStack ->
-                    let allocated = applyToInstr arch mapping (LIR.RestoreRegs regs)
-                    (allocated, (savedRegsStack, remainingLiveness, remainingArgMoveBacking))
-                | [] ->
-                    Crash.crash "Unmatched RestoreRegs: SaveRegs stack is empty"
-            | _ ->
-                (applyToInstr arch mapping instr, (savedRegsStack, remainingLiveness, remainingArgMoveBacking))
-        ) ([], saveRegsLiveness, argMoveBackingRegs)
+    // Find SaveRegs/RestoreRegs pairs and compute the registers to save while
+    // emitting allocated instructions directly. The old mapFold produced one
+    // temporary list per input instruction, concatenated all of those lists,
+    // and then traversed the result again for float allocation.
+    let allocatedInstrs = ResizeArray<LIR.Instr>()
+    let mutable savedRegsStack : (LIR.PhysReg list * LIR.PhysFPReg list) list = []
+    let mutable remainingLiveness = saveRegsLiveness
+    let mutable remainingArgMoveBacking = argMoveBackingRegs
+
+    let appendAllocated (instrs: LIR.Instr list) : unit =
+        for instr in instrs do
+            allocatedInstrs.Add(applyFloatAllocationToInstr floatAllocation instr)
+
+    for instr in block.Instrs do
+        match instr with
+        | LIR.SaveRegs ([], []) ->
+            match remainingLiveness, remainingArgMoveBacking with
+            | (liveAfter, floatLiveAfter) :: restLiveness,
+              argMoveBacking :: restArgMoveBacking ->
+                let liveCallerSaved = getLiveCallerSavedRegs mapping liveAfter
+                let intRegs =
+                    liveCallerSaved @ argMoveBacking
+                    |> List.distinct
+                    |> List.sort
+                let liveCallerSavedFloat =
+                    getLiveCallerSavedFloatRegs arch floatLiveAfter floatAllocation
+                let regs = (intRegs, liveCallerSavedFloat)
+                appendAllocated (applyToInstr arch mapping (LIR.SaveRegs regs))
+                savedRegsStack <- regs :: savedRegsStack
+                remainingLiveness <- restLiveness
+                remainingArgMoveBacking <- restArgMoveBacking
+            | [], _ ->
+                Crash.crash "Missing liveness snapshot for SaveRegs"
+            | _, [] ->
+                Crash.crash "Missing argument-move backing for SaveRegs"
+        | LIR.RestoreRegs ([], []) ->
+            match savedRegsStack with
+            | regs :: restSavedRegs ->
+                appendAllocated (applyToInstr arch mapping (LIR.RestoreRegs regs))
+                savedRegsStack <- restSavedRegs
+            | [] ->
+                Crash.crash "Unmatched RestoreRegs: SaveRegs stack is empty"
+        | _ ->
+            appendAllocated (applyToInstr arch mapping instr)
 
     if not (List.isEmpty remainingLiveness) then
         Crash.crash "Unused liveness snapshot for SaveRegs"
@@ -3520,11 +3529,10 @@ let applyToBlockWithLiveness
     if not (List.isEmpty remainingArgMoveBacking) then
         Crash.crash "Unused argument-move backing for SaveRegs"
 
-    let allocatedInstrs = List.concat allocatedInstrGroups
-
     let (termLoads, allocatedTerm) = applyToTerminator mapping block.Terminator
+    appendAllocated termLoads
     { Label = block.Label
-      Instrs = allocatedInstrs @ termLoads
+      Instrs = allocatedInstrs |> Seq.toList
       Terminator = allocatedTerm }
 
 /// Apply allocation to CFG with liveness info
@@ -4163,9 +4171,13 @@ let private allocateRegistersInternal
     // Step 8: Apply allocation to CFG with liveness info for SaveRegs/RestoreRegs population
     let (allocatedBlocks, timings) =
         timePhase swOpt "RegAlloc: Apply Allocation" timings (fun () ->
-            let allocatedBlocks =
-                applyToCFGWithLiveness arch blocksWithPhiResolved result floatAllocation livenessBits floatLiveness
-            applyFloatAllocationToBlocks floatAllocation allocatedBlocks)
+            applyToCFGWithLiveness
+                arch
+                blocksWithPhiResolved
+                result
+                floatAllocation
+                livenessBits
+                floatLiveness)
 
     let ((cfgWithParamCopies, allocatedTypedParams), timings) =
         timePhase swOpt "RegAlloc: Finalize" timings (fun () ->
