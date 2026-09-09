@@ -57,6 +57,23 @@ let uint64ToBytes (value: uint64) : byte array =
         byte ((value >>> 56) &&& 0xFFUL)
     |]
 
+let private writeUInt64LittleEndian
+    (bytes: byte array)
+    (offset: int)
+    (value: uint64)
+    : unit =
+    bytes.[offset] <- byte (value &&& 0xFFUL)
+    bytes.[offset + 1] <- byte ((value >>> 8) &&& 0xFFUL)
+    bytes.[offset + 2] <- byte ((value >>> 16) &&& 0xFFUL)
+    bytes.[offset + 3] <- byte ((value >>> 24) &&& 0xFFUL)
+    bytes.[offset + 4] <- byte ((value >>> 32) &&& 0xFFUL)
+    bytes.[offset + 5] <- byte ((value >>> 40) &&& 0xFFUL)
+    bytes.[offset + 6] <- byte ((value >>> 48) &&& 0xFFUL)
+    bytes.[offset + 7] <- byte ((value >>> 56) &&& 0xFFUL)
+
+let private align8Int (value: int) : int =
+    ((value + 7) / 8) * 8
+
 /// Convert machine code words to little-endian bytes without per-word arrays
 let private machineCodeToBytes (machineCode: uint32 array) : byte array =
     let byteCount = machineCode.Length * 4
@@ -262,49 +279,39 @@ let serializeMachO (binary: Binary.MachOBinary) : byte array =
 /// Create float data bytes from float pool
 /// Returns byte array of 8-byte IEEE 754 doubles
 let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
-    if floatPool.Floats.IsEmpty then
-        [||]
-    else
-        // Map enumeration is already ordered by the pool index.
-        floatPool.Floats
-        |> Map.toList
-        |> List.map (fun (_idx, floatVal) ->
-            System.BitConverter.GetBytes(floatVal))
-        |> Array.ofList
-        |> Array.concat
+    let bytes = Array.zeroCreate (floatPool.Floats.Count * 8)
+    // Map enumeration is already ordered by the pool index.
+    floatPool.Floats
+    |> Map.toSeq
+    |> Seq.iteri (fun index (_idx, floatVal) ->
+        writeUInt64LittleEndian
+            bytes
+            (index * 8)
+            (System.BitConverter.DoubleToUInt64Bits floatVal))
+    bytes
 
 /// Create string data bytes and label map from string pool
-/// Format: [length:8][data:N][null:1] for each string
+/// Format: [length:8][data:N][padding:P][refcount:8] for each string
 /// Returns (string bytes, label map from "_strN" to offset within string section)
 let createStringData (stringPool: LiteralPool.StringPool) : byte array * Map<string, int> =
-    if stringPool.Strings.IsEmpty then
-        ([||], Map.empty)
-    else
-        // Map enumeration is already ordered by the pool index.
-        let sortedStrings =
-            stringPool.Strings
-            |> Map.toList
-
-        // Build string bytes and track offsets using fold.
-        // Each string has format: [length:8][data:N][padding:P][refcount:8].
-        // Literal strings use INT64_MAX in the refcount slot so shared string RC code can skip them.
-        let (segmentsRev, labelMap, _finalOffset) =
-            sortedStrings
-            |> List.fold (fun (segments, labels, offset) (idx, (str, len)) ->
-                let label = "str_" + string idx  // Match label format in CodeGen
-                let lenBytes = uint64ToBytes (uint64 len)  // 8-byte length
-                let strBytes = System.Text.Encoding.UTF8.GetBytes(str)
-                let alignedLen = ((len + 7) / 8) * 8
-                let padding = Array.zeroCreate (alignedLen - len)
-                let sentinel = System.BitConverter.GetBytes(System.Int64.MaxValue)
-                let segment = Array.concat [| lenBytes; strBytes; padding; sentinel |]
-                let newLabels = Map.add label offset labels
-                let newOffset = offset + 8 + alignedLen + 8
-                (segment :: segments, newLabels, newOffset))
-                ([], Map.empty, 0)
-
-        let allBytes = segmentsRev |> List.rev |> Array.concat
-        (allBytes, labelMap)
+    let totalSize =
+        stringPool.Strings
+        |> Map.fold (fun size _idx (_str, len) -> size + 16 + align8Int len) 0
+    let bytes = Array.zeroCreate totalSize
+    // Array.zeroCreate supplies the alignment padding. Map enumeration is
+    // already ordered by the pool index.
+    let (_finalOffset, labelMap) =
+        stringPool.Strings
+        |> Map.fold (fun (offset, labels) idx (str, len) ->
+            let alignedLen = align8Int len
+            writeUInt64LittleEndian bytes offset (uint64 len)
+            System.Text.Encoding.UTF8.GetBytes(str, 0, str.Length, bytes, offset + 8)
+            |> ignore
+            writeUInt64LittleEndian bytes (offset + 8 + alignedLen) 0x7FFFFFFFFFFFFFFFUL
+            let label = "str_" + string idx  // Match label format in CodeGen
+            (offset + 16 + alignedLen, Map.add label offset labels))
+            (0, Map.empty)
+    (bytes, labelMap)
 
 /// Create a Mach-O executable with already-laid-out constant data.
 let private createExecutableWithDataBytes

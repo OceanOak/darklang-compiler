@@ -67,6 +67,20 @@ let private align8Int (value: int) : int =
 let private align8UInt64 (value: uint64) : uint64 =
     (value + 7UL) &&& (~~~7UL)
 
+let private writeUInt64LittleEndian
+    (bytes: byte array)
+    (offset: int)
+    (value: uint64)
+    : unit =
+    bytes.[offset] <- byte (value &&& 0xFFUL)
+    bytes.[offset + 1] <- byte ((value >>> 8) &&& 0xFFUL)
+    bytes.[offset + 2] <- byte ((value >>> 16) &&& 0xFFUL)
+    bytes.[offset + 3] <- byte ((value >>> 24) &&& 0xFFUL)
+    bytes.[offset + 4] <- byte ((value >>> 32) &&& 0xFFUL)
+    bytes.[offset + 5] <- byte ((value >>> 40) &&& 0xFFUL)
+    bytes.[offset + 6] <- byte ((value >>> 48) &&& 0xFFUL)
+    bytes.[offset + 7] <- byte ((value >>> 56) &&& 0xFFUL)
+
 /// Serialize ELF64 header to bytes
 let serializeElf64Header (header: Binary_ELF.Elf64Header) : byte array =
     [|
@@ -118,36 +132,37 @@ let serializeElf (binary: Binary_ELF.ElfBinary) : byte array =
 
 /// Create float data bytes from float pool
 let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
-    if floatPool.Floats.IsEmpty then
-        [||]
-    else
-        // Map enumeration is already ordered by the pool index.
-        floatPool.Floats
-        |> Map.toList
-        |> List.map (fun (_idx, floatVal) ->
-            System.BitConverter.GetBytes(floatVal))
-        |> Array.ofList
-        |> Array.concat
+    let bytes = Array.zeroCreate (floatPool.Floats.Count * 8)
+    // Map enumeration is already ordered by the pool index.
+    floatPool.Floats
+    |> Map.toSeq
+    |> Seq.iteri (fun index (_idx, floatVal) ->
+        writeUInt64LittleEndian
+            bytes
+            (index * 8)
+            (System.BitConverter.DoubleToUInt64Bits floatVal))
+    bytes
 
 /// Create string data bytes from string pool
 /// Format: [length:8 bytes][data:N bytes][padding:P][refcount:8 bytes] for each string.
 /// Literal strings use INT64_MAX in the refcount slot so shared string RC code can skip them.
 let createStringData (stringPool: LiteralPool.StringPool) : byte array =
-    if stringPool.Strings.IsEmpty then
-        [||]
-    else
-        // Map enumeration is already ordered by the pool index.
+    let totalSize =
         stringPool.Strings
-        |> Map.toList
-        |> List.map (fun (_idx, (str, len)) ->
-            let lenBytes = uint64ToBytes (uint64 len)  // 8-byte length
-            let strBytes = System.Text.Encoding.UTF8.GetBytes(str)
-            let alignedLen = align8Int len
-            let padding = Array.zeroCreate (alignedLen - len)
-            let sentinel = System.BitConverter.GetBytes(System.Int64.MaxValue)
-            Array.concat [| lenBytes; strBytes; padding; sentinel |])
-        |> Array.ofList
-        |> Array.concat
+        |> Map.fold (fun size _idx (_str, len) -> size + 16 + align8Int len) 0
+    let bytes = Array.zeroCreate totalSize
+    // Array.zeroCreate supplies the alignment padding. Map enumeration is
+    // already ordered by the pool index.
+    stringPool.Strings
+    |> Map.fold (fun offset _idx (str, len) ->
+        let alignedLen = align8Int len
+        writeUInt64LittleEndian bytes offset (uint64 len)
+        System.Text.Encoding.UTF8.GetBytes(str, 0, str.Length, bytes, offset + 8)
+        |> ignore
+        writeUInt64LittleEndian bytes (offset + 8 + alignedLen) 0x7FFFFFFFFFFFFFFFUL
+        offset + 16 + alignedLen) 0
+    |> ignore
+    bytes
 
 let private elfHeaderSize = 64UL
 let private programHeaderSize = 56UL
