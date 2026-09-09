@@ -7021,9 +7021,7 @@ let private materializeHelpersInTopLevels
 
         let finalEqState =
             helperTypes
-            |> Set.toList
-            |> List.sortBy typeToString
-            |> List.fold
+            |> Set.fold
                 (fun currentState helperType ->
                     ensureEqHelperForType
                         aliasReg
@@ -7041,9 +7039,7 @@ let private materializeHelpersInTopLevels
 
         let finalCompareState =
             compareHelperTypes
-            |> Set.toList
-            |> List.sortBy typeToString
-            |> List.fold
+            |> Set.fold
                 (fun currentState helperType ->
                     ensureCompareHelperForType
                         aliasReg
@@ -7068,7 +7064,6 @@ let private materializeHelpersInTopLevels
             |> Map.toList
             |> List.map snd
             |> List.filter (fun helperDef -> not (Set.contains helperDef.Name existingFunctionNames))
-            |> List.sortBy (fun helperDef -> helperDef.Name)
             |> List.map FunctionDef
 
         helperTopLevels @ rewrittenTopLevels
