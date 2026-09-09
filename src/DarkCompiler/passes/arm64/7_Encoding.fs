@@ -1462,11 +1462,10 @@ let private computeFloatLiteralOffsets (codeFileOffset: int) (codeSize: int) (fl
     if floatPool.Floats.IsEmpty then
         Map.empty
     else
-        // Sort by index to ensure consistent ordering
+        // Map enumeration is already ordered by the pool index.
         let sortedFloats =
             floatPool.Floats
             |> Map.toList
-            |> List.sortBy fst
 
         // Build label map with offsets using fold
         // Floats start after headers + code, 8-byte aligned
@@ -1491,11 +1490,10 @@ let private computeStringLiteralOffsets (codeFileOffset: int) (codeSize: int) (f
     if stringPool.Strings.IsEmpty then
         Map.empty
     else
-        // Sort by index to ensure consistent ordering
+        // Map enumeration is already ordered by the pool index.
         let sortedStrings =
             stringPool.Strings
             |> Map.toList
-            |> List.sortBy fst
 
         // Build label map with offsets using fold
         // Strings start after headers + code + floats
@@ -1519,8 +1517,7 @@ let getStringPoolSize (stringPool: LiteralPool.StringPool) : int =
     else
         stringPool.Strings
         |> Map.toList
-        |> List.sumBy (fun (_, (str, _)) ->
-            let len = System.Text.Encoding.UTF8.GetBytes(str).Length
+        |> List.sumBy (fun (_, (_, len)) ->
             let alignedLen = ((len + 7) / 8) * 8
             8 + alignedLen + 8)
 

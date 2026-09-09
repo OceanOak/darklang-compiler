@@ -265,10 +265,9 @@ let createFloatData (floatPool: LiteralPool.FloatPool) : byte array =
     if floatPool.Floats.IsEmpty then
         [||]
     else
-        // Sort by index to ensure consistent ordering
+        // Map enumeration is already ordered by the pool index.
         floatPool.Floats
         |> Map.toList
-        |> List.sortBy fst
         |> List.map (fun (_idx, floatVal) ->
             System.BitConverter.GetBytes(floatVal))
         |> Array.ofList
@@ -281,11 +280,10 @@ let createStringData (stringPool: LiteralPool.StringPool) : byte array * Map<str
     if stringPool.Strings.IsEmpty then
         ([||], Map.empty)
     else
-        // Sort by index to ensure consistent ordering
+        // Map enumeration is already ordered by the pool index.
         let sortedStrings =
             stringPool.Strings
             |> Map.toList
-            |> List.sortBy fst
 
         // Build string bytes and track offsets using fold.
         // Each string has format: [length:8][data:N][padding:P][refcount:8].
