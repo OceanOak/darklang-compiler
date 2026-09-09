@@ -1572,73 +1572,101 @@ let private buildDefUseMap (cfg: CFG) : Map<VReg, VReg list> =
 let private collectRootUses (cfg: CFG) : Set<VReg> =
     cfg.Blocks
     |> Map.fold (fun roots _ block ->
-        let sideEffectUses =
+        let roots' =
             block.Instrs
             |> List.fold (fun acc instr ->
                 if hasSideEffects instr then
                     foldInstrUses (fun uses vreg -> Set.add vreg uses) acc instr
                 else
                     acc
-            ) Set.empty
-        let roots' = Set.union roots sideEffectUses
+            ) roots
         foldTerminatorUses (fun uses vreg -> Set.add vreg uses) roots' block.Terminator
     ) Set.empty
 
 /// Mark live SSA destinations by walking backwards from root uses.
-let private collectLiveDestinations (cfg: CFG) : Set<VReg> =
-    let defUseMap = buildDefUseMap cfg
-    let roots = collectRootUses cfg
+let private collectLiveDestinations
+    (recordTicks: (string -> int64 -> unit) option)
+    (cfg: CFG)
+    : Set<VReg> =
+    let measure name operation =
+        match recordTicks with
+        | None -> operation ()
+        | Some record ->
+            let started = System.Diagnostics.Stopwatch.GetTimestamp()
+            let result = operation ()
+            record name (System.Diagnostics.Stopwatch.GetTimestamp() - started)
+            result
 
-    let rec loop (work: VReg list) (queued: Set<VReg>) (live: Set<VReg>) : Set<VReg> =
+    let defUseMap =
+        measure "MIR DCE Def-Use Graph" (fun () -> buildDefUseMap cfg)
+    let roots =
+        measure "MIR DCE Root Collection" (fun () -> collectRootUses cfg)
+
+    let rec loop (work: VReg list) (seen: Set<VReg>) (live: Set<VReg>) : Set<VReg> =
         match work with
         | [] -> live
         | reg :: rest ->
-            let queued' = Set.remove reg queued
             match Map.tryFind reg defUseMap with
             | None ->
                 // Parameters or registers without a local definition.
-                loop rest queued' live
-            | Some uses when Set.contains reg live ->
-                loop rest queued' live
+                loop rest seen live
             | Some uses ->
-                let (rest', queued'') =
+                let (rest', seen') =
                     uses
-                    |> List.fold (fun (pending, queuedAcc) usedReg ->
-                        if Set.contains usedReg queuedAcc || Set.contains usedReg live then
-                            (pending, queuedAcc)
+                    |> List.fold (fun (pending, seenAcc) usedReg ->
+                        if Set.contains usedReg seenAcc then
+                            (pending, seenAcc)
                         else
-                            (usedReg :: pending, Set.add usedReg queuedAcc)
-                    ) (rest, queued')
-                loop rest' queued'' (Set.add reg live)
+                            (usedReg :: pending, Set.add usedReg seenAcc)
+                    ) (rest, seen)
+                loop rest' seen' (Set.add reg live)
 
-    loop (Set.toList roots) roots Set.empty
+    measure "MIR DCE Reachability" (fun () ->
+        loop (Set.toList roots) roots Set.empty)
 
 /// Dead Code Elimination
 /// Remove instructions whose destinations are never used (unless they have side effects)
+let private eliminateDeadCodeWithTickTrace
+    (recordTicks: (string -> int64 -> unit) option)
+    (cfg: CFG)
+    : CFG * bool =
+    let measure name operation =
+        match recordTicks with
+        | None -> operation ()
+        | Some record ->
+            let started = System.Diagnostics.Stopwatch.GetTimestamp()
+            let result = operation ()
+            record name (System.Diagnostics.Stopwatch.GetTimestamp() - started)
+            result
+
+    let liveDests =
+        measure "MIR DCE Liveness" (fun () -> collectLiveDestinations recordTicks cfg)
+
+    measure "MIR DCE Rewrite" (fun () ->
+        let (blocks', changed) =
+            cfg.Blocks
+            |> Map.fold (fun (acc, ch) label block ->
+                let (instrs', instrChanged) =
+                    block.Instrs
+                    |> List.fold (fun (acc', ch') instr ->
+                        match getInstrDest instr with
+                        | Some dest when not (Set.contains dest liveDests) && not (hasSideEffects instr) ->
+                            // Dead instruction - remove it
+                            (acc', true)
+                        | _ ->
+                            // Keep instruction
+                            (instr :: acc', ch')
+                    ) ([], false)
+                let instrs' = List.rev instrs'
+
+                let block' = { block with Instrs = instrs' }
+                (Map.add label block' acc, ch || instrChanged)
+            ) (Map.empty, false)
+
+        ({ cfg with Blocks = blocks' }, changed))
+
 let eliminateDeadCode (cfg: CFG) : CFG * bool =
-    let liveDests = collectLiveDestinations cfg
-
-    let (blocks', changed) =
-        cfg.Blocks
-        |> Map.fold (fun (acc, ch) label block ->
-            let (instrs', instrChanged) =
-                block.Instrs
-                |> List.fold (fun (acc', ch') instr ->
-                    match getInstrDest instr with
-                    | Some dest when not (Set.contains dest liveDests) && not (hasSideEffects instr) ->
-                        // Dead instruction - remove it
-                        (acc', true)
-                    | _ ->
-                        // Keep instruction
-                        (instr :: acc', ch')
-                ) ([], false)
-            let instrs' = List.rev instrs'
-
-            let block' = { block with Instrs = instrs' }
-            (Map.add label block' acc, ch || instrChanged)
-        ) (Map.empty, false)
-
-    ({ cfg with Blocks = blocks' }, changed)
+    eliminateDeadCodeWithTickTrace None cfg
 
 /// Copy Propagation
 /// Replace uses of copy destinations with their sources
@@ -2774,7 +2802,8 @@ let private optimizeCFGOnceWithEffectFreeCalls
         | None -> (cfg6, false)
     let (cfg8, changed8) =
         if options.EnableDCE then
-            measure "MIR Dead Code Elimination" (fun () -> eliminateDeadCode cfg7)
+            measure "MIR Dead Code Elimination" (fun () ->
+                eliminateDeadCodeWithTickTrace recordTicks cfg7)
         else
             (cfg7, false)
     let (cfg9, changed9) =
