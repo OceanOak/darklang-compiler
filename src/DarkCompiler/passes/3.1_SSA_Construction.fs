@@ -443,6 +443,7 @@ let private requireBlock (context: string) (blocks: Map<Label, BasicBlock>) (lab
 /// A variable is live-out at a block if it's live-in at any successor
 let private computeLivenessForVRegs
     (trackedVRegs: Set<VReg> option)
+    (includeLiveOut: bool)
     (cfg: CFG)
     : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
     let labelIndex = buildLabelIndex cfg
@@ -559,9 +560,6 @@ let private computeLivenessForVRegs
     let finalLiveInByIndex = fixpoint Map.empty
     let liveIn =
         Array.init labelCount (getLiveIn finalLiveInByIndex)
-    let finalLiveOut =
-        Array.init labelCount (computeLiveOut finalLiveInByIndex)
-
     let bitsetsToMap (bitsets: Bitset.Bitset array) : Map<Label, Set<VReg>> =
         Array.map2 (fun label bits ->
             let vregs =
@@ -573,10 +571,17 @@ let private computeLivenessForVRegs
         |> Array.toList
         |> Map.ofList
 
-    (bitsetsToMap liveIn, bitsetsToMap finalLiveOut)
+    let liveOut =
+        if includeLiveOut then
+            Array.init labelCount (computeLiveOut finalLiveInByIndex)
+            |> bitsetsToMap
+        else
+            Map.empty
+
+    (bitsetsToMap liveIn, liveOut)
 
 let computeLiveness (cfg: CFG) : Map<Label, Set<VReg>> * Map<Label, Set<VReg>> =
-    computeLivenessForVRegs None cfg
+    computeLivenessForVRegs None true cfg
 
 /// Insert phi nodes at dominance frontiers
 /// For each variable v defined in block b:
@@ -1265,7 +1270,7 @@ let private convertFunctionToSSAInternal
             if Set.isEmpty phiCandidateVRegs then
                 (Map.empty, Map.empty)
             else
-                computeLivenessForVRegs (Some phiCandidateVRegs) cfg)
+                computeLivenessForVRegs (Some phiCandidateVRegs) false cfg)
 
     // Insert phi nodes (only for live variables)
     // Pass function params so they're treated as defined at entry (for self-recursive functions)
