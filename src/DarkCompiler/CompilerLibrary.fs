@@ -997,7 +997,12 @@ type CompilationSession(collectCodegenMetrics: bool) =
                  releasePlanCacheKey)
             match arm64ReleasePlanSummaries.TryGetValue key with
             | true, entries ->
-                match entries |> List.tryFind (fun (existingPlan, _) -> existingPlan = releasePlan) with
+                match
+                    entries
+                    |> List.tryFind (fun (existingPlan, _) ->
+                        System.Object.ReferenceEquals(existingPlan, releasePlan)
+                        || existingPlan = releasePlan)
+                with
                 | Some (_, summary) ->
                     arm64ReleasePlanSummaryHitCount <- arm64ReleasePlanSummaryHitCount + 1
                     summary
