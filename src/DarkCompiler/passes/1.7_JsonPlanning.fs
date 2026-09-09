@@ -66,8 +66,58 @@ let private stableHash (value: string) : uint64 =
     |> Seq.fold (fun hash ch -> (hash ^^^ uint64 (int ch)) * 1099511628211UL) 14695981039346656037UL
 
 // Generated plan names must distinguish structurally different types whose
-// public spelling is intentionally flattened (notably nested tuples).
-let private structuralTypeKey (typ: Type) : string = $"{typ}"
+// public spelling is intentionally flattened (notably nested tuples). Encode
+// the union directly: F#'s default union formatting uses reflection, which is
+// disproportionately expensive when the same primitive codecs are requested
+// by many separate compilations.
+let rec private structuralTypeKey (typ: Type) : string =
+    let encodeText tag (value: string) = $"{tag}{value.Length}:{value}"
+    let encodeTypes tag types =
+        let encoded =
+            types
+            |> List.map structuralTypeKey
+            |> List.map (fun value -> $"{value.Length}:{value}")
+            |> String.concat ""
+        $"{tag}{List.length types}:{encoded}"
+    match typ with
+    | TInt8 -> "i8"
+    | TInt16 -> "i16"
+    | TInt32 -> "i32"
+    | TInt64 -> "i64"
+    | TInt128 -> "i128"
+    | TInt -> "int"
+    | TUInt8 -> "u8"
+    | TUInt16 -> "u16"
+    | TUInt32 -> "u32"
+    | TUInt64 -> "u64"
+    | TUInt128 -> "u128"
+    | TBool -> "bool"
+    | TFloat64 -> "float64"
+    | TString -> "string"
+    | TBlob -> "blob"
+    | TChar -> "char"
+    | TDateTime -> "datetime"
+    | TUnit -> "unit"
+    | TRuntimeError -> "runtime-error"
+    | TRawPtr -> "raw-ptr"
+    | TVar name -> encodeText "var" name
+    | TList elementType -> encodeTypes "list" [elementType]
+    | TStream elementType -> encodeTypes "stream" [elementType]
+    | TDict (keyType, valueType) -> encodeTypes "dict" [keyType; valueType]
+    | TTuple elementTypes -> encodeTypes "tuple" elementTypes
+    | TEnumFields fieldTypes -> encodeTypes "enum-fields" fieldTypes
+    | TRecord (name, typeArgs) ->
+        let encodedName = encodeText "record" name
+        let encodedArgs = encodeTypes "args" typeArgs
+        $"{encodedName}{encodedArgs}"
+    | TSum (name, typeArgs) ->
+        let encodedName = encodeText "sum" name
+        let encodedArgs = encodeTypes "args" typeArgs
+        $"{encodedName}{encodedArgs}"
+    | TFunction (paramTypes, returnType) ->
+        let encodedParams = encodeTypes "function" paramTypes
+        let encodedReturn = encodeTypes "returns" [returnType]
+        $"{encodedParams}{encodedReturn}"
 
 let private serializeName typ =
     $"__dark_json_serialize_{stableHash (structuralTypeKey typ):x16}"
