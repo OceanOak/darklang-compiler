@@ -1819,28 +1819,68 @@ let propagateCopyTerminator (copies: CopyMap) (term: Terminator) : Terminator =
     | Branch (cond, trueLabel, falseLabel) -> Branch (p cond, trueLabel, falseLabel)
     | Jump label -> Jump label
 
-/// Apply copy propagation to CFG
-let applyCopyPropagation (cfg: CFG) : CFG * bool =
-    let copies = buildCopyMap cfg |> resolveCopyMap
+/// Apply copy propagation to a CFG, optionally recording its internal scans.
+let private applyCopyPropagationWithTickTrace
+    (recordTicks: (string -> int64 -> unit) option)
+    (cfg: CFG)
+    : CFG * bool =
+    let measure name operation =
+        match recordTicks with
+        | None -> operation ()
+        | Some record ->
+            let started = System.Diagnostics.Stopwatch.GetTimestamp()
+            let result = operation ()
+            record name (System.Diagnostics.Stopwatch.GetTimestamp() - started)
+            result
+
+    let discoveredCopies =
+        measure "MIR Copy Map Discovery" (fun () -> buildCopyMap cfg)
+    let copies =
+        measure "MIR Copy Chain Resolution" (fun () -> resolveCopyMap discoveredCopies)
 
     if Map.isEmpty copies then
         (cfg, false)
     else
-        let (blocks', changed) =
-            cfg.Blocks
-            |> Map.fold (fun (acc, changedAcc) label block ->
-                let (instrs', instrChanged) =
-                    block.Instrs
-                    |> List.fold (fun (instrAcc, ch) instr ->
-                        let instr' = propagateCopyInstr copies instr
-                        (instr' :: instrAcc, ch || instr' <> instr)
-                    ) ([], false)
-                let instrs' = List.rev instrs'
-                let term' = propagateCopyTerminator copies block.Terminator
-                let block' = { block with Instrs = instrs'; Terminator = term' }
-                (Map.add label block' acc, changedAcc || instrChanged || term' <> block.Terminator)
-            ) (Map.empty, false)
-        ({ cfg with Blocks = blocks' }, changed)
+        measure "MIR Copy Rewrite" (fun () ->
+            let usesCopiedRegister instr =
+                match instr with
+                // Copy propagation intentionally leaves phi inputs unchanged.
+                | Phi _ -> false
+                | _ ->
+                    foldInstrUses
+                        (fun found reg -> found || Map.containsKey reg copies)
+                        false
+                        instr
+            let terminatorUsesCopiedRegister term =
+                foldTerminatorUses
+                    (fun found reg -> found || Map.containsKey reg copies)
+                    false
+                    term
+            let (blocks', changed) =
+                cfg.Blocks
+                |> Map.fold (fun (acc, changedAcc) label block ->
+                    let (instrs', instrChanged) =
+                        block.Instrs
+                        |> List.fold (fun (instrAcc, ch) instr ->
+                            if usesCopiedRegister instr then
+                                let instr' = propagateCopyInstr copies instr
+                                (instr' :: instrAcc, ch || instr' <> instr)
+                            else
+                                (instr :: instrAcc, ch)
+                        ) ([], false)
+                    let instrs' = List.rev instrs'
+                    let term' =
+                        if terminatorUsesCopiedRegister block.Terminator then
+                            propagateCopyTerminator copies block.Terminator
+                        else
+                            block.Terminator
+                    let block' = { block with Instrs = instrs'; Terminator = term' }
+                    (Map.add label block' acc, changedAcc || instrChanged || term' <> block.Terminator)
+                ) (Map.empty, false)
+            ({ cfg with Blocks = blocks' }, changed))
+
+let applyCopyPropagation (cfg: CFG) : CFG * bool =
+    applyCopyPropagationWithTickTrace None cfg
 
 /// Merge a block ending in an unconditional jump with its sole-predecessor
 /// successor. Successor phis become copies, while phi edges leaving the merged
@@ -2695,7 +2735,8 @@ let private optimizeCFGOnceWithEffectFreeCalls
             (cfg1, false)
     let (cfg3, changed3) =
         if options.EnableCopyProp then
-            measure "MIR Copy Propagation" (fun () -> applyCopyPropagation cfg2)
+            measure "MIR Copy Propagation" (fun () ->
+                applyCopyPropagationWithTickTrace recordTicks cfg2)
         else
             (cfg2, false)
     // Run constant folding again only when copy propagation changed the CFG.
