@@ -308,6 +308,11 @@ let getOperandUses (op: Operand) : Set<VReg> =
     | Register vreg -> Set.singleton vreg
     | _ -> Set.empty
 
+let private addOperandUse (op: Operand) (uses: Set<VReg>) : Set<VReg> =
+    match op with
+    | Register vreg -> Set.add vreg uses
+    | _ -> uses
+
 /// Get all variables used (read) in a basic block
 /// Returns set of VRegs that are read in the block
 let getBlockUses (block: BasicBlock) : Set<VReg> =
@@ -315,112 +320,108 @@ let getBlockUses (block: BasicBlock) : Set<VReg> =
         block.Instrs
         |> List.fold (fun uses instr ->
             match instr with
-            | Mov (_, src, _) -> Set.union uses (getOperandUses src)
+            | Mov (_, src, _) -> addOperandUse src uses
             | BinOp (_, _, left, right, _) ->
-                uses |> Set.union (getOperandUses left) |> Set.union (getOperandUses right)
-            | UnaryOp (_, _, src) -> Set.union uses (getOperandUses src)
+                uses |> addOperandUse left |> addOperandUse right
+            | UnaryOp (_, _, src) -> addOperandUse src uses
             | Call (_, _, args, _, _) ->
-                args |> List.fold (fun u a -> Set.union u (getOperandUses a)) uses
+                args |> List.fold (fun u a -> addOperandUse a u) uses
             | TailCall (_, args, _, _) ->
-                args |> List.fold (fun u a -> Set.union u (getOperandUses a)) uses
+                args |> List.fold (fun u a -> addOperandUse a u) uses
             | IndirectCall (_, func, args, _, _) ->
-                let funcUses = getOperandUses func
-                let argUses = args |> List.fold (fun u a -> Set.union u (getOperandUses a)) Set.empty
-                uses |> Set.union funcUses |> Set.union argUses
+                args
+                |> List.fold (fun u a -> addOperandUse a u) (addOperandUse func uses)
             | IndirectTailCall (func, args, _, _) ->
-                let funcUses = getOperandUses func
-                let argUses = args |> List.fold (fun u a -> Set.union u (getOperandUses a)) Set.empty
-                uses |> Set.union funcUses |> Set.union argUses
+                args
+                |> List.fold (fun u a -> addOperandUse a u) (addOperandUse func uses)
             | ClosureAlloc (_, _, captures) ->
-                captures |> List.fold (fun u c -> Set.union u (getOperandUses c)) uses
+                captures |> List.fold (fun u c -> addOperandUse c u) uses
             | ClosureCall (_, closure, args, _, _) ->
-                let closureUses = getOperandUses closure
-                let argUses = args |> List.fold (fun u a -> Set.union u (getOperandUses a)) Set.empty
-                uses |> Set.union closureUses |> Set.union argUses
+                args
+                |> List.fold (fun u a -> addOperandUse a u) (addOperandUse closure uses)
             | ClosureTailCall (closure, args, _) ->
-                let closureUses = getOperandUses closure
-                let argUses = args |> List.fold (fun u a -> Set.union u (getOperandUses a)) Set.empty
-                uses |> Set.union closureUses |> Set.union argUses
+                args
+                |> List.fold (fun u a -> addOperandUse a u) (addOperandUse closure uses)
             | HeapAlloc _ -> uses
             | HeapStore (addr, _, src, _) ->
-                uses |> Set.add addr |> Set.union (getOperandUses src)
+                uses |> Set.add addr |> addOperandUse src
             | HeapLoad (_, addr, _, _) -> Set.add addr uses
             | StringConcat (_, left, right) ->
-                uses |> Set.union (getOperandUses left) |> Set.union (getOperandUses right)
+                uses |> addOperandUse left |> addOperandUse right
             | RefCountInc (addr, _, _, _) -> Set.add addr uses
             | RefCountDec (addr, _, _, _) -> Set.add addr uses
-            | Print (src, _) -> Set.union uses (getOperandUses src)
-            | StdoutWrite (_, src, _) -> Set.union uses (getOperandUses src)
+            | Print (src, _) -> addOperandUse src uses
+            | StdoutWrite (_, src, _) -> addOperandUse src uses
             | StdinReadLine _ -> uses
-            | FileReadText (_, path) -> Set.union uses (getOperandUses path)
-            | FileExists (_, path) -> Set.union uses (getOperandUses path)
+            | FileReadText (_, path) -> addOperandUse path uses
+            | FileExists (_, path) -> addOperandUse path uses
             | FileWriteText (_, path, content) ->
-                uses |> Set.union (getOperandUses path) |> Set.union (getOperandUses content)
+                uses |> addOperandUse path |> addOperandUse content
             | FileAppendText (_, path, content) ->
-                uses |> Set.union (getOperandUses path) |> Set.union (getOperandUses content)
-            | FileDelete (_, path) -> Set.union uses (getOperandUses path)
-            | FileSetExecutable (_, path) -> Set.union uses (getOperandUses path)
+                uses |> addOperandUse path |> addOperandUse content
+            | FileDelete (_, path) -> addOperandUse path uses
+            | FileSetExecutable (_, path) -> addOperandUse path uses
             | FileWriteFromPtr (_, path, ptr, length) ->
-                uses |> Set.union (getOperandUses path) |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses length)
+                uses |> addOperandUse path |> addOperandUse ptr |> addOperandUse length
             | Phi (_, sources, _) ->
-                sources |> List.fold (fun u (src, _) -> Set.union u (getOperandUses src)) uses
-            | RawAlloc (_, numBytes) -> Set.union uses (getOperandUses numBytes)
-            | RawFree ptr -> Set.union uses (getOperandUses ptr)
+                sources |> List.fold (fun u (src, _) -> addOperandUse src u) uses
+            | RawAlloc (_, numBytes) -> addOperandUse numBytes uses
+            | RawFree ptr -> addOperandUse ptr uses
             | RawGet (_, ptr, offset, _) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses offset)
+                uses |> addOperandUse ptr |> addOperandUse offset
             | RawGetByte (_, ptr, offset) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses offset)
+                uses |> addOperandUse ptr |> addOperandUse offset
             | StringToRawPtr (_, value) ->
-                uses |> Set.union (getOperandUses value)
+                addOperandUse value uses
             | RawPtrToString (_, ptr) ->
-                uses |> Set.union (getOperandUses ptr)
+                addOperandUse ptr uses
             | BlobToRawPtr (_, value) ->
-                uses |> Set.union (getOperandUses value)
+                addOperandUse value uses
             | RawPtrToBlob (_, ptr) ->
-                uses |> Set.union (getOperandUses ptr)
+                addOperandUse ptr uses
             | DictToRawPtr (_, dict) ->
-                uses |> Set.union (getOperandUses dict)
+                addOperandUse dict uses
             | RawPtrToDict (_, ptr, tag) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses tag)
+                uses |> addOperandUse ptr |> addOperandUse tag
             | ListToRawPtr (_, list) ->
-                uses |> Set.union (getOperandUses list)
+                addOperandUse list uses
             | RawPtrToList (_, ptr, tag) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses tag)
+                uses |> addOperandUse ptr |> addOperandUse tag
             | RawWriteWord (ptr, offset, value) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses offset) |> Set.union (getOperandUses value)
+                uses |> addOperandUse ptr |> addOperandUse offset |> addOperandUse value
             | RawWriteByte (ptr, offset, value) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses offset) |> Set.union (getOperandUses value)
+                uses |> addOperandUse ptr |> addOperandUse offset |> addOperandUse value
             | RawSlotInit (ptr, offset, value, _) ->
-                uses |> Set.union (getOperandUses ptr) |> Set.union (getOperandUses offset) |> Set.union (getOperandUses value)
-            | FloatSqrt (_, src) -> Set.union uses (getOperandUses src)
-            | FloatAbs (_, src) -> Set.union uses (getOperandUses src)
-            | FloatNeg (_, src) -> Set.union uses (getOperandUses src)
-            | Int64ToFloat (_, src) -> Set.union uses (getOperandUses src)
-            | FloatToInt64 (_, src) -> Set.union uses (getOperandUses src)
-            | FloatToBits (_, src) -> Set.union uses (getOperandUses src)
-            | RefCountIncString str -> Set.union uses (getOperandUses str)
-            | RefCountDecString str -> Set.union uses (getOperandUses str)
-            | RefCountIncBlob bytes -> Set.union uses (getOperandUses bytes)
-            | RefCountDecBlob bytes -> Set.union uses (getOperandUses bytes)
+                uses |> addOperandUse ptr |> addOperandUse offset |> addOperandUse value
+            | FloatSqrt (_, src) -> addOperandUse src uses
+            | FloatAbs (_, src) -> addOperandUse src uses
+            | FloatNeg (_, src) -> addOperandUse src uses
+            | Int64ToFloat (_, src) -> addOperandUse src uses
+            | FloatToInt64 (_, src) -> addOperandUse src uses
+            | FloatToBits (_, src) -> addOperandUse src uses
+            | RefCountIncString str -> addOperandUse str uses
+            | RefCountDecString str -> addOperandUse str uses
+            | RefCountIncBlob bytes -> addOperandUse bytes uses
+            | RefCountDecBlob bytes -> addOperandUse bytes uses
             | RandomInt64 _ -> uses  // No operand uses
             | DateTimeNow _ -> uses      // No operand uses
-            | Sleep (_, _, delayMs) -> Set.union uses (getOperandUses delayMs)
+            | Sleep (_, _, delayMs) -> addOperandUse delayMs uses
             | CliNative (_, _, args) ->
-                args |> List.fold (fun current arg -> Set.union current (getOperandUses arg)) uses
-            | FloatToString (_, value) -> Set.union uses (getOperandUses value)
+                args |> List.fold (fun current arg -> addOperandUse arg current) uses
+            | FloatToString (_, value) -> addOperandUse value uses
             | RuntimeError _ -> uses
-            | RuntimeErrorString message -> Set.union uses (getOperandUses message)
+            | RuntimeErrorString message -> addOperandUse message uses
             | CoverageHit _ -> uses  // No operand uses
         ) Set.empty
 
     // Also include uses in terminator
     let termUses =
         match block.Terminator with
-        | Ret op -> getOperandUses op
-        | Branch (cond, _, _) -> getOperandUses cond
-        | Jump _ -> Set.empty
+        | Ret op -> addOperandUse op instrUses
+        | Branch (cond, _, _) -> addOperandUse cond instrUses
+        | Jump _ -> instrUses
 
-    Set.union instrUses termUses
+    termUses
 
 /// Get successor labels of a block
 let getSuccessors (block: BasicBlock) : Label list =
