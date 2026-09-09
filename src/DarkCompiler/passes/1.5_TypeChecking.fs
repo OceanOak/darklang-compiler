@@ -1257,6 +1257,7 @@ let private validateJsonTargetType
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (targetType: Type)
     : Result<unit, TypeError> =
     let unsupported typ =
@@ -1288,20 +1289,14 @@ let private validateJsonTargetType
                     | Error _ -> unsupported typ
                     | Ok subst -> info.Fields |> List.map (snd >> applySubst subst) |> validateAll
             | TSum (name, typeArgs) ->
-                let variants =
-                    variantLookup
-                    |> Map.toList
-                    |> List.choose (fun (_, (owner, typeParams, tag, payload)) ->
-                        if owner = name then Some (typeParams, tag, payload) else None)
-                    |> List.distinctBy (fun (_, tag, _) -> tag)
-                match variants with
-                | [] -> unsupported typ
-                | (typeParams, _, _) :: _ ->
-                    match buildSubstitution typeParams typeArgs with
+                match Map.tryFind name indexedSumTypeReg with
+                | None -> unsupported typ
+                | Some info ->
+                    match buildSubstitution info.TypeParams typeArgs with
                     | Error _ -> unsupported typ
                     | Ok subst ->
-                        variants
-                        |> List.choose (fun (_, _, payload) -> Option.map (applySubst subst) payload)
+                        info.Variants
+                        |> List.choose (fun variant -> Option.map (applySubst subst) variant.Payload)
                         |> validateAll
             | TFunction _ | TBlob | TRawPtr | TRuntimeError | TStream _ | TVar _ | TDict _ -> unsupported typ
     validate Set.empty targetType
@@ -3817,7 +3812,12 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                     |> Result.bind (fun () ->
                         match resolvedFuncName, typeArgs with
                         | ("Stdlib.Json.serialize" | "Stdlib.Json.parse"), [targetType] ->
-                            validateJsonTargetType aliasReg typeReg variantLookup targetType
+                            validateJsonTargetType
+                                aliasReg
+                                typeReg
+                                variantLookup
+                                indexedSumTypeReg
+                                targetType
                         | _ -> Ok ())
                     |> Result.bind (fun () -> buildSubstitution typeParams typeArgs |> Result.mapError GenericError)
                     |> Result.bind (fun subst ->
