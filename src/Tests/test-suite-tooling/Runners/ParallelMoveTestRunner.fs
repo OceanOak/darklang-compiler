@@ -15,7 +15,6 @@ let private context : CodeGen.CodeGenContext = {
     RecordRegistry = Map.empty
     ClosurePayloadSizes = Map.empty
     ClosureCaptureTypes = Map.empty
-    PlannedListDecHelperLabels = Map.empty
     FunctionName = "parallel_move_fixture"
     InstructionSite = "fixture_0"
     StackSize = 0

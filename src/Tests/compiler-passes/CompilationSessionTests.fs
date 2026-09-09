@@ -223,9 +223,35 @@ let testArm64CodegenCacheSegregatesCompilationContexts (_: CompilerLibrary.Stdli
     let generate () =
         calls.Add ()
         Ok []
+    let registryDependentFunction =
+        let entry = LIR.Label "registry_dependent_entry"
+        {
+            fakeFunction with
+                Name = "registry_dependent_function"
+                CFG = {
+                    Entry = entry
+                    Blocks =
+                        Map.ofList [
+                            entry,
+                            {
+                                Label = entry
+                                Instrs =
+                                    [
+                                        LIR.RawSlotInit (
+                                            LIR.Physical LIR.X0,
+                                            LIR.Physical LIR.X1,
+                                            LIR.Physical LIR.X2,
+                                            TRecord ("UserRecord", []))
+                                    ]
+                                Terminator = LIR.Ret
+                            }
+                        ]
+                }
+        }
+        |> LIR.attachFunctionCodegenFacts
     let structurallyEquivalentFunction =
-        { fakeFunction with Name = fakeFunction.Name }
-    let _ = session.CodegenFunction firstContext target CodeGen.defaultOptions fakeFunction generate
+        { registryDependentFunction with Name = registryDependentFunction.Name }
+    let _ = session.CodegenFunction firstContext target CodeGen.defaultOptions registryDependentFunction generate
     let _ = session.CodegenFunction firstContext target CodeGen.defaultOptions structurallyEquivalentFunction generate
     let _ = session.CodegenFunction secondContext target CodeGen.defaultOptions structurallyEquivalentFunction generate
     if calls.Count = 2
@@ -235,6 +261,43 @@ let testArm64CodegenCacheSegregatesCompilationContexts (_: CompilerLibrary.Stdli
         Ok ()
     else
         Error $"Expected structurally equal functions to reuse only within one registry context, got calls={calls.Count}, cached={session.CachedArm64FunctionCount}, hits={session.Arm64CodegenHitCount}, misses={session.Arm64CodegenMissCount}"
+
+let testArm64CodegenCacheReusesContextIndependentFunctions
+    (_: CompilerLibrary.StdlibResult)
+    ()
+    : TestResult =
+    use session = new CompilerLibrary.CompilationSession()
+    let target = ARM64.targetConfigFor Platform.MacOSARM64
+    let firstContext = System.Object()
+    let secondContext = System.Object()
+    let calls = ResizeArray<unit>()
+    let generate () =
+        calls.Add ()
+        Ok []
+    let preparedFunction = LIR.attachFunctionCodegenFacts fakeFunction
+    let structurallyEquivalentFunction =
+        { preparedFunction with Name = preparedFunction.Name }
+    let _ =
+        session.CodegenFunction
+            firstContext
+            target
+            CodeGen.defaultOptions
+            preparedFunction
+            generate
+    let _ =
+        session.CodegenFunction
+            secondContext
+            target
+            CodeGen.defaultOptions
+            structurallyEquivalentFunction
+            generate
+    if calls.Count = 1
+       && session.CachedArm64FunctionCount = 1
+       && session.Arm64CodegenHitCount = 1
+       && session.Arm64CodegenMissCount = 1 then
+        Ok ()
+    else
+        Error $"Expected registry-independent functions to reuse ARM64 code across compilation contexts, got calls={calls.Count}, cached={session.CachedArm64FunctionCount}, hits={session.Arm64CodegenHitCount}, misses={session.Arm64CodegenMissCount}"
 
 let testArm64EmissionChunkCacheUsesChunkIdentity (_: CompilerLibrary.StdlibResult) () : TestResult =
     use session = new CompilerLibrary.CompilationSession()
@@ -479,6 +542,7 @@ let tests (stdlib: CompilerLibrary.StdlibResult) = [
     ("compilation session reuses structural MIR optimizations", testMirOptimizationCacheReusesStructuralFunctions stdlib)
     ("compilation session reuses structural LIR allocation", testAllocatedLirFunctionCacheReusesStructuralFunctions stdlib)
     ("compilation session segregates ARM64 registry contexts", testArm64CodegenCacheSegregatesCompilationContexts stdlib)
+    ("compilation session reuses registry-independent ARM64 functions", testArm64CodegenCacheReusesContextIndependentFunctions stdlib)
     ("compilation session reuses prepared ARM64 chunks by identity", testArm64EmissionChunkCacheUsesChunkIdentity stdlib)
     ("compilation session confirms ARM64 release-plan cache shapes", testArm64ReleasePlanSummaryCacheConfirmsPlanShape stdlib)
     ("expression-only type checking reuses base registries", testExpressionTypeCheckingReusesBaseRegistries stdlib)

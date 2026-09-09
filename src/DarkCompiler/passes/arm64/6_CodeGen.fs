@@ -59,8 +59,6 @@ type CodeGenContext = {
     RecordRegistry: LIR.RecordRegistry
     ClosurePayloadSizes: Map<string, int>
     ClosureCaptureTypes: Map<string, AST.Type list>
-    /// Reuses labels already derived while planning generic list release helpers.
-    PlannedListDecHelperLabels: Map<ANF.RcReleasePlan, string>
     FunctionName: string
     /// Deterministic block/instruction identity for labels emitted by an effect.
     /// One source effect can be cloned into multiple CFG locations.
@@ -5628,10 +5626,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                 let helperLabel =
                     match releasePlan with
                     | ANF.RootRelease (_, _, ANF.TaggedListPayloadRelease (ANF.RootRelease (_, ANF.GenericHeap, _) as elementRelease)) ->
-                        match Map.tryFind elementRelease ctx.PlannedListDecHelperLabels with
-                        | Some label -> label
-                        | None ->
-                            Crash.crash $"TaggedList RefCountDec planned helper label missing for release plan {releasePlan}"
+                        plannedListDecHelperLabelForReleasePlan elementRelease
                     | _ ->
                         listDecHelperForReleasePlan releasePlan
                 let listDecCall = [
@@ -8558,7 +8553,6 @@ let private generatePreparedARM64WithOptionsAndCache
         RecordRegistry = recordRegistry
         ClosurePayloadSizes = closurePayloadSizes
         ClosureCaptureTypes = programMetadata.Facts.ClosureCaptureTypes
-        PlannedListDecHelperLabels = Map.empty
         FunctionName = ""
         InstructionSite = ""
         StackSize = 0
@@ -8574,13 +8568,6 @@ let private generatePreparedARM64WithOptionsAndCache
 
     let plannedDictDecHelpers = rcHelperRequirements.PlannedDictDecHelpers
 
-    let plannedListDecHelperLabels =
-        plannedListDecHelpers
-        |> Map.toList
-        |> List.map (fun (helperLabel, (_, releasePlan)) -> releasePlan, helperLabel)
-        |> Map.ofList
-
-    let ctx = { ctx with PlannedListDecHelperLabels = plannedListDecHelperLabels }
     recordPhase "ARM64 Codegen Metadata" metadataTimer
 
     let convertCached func =

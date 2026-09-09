@@ -449,7 +449,7 @@ let testBranchFalseEdgeFallsThrough () : TestResult =
     }
     let ctx : CodeGen.CodeGenContext = {
         Target = target; Options = CodeGen.defaultOptions; SumShapeRegistry = Map.empty; RecordRegistry = Map.empty
-        ClosurePayloadSizes = Map.empty; ClosureCaptureTypes = Map.empty; PlannedListDecHelperLabels = Map.empty
+        ClosurePayloadSizes = Map.empty; ClosureCaptureTypes = Map.empty
         FunctionName = func.Name; InstructionSite = ""; StackSize = 0; UsedCalleeSaved = []
         HeapOverflowLabel = "__heap_oom_arm64_layout"
         RecordLirOpExpansion = None
@@ -529,7 +529,6 @@ let private generatedEntryTransfers
         RecordRegistry = Map.empty
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
-        PlannedListDecHelperLabels = Map.empty
         FunctionName = func.Name
         InstructionSite = ""
         StackSize = func.StackSize
@@ -671,7 +670,6 @@ let private convertRawAlloc
         RecordRegistry = Map.empty
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
-        PlannedListDecHelperLabels = Map.empty
         FunctionName = "test"
         InstructionSite = "test_0"
         StackSize = 0
@@ -2015,7 +2013,6 @@ let testLirOpExpansionRecorderAttributesGeneratedInstructions () : TestResult =
         RecordRegistry = Map.empty
         ClosurePayloadSizes = Map.empty
         ClosureCaptureTypes = Map.empty
-        PlannedListDecHelperLabels = Map.empty
         FunctionName = "lir_op_profile"
         InstructionSite = ""
         StackSize = 0

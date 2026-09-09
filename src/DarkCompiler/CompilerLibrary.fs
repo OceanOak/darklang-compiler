@@ -354,6 +354,10 @@ type CompilationSession(collectCodegenMetrics: bool) =
                     ARM64.TargetConfig * CodeGen.CodeGenOptions,
                     Result<ARM64Symbolic.Instr list, string>>>>(ObjectReferenceComparer())
     let arm64StartContextIdentity = System.Object()
+    // Finalized functions carry every input needed by ARM64 conversion except
+    // RawSlotInit's nominal-type lookup. Share all other functions across
+    // executable registry contexts while retaining target/options segregation.
+    let arm64RegistryIndependentFunctionContextIdentity = System.Object()
     let arm64GenericReleaseHelperContextIdentity = System.Object()
     let arm64EmissionChunks =
         Dictionary<
@@ -726,6 +730,11 @@ type CompilationSession(collectCodegenMetrics: bool) =
         else
             let contextIdentity =
                 if func.Name = "_start" then arm64StartContextIdentity
+                elif
+                    func.CodegenFacts
+                    |> Option.exists (fun facts -> Set.isEmpty facts.RawSlotInitTypes)
+                then
+                    arm64RegistryIndependentFunctionContextIdentity
                 else contextIdentity
             let structuralEntries =
                 match arm64FunctionsByContext.TryGetValue contextIdentity with
