@@ -675,8 +675,6 @@ type RenamingState = {
     VersionStack: Map<VReg, int list>
     /// Next available version number
     NextVersion: int
-    /// Map from (original VReg, version) to new VReg
-    VersionToReg: Map<VReg * int, VReg>
     /// Original floatRegs set (VReg IDs that are floats)
     OriginalFloatRegs: Set<int>
     /// Updated floatRegs set (includes SSA renamed VRegs)
@@ -708,7 +706,6 @@ let createInitialRenamingState (cfg: CFG) (floatRegs: Set<int>) (extraRegs: VReg
         CurrentVersion = Map.empty
         VersionStack = Map.empty
         NextVersion = nextVersionStart
-        VersionToReg = Map.empty
         OriginalFloatRegs = floatRegs
         FloatRegs = floatRegs  // Start with original floatRegs, will be extended
     }
@@ -733,7 +730,6 @@ let newVersion (state: RenamingState) (vreg: VReg) : int * VReg * RenamingState 
         CurrentVersion = Map.add vreg version state.CurrentVersion
         VersionStack = Map.add vreg (version :: stack) state.VersionStack
         NextVersion = state.NextVersion + 1
-        VersionToReg = Map.add (vreg, version) newReg state.VersionToReg
         OriginalFloatRegs = state.OriginalFloatRegs
         FloatRegs = updatedFloatRegs
     }
@@ -741,9 +737,9 @@ let newVersion (state: RenamingState) (vreg: VReg) : int * VReg * RenamingState 
 
 /// Get the renamed VReg for a use
 let getRenamedReg (state: RenamingState) (vreg: VReg) : VReg =
-    let version = Map.tryFind vreg state.CurrentVersion |> Option.defaultValue 0
-    Map.tryFind (vreg, version) state.VersionToReg
-    |> Option.defaultValue vreg
+    match Map.tryFind vreg state.CurrentVersion with
+    | Some version when version <> 0 -> VReg version
+    | _ -> vreg
 
 /// Rename operand
 let renameOperand (state: RenamingState) (op: Operand) : Operand =
