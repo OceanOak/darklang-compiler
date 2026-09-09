@@ -10472,6 +10472,8 @@ type UserOnlyResult = {
     RecordFieldsReg: Map<string, (string * AST.Type) list>
     RecordTypeParamsReg: Map<string, string list>
     VariantLookup: VariantLookup
+    LocalRecordFieldsReg: Map<string, (string * AST.Type) list>
+    LocalVariantLookup: VariantLookup
     RcSumShapeReg: ANF.RcSumShapeRegistry
     FuncReg: FunctionRegistry
     LocalReturnTypes: Map<string, AST.Type>

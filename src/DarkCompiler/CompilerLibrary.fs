@@ -272,6 +272,19 @@ type private Arm64HelperCacheKey = {
     Helper: CodeGen.HelperCacheKey
 }
 
+let private mergeMirRegistryOverlay baseRegistry overlay =
+    Map.fold (fun merged name value -> Map.add name value merged) baseRegistry overlay
+
+let private projectMirRegistryOverlay
+    ((baseVariants, baseRecords): MIR.VariantRegistry * MIR.RecordRegistry)
+    (localVariantLookup: AST_to_ANF.VariantLookup)
+    (localRecordFields: Map<string, (string * AST.Type) list>)
+    : MIR.VariantRegistry * MIR.RecordRegistry =
+    let localVariants = ANF_to_MIR.buildVariantRegistry localVariantLookup
+    let localRecords = ANF_to_MIR.buildRecordRegistry localRecordFields
+    (mergeMirRegistryOverlay baseVariants localVariants,
+     mergeMirRegistryOverlay baseRecords localRecords)
+
 type CompilationSession(collectCodegenMetrics: bool) =
     let jsonPlanning = new JsonPlanning.PlanningSession()
     let anfDependenciesByContext =
@@ -591,21 +604,24 @@ type CompilationSession(collectCodegenMetrics: bool) =
 
     member internal _.ProjectMirRegistries
         (contextIdentity: obj)
-        (variantLookup: AST_to_ANF.VariantLookup)
-        (recordFields: Map<string, (string * AST.Type) list>)
+        ((baseVariants, baseRecords): MIR.VariantRegistry * MIR.RecordRegistry)
+        (localVariantLookup: AST_to_ANF.VariantLookup)
+        (localRecordFields: Map<string, (string * AST.Type) list>)
         : MIR.VariantRegistry * MIR.RecordRegistry =
+        let projectLocalOverlay () =
+            projectMirRegistryOverlay
+                (baseVariants, baseRecords)
+                localVariantLookup
+                localRecordFields
         if disposed then
-            (ANF_to_MIR.buildVariantRegistry variantLookup,
-             ANF_to_MIR.buildRecordRegistry recordFields)
+            projectLocalOverlay ()
         else
             match mirRegistriesByContext.TryGetValue contextIdentity with
             | true, registries ->
                 mirRegistryProjectionHitCount <- mirRegistryProjectionHitCount + 1
                 registries
             | false, _ ->
-                let registries =
-                    (ANF_to_MIR.buildVariantRegistry variantLookup,
-                     ANF_to_MIR.buildRecordRegistry recordFields)
+                let registries = projectLocalOverlay ()
                 mirRegistriesByContext.[contextIdentity] <- registries
                 mirRegistryProjectionMissCount <- mirRegistryProjectionMissCount + 1
                 registries
@@ -1831,6 +1847,7 @@ type PipelineContext = {
     LambdaLiftFuncParams: Map<string, (string * AST.Type) list>
     LambdaLiftTypeReg: AST_to_ANF.TypeRegistry
     LambdaLiftVariantLookup: AST_to_ANF.VariantLookup
+    ProjectedMirRegistries: MIR.VariantRegistry * MIR.RecordRegistry
     ReturnTypes: Map<string, AST.Type>
     PackageCatalogGenericCallers: Set<string>
 }
@@ -1859,6 +1876,9 @@ let private buildContext
             reserveBaseFunctionParams registries.FuncParams baseFuncNames
         LambdaLiftTypeReg = lambdaLiftTypeReg
         LambdaLiftVariantLookup = lambdaLiftVariantLookup
+        ProjectedMirRegistries =
+            (ANF_to_MIR.buildVariantRegistry registries.VariantLookup,
+             ANF_to_MIR.buildRecordRegistry registries.RecordFieldsReg)
         ReturnTypes = returnTypes
         PackageCatalogGenericCallers =
             buildPackageCatalogGenericCallers genericFuncDefs
@@ -2382,6 +2402,8 @@ let private convertTypedProgramToUserOnlyWithMode
                         RecordFieldsReg = registries.RecordFieldsReg
                         RecordTypeParamsReg = registries.RecordTypeParamsReg
                         VariantLookup = registries.VariantLookup
+                        LocalRecordFieldsReg = localRegistries.RecordFieldsReg
+                        LocalVariantLookup = localRegistries.VariantLookup
                         RcSumShapeReg = registries.RcSumShapeReg
                         FuncReg = registries.FuncReg
                         LocalReturnTypes = localReturnTypes
@@ -3523,11 +3545,14 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             | Some current ->
                                 current.ProjectMirRegistries
                                     dependencyIdentity
-                                    userRegistries.VariantLookup
-                                    userRegistries.RecordFieldsReg
+                                    plan.BaseContext.ProjectedMirRegistries
+                                    userOnly.LocalVariantLookup
+                                    userOnly.LocalRecordFieldsReg
                             | None ->
-                                (ANF_to_MIR.buildVariantRegistry userRegistries.VariantLookup,
-                                 ANF_to_MIR.buildRecordRegistry userRegistries.RecordFieldsReg)
+                                projectMirRegistryOverlay
+                                    plan.BaseContext.ProjectedMirRegistries
+                                    userOnly.LocalVariantLookup
+                                    userOnly.LocalRecordFieldsReg
                         mirRegistryTimer.Stop()
                         recordPassTiming
                             plan.PassTimingRecorder
