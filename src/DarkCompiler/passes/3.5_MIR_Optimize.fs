@@ -365,12 +365,12 @@ let dominates (entry: Label) (idoms: Dominators) (dominator: Label) (node: Label
         walk node
 
 /// Identify natural loops via backedges (header dominates source), reusing a
-/// predecessor map already computed for this CFG topology.
-let private findNaturalLoopsWithPredecessors
+/// predecessor map and dominators already computed for this CFG topology.
+let private findNaturalLoopsWithTopology
     (cfg: CFG)
     (predecessors: Map<Label, Label list>)
+    (idoms: Dominators)
     : Map<Label, Set<Label>> =
-    let idoms = computeDominators cfg predecessors
     let entry = cfg.Entry
     let successors = buildSuccessors cfg
 
@@ -420,15 +420,40 @@ type private LoopTopology = {
     Predecessors: Map<Label, Label list>
 }
 
-let private tryBuildLoopTopology (cfg: CFG) : LoopTopology option =
+type private DominatorTopology = {
+    Predecessors: Map<Label, Label list>
+    ImmediateDominators: Dominators
+}
+
+let private buildDominatorTopology (cfg: CFG) : DominatorTopology =
+    let predecessors = buildPredecessors cfg
+    {
+        Predecessors = predecessors
+        ImmediateDominators = computeDominators cfg predecessors
+    }
+
+let private tryBuildLoopTopologyWithDominators
+    (cfg: CFG)
+    (dominatorTopology: DominatorTopology)
+    : LoopTopology option =
     if not (cfgHasReachableCycle cfg) then
         None
     else
-        let predecessors = buildPredecessors cfg
         Some {
-            Loops = findNaturalLoopsWithPredecessors cfg predecessors
-            Predecessors = predecessors
+            Loops =
+                findNaturalLoopsWithTopology
+                    cfg
+                    dominatorTopology.Predecessors
+                    dominatorTopology.ImmediateDominators
+            Predecessors = dominatorTopology.Predecessors
         }
+
+let private tryBuildLoopTopology (cfg: CFG) : LoopTopology option =
+    if cfgHasReachableCycle cfg then
+        buildDominatorTopology cfg
+        |> tryBuildLoopTopologyWithDominators cfg
+    else
+        None
 
 /// Identify natural loops via backedges (header dominates source).
 let findNaturalLoops (cfg: CFG) : Map<Label, Set<Label>> =
@@ -2548,10 +2573,10 @@ let private clearHeapLoadAndDirectCallAvailability
         DirectCalls = Map.empty }
 
 /// Apply CSE to a CFG, carrying available expressions into dominated blocks.
-let applyCSEWithEffectFreeCalls
+let private applyCSEWithEffectFreeCallsAndTopology
     (effectFreeFunctions: Set<string>)
     (cfg: CFG)
-    : CFG * bool =
+    : CFG * bool * DominatorTopology =
     let optimizeBlock
         (available: ExprAvailability)
         (block: BasicBlock)
@@ -2646,7 +2671,8 @@ let applyCSEWithEffectFreeCalls
 
         ({ block with Instrs = List.rev instrs' }, exported', changed)
 
-    let idoms = computeDominators cfg (buildPredecessors cfg)
+    let dominatorTopology = buildDominatorTopology cfg
+    let idoms = dominatorTopology.ImmediateDominators
     let dominatorChildren =
         idoms
         |> Map.fold (fun children child parent ->
@@ -2688,7 +2714,15 @@ let applyCSEWithEffectFreeCalls
                 (Map.add label block' blocks, ch || blockChanged)
         ) (reachableBlocks, reachableChanged)
 
-    ({ cfg with Blocks = blocks' }, changed)
+    ({ cfg with Blocks = blocks' }, changed, dominatorTopology)
+
+let applyCSEWithEffectFreeCalls
+    (effectFreeFunctions: Set<string>)
+    (cfg: CFG)
+    : CFG * bool =
+    let (optimized, changed, _) =
+        applyCSEWithEffectFreeCallsAndTopology effectFreeFunctions cfg
+    (optimized, changed)
 
 let applyCSE (cfg: CFG) : CFG * bool =
     applyCSEWithEffectFreeCalls Set.empty cfg
@@ -2752,12 +2786,14 @@ let private optimizeCFGOnceWithEffectFreeCalls
             measure "MIR Constant Folding" (fun () -> applyConstantFolding cfg)
         else
             (cfg, false)
-    let (cfg2, changed2) =
+    let (cfg2, changed2, cseTopology) =
         if options.EnableCSE then
             measure "MIR Common Subexpression Elimination" (fun () ->
-                applyCSEWithEffectFreeCalls effectFreeFunctions cfg1)
+                let (optimized, changed, topology) =
+                    applyCSEWithEffectFreeCallsAndTopology effectFreeFunctions cfg1
+                (optimized, changed, Some topology))
         else
-            (cfg1, false)
+            (cfg1, false, None)
     let (cfg3, changed3) =
         if options.EnableCopyProp then
             measure "MIR Copy Propagation" (fun () ->
@@ -2774,7 +2810,14 @@ let private optimizeCFGOnceWithEffectFreeCalls
             (cfg3, false)
     let (cfg5, changed5, cfg6, changed6, loopTopology) =
         if options.EnableLICM then
-            match measure "MIR Loop Topology" (fun () -> tryBuildLoopTopology cfg4) with
+            match
+                measure "MIR Loop Topology" (fun () ->
+                    match cseTopology with
+                    | Some topology ->
+                        tryBuildLoopTopologyWithDominators cfg4 topology
+                    | None ->
+                        tryBuildLoopTopology cfg4)
+            with
             | None -> (cfg4, false, cfg4, false, None)
             | Some topology ->
                 let (cfg5, changed5) =
