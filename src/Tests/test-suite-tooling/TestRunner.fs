@@ -158,6 +158,8 @@ type CodegenProfileSummary = {
     ssa_function_cache_misses: int
     mir_optimization_cache_hits: int
     mir_optimization_cache_misses: int
+    allocated_lir_function_cache_hits: int
+    allocated_lir_function_cache_misses: int
     compiled_start_cache_hits: int
     compiled_start_cache_misses: int
     stdlib_reachability_cache_hits: int
@@ -595,6 +597,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
     let mutable ssaFunctionCacheMisses = 0
     let mutable mirOptimizationCacheHits = 0
     let mutable mirOptimizationCacheMisses = 0
+    let mutable allocatedLirFunctionCacheHits = 0
+    let mutable allocatedLirFunctionCacheMisses = 0
     let mutable compiledStartCacheHits = 0
     let mutable compiledStartCacheMisses = 0
     let mutable stdlibReachabilityCacheHits = 0
@@ -1059,6 +1063,12 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                     mirOptimizationCacheHits + compilationSession.MirOptimizationHitCount
                 mirOptimizationCacheMisses <-
                     mirOptimizationCacheMisses + compilationSession.MirOptimizationMissCount
+                allocatedLirFunctionCacheHits <-
+                    allocatedLirFunctionCacheHits
+                    + compilationSession.AllocatedLirFunctionHitCount
+                allocatedLirFunctionCacheMisses <-
+                    allocatedLirFunctionCacheMisses
+                    + compilationSession.AllocatedLirFunctionMissCount
                 compiledStartCacheHits <-
                     compiledStartCacheHits + compilationSession.CompiledStartHitCount
                 compiledStartCacheMisses <-
@@ -1657,7 +1667,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
             |> Seq.toArray
         let payload = {
-            schema_version = 9
+            schema_version = 10
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs
@@ -1676,6 +1686,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                 ssa_function_cache_misses = ssaFunctionCacheMisses
                 mir_optimization_cache_hits = mirOptimizationCacheHits
                 mir_optimization_cache_misses = mirOptimizationCacheMisses
+                allocated_lir_function_cache_hits = allocatedLirFunctionCacheHits
+                allocated_lir_function_cache_misses = allocatedLirFunctionCacheMisses
                 compiled_start_cache_hits = compiledStartCacheHits
                 compiled_start_cache_misses = compiledStartCacheMisses
                 stdlib_reachability_cache_hits = stdlibReachabilityCacheHits
