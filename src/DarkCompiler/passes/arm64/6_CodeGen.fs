@@ -4513,14 +4513,10 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
             | LIR.FloatImm _ | LIR.FloatSymbol _ ->
                 Error "Float in ArgMoves not yet supported"
 
-        // Generate all moves in order (X0, X1, X2, ...)
+        // MIR lowering stores moves in ABI destination order (X0, X1, ...),
+        // and register allocation changes only their source operands.
         let moveInstrs =
             moves
-            |> List.sortBy (fun (destReg, _) ->
-                match destReg with
-                | LIR.X0 -> 0 | LIR.X1 -> 1 | LIR.X2 -> 2 | LIR.X3 -> 3
-                | LIR.X4 -> 4 | LIR.X5 -> 5 | LIR.X6 -> 6 | LIR.X7 -> 7
-                | _ -> 100)
             |> ResultList.mapResults generateMove
             |> Result.map List.concat
 

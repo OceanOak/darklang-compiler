@@ -124,6 +124,7 @@ type Instr =
     | ClosureTailCall of closure:Reg * args:Operand list
     | SaveRegs of intRegs:PhysReg list * floatRegs:PhysFPReg list
     | RestoreRegs of intRegs:PhysReg list * floatRegs:PhysFPReg list
+    /// Destination registers are stored in ABI argument order.
     | ArgMoves of (PhysReg * Operand) list
     | TailArgMoves of (PhysReg * Operand) list
     | FArgMoves of (PhysFPReg * FReg) list
