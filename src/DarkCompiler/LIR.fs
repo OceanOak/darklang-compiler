@@ -365,6 +365,8 @@ type Function = {
     TypedParams: TypedLIRParam list
     CFG: CFG
     StackSize: int
+    /// Register allocation stores these in physical-register order so backend
+    /// prologue and epilogue generation can consume them directly.
     UsedCalleeSaved: PhysReg list
     CodegenFacts: FunctionCodegenFacts option
 }

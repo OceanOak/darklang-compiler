@@ -3335,13 +3335,6 @@ let storeStackSlot (src: ARM64Symbolic.Reg) (offset: int) : Result<ARM64Symbolic
 /// Generate STP instructions to save callee-saved register pairs
 /// Returns instructions and total bytes pushed
 let generateCalleeSavedSaves (regs: LIR.PhysReg list) : ARM64Symbolic.Instr list * int =
-    // Sort registers for consistent ordering and pair them
-    let sorted = regs |> List.sortBy (fun r ->
-        match r with
-        | LIR.X19 -> 19 | LIR.X20 -> 20 | LIR.X21 -> 21 | LIR.X22 -> 22
-        | LIR.X23 -> 23 | LIR.X24 -> 24 | LIR.X25 -> 25 | LIR.X26 -> 26
-        | LIR.X27 -> 27 | _ -> 99)
-
     // Process in pairs. If odd number, pad with X27 (or just save single)
     let rec savePairs (remaining: LIR.PhysReg list) (offset: int) (acc: ARM64Symbolic.Instr list) =
         match remaining with
@@ -3354,19 +3347,13 @@ let generateCalleeSavedSaves (regs: LIR.PhysReg list) : ARM64Symbolic.Instr list
             let instr = ARM64Symbolic.STP (lirPhysRegToARM64Reg r1, lirPhysRegToARM64Reg r2, ARM64Symbolic.SP, int16 offset)
             savePairs rest (offset + 16) (instr :: acc)
 
-    if List.isEmpty sorted then
+    if List.isEmpty regs then
         ([], 0)
     else
-        savePairs sorted 0 []
+        savePairs regs 0 []
 
 /// Generate LDP instructions to restore callee-saved register pairs
 let generateCalleeSavedRestores (regs: LIR.PhysReg list) : ARM64Symbolic.Instr list =
-    let sorted = regs |> List.sortBy (fun r ->
-        match r with
-        | LIR.X19 -> 19 | LIR.X20 -> 20 | LIR.X21 -> 21 | LIR.X22 -> 22
-        | LIR.X23 -> 23 | LIR.X24 -> 24 | LIR.X25 -> 25 | LIR.X26 -> 26
-        | LIR.X27 -> 27 | _ -> 99)
-
     let rec restorePairs (remaining: LIR.PhysReg list) (offset: int) (acc: ARM64Symbolic.Instr list) =
         match remaining with
         | [] -> List.rev acc
@@ -3377,8 +3364,8 @@ let generateCalleeSavedRestores (regs: LIR.PhysReg list) : ARM64Symbolic.Instr l
             let instr = ARM64Symbolic.LDP (lirPhysRegToARM64Reg r1, lirPhysRegToARM64Reg r2, ARM64Symbolic.SP, int16 offset)
             restorePairs rest (offset + 16) (instr :: acc)
 
-    if List.isEmpty sorted then []
-    else restorePairs sorted 0 []
+    if List.isEmpty regs then []
+    else restorePairs regs 0 []
 
 /// Calculate stack space needed for callee-saved registers (16-byte aligned)
 let calleeSavedStackSpace (regs: LIR.PhysReg list) : int =
