@@ -161,6 +161,11 @@ type private LirFunctionReferenceComparer() =
         member _.GetHashCode(func) =
             System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(func)
 
+type private MirFunctionNameHashComparer() =
+    interface IEqualityComparer<MIR.Function> with
+        member _.Equals(left, right) = left = right
+        member _.GetHashCode(func) = StringComparer.Ordinal.GetHashCode(func.Name)
+
 type private ObjectReferenceComparer() =
     interface IEqualityComparer<obj> with
         member _.Equals(left, right) = Object.ReferenceEquals(left, right)
@@ -187,6 +192,9 @@ type internal StartCompilationConfig = {
     Options: CompilerOptions
     BoundaryProgramType: AST.Type
 }
+
+type internal SsaFunctionCache =
+    MIR.Function -> (unit -> MIR.Function) -> MIR.Function
 
 type private Arm64InstructionChunkReferenceComparer() =
     interface IEqualityComparer<ARM64Symbolic.Instr list> with
@@ -239,6 +247,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 Result<LIR.Function list, string>>>(ObjectReferenceComparer())
     let compiledStartFunctions =
         Dictionary<StartCompilationConfig, Result<LIR.Function list, string>>()
+    let ssaFunctions =
+        Dictionary<MIR.Function, MIR.Function>(MirFunctionNameHashComparer())
     let reachableStdlibFunctionsByContext =
         Dictionary<
             obj,
@@ -309,6 +319,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
     let mutable compiledDependencyMissCount = 0
     let mutable compiledStartHitCount = 0
     let mutable compiledStartMissCount = 0
+    let mutable ssaFunctionHitCount = 0
+    let mutable ssaFunctionMissCount = 0
     let mutable stdlibReachabilityHitCount = 0
     let mutable stdlibReachabilityMissCount = 0
     let mutable mirRegistryProjectionHitCount = 0
@@ -413,6 +425,23 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 compiledStartFunctions.[config] <- result
                 compiledStartMissCount <- compiledStartMissCount + 1
                 result
+
+    member _.ConvertMirFunctionToSsa
+        (func: MIR.Function)
+        (convert: unit -> MIR.Function)
+        : MIR.Function =
+        if disposed then
+            convert ()
+        else
+            match ssaFunctions.TryGetValue func with
+            | true, converted ->
+                ssaFunctionHitCount <- ssaFunctionHitCount + 1
+                converted
+            | false, _ ->
+                let converted = convert ()
+                ssaFunctions.[func] <- converted
+                ssaFunctionMissCount <- ssaFunctionMissCount + 1
+                converted
 
     member internal _.ReachableStdlibFunctions
         (contextIdentity: obj)
@@ -730,6 +759,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
         if disposed then 0
         else compiledDependenciesByIdentity.Values |> Seq.sumBy (fun entries -> entries.Count)
     member _.CachedCompiledStartCount = if disposed then 0 else compiledStartFunctions.Count
+    member _.CachedSsaFunctionCount = if disposed then 0 else ssaFunctions.Count
     member _.CachedStdlibReachabilityCount =
         if disposed then 0
         else reachableStdlibFunctionsByContext.Values |> Seq.sumBy (fun entries -> entries.Count)
@@ -755,6 +785,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
     member _.CompiledDependencyMissCount = compiledDependencyMissCount
     member _.CompiledStartHitCount = compiledStartHitCount
     member _.CompiledStartMissCount = compiledStartMissCount
+    member _.SsaFunctionHitCount = ssaFunctionHitCount
+    member _.SsaFunctionMissCount = ssaFunctionMissCount
     member _.StdlibReachabilityHitCount = stdlibReachabilityHitCount
     member _.StdlibReachabilityMissCount = stdlibReachabilityMissCount
     member _.MirRegistryProjectionHitCount = mirRegistryProjectionHitCount
@@ -791,6 +823,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             anfDependenciesByContext.Clear()
             compiledDependenciesByIdentity.Clear()
             compiledStartFunctions.Clear()
+            ssaFunctions.Clear()
             reachableStdlibFunctionsByContext.Clear()
             reachableStdlibNamesByRootAndContext.Clear()
             mirRegistriesByContext.Clear()
@@ -893,6 +926,7 @@ let private compileMirToLir
     (options: CompilerOptions)
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
+    (ssaFunctionCache: SsaFunctionCache option)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
     : Result<LIR.Function list, string> =
@@ -901,19 +935,29 @@ let private compileMirToLir
 
     if verbosity >= 1 then println $"  [3.1/7] SSA Construction{suffix}..."
     let ssaStart = sw.Elapsed.TotalMilliseconds
+    let convertFunction func =
+        let convert () =
+            match passTimingRecorder with
+            | None -> SSA_Construction.convertFunctionToSSA func
+            | Some recorder ->
+                let (converted, timings) =
+                    SSA_Construction.convertFunctionToSSAWithTiming func
+                timings
+                |> List.iter (fun timing ->
+                    recorder {
+                        Pass = timing.Phase
+                        Elapsed = TimeSpan.FromMilliseconds timing.ElapsedMs
+                    })
+                converted
+        match ssaFunctionCache with
+        | Some cache -> cache func convert
+        | None -> convert ()
+    let (MIR.Program (mirFunctions, mirVariants, mirRecords)) = mirProgram
     let ssaProgram =
-        match passTimingRecorder with
-        | None -> SSA_Construction.convertToSSA mirProgram
-        | Some recorder ->
-            let (converted, timings) =
-                SSA_Construction.convertToSSAWithTiming mirProgram
-            timings
-            |> List.iter (fun timing ->
-                recorder {
-                    Pass = timing.Phase
-                    Elapsed = TimeSpan.FromMilliseconds timing.ElapsedMs
-                })
-            converted
+        MIR.Program (
+            mirFunctions |> List.map convertFunction,
+            mirVariants,
+            mirRecords)
     let ssaElapsed = sw.Elapsed.TotalMilliseconds - ssaStart
     recordPassTiming passTimingRecorder "SSA Construction" ssaElapsed
     if verbosity >= 2 then
@@ -1053,6 +1097,7 @@ let private lowerToAllocatedLir
     (options: CompilerOptions)
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
+    (ssaFunctionCache: SsaFunctionCache option)
     (releasePlanSummaryCache: CodeGen.ReleasePlanSummaryCache option)
     (stageSuffix: string)
     (functions: ANF.Function list)
@@ -1107,7 +1152,15 @@ let private lowerToAllocatedLir
                 if verbosity >= 2 then
                     let t = System.Math.Round(mirElapsed, 1)
                     println $"        {t}ms"
-                compileMirToLir (Platform.archFor target) verbosity options sw passTimingRecorder stageSuffix mirProgram
+                compileMirToLir
+                    (Platform.archFor target)
+                    verbosity
+                    options
+                    sw
+                    passTimingRecorder
+                    ssaFunctionCache
+                    stageSuffix
+                    mirProgram
                 |> Result.bind (fun lirFuncs ->
                     let metadataPlanningStart = sw.Elapsed.TotalMilliseconds
                     let funcsPreparedForAllocation =
@@ -2552,6 +2605,7 @@ let buildStdlibWithTrace
                         sw
                         passTimingRecorder
                         None
+                        None
                         "stdlib"
                         tcoFunctions
                         typeMap
@@ -2710,6 +2764,7 @@ let buildStdlibSpecializations
                                 stdlibOptions
                                 sw
                                 passTimingRecorder
+                                None
                                 None
                                 "stdlib_specializations"
                                 tcoFunctions
@@ -3316,6 +3371,12 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         releasePlanCacheKey
                                         releasePlan
                                         generate)
+                        let dependencySsaFunctionCache : SsaFunctionCache option =
+                            plan.Session
+                            |> Option.filter (fun _ -> not plan.Options.EnableCoverage)
+                            |> Option.map (fun current ->
+                                fun func convert ->
+                                    current.ConvertMirFunctionToSsa func convert)
                         let mirRegistryTimer = Stopwatch.StartNew()
                         let projectedMirRegistries =
                             match plan.Session with
@@ -3359,6 +3420,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                     plan.Options
                                     sw
                                     plan.PassTimingRecorder
+                                    dependencySsaFunctionCache
                                     releasePlanSummaryCache
                                     plan.Labels.StageSuffix
                                     tcoDependencies
@@ -3444,6 +3506,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         plan.Options
                                         sw
                                         plan.PassTimingRecorder
+                                        None
                                         releasePlanSummaryCache
                                         plan.Labels.StageSuffix
                                         tcoProgramFunctions
@@ -3496,6 +3559,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                             plan.Options
                                             sw
                                             plan.PassTimingRecorder
+                                            None
                                             releasePlanSummaryCache
                                             plan.Labels.StageSuffix
                                             tcoStart
@@ -3764,6 +3828,7 @@ let buildPreambleContext
                             sw
                             passTimingRecorder
                             None
+                            None
                             "preamble"
                             tcoFunctions
                             typeMap
@@ -3866,6 +3931,7 @@ let buildPreambleContextFromAnalysis
                 preambleOptions
                 sw
                 passTimingRecorder
+                None
                 None
                 "preamble"
                 tcoFunctions

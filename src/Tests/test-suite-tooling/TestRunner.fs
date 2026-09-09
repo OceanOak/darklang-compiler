@@ -154,6 +154,8 @@ type CodegenProfileSummary = {
     anf_dependency_cache_misses: int
     compiled_dependency_cache_hits: int
     compiled_dependency_cache_misses: int
+    ssa_function_cache_hits: int
+    ssa_function_cache_misses: int
     compiled_start_cache_hits: int
     compiled_start_cache_misses: int
     stdlib_reachability_cache_hits: int
@@ -587,6 +589,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
     let mutable anfDependencyCacheMisses = 0
     let mutable compiledDependencyCacheHits = 0
     let mutable compiledDependencyCacheMisses = 0
+    let mutable ssaFunctionCacheHits = 0
+    let mutable ssaFunctionCacheMisses = 0
     let mutable compiledStartCacheHits = 0
     let mutable compiledStartCacheMisses = 0
     let mutable stdlibReachabilityCacheHits = 0
@@ -1043,6 +1047,10 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                     compiledDependencyCacheHits + compilationSession.CompiledDependencyHitCount
                 compiledDependencyCacheMisses <-
                     compiledDependencyCacheMisses + compilationSession.CompiledDependencyMissCount
+                ssaFunctionCacheHits <-
+                    ssaFunctionCacheHits + compilationSession.SsaFunctionHitCount
+                ssaFunctionCacheMisses <-
+                    ssaFunctionCacheMisses + compilationSession.SsaFunctionMissCount
                 compiledStartCacheHits <-
                     compiledStartCacheHits + compilationSession.CompiledStartHitCount
                 compiledStartCacheMisses <-
@@ -1641,7 +1649,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
             |> Seq.sortByDescending (fun entry -> entry.symbolic_instructions_before_peephole)
             |> Seq.toArray
         let payload = {
-            schema_version = 7
+            schema_version = 8
             summary = {
                 codegen_ms = codegenMs
                 attributed_function_ms = roundedMilliseconds attributedMs
@@ -1656,6 +1664,8 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
                 anf_dependency_cache_misses = anfDependencyCacheMisses
                 compiled_dependency_cache_hits = compiledDependencyCacheHits
                 compiled_dependency_cache_misses = compiledDependencyCacheMisses
+                ssa_function_cache_hits = ssaFunctionCacheHits
+                ssa_function_cache_misses = ssaFunctionCacheMisses
                 compiled_start_cache_hits = compiledStartCacheHits
                 compiled_start_cache_misses = compiledStartCacheMisses
                 stdlib_reachability_cache_hits = stdlibReachabilityCacheHits

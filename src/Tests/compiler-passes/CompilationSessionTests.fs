@@ -50,6 +50,48 @@ let private fakeFunction : LIR.Function =
         CodegenFacts = None
     }
 
+let private fakeMirFunction : MIR.Function =
+    let entry = MIR.Label "cached_mir_function_entry"
+    {
+        Name = "cached_mir_function"
+        TypedParams = []
+        ReturnType = TUnit
+        CFG = {
+            Entry = entry
+            Blocks =
+                Map.ofList [
+                    entry,
+                    {
+                        Label = entry
+                        Instrs = []
+                        Terminator = MIR.Ret (MIR.Int64Const 0L)
+                    }
+                ]
+        }
+        FloatRegs = Set.empty
+    }
+
+let testSsaFunctionCacheReusesStructuralFunctions
+    (_: CompilerLibrary.StdlibResult)
+    ()
+    : TestResult =
+    use session = new CompilerLibrary.CompilationSession()
+    let conversions = ResizeArray<unit>()
+    let convert () =
+        conversions.Add ()
+        SSA_Construction.convertFunctionToSSA fakeMirFunction
+    let first = session.ConvertMirFunctionToSsa fakeMirFunction convert
+    let structurallyEquivalent = { fakeMirFunction with Name = fakeMirFunction.Name }
+    let second = session.ConvertMirFunctionToSsa structurallyEquivalent convert
+    if conversions.Count = 1
+       && obj.ReferenceEquals(first, second)
+       && session.CachedSsaFunctionCount = 1
+       && session.SsaFunctionHitCount = 1
+       && session.SsaFunctionMissCount = 1 then
+        Ok ()
+    else
+        Error $"Expected structurally identical MIR functions to share SSA conversion, got conversions={conversions.Count}, cached={session.CachedSsaFunctionCount}, hits={session.SsaFunctionHitCount}, misses={session.SsaFunctionMissCount}"
+
 let testArm64HitWithNestedJson (stdlib: CompilerLibrary.StdlibResult) () : TestResult =
     use session = new CompilerLibrary.CompilationSession()
     let source = "Stdlib.Json.parse<List<List<Int64>>>(\"[[1,2],[3]]\")"
@@ -241,6 +283,7 @@ let testSessionIsolationAndDisposal (stdlib: CompilerLibrary.StdlibResult) () : 
     match firstResult, secondResult with
     | Ok (), Ok () when
         first.CachedArm64FunctionCount = 0
+        && first.CachedSsaFunctionCount = 0
         && first.CachedAnfDependencyCount = 0
         && first.CachedCompiledDependencyCount = 0
         && first.CachedMirRegistryProjectionCount = 0
@@ -249,6 +292,7 @@ let testSessionIsolationAndDisposal (stdlib: CompilerLibrary.StdlibResult) () : 
         && first.CachedArm64ReleasePlanSummaryCount = 0
         && first.CachedJsonPlanCount = 0
         && second.CachedArm64FunctionCount > 0
+        && second.CachedSsaFunctionCount > 0
         && second.CachedAnfDependencyCount > 0
         && second.CachedCompiledDependencyCount > 0
         && second.CachedMirRegistryProjectionCount > 0
@@ -368,6 +412,7 @@ let tests (stdlib: CompilerLibrary.StdlibResult) = [
     ("compilation session reuses ARM64 code for nested JSON", testArm64HitWithNestedJson stdlib)
     ("compilation session segregates ARM64 target options and coverage", testArm64CodegenCacheSegregatesTargetOptionsAndCoverage stdlib)
     ("compilation session codegen metrics are opt-in", testArm64CodegenMetricsAreOptIn stdlib)
+    ("compilation session reuses structural SSA functions", testSsaFunctionCacheReusesStructuralFunctions stdlib)
     ("compilation session segregates ARM64 registry contexts", testArm64CodegenCacheSegregatesCompilationContexts stdlib)
     ("compilation session reuses prepared ARM64 chunks by identity", testArm64EmissionChunkCacheUsesChunkIdentity stdlib)
     ("compilation session confirms ARM64 release-plan cache shapes", testArm64ReleasePlanSummaryCacheConfirmsPlanShape stdlib)

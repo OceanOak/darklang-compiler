@@ -1278,6 +1278,13 @@ let private convertFunctionToSSAInternal
 let convertFunctionToSSA (func: Function) : Function =
     convertFunctionToSSAInternal None func |> fst
 
+/// Convert one function to SSA form and retain its nested phase timings.
+let convertFunctionToSSAWithTiming
+    (func: Function)
+    : Function * SSAConstructionTiming list =
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    convertFunctionToSSAInternal (Some sw) func
+
 /// Convert a program to SSA form
 let convertToSSA (program: Program) : Program =
     let (Program (functions, variants, records)) = program
