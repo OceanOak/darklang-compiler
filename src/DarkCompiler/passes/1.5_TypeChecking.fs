@@ -1446,17 +1446,17 @@ let private equalityComparableType
                         |> List.forall (fun (_, fieldType) -> recurse (applySubst subst fieldType))
             | TSum (sumName, typeArgs) ->
                 variantLookup
-                |> Map.toList
-                |> List.choose (fun (_, (ownerName, typeParams, _, payloadType)) ->
-                    if ownerName <> sumName then None
+                |> Map.forall (fun _ (ownerName, typeParams, _, payloadType) ->
+                    if ownerName <> sumName then
+                        true
                     else
-                        payloadType
-                        |> Option.map (fun payload ->
+                        match payloadType with
+                        | None -> true
+                        | Some payload ->
                             if List.length typeParams = List.length typeArgs then
-                                applySubst (List.zip typeParams typeArgs |> Map.ofList) payload
+                                recurse (applySubst (List.zip typeParams typeArgs |> Map.ofList) payload)
                             else
-                                payload))
-                |> List.forall recurse
+                                recurse payload)
             | TBlob -> true
             | TRawPtr | TRuntimeError -> false
 
@@ -1498,17 +1498,17 @@ let private canonicalSortableType
                         |> List.forall (fun (_, fieldType) -> recurse (applySubst subst fieldType))
             | TSum (sumName, typeArgs) ->
                 variantLookup
-                |> Map.toList
-                |> List.choose (fun (_, (ownerName, typeParams, _, payloadType)) ->
-                    if ownerName <> sumName then None
+                |> Map.forall (fun _ (ownerName, typeParams, _, payloadType) ->
+                    if ownerName <> sumName then
+                        true
                     else
-                        payloadType
-                        |> Option.map (fun payload ->
+                        match payloadType with
+                        | None -> true
+                        | Some payload ->
                             if List.length typeParams = List.length typeArgs then
-                                applySubst (List.zip typeParams typeArgs |> Map.ofList) payload
+                                recurse (applySubst (List.zip typeParams typeArgs |> Map.ofList) payload)
                             else
-                                payload))
-                |> List.forall recurse
+                                recurse payload)
             | TDict _ | TFunction _ | TBlob | TRawPtr | TRuntimeError -> false
 
     sortable Set.empty typ
