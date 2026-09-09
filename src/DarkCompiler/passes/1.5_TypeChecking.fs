@@ -5266,6 +5266,32 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                         | TEnumFields fields -> TTuple fields
                         | other -> other)
 
+            let variantsForExhaustiveness
+                (sumTypeName: string)
+                (sumTypeArgs: Type list)
+                : (string * Type option) list =
+                let sumInfo =
+                    match Map.tryFind sumTypeName indexedSumTypeReg with
+                    | Some info -> Some info
+                    | None ->
+                        indexedSumTypeReg
+                        |> Map.toSeq
+                        |> Seq.tryPick (fun (owner, info) ->
+                            if sumTypeNamesMatchForExhaustiveness owner sumTypeName then
+                                Some info
+                            else
+                                None)
+                match sumInfo with
+                | None -> []
+                | Some info ->
+                    info.Variants
+                    |> List.map (fun variant ->
+                        (variant.Name,
+                         instantiateVariantPayloadForExhaustiveness
+                             info.TypeParams
+                             sumTypeArgs
+                             variant.Payload))
+
             // Tuple matches are decision matrices. Split each finite head type
             // into its public constructors, then prove that the remaining
             // columns cover every resulting row. This covers, for example,
@@ -5294,16 +5320,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                         tupleDecisionMatrixIsExhaustive restTypes (rowsFor true)
                         && tupleDecisionMatrixIsExhaustive restTypes (rowsFor false)
                     | TSum (sumTypeName, sumTypeArgs) ->
-                        let variants =
-                            variantLookup
-                            |> Map.toList
-                            |> List.choose (fun (variantName, (owner, typeParams, _, payloadType)) ->
-                                if sumTypeNamesMatchForExhaustiveness owner sumTypeName then
-                                    Some (
-                                        variantName,
-                                        instantiateVariantPayloadForExhaustiveness typeParams sumTypeArgs payloadType
-                                    )
-                                else None)
+                        let variants = variantsForExhaustiveness sumTypeName sumTypeArgs
                         variants <> []
                         && variants
                            |> List.forall (fun (variantName, payloadType) ->
@@ -5373,16 +5390,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                     | TEnumFields elementTypes ->
                         tupleMatchIsExhaustive elementTypes patterns
                     | TSum (sumTypeName, sumTypeArgs) ->
-                        let variants =
-                            variantLookup
-                            |> Map.toList
-                            |> List.choose (fun (variantName, (owner, typeParams, _, payloadType)) ->
-                                if sumTypeNamesMatchForExhaustiveness owner sumTypeName then
-                                    Some (
-                                        variantName,
-                                        instantiateVariantPayloadForExhaustiveness typeParams sumTypeArgs payloadType
-                                    )
-                                else None)
+                        let variants = variantsForExhaustiveness sumTypeName sumTypeArgs
                         variants <> []
                         && variants
                            |> List.forall (fun (variantName, payloadType) ->
