@@ -768,7 +768,28 @@ let private cexprProducesNonRcSentinel (cexpr: CExpr) : bool =
     | _ ->
         false
 
-type private ReturnDec = TempId * AST.Type * RcShape * RcKind option
+/// Carry fixed-root metadata with the ownership obligation that created it.
+/// One obligation can be emitted on several return paths; deriving the same
+/// canonical type and recursive release plan at each use is duplicate work.
+type private ReturnDec =
+    TempId * AST.Type * RcShape * RcKind option * RcMetadata option
+
+let private createReturnDec
+    (ctx: TypeContext)
+    (tempId: TempId)
+    (typ: AST.Type)
+    (shape: RcShape)
+    (kindOverride: RcKind option)
+    : ReturnDec =
+    let metadata =
+        match rcShapeReleaseOperation shape with
+        | Some (FixedSizeRoot _) ->
+            Some (rcMetadataForTypeAndShape ctx typ shape)
+        | Some DynamicStringBuffer
+        | Some DynamicBlobBuffer
+        | None ->
+            None
+    (tempId, typ, shape, kindOverride, metadata)
 
 let private retainExprForShape
     (ctx: TypeContext)
@@ -791,11 +812,11 @@ let private retainExprForShape
         Crash.crash $"retainExprForShape: type '{typ}' does not have an RC retain operation"
 
 let private releaseExprForShape
-    (ctx: TypeContext)
     (tempId: TempId)
     (typ: AST.Type)
     (shape: RcShape)
     (kindOverride: RcKind option)
+    (metadata: RcMetadata option)
     : CExpr =
     match rcShapeReleaseOperation shape with
     | Some DynamicStringBuffer ->
@@ -804,11 +825,17 @@ let private releaseExprForShape
         RefCountDecBlob (Var tempId)
     | Some (FixedSizeRoot (size, defaultKind)) ->
         let kind = kindOverride |> Option.defaultValue defaultKind
+        let metadata =
+            match metadata with
+            | Some metadata -> metadata
+            | None ->
+                Crash.crash
+                    $"releaseExprForShape: fixed-size type '{typ}' is missing RC metadata"
         RefCountDec (
             Var tempId,
             size,
             kind,
-            Some (rcMetadataForTypeAndShape ctx typ shape))
+            Some metadata)
     | None ->
         Crash.crash $"releaseExprForShape: type '{typ}' does not have an RC release operation"
 
@@ -903,7 +930,6 @@ let insertParamIncsAtReturn
 
 /// Insert RefCountDec operations before a Return using the current dec stack
 let insertReturnDecs
-    (ctx: TypeContext)
     (returnDecs: ReturnDec list)
     (expr: AExpr)
     (varGen: VarGen)
@@ -911,9 +937,9 @@ let insertReturnDecs
     : AExpr * VarGen * Map<TempId, AST.Type> =
     let decsInOrder = List.rev returnDecs
     List.fold
-        (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride) ->
+        (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride, metadata) ->
             let (dummyId, varGen') = freshVar accVarGen
-            let decExpr = releaseExprForShape ctx tempId typ shape kindOverride
+            let decExpr = releaseExprForShape tempId typ shape kindOverride metadata
             let accExpr' = Let (dummyId, decExpr, accExpr)
             (accExpr', varGen', Map.add dummyId AST.TUnit accTypes))
         (expr, varGen, types)
@@ -1097,7 +1123,7 @@ let rec private insertOwnedAccumulatorDecsBeforeSelfTailCalls
                 | _ -> acc) Set.empty
 
         ownedParamDecs
-        |> List.filter (fun (tempId, _, _, _) -> not (Set.contains tempId argTemps))
+        |> List.filter (fun (tempId, _, _, _, _) -> not (Set.contains tempId argTemps))
 
     let wrapOwnedAccumulatorDecs
         (decs: ReturnDec list)
@@ -1107,9 +1133,10 @@ let rec private insertOwnedAccumulatorDecsBeforeSelfTailCalls
         : AExpr * VarGen * Map<TempId, AST.Type> =
         decs
         |> List.fold
-            (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride) ->
+            (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride, metadata) ->
                 let (dummyId, varGen') = freshVar accVarGen
-                let decExpr = releaseExprForShape ctx tempId typ shape kindOverride
+                let decExpr =
+                    releaseExprForShape tempId typ shape kindOverride metadata
                 (Let (dummyId, decExpr, accExpr), varGen', Map.add dummyId AST.TUnit accTypes))
             (tailExpr, varGen, types)
 
@@ -1292,7 +1319,7 @@ let rec insertRCWithAnalysis
             let baseExpr = Return atom
             let (withParamIncs, varGen1, types1) =
                 insertParamIncsAtReturn ctx paramIncs returned baseExpr varGen types
-            let (withDecs, varGen2, types2) = insertReturnDecs ctx returnDecs withParamIncs varGen1 types1
+            let (withDecs, varGen2, types2) = insertReturnDecs returnDecs withParamIncs varGen1 types1
             let (finalExpr, finalVarGen, finalTypes) = applyLetFrames ctx frames (withDecs, varGen2, types2)
             (finalExpr, finalVarGen, finalTypes)
 
@@ -1303,14 +1330,14 @@ let rec insertRCWithAnalysis
                 |> fun local -> local @ inheritedTransferableOwnership
             let returnDecTemps =
                 returnDecs
-                |> List.map (fun (tempId, _, _, _) -> tempId)
+                |> List.map (fun (tempId, _, _, _, _) -> tempId)
                 |> Set.ofList
             let branchLocalDecs (branchReturned: Set<TempId>) : ReturnDec list =
                 let frameDecs =
                     frames
                     |> List.choose (fun frame ->
                         match frame.BranchDec with
-                        | Some (tempId, _, _, _ as dec)
+                        | Some (tempId, _, _, _, _ as dec)
                             when not (Set.contains tempId branchReturned)
                                  && not (Set.contains tempId returnDecTemps) ->
                             Some dec
@@ -1479,7 +1506,13 @@ let rec insertRCWithAnalysis
                         match inferredType with
                         | AST.TList (AST.TFunction _) -> Some TaggedList
                         | _ -> None
-                    Some (tempId, inferredType, inferredShape, kindOverride)
+                    Some (
+                        createReturnDec
+                            ctx
+                            tempId
+                            inferredType
+                            inferredShape
+                            kindOverride)
                 else
                     None
 
@@ -1652,13 +1685,13 @@ let rec insertRCWithAnalysis
                         frames
                         |> List.tryPick (fun candidate ->
                             match candidate.TransferableOwnership with
-                            | Some ((candidateOwnerId, _, _, _) as pendingDec) when candidateOwnerId = ownerId ->
+                            | Some ((candidateOwnerId, _, _, _, _) as pendingDec) when candidateOwnerId = ownerId ->
                                 Some pendingDec
                             | _ ->
                                 None)
                         |> Option.orElseWith (fun () ->
                             inheritedTransferableOwnership
-                            |> List.tryFind (fun (candidateOwnerId, _, _, _) -> candidateOwnerId = ownerId))
+                            |> List.tryFind (fun (candidateOwnerId, _, _, _, _) -> candidateOwnerId = ownerId))
                         |> Option.map (fun pendingDec ->
                             ((targetId, pendingDec) :: transfers, Set.add ownerId transferredOwners))
                         |> Option.defaultValue (transfers, transferredOwners)
@@ -1679,7 +1712,7 @@ let rec insertRCWithAnalysis
 
             let transferredOwnerIds =
                 transferredOwnership
-                |> List.map (fun (_, (ownerId, _, _, _)) -> ownerId)
+                |> List.map (fun (_, (ownerId, _, _, _, _)) -> ownerId)
                 |> Set.ofList
 
             let allocationIncTargetsAfterTransfers =
@@ -1946,11 +1979,7 @@ let private insertRCInFunctionInternal
         |> List.choose (fun (param, shape, transfersOwnedAccumulator, _) ->
             if transfersOwnedAccumulator
                || Set.contains param.Id internalOwnedParamIds then
-                Some (
-                    param.Id,
-                    param.Type,
-                    shape,
-                    None)
+                Some (createReturnDec ctxWithParams param.Id param.Type shape None)
             else
                 None)
 
