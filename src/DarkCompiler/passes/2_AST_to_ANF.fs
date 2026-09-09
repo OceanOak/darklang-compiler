@@ -70,6 +70,10 @@ let private materializeComparisonPlan (targetType: AST.Type) (args: AST.Expr lis
 /// Variant lookup - maps variant names to (type name, type params, tag index, payload type)
 type VariantLookup = Map<string, (string * string list * int * AST.Type option)>
 
+let private sumTypeNamesFromVariantLookup (variantLookup: VariantLookup) : Set<string> =
+    variantLookup
+    |> Map.fold (fun names _ (typeName, _, _, _) -> Set.add typeName names) Set.empty
+
 let private tryFindVariant
     (constructorReference: AST.ConstructorReference)
     (variantName: string)
@@ -655,16 +659,13 @@ let private listHeadUnsafeExpr
 /// For simple record aliases: "Vec" -> ([], TRecord "Point")
 type AliasRegistry = Map<string, string list * AST.Type>
 
-let private canonicalizeBareSumTypeRefs (variantLookup: VariantLookup) (typ: AST.Type) : AST.Type =
-    let sumTypeNames =
-        variantLookup
-        |> Map.toList
-        |> List.map (fun (_, (typeName, _, _, _)) -> typeName)
-        |> Set.ofList
-
+let private canonicalizeBareSumTypeRefsWithPredicate
+    (isSumTypeName: string -> bool)
+    (typ: AST.Type)
+    : AST.Type =
     let rec canonicalize typ =
         match typ with
-        | AST.TRecord (name, []) when Set.contains name sumTypeNames ->
+        | AST.TRecord (name, []) when isSumTypeName name ->
             AST.TSum (name, [])
         | AST.TRecord (name, typeArgs) ->
             AST.TRecord (name, List.map canonicalize typeArgs)
@@ -690,21 +691,28 @@ let private canonicalizeBareSumTypeRefs (variantLookup: VariantLookup) (typ: AST
 
     canonicalize typ
 
-let private canonicalizeNamedTypeRefs
-    (recordNames: Set<string>)
-    (variantLookup: VariantLookup)
+let private canonicalizeBareSumTypeRefsWithNames
+    (sumTypeNames: Set<string>)
     (typ: AST.Type)
     : AST.Type =
-    let sumNames =
+    canonicalizeBareSumTypeRefsWithPredicate (fun name -> Set.contains name sumTypeNames) typ
+
+let private canonicalizeBareSumTypeRefs (variantLookup: VariantLookup) (typ: AST.Type) : AST.Type =
+    let isSumTypeName name =
         variantLookup
-        |> Map.values
-        |> Seq.map (fun (typeName, _, _, _) -> typeName)
-        |> Set.ofSeq
+        |> Map.exists (fun _ (typeName, _, _, _) -> typeName = name)
+    canonicalizeBareSumTypeRefsWithPredicate isSumTypeName typ
+
+let private canonicalizeNamedTypeRefs
+    (recordNames: Set<string>)
+    (sumTypeNames: Set<string>)
+    (typ: AST.Type)
+    : AST.Type =
     let rec canonicalize current =
         match current with
-        | AST.TSum (name, args) when Set.contains name recordNames && not (Set.contains name sumNames) ->
+        | AST.TSum (name, args) when Set.contains name recordNames && not (Set.contains name sumTypeNames) ->
             AST.TRecord (name, List.map canonicalize args)
-        | AST.TRecord (name, args) when Set.contains name sumNames ->
+        | AST.TRecord (name, args) when Set.contains name sumTypeNames ->
             AST.TSum (name, List.map canonicalize args)
         | AST.TRecord (name, args) -> AST.TRecord (name, List.map canonicalize args)
         | AST.TSum (name, args) -> AST.TSum (name, List.map canonicalize args)
@@ -3745,6 +3753,7 @@ let prepareLambdaLiftBaseTypes
     (baseTypeReg: TypeRegistry)
     (baseVariantLookup: VariantLookup)
     : TypeRegistry * VariantLookup =
+    let sumTypeNames = sumTypeNamesFromVariantLookup baseVariantLookup
     let canonicalVariantLookup =
         baseVariantLookup
         |> Map.map (fun _ (typeName, typeParams, tag, payloadType) ->
@@ -3756,7 +3765,7 @@ let prepareLambdaLiftBaseTypes
              tag,
              if isCatalogBoundaryType then
                  payloadType
-                 |> Option.map (canonicalizeBareSumTypeRefs baseVariantLookup)
+                 |> Option.map (canonicalizeBareSumTypeRefsWithNames sumTypeNames)
              else
                  payloadType))
     let recordNames = baseTypeReg |> Map.keys |> Set.ofSeq
@@ -3770,7 +3779,7 @@ let prepareLambdaLiftBaseTypes
                         (fieldName,
                          canonicalizeNamedTypeRefs
                             recordNames
-                            canonicalVariantLookup
+                            sumTypeNames
                             fieldType)) })
     (canonicalTypeReg, canonicalVariantLookup)
 
@@ -3832,6 +3841,7 @@ let rec liftLambdasInProgram
     let mergeMapsLocal m1 m2 = Map.fold (fun acc k v -> Map.add k v acc) m1 m2
     let mergedTypeReg = mergeMapsLocal baseTypeReg typeReg
     let rawMergedVariantLookup = mergeMapsLocal baseVariantLookup variantLookup
+    let mergedSumTypeNames = sumTypeNamesFromVariantLookup rawMergedVariantLookup
     let mergedVariantLookup =
         if Map.isEmpty variantLookup then
             baseVariantLookup
@@ -3846,7 +3856,7 @@ let rec liftLambdasInProgram
                  tag,
                  if isCatalogBoundaryType then
                      payloadType
-                     |> Option.map (canonicalizeBareSumTypeRefs rawMergedVariantLookup)
+                     |> Option.map (canonicalizeBareSumTypeRefsWithNames mergedSumTypeNames)
                  else
                      payloadType))
     let canonicalMergedTypeReg =
@@ -3861,7 +3871,7 @@ let rec liftLambdasInProgram
                         info.Fields
                         |> List.map (fun (fieldName, fieldType) ->
                             (fieldName,
-                             canonicalizeNamedTypeRefs recordNames mergedVariantLookup fieldType)) })
+                             canonicalizeNamedTypeRefs recordNames mergedSumTypeNames fieldType)) })
 
     // First pass: collect all function definitions and their parameters
     let userFuncParams : Map<string, (string * AST.Type) list> =
@@ -10598,6 +10608,8 @@ let private buildRegistriesInternal
                     else Map.add variant.Name info typeLookup
                 Map.add $"{typeName}.{variant.Name}" info withBare) lookup) Map.empty
 
+    let sumTypeNames = sumTypeNamesFromVariantLookup rawVariantLookup
+
     let variantLookup : VariantLookup =
         rawVariantLookup
         |> Map.map (fun _ (typeName, typeParams, tag, payloadType) ->
@@ -10605,8 +10617,9 @@ let private buildRegistriesInternal
              typeParams,
              tag,
              payloadType
-             |> Option.map (canonicalizeBareSumTypeRefs rawVariantLookup)))
+             |> Option.map (canonicalizeBareSumTypeRefsWithNames sumTypeNames)))
 
+    let recordNames = typeRegBase |> Map.keys |> Set.ofSeq
     let typeReg =
         typeRegBase
         |> resolveAliasesInTypeRegistry aliasReg
@@ -10618,8 +10631,8 @@ let private buildRegistriesInternal
                     |> List.map (fun (fieldName, fieldType) ->
                         (fieldName,
                          canonicalizeNamedTypeRefs
-                            (typeRegBase |> Map.keys |> Set.ofSeq)
-                            variantLookup
+                            recordNames
+                            sumTypeNames
                             fieldType)) })
 
     let funcReg : FunctionRegistry =
