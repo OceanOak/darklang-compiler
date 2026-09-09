@@ -1453,7 +1453,10 @@ let rec insertRCWithAnalysis
                 else
                     None
 
-            let returnDecs' =
+            // TempIds are unique within the function, so the current binding's
+            // pending-release multiplicity is known while prepending it. Keep
+            // that fact instead of rescanning the growing release stack.
+            let (returnDecs', currentBindingHasSinglePendingDec) =
                 let functionReturnsNestedRecordListDict =
                     let isSingleListDictRecord (name: string) : bool =
                         ctx.TypeReg
@@ -1482,11 +1485,11 @@ let rec insertRCWithAnalysis
                         // dict once for the inner list payload and once for the returned graph.
                         // The current shape-specific ARM64 helpers release that graph, but the
                         // local dict temp still needs both ownership edges balanced.
-                        dec :: dec :: returnDecs
+                        (dec :: dec :: returnDecs, false)
                     else
-                        dec :: returnDecs
+                        (dec :: returnDecs, true)
                 | _ ->
-                    returnDecs
+                    (returnDecs, false)
 
             let rec tempProducesNonRcSentinel (targetId: TempId) : bool =
                 frames
@@ -1607,14 +1610,10 @@ let rec insertRCWithAnalysis
                     []
 
             let transferableOwnership =
-                let pendingForCurrent =
-                    returnDecs'
-                    |> List.filter (fun (pendingId, _, _, _) -> pendingId = tempId)
-                match bindingDec, pendingForCurrent with
-                | Some dec, [ pendingDec ]
-                    when dec = pendingDec
-                         && (transfersIntoReturnedAggregate tempId bodyInfo
-                             || transfersIntoRawSlot tempId bodyInfo) ->
+                match bindingDec, currentBindingHasSinglePendingDec with
+                | Some dec, true
+                    when transfersIntoReturnedAggregate tempId bodyInfo
+                         || transfersIntoRawSlot tempId bodyInfo ->
                     Some dec
                 | _ ->
                     None
@@ -1705,16 +1704,22 @@ let rec insertRCWithAnalysis
                     inheritedTransferableOwnership
 
             let framesAfterTransfers =
-                frames
-                |> List.map (fun candidate ->
-                    if Set.contains candidate.TempId transferredOwnerIds then
-                        {
-                            candidate with
-                                TransferableOwnership = None
-                                BranchDec = None
-                        }
-                    else
-                        candidate)
+                // Ownership transfers are rare. Preserve the existing frame
+                // spine when there is nothing to clear instead of rebuilding
+                // every preceding frame for every ordinary binding.
+                if Set.isEmpty transferredOwnerIds then
+                    frames
+                else
+                    frames
+                    |> List.map (fun candidate ->
+                        if Set.contains candidate.TempId transferredOwnerIds then
+                            {
+                                candidate with
+                                    TransferableOwnership = None
+                                    BranchDec = None
+                            }
+                        else
+                            candidate)
 
             let returnInc =
                 let retainedTypeFromAtom (atom: Atom) : (AST.Type * RcShape) option =
