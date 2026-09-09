@@ -4114,36 +4114,17 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         |> List.partition (fun func ->
                                             Set.contains func.Name dependencyNames)
                                     let lirVariantRegistry : LIR.VariantRegistry =
-                                        let combinedVariantLookup =
-                                            Map.fold
-                                                (fun acc variantName variantInfo -> Map.add variantName variantInfo acc)
-                                                plan.Stdlib.Context.Registries.VariantLookup
-                                                userRegistries.VariantLookup
-                                        combinedVariantLookup
-                                        |> Map.toList
-                                        |> List.choose (fun (lookupName, info) ->
-                                            let (typeName, _, _, _) = info
-                                            let prefix = $"{typeName}."
-                                            if lookupName.StartsWith(prefix) then
-                                                Some (lookupName.Substring(prefix.Length), info)
-                                            else
-                                                None)
-                                        |> List.groupBy (fun (_, (typeName, _, _, _)) -> typeName)
-                                        |> List.map (fun (typeName, variants) ->
-                                            let typeParams =
-                                                variants
-                                                |> List.tryHead
-                                                |> Option.map (fun (_, (_, typeParams, _, _)) -> typeParams)
-                                                |> Option.defaultValue []
-                                            let lirVariants =
-                                                variants
-                                                |> List.map (fun (variantName, (_, _, tag, payload)) ->
-                                                    ({ Name = variantName
-                                                       Tag = tag
-                                                       Payload = payload } : LIR.VariantInfo))
-                                                |> List.sortBy (fun variant -> variant.Tag)
-                                            (typeName, { LIR.TypeParams = typeParams; LIR.Variants = lirVariants }))
-                                        |> Map.ofList
+                                        userEnv.IndexedSumTypeReg
+                                        |> Map.map (fun _ info ->
+                                            ({ TypeParams = info.TypeParams
+                                               Variants =
+                                                info.Variants
+                                                |> List.map (fun variant ->
+                                                    ({ Name = variant.Name
+                                                       Tag = variant.Tag
+                                                       Payload = variant.Payload }
+                                                        : LIR.VariantInfo)) }
+                                                : LIR.TypeVariants))
                                     let allocatedProgram =
                                         LIR.Program (
                                             allFuncs,
