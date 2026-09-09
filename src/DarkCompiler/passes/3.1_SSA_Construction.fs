@@ -529,13 +529,12 @@ let private computeLivenessForVRegs
         visit (roots |> List.map (fun blockIdx -> (blockIdx, false))) Set.empty []
 
     let emptyBits = Bitset.empty vregIndex.WordCount
-    let getLiveIn (liveInByIndex: Map<int, Bitset.Bitset>) (blockIdx: int) =
-        Map.tryFind blockIdx liveInByIndex |> Option.defaultValue emptyBits
-    let computeLiveOut (liveInByIndex: Map<int, Bitset.Bitset>) (blockIdx: int) =
+    let liveInByIndex = Array.init labelCount (fun _ -> emptyBits)
+    let computeLiveOut (blockIdx: int) =
         Array.init vregIndex.WordCount (fun wordIdx ->
             successorIndices.[blockIdx]
             |> List.fold (fun word successorIdx ->
-                word ||| (getLiveIn liveInByIndex successorIdx).[wordIdx]) 0UL)
+                word ||| liveInByIndex.[successorIdx].[wordIdx]) 0UL)
     let computeLiveIn (blockIdx: int) (liveOut: Bitset.Bitset) =
         Array.init vregIndex.WordCount (fun wordIdx ->
             blockUses.[blockIdx].[wordIdx]
@@ -543,23 +542,17 @@ let private computeLivenessForVRegs
 
     // Within each round, predecessors see successor values computed earlier in
     // the same postorder traversal instead of waiting for another global round.
-    let rec fixpoint (liveInByIndex: Map<int, Bitset.Bitset>) =
-        let (changed, updated) =
-            backwardDataflowOrder
-            |> List.fold (fun (changed, current) blockIdx ->
-                let newLiveIn =
-                    computeLiveOut current blockIdx |> computeLiveIn blockIdx
-                let oldLiveIn = getLiveIn current blockIdx
-                if Bitset.equal oldLiveIn newLiveIn then
-                    (changed, current)
-                else
-                    (true, Map.add blockIdx newLiveIn current)
-            ) (false, liveInByIndex)
-        if changed then fixpoint updated else updated
+    let mutable changed = true
+    while changed do
+        changed <- false
+        for blockIdx in backwardDataflowOrder do
+            let newLiveIn =
+                computeLiveOut blockIdx |> computeLiveIn blockIdx
+            if not (Bitset.equal liveInByIndex.[blockIdx] newLiveIn) then
+                liveInByIndex.[blockIdx] <- newLiveIn
+                changed <- true
 
-    let finalLiveInByIndex = fixpoint Map.empty
-    let liveIn =
-        Array.init labelCount (getLiveIn finalLiveInByIndex)
+    let liveIn = Array.copy liveInByIndex
     let bitsetsToMap (bitsets: Bitset.Bitset array) : Map<Label, Set<VReg>> =
         Array.map2 (fun label bits ->
             let vregs =
@@ -573,7 +566,7 @@ let private computeLivenessForVRegs
 
     let liveOut =
         if includeLiveOut then
-            Array.init labelCount (computeLiveOut finalLiveInByIndex)
+            Array.init labelCount computeLiveOut
             |> bitsetsToMap
         else
             Map.empty
