@@ -255,13 +255,21 @@ let createExecutableWithPools
     Array.blit headerBytes 0 binary 0 headerBytes.Length
     Array.blit programHeaderBytes 0 binary headerBytes.Length programHeaderBytes.Length
 
-    machineCode
-    |> Array.iteri (fun index word ->
-        let offset = int codeFileOffset + (index * 4)
-        binary.[offset] <- byte (word &&& 0xFFu)
-        binary.[offset + 1] <- byte ((word >>> 8) &&& 0xFFu)
-        binary.[offset + 2] <- byte ((word >>> 16) &&& 0xFFu)
-        binary.[offset + 3] <- byte ((word >>> 24) &&& 0xFFu))
+    if System.BitConverter.IsLittleEndian then
+        System.Buffer.BlockCopy(
+            machineCode,
+            0,
+            binary,
+            int codeFileOffset,
+            codeSize)
+    else
+        machineCode
+        |> Array.iteri (fun index word ->
+            let offset = int codeFileOffset + (index * 4)
+            binary.[offset] <- byte (word &&& 0xFFu)
+            binary.[offset + 1] <- byte ((word >>> 8) &&& 0xFFu)
+            binary.[offset + 2] <- byte ((word >>> 16) &&& 0xFFu)
+            binary.[offset + 3] <- byte ((word >>> 24) &&& 0xFFu))
 
     Array.blit floatBytes 0 binary dataStart floatBytes.Length
     Array.blit stringBytes 0 binary (dataStart + floatBytes.Length) stringBytes.Length
