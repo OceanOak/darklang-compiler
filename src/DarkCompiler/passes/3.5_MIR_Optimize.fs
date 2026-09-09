@@ -2006,11 +2006,25 @@ let simplifyEmptyBlocks (cfg: CFG) : CFG * bool =
 ///   pred2: ...; Ret v2
 /// and removes `join`.
 let private simplifyRetPhiJoinLayer (cfg: CFG) : CFG * bool =
-    let preds = buildPredecessors cfg
-
-    let candidateMappings : Map<Label, Map<Label, Operand>> =
+    let potentialJoinBlocks =
         cfg.Blocks
         |> Map.toList
+        |> List.filter (fun (_, block) ->
+            match block.Terminator with
+            | Ret (Register _) ->
+                block.Instrs
+                |> List.exists (function Phi _ -> true | _ -> false)
+            | _ -> false)
+
+    // Most functions have no return-phi join. Avoid constructing a complete
+    // predecessor map on every fixed-point iteration until a block can
+    // actually match the transformation.
+    let preds =
+        if List.isEmpty potentialJoinBlocks then Map.empty
+        else buildPredecessors cfg
+
+    let candidateMappings : Map<Label, Map<Label, Operand>> =
+        potentialJoinBlocks
         |> List.choose (fun (joinLabel, joinBlock) ->
             match joinBlock.Terminator with
             | Ret (Register retReg) ->
