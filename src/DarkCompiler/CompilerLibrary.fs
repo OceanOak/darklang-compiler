@@ -612,6 +612,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
     // executable registry contexts while retaining target/options segregation.
     let arm64RegistryIndependentFunctionContextIdentity = System.Object()
     let arm64GenericReleaseHelperContextIdentity = System.Object()
+    let arm64RegistryIndependentHelperContextIdentity = System.Object()
     let arm64EmissionChunks =
         Dictionary<
             ARM64Symbolic.Instr list,
@@ -1104,6 +1105,12 @@ type CompilationSession(collectCodegenMetrics: bool) =
         if disposed || options.EnableCoverage then
             generate ()
         else
+            let contextIdentity =
+                if List.isEmpty helperKey.RecursiveReleaseTypes
+                   && List.isEmpty helperKey.ClosureCaptureTypes then
+                    arm64RegistryIndependentHelperContextIdentity
+                else
+                    contextIdentity
             let contextEntries =
                 match arm64HelpersByContext.TryGetValue contextIdentity with
                 | true, entries -> entries
