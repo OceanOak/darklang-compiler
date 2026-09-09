@@ -1853,6 +1853,24 @@ let private emptyColoringResult (domain: VRegDomain) : ColoringResult =
       Spills = bitsetEmpty domain.WordCount
       ChromaticNumber = 0 }
 
+/// Build the inputs needed by greedy coloring when there are no move or phi
+/// pairs to coalesce. Most small generated functions take this path, avoiding
+/// construction and cloning of several full-domain bitset arrays.
+let private uncoalescedColoringInputs
+    (graph: InterferenceGraph)
+    (precoloredPairs: (int * int) list)
+    : int option array * BitSet array =
+    let domain = graph.Domain
+    let precolored = Array.create domain.Ids.Length None
+    for (vregId, color) in precoloredPairs do
+        match tryIndexOf domain vregId with
+        | Some idx when bitsetContainsIndex idx graph.Vertices ->
+            precolored.[idx] <- Some color
+        | _ -> ()
+    let emptyPreferences = bitsetEmpty domain.WordCount
+    let preferences = Array.create domain.Ids.Length emptyPreferences
+    (precolored, preferences)
+
 /// Greedy color in reverse PEO order with phi coalescing preferences
 /// For chordal graphs, this produces an optimal coloring.
 /// When preferences are provided, try to use colors that match coalesced partners.
@@ -1998,6 +2016,11 @@ let chordalGraphColor
     : ColoringResult =
     if bitsetIsEmpty graph.Vertices then
         emptyColoringResult graph.Domain
+    elif List.isEmpty movePairs && List.isEmpty preferencePairs then
+        let (precolored, preferences) =
+            uncoalescedColoringInputs graph precoloredPairs
+        let peo = maximumCardinalitySearch graph
+        greedyColorReverse graph peo precolored numColors preferences
     else
         let coalesced = coalesceGraphFast graph precoloredPairs movePairs preferencePairs
         let peo = maximumCardinalitySearch coalesced.Graph
@@ -2018,6 +2041,21 @@ let private chordalGraphColorWithTiming
            McsSelectMs = 0.0
            McsUpdateMs = 0.0
            GreedyMs = 0.0
+           ExpandMs = 0.0 })
+    elif List.isEmpty movePairs && List.isEmpty preferencePairs then
+        let start = sw.Elapsed.TotalMilliseconds
+        let (precolored, preferences) =
+            uncoalescedColoringInputs graph precoloredPairs
+        let prepMs = sw.Elapsed.TotalMilliseconds - start
+        let (peo, mcsTiming) = maximumCardinalitySearchWithTiming graph sw
+        let greedyStart = sw.Elapsed.TotalMilliseconds
+        let result = greedyColorReverse graph peo precolored numColors preferences
+        let greedyMs = sw.Elapsed.TotalMilliseconds - greedyStart
+        (result,
+         { CoalesceMs = prepMs
+           McsSelectMs = mcsTiming.SelectMs
+           McsUpdateMs = mcsTiming.UpdateMs
+           GreedyMs = greedyMs
            ExpandMs = 0.0 })
     else
         let timePhase (f: unit -> 'a) : 'a * float =
