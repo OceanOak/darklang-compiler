@@ -8230,7 +8230,22 @@ type MetadataGroupCache =
 
 [<NoComparison>]
 type HelperCacheKey = {
-    ProgramMetadata: Arm64ProgramMetadata
+    ClosurePayloadSizesFromParams: (string * int) list
+    ClosurePayloadSizesFromAllocs: (string * int) list
+    ClosureCaptureTypes: (string * AST.Type list) list
+    RecursiveReleaseTypes: AST.Type list
+    CliArgvHelperLabels: string list
+    NeedsCliExecuteHelper: bool
+    ListDecHelperLabels: string list
+    PlannedListDecHelpers: (string * int) list
+    PlannedGenericDecHelperLabels: string list
+    PlannedDictDecHelperLabels: string list
+    DictDecHelperLabels: string list
+    NeedsListRcIncHelper: bool
+    NeedsDictRcIncHelper: bool
+    NeedsClosureRcIncHelper: bool
+    NeedsClosureRcDecHelper: bool
+    NeedsStreamRcDecHelper: bool
 }
 
 type HelperCodegenCache =
@@ -8998,7 +9013,33 @@ let private generatePreparedARM64WithOptionsAndCache
             recordPhase "ARM64 Codegen Peephole" peepholeTimer
             optimized
         let helperCacheKey = {
-            ProgramMetadata = programMetadata
+            ClosurePayloadSizesFromParams =
+                programMetadata.Facts.ClosurePayloadSizesFromParams |> Map.toList
+            ClosurePayloadSizesFromAllocs =
+                programMetadata.Facts.ClosurePayloadSizesFromAllocs |> Map.toList
+            ClosureCaptureTypes =
+                programMetadata.Facts.ClosureCaptureTypes |> Map.toList
+            RecursiveReleaseTypes =
+                programMetadata.Facts.RecursiveReleaseTypes |> Set.toList
+            CliArgvHelperLabels =
+                programMetadata.Facts.CliArgvHelperLabels |> Set.toList
+            NeedsCliExecuteHelper = programMetadata.Facts.NeedsCliExecuteHelper
+            ListDecHelperLabels = rcHelperRequirements.ListDecHelperLabels |> Set.toList
+            PlannedListDecHelpers =
+                rcHelperRequirements.PlannedListDecHelpers
+                |> Map.toList
+                |> List.map (fun (label, (payloadSize, _releasePlan)) ->
+                    (label, payloadSize))
+            PlannedGenericDecHelperLabels =
+                rcHelperRequirements.PlannedGenericDecHelpers |> Map.keys |> Seq.toList
+            PlannedDictDecHelperLabels =
+                rcHelperRequirements.PlannedDictDecHelpers |> Map.keys |> Seq.toList
+            DictDecHelperLabels = rcHelperRequirements.DictDecHelperLabels |> Set.toList
+            NeedsListRcIncHelper = rcHelperRequirements.NeedsListRcIncHelper
+            NeedsDictRcIncHelper = rcHelperRequirements.NeedsDictRcIncHelper
+            NeedsClosureRcIncHelper = rcHelperRequirements.NeedsClosureRcIncHelper
+            NeedsClosureRcDecHelper = rcHelperRequirements.NeedsClosureRcDecHelper
+            NeedsStreamRcDecHelper = rcHelperRequirements.NeedsStreamRcDecHelper
         }
         let optimizedHelperInstructions =
             match helperCache with
