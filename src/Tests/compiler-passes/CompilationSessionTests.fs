@@ -221,6 +221,7 @@ let testExpressionTypeCheckingReusesBaseRegistries
             obj.ReferenceEquals(checkedEnv.TypeReg, baseEnv.TypeReg)
             && obj.ReferenceEquals(checkedEnv.IndexedTypeReg, baseEnv.IndexedTypeReg)
             && obj.ReferenceEquals(checkedEnv.VariantLookup, baseEnv.VariantLookup)
+            && obj.ReferenceEquals(checkedEnv.IndexedSumTypeReg, baseEnv.IndexedSumTypeReg)
             && obj.ReferenceEquals(checkedEnv.FuncEnv, baseEnv.FuncEnv)
             && obj.ReferenceEquals(checkedEnv.FuncParamNames, baseEnv.FuncParamNames)
             && obj.ReferenceEquals(checkedEnv.GenericFuncDefs, baseEnv.GenericFuncDefs)

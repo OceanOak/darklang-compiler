@@ -614,6 +614,17 @@ type IndexedTypeRegistry = Map<string, RecordTypeInfo>
 /// Sum type registry - maps sum type names to their variant lists (name, tag, payload)
 type SumTypeRegistry = Map<string, (string * int * Type option) list>
 
+type SumVariantInfo = { Name: string; Tag: int; Payload: Type option }
+
+type SumTypeInfo = {
+    TypeParams: string list
+    Variants: SumVariantInfo list
+}
+
+/// Indexed sum metadata retained in TypeCheckEnv so separate compilations do
+/// not rebuild it from the complete constructor lookup.
+type IndexedSumTypeRegistry = Map<string, SumTypeInfo>
+
 /// Variant lookup - maps variant names to (type name, type params, tag index, payload type)
 /// Type params are the generic type parameters of the containing sum type
 type VariantLookup = Map<string, (string * string list * int * Type option)>
@@ -660,6 +671,7 @@ type TypeCheckEnv = {
     IndexedTypeReg: IndexedTypeRegistry
     RecordTypeNames: Set<string>
     VariantLookup: VariantLookup
+    IndexedSumTypeReg: IndexedSumTypeRegistry
     SumTypeNames: Set<string>
     FuncEnv: TypeEnv
     FuncParamNames: FuncParamNameRegistry
@@ -679,6 +691,7 @@ let mergeTypeCheckEnv (baseEnv: TypeCheckEnv) (overlay: TypeCheckEnv) : TypeChec
         IndexedTypeReg = mergeMap baseEnv.IndexedTypeReg overlay.IndexedTypeReg
         RecordTypeNames = Set.union baseEnv.RecordTypeNames overlay.RecordTypeNames
         VariantLookup = mergeMap baseEnv.VariantLookup overlay.VariantLookup
+        IndexedSumTypeReg = mergeMap baseEnv.IndexedSumTypeReg overlay.IndexedSumTypeReg
         SumTypeNames = Set.union baseEnv.SumTypeNames overlay.SumTypeNames
         FuncEnv = mergeMap baseEnv.FuncEnv overlay.FuncEnv
         FuncParamNames = mergeMap baseEnv.FuncParamNames overlay.FuncParamNames
@@ -1026,6 +1039,37 @@ let resolveAliasesInTypeRegistry (aliasReg: AliasRegistry) (typeReg: TypeRegistr
 let private sumTypeNamesFromVariantLookup (variantLookup: VariantLookup) : Set<string> =
     variantLookup
     |> Map.fold (fun names _ (typeName, _, _, _) -> Set.add typeName names) Set.empty
+
+let private indexSumTypeRegistry
+    (variantLookup: VariantLookup)
+    : IndexedSumTypeRegistry =
+    variantLookup
+    |> Map.fold
+        (fun indexed lookupName (typeName, typeParams, tag, payload) ->
+            let qualifiedPrefix = $"{typeName}."
+            if not (lookupName.StartsWith qualifiedPrefix) then
+                indexed
+            else
+                let variant = {
+                    Name = lookupName.Substring qualifiedPrefix.Length
+                    Tag = tag
+                    Payload = payload
+                }
+                match Map.tryFind typeName indexed with
+                | None ->
+                    Map.add
+                        typeName
+                        { TypeParams = typeParams; Variants = [variant] }
+                        indexed
+                | Some info when
+                    info.Variants |> List.exists (fun existing -> existing.Tag = tag) ->
+                    indexed
+                | Some info ->
+                    Map.add
+                        typeName
+                        { info with Variants = info.Variants @ [variant] }
+                        indexed)
+        Map.empty
 
 let private canonicalizeBareSumTypeRefsWithNames
     (sumTypeNames: Set<string>)
@@ -8173,17 +8217,12 @@ let private checkResolvedProgramInternal
     let programResolutionEnv =
         declarationResolutionEnvironment topLevels moduleRegistry (Option.isNone baseEnv)
 
-    let availableVariantLookup =
-        match baseEnv with
-        | Some existingEnv ->
-            Map.fold
-                (fun lookup name variant -> Map.add name variant lookup)
-                existingEnv.VariantLookup
-                declarationSummary.VariantLookup
-        | None -> declarationSummary.VariantLookup
-
+    let programSumTypeNames =
+        sumTypeNamesFromVariantLookup declarationSummary.VariantLookup
     let availableSumTypeNames =
-        sumTypeNamesFromVariantLookup availableVariantLookup
+        match baseEnv with
+        | Some existingEnv -> Set.union existingEnv.SumTypeNames programSumTypeNames
+        | None -> programSumTypeNames
 
     // The base environment is already canonical. Canonicalize only this
     // program's declarations, then overlay them on the immutable base instead
@@ -8205,6 +8244,9 @@ let private checkResolvedProgramInternal
                 existingEnv.VariantLookup
                 canonicalProgramVariantLookup
         | None -> canonicalProgramVariantLookup
+
+    let programIndexedSumTypeReg =
+        indexSumTypeRegistry canonicalProgramVariantLookup
 
     let canonicalProgramTypeReg =
         programTypeReg
@@ -8259,8 +8301,8 @@ let private checkResolvedProgramInternal
         IndexedTypeReg = programIndexedTypeReg
         RecordTypeNames = programIndexedTypeReg |> Map.keys |> Set.ofSeq
         VariantLookup = canonicalProgramVariantLookup
-        SumTypeNames =
-            sumTypeNamesFromVariantLookup canonicalProgramVariantLookup
+        IndexedSumTypeReg = programIndexedSumTypeReg
+        SumTypeNames = programSumTypeNames
         FuncEnv = programFuncEnv
         FuncParamNames = declarationSummary.FuncParamNames
         GenericFuncReg = programGenericFuncReg

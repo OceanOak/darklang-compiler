@@ -45,8 +45,8 @@ type PlanningSession() =
             artifacts.Clear()
             disposed <- true
 
-type private SumVariant = { Name: string; Tag: int; Payload: Type option }
-type private SumInfo = { TypeParams: string list; Variants: SumVariant list }
+type private SumVariant = TypeChecking.SumVariantInfo
+type private SumInfo = TypeChecking.SumTypeInfo
 
 type private Env = {
     Records: TypeChecking.IndexedTypeRegistry
@@ -475,7 +475,7 @@ and private serializeBody env typ value writer state : Result<Expr * State, stri
         | Some sumInfo ->
             substitution sumInfo.TypeParams typeArgs
             |> Result.bind (fun subst ->
-                let rec loop remaining current acc =
+                let rec loop (remaining: SumVariant list) current acc =
                     match remaining with
                     | [] -> Ok (List.rev acc, current)
                     | variant :: rest ->
@@ -693,7 +693,13 @@ and private ensureDictDecoder env valueType state =
             let completed = { placeholder with Body = body }
             (name, { nextState with Functions = Map.add name completed nextState.Functions }))
 
-and private decodeEnumCase env typ typeName subst variant state =
+and private decodeEnumCase
+    env
+    typ
+    typeName
+    subst
+    (variant: SumVariant)
+    state =
     let casePath =
         listPush
             pathPartType
@@ -909,7 +915,7 @@ and private decodeBody env typ state : Result<Expr * State, string> =
         | Some sumInfo ->
             substitution sumInfo.TypeParams typeArgs
             |> Result.bind (fun subst ->
-                let rec buildCases remaining current acc =
+                let rec buildCases (remaining: SumVariant list) current acc =
                     match remaining with
                     | [] -> Ok (List.rev acc, current)
                     | variant :: rest ->
@@ -951,29 +957,6 @@ and private decodeBody env typ state : Result<Expr * State, string> =
                     (objectBody, nextState)))
     | TFunction _ | TBlob | TRawPtr | TRuntimeError | TStream _ | TVar _ | TEnumFields _ | TDict _ ->
         Error $"Unsupported type in JSON: {TypeChecking.typeToString typ}. Some types are not supported in Json serialization"
-
-let private sumRegistry (variantLookup: TypeChecking.VariantLookup) =
-    variantLookup
-    |> Map.fold
-        (fun sums lookupName (typeName, typeParams, tag, payload) ->
-            let prefix = $"{typeName}."
-            let caseName =
-                if lookupName.StartsWith prefix then
-                    lookupName.Substring prefix.Length
-                else
-                    lookupName
-            let variant = { Name = caseName; Tag = tag; Payload = payload }
-            match Map.tryFind typeName sums with
-            | None -> Map.add typeName (typeParams, Set.singleton tag, [variant]) sums
-            | Some (_, tags, _) when Set.contains tag tags -> sums
-            | Some (existingTypeParams, tags, reversedVariants) ->
-                Map.add
-                    typeName
-                    (existingTypeParams, Set.add tag tags, variant :: reversedVariants)
-                    sums)
-        Map.empty
-    |> Map.map (fun _ (typeParams, _, reversedVariants) ->
-        { TypeParams = typeParams; Variants = List.rev reversedVariants })
 
 let rec private mapExpr rewrite expr =
     let recurse = mapExpr rewrite
@@ -1059,7 +1042,7 @@ let rewriteProgramWithSession
     let hasJsonCalls = not (List.isEmpty serializerTypes && List.isEmpty parserTypes)
     let planningEnv = {
         Records = env.IndexedTypeReg
-        Sums = if hasJsonCalls then sumRegistry env.VariantLookup else Map.empty
+        Sums = if hasJsonCalls then env.IndexedSumTypeReg else Map.empty
         Aliases = env.AliasReg
     }
 
