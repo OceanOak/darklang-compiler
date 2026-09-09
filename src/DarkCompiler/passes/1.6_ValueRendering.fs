@@ -8,21 +8,9 @@ module ValueRendering
 
 open AST
 
-type private SumVariant = {
-    Name: string
-    Tag: int
-    Payload: Type option
-}
-
-type private SumInfo = {
-    TypeParams: string list
-    Variants: SumVariant list
-}
-
-type private RecordInfo = {
-    TypeParams: string list
-    Fields: (string * Type) list
-}
+type private SumVariant = TypeChecking.SumVariantInfo
+type private SumInfo = TypeChecking.SumTypeInfo
+type private RecordInfo = TypeChecking.RecordTypeInfo
 
 type private RenderEnv = {
     Records: Lazy<Map<string, RecordInfo>>
@@ -32,14 +20,6 @@ type private RenderEnv = {
 type private RenderState = {
     Functions: Map<string, FunctionDef>
 }
-
-let private firstDeclaredRecordFields (fields: (string * Type) list) : (string * Type) list =
-    fields
-    |> List.fold (fun (seen, retainedRev) ((name, _) as field) ->
-        if Set.contains name seen then (seen, retainedRev)
-        else (Set.add name seen, field :: retainedRev)) (Set.empty, [])
-    |> snd
-    |> List.rev
 
 let private args (values: Expr list) : NonEmptyList<Expr> =
     NonEmptyList.fromList values
@@ -398,7 +378,7 @@ and private renderBody
         | Some sumInfo ->
             let subst = typeSubstitution sumInfo.TypeParams typeArgs
             let typeText = TypeChecking.typeToString typ
-            let rec buildCases remaining currentState acc =
+            let rec buildCases (remaining: SumVariant list) currentState acc =
                 match remaining with
                 | [] -> (List.rev acc, currentState)
                 | variant :: rest ->
@@ -441,91 +421,17 @@ and private renderBody
     | TRuntimeError -> (StringLiteral "()", state)
     | TVar name -> Crash.crash $"Unresolved type variable in value renderer: {name}"
 
-let private sumRegistryFromVariants
-    (variantLookup: Map<string, string * string list * int * Type option>)
-    : Map<string, SumInfo> =
-    variantLookup
-    |> Map.toList
-    |> List.map (fun (_, (typeName, typeParams, tag, payload)) ->
-        (typeName, typeParams, { Name = ""; Tag = tag; Payload = payload }))
-    |> List.groupBy (fun (typeName, _, _) -> typeName)
-    |> List.map (fun (typeName, entries) ->
-        let typeParams = entries |> List.head |> fun (_, parameters, _) -> parameters
-        let variants =
-            variantLookup
-            |> Map.toList
-            |> List.choose (fun (lookupName, (owner, _, tag, payload)) ->
-                let qualifiedPrefix = $"{typeName}."
-                if owner <> typeName || not (lookupName.StartsWith qualifiedPrefix) then None
-                else
-                    Some {
-                        Name = lookupName.Substring(qualifiedPrefix.Length)
-                        Tag = tag
-                        Payload = payload
-                    })
-            |> List.distinctBy (fun variant -> variant.Tag)
-        (typeName, { TypeParams = typeParams; Variants = variants }))
-    |> Map.ofList
-
 let rewriteProgram
-    (baseRecords: Map<string, (string * Type) list>)
     (recordMetadata: TypeChecking.IndexedTypeRegistry)
-    (baseVariants: Map<string, string * string list * int * Type option>)
+    (sumMetadata: TypeChecking.IndexedSumTypeRegistry)
     (baseFunctions: Map<string, Type>)
     (programType: Type)
     (Program topLevels)
     : Program =
-    // Most programs return a primitive and never inspect declaration metadata
-    // while constructing their boundary renderer. Building complete record,
-    // sum, and function inventories eagerly made every small compilation scan
-    // the entire base environment. Force each inventory only for a renderer
-    // whose result type can actually consult it.
-    let records =
-        lazy
-            let localRecords =
-                topLevels
-                |> List.choose (function
-                    | TypeDef (RecordDef (name, typeParams, fields)) ->
-                        Some (name, { TypeParams = typeParams; Fields = firstDeclaredRecordFields fields })
-                    | _ -> None)
-                |> Map.ofList
-            let baseRecordInfo =
-                baseRecords
-                |> Map.map (fun name fields ->
-                    {
-                        TypeParams =
-                            recordMetadata
-                            |> Map.tryFind name
-                            |> Option.map (fun info -> info.TypeParams)
-                            |> Option.defaultValue []
-                        Fields = firstDeclaredRecordFields fields
-                    })
-            let allCheckedRecordInfo =
-                recordMetadata
-                |> Map.map (fun _ (info: TypeChecking.RecordTypeInfo) ->
-                    ({ TypeParams = info.TypeParams; Fields = info.Fields }: RecordInfo))
-            baseRecordInfo
-            |> Map.fold (fun acc name info -> Map.add name info acc) allCheckedRecordInfo
-            |> fun checkedRecords ->
-                Map.fold (fun acc name info -> Map.add name info acc) checkedRecords localRecords
-
-    let sums =
-        lazy
-            let baseSums = sumRegistryFromVariants baseVariants
-            let localSums =
-                topLevels
-                |> List.choose (function
-                    | TypeDef (SumTypeDef (name, typeParams, variants)) ->
-                        Some (
-                            name,
-                            { TypeParams = typeParams
-                              Variants =
-                                variants
-                                |> List.mapi (fun tag variant -> { Name = variant.Name; Tag = tag; Payload = variant.Payload }) }
-                        )
-                    | _ -> None)
-                |> Map.ofList
-            Map.fold (fun acc name info -> Map.add name info acc) baseSums localSums
+    // Type checking already built and overlaid these immutable indexes. Keep
+    // them lazy so primitive renderers do not inspect declaration metadata.
+    let records = lazy recordMetadata
+    let sums = lazy sumMetadata
 
     let namedFunctions =
         lazy

@@ -3196,9 +3196,8 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             (plannedUserAst, AST.TUnit)
                         else
                             (ValueRendering.rewriteProgram
-                                plan.BaseContext.Registries.RecordFieldsReg
                                 userEnv.IndexedTypeReg
-                                plan.BaseContext.Registries.VariantLookup
+                                userEnv.IndexedSumTypeReg
                                 plan.BaseContext.Registries.FuncReg
                                 plannedProgramType
                                 plannedUserAst,
@@ -4193,9 +4192,8 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
                     (plannedUserAst, AST.TUnit)
                 else
                     (ValueRendering.rewriteProgram
-                        stdlib.Context.Registries.RecordFieldsReg
                         userEnv.IndexedTypeReg
-                        stdlib.Context.Registries.VariantLookup
+                        userEnv.IndexedSumTypeReg
                         stdlib.Context.Registries.FuncReg
                         plannedProgramType
                         plannedUserAst,
