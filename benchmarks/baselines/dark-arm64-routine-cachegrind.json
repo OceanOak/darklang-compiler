@@ -10,91 +10,91 @@
     "measurement_policy": "cachegrind-ir-v1:cache-sim=yes,branch-sim=yes,extract=summary-I-refs"
   },
   "contract_sha256": "b4e6ba180a5f68f107005cf8867371144b93d3ed5326517cea45284c74fa6cc2",
-  "generated_at": "2026-09-06T11:42:18+00:00",
+  "generated_at": "2026-09-09T19:10:34+00:00",
   "compiler": {
-    "commit": "9f0f23a08c91679b750923637785e0036a090533",
-    "subject": "Keep FloatSqrt load reuse scoped to heap values"
+    "commit": "e34e66c5c701647f8aba2a6d67f1e282584874eb",
+    "subject": "Accumulate generic type applications in one traversal"
   },
   "benchmarks": [
     {
       "name": "ackermann",
-      "instructions": 9303384874
+      "instructions": 9303384893
     },
     {
       "name": "binary_trees",
-      "instructions": 547528421
+      "instructions": 547528440
     },
     {
       "name": "collatz",
-      "instructions": 70196377
+      "instructions": 70196392
     },
     {
       "name": "edigits",
-      "instructions": 3528831110
+      "instructions": 3528831129
     },
     {
       "name": "factorial",
-      "instructions": 67431
+      "instructions": 67450
     },
     {
       "name": "fasta",
-      "instructions": 477017163
+      "instructions": 477020357
     },
     {
       "name": "fib",
-      "instructions": 388196637
+      "instructions": 388196652
     },
     {
       "name": "leibniz",
-      "instructions": 850009224
+      "instructions": 850009239
     },
     {
       "name": "mandelbrot",
-      "instructions": 16367511
+      "instructions": 16367530
     },
     {
       "name": "matmul",
-      "instructions": 1941542471
+      "instructions": 1941542486
     },
     {
       "name": "merkletrees",
-      "instructions": 193343646
+      "instructions": 193343665
     },
     {
       "name": "nbody",
-      "instructions": 883009449
+      "instructions": 883009464
     },
     {
       "name": "nqueen",
-      "instructions": 212398449
+      "instructions": 212398464
     },
     {
       "name": "pisum",
-      "instructions": 40029674
+      "instructions": 40029693
     },
     {
       "name": "primes",
-      "instructions": 1470311
+      "instructions": 1470326
     },
     {
       "name": "quicksort",
-      "instructions": 187792880
+      "instructions": 187792899
     },
     {
       "name": "spectral_norm",
-      "instructions": 69747717
+      "instructions": 69747736
     },
     {
       "name": "sum_to_n",
-      "instructions": 75660
+      "instructions": 75679
     },
     {
       "name": "tak",
-      "instructions": 48023681
+      "instructions": 48023708
     },
     {
       "name": "tinytemplate",
-      "instructions": 1115881107
+      "instructions": 1115858537
     }
   ]
 }
