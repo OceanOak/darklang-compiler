@@ -1380,6 +1380,19 @@ let prepareSymbolicChunk
     let relocations = ResizeArray<struct (int * ARM64Symbolic.Instr)>()
     let codeLabels = ResizeArray<struct (string * int)>()
     let poolLabelRefs = ResizeArray<ARM64Symbolic.LabelRef>()
+    let stringLiterals =
+        System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal)
+    let floatLiterals = System.Collections.Generic.HashSet<int64>()
+
+    let recordPoolLabelRef labelRef =
+        match labelRef with
+        | ARM64Symbolic.DataLabel (ARM64Symbolic.StringLiteral value) ->
+            if stringLiterals.Add value then poolLabelRefs.Add labelRef
+        | ARM64Symbolic.DataLabel (ARM64Symbolic.FloatLiteral value) ->
+            let bits = System.BitConverter.DoubleToInt64Bits value
+            if floatLiterals.Add bits then poolLabelRefs.Add labelRef
+        | ARM64Symbolic.CodeLabel _
+        | ARM64Symbolic.DataLabel (ARM64Symbolic.Named _) -> ()
 
     let addRelocation instr =
         relocations.Add(struct (words.Count, instr))
@@ -1393,7 +1406,7 @@ let prepareSymbolicChunk
         | ARM64Symbolic.ADRP (_, labelRef)
         | ARM64Symbolic.ADD_label (_, _, labelRef)
         | ARM64Symbolic.ADR (_, labelRef) ->
-            poolLabelRefs.Add labelRef
+            recordPoolLabelRef labelRef
             addRelocation instr
         | ARM64Symbolic.CBZ _
         | ARM64Symbolic.CBNZ _
