@@ -3272,14 +3272,11 @@ let buildStdlibSpecializations
                                     |> List.map snd
                                 let stdlibCallGraph = DeadCodeElimination.buildCallGraph allLirFuncs
                                 let stdlibAnfCallGraph = ANFDeadCodeElimination.buildCallGraph allAnfFunctions
-                                let specializedFuncNames =
-                                    mergedStdlibAnfFunctions
-                                    |> Map.keys
-                                    |> Set.ofSeq
                                 let baseFuncNames =
-                                    Set.union
+                                    tcoFunctions
+                                    |> List.fold
+                                        (fun names func -> Set.add func.Name names)
                                         stdlib.Context.BaseFuncNames
-                                        (Set.union (buildBaseFuncNames registries) specializedFuncNames)
                                 let lambdaLiftFuncParams =
                                     reserveBaseFunctionParams registries.FuncParams baseFuncNames
                                 let (lambdaLiftTypeReg, lambdaLiftVariantLookup) =
