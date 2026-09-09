@@ -2180,9 +2180,9 @@ let private buildContext
     (genericFuncDefs: AST_to_ANF.GenericFuncDefs)
     (specRegistry: AST_to_ANF.SpecRegistry)
     (registries: AST_to_ANF.Registries)
+    (baseFuncNames: Set<string>)
     (returnTypes: Map<string, AST.Type>)
     : PipelineContext =
-    let baseFuncNames = buildBaseFuncNames registries
     let (lambdaLiftTypeReg, lambdaLiftVariantLookup) =
         AST_to_ANF.prepareLambdaLiftBaseTypes
             registries.TypeReg
@@ -3044,7 +3044,16 @@ let buildStdlibWithTrace
                 let sw = Stopwatch.StartNew()
                 let registries = anfResult.Registries
                 let returnTypes = extractReturnTypes registries.FuncReg
-                let context = buildContext target typeCheckEnv genericFuncDefs Map.empty registries returnTypes
+                let baseFuncNames = buildBaseFuncNames registries
+                let context =
+                    buildContext
+                        target
+                        typeCheckEnv
+                        genericFuncDefs
+                        Map.empty
+                        registries
+                        baseFuncNames
+                        returnTypes
                 let stdlibFunctions = anfResult.Functions
                 let stdlibOptions = { defaultOptions with DisableANFOpt = true; DisableInlining = true }
                 match buildAnf 0 stdlibOptions sw registries Map.empty Set.empty stdlibFunctions false passTimingRecorder with
@@ -4294,8 +4303,20 @@ let buildPreambleContext
                     let sw = Stopwatch.StartNew()
                     let preambleReturnTypes =
                         mergeReturnTypes stdlib.Context.ReturnTypes preambleUserOnly.LocalReturnTypes
+                    let baseFuncNames =
+                        preambleUserOnly.Functions
+                        |> List.fold
+                            (fun names func -> Set.add func.Name names)
+                            stdlib.Context.BaseFuncNames
                     let pipelineContext =
-                        buildContext stdlib.Context.Target preambleTypeCheckEnv mergedGenericDefs Map.empty preambleRegistries preambleReturnTypes
+                        buildContext
+                            stdlib.Context.Target
+                            preambleTypeCheckEnv
+                            mergedGenericDefs
+                            Map.empty
+                            preambleRegistries
+                            baseFuncNames
+                            preambleReturnTypes
                     match buildAnf 0 preambleOptions sw preambleRegistries Map.empty Set.empty preambleUserOnly.Functions false passTimingRecorder with
                     | Error err ->
                         let rcPrefix = "Reference count insertion error: "
@@ -4399,8 +4420,20 @@ let buildPreambleContextFromAnalysis
         let sw = Stopwatch.StartNew()
         let preambleReturnTypes =
             mergeReturnTypes stdlib.Context.ReturnTypes preambleUserOnly.LocalReturnTypes
+        let baseFuncNames =
+            preambleUserOnly.Functions
+            |> List.fold
+                (fun names func -> Set.add func.Name names)
+                stdlib.Context.BaseFuncNames
         let pipelineContext =
-            buildContext stdlib.Context.Target analysis.TypeCheckEnv mergedGenericDefs combinedSpecRegistry preambleRegistries preambleReturnTypes
+            buildContext
+                stdlib.Context.Target
+                analysis.TypeCheckEnv
+                mergedGenericDefs
+                combinedSpecRegistry
+                preambleRegistries
+                baseFuncNames
+                preambleReturnTypes
         match buildAnf 0 preambleOptions sw preambleRegistries Map.empty Set.empty preambleUserOnly.Functions false passTimingRecorder with
         | Error err ->
             let rcPrefix = "Reference count insertion error: "
