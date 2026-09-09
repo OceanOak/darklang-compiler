@@ -311,6 +311,10 @@ type CompilationSession(collectCodegenMetrics: bool) =
         Dictionary<
             obj,
             Dictionary<Set<string>, LIR.Function list>>(ObjectReferenceComparer())
+    let stdlibFunctionInventoryByContext =
+        Dictionary<
+            obj,
+            Dictionary<string, struct (int * LIR.Function)>>(ObjectReferenceComparer())
     let reachableStdlibNamesByRootAndContext =
         Dictionary<
             obj,
@@ -599,9 +603,25 @@ type CompilationSession(collectCodegenMetrics: bool) =
                                 rootEntries.[root] <- names
                                 names
                         Set.union reachable fromRoot) Set.empty
+                let functionInventory =
+                    match stdlibFunctionInventoryByContext.TryGetValue contextIdentity with
+                    | true, inventory -> inventory
+                    | false, _ ->
+                        let inventory = Dictionary<string, struct (int * LIR.Function)>()
+                        stdlibFunctions
+                        |> List.iteri (fun index func ->
+                            inventory.[func.Name] <- struct (index, func))
+                        stdlibFunctionInventoryByContext.[contextIdentity] <- inventory
+                        inventory
                 let functions =
-                    stdlibFunctions
-                    |> List.filter (fun func -> Set.contains func.Name reachable)
+                    reachable
+                    |> Seq.choose (fun name ->
+                        match functionInventory.TryGetValue name with
+                        | true, entry -> Some entry
+                        | false, _ -> None)
+                    |> Seq.sortBy (fun struct (index, _) -> index)
+                    |> Seq.map (fun struct (_, func) -> func)
+                    |> Seq.toList
                 contextEntries.[directCalls] <- functions
                 stdlibReachabilityMissCount <- stdlibReachabilityMissCount + 1
                 functions
@@ -945,6 +965,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             optimizedMirFunctions.Clear()
             allocatedLirFunctions.Clear()
             reachableStdlibFunctionsByContext.Clear()
+            stdlibFunctionInventoryByContext.Clear()
             reachableStdlibNamesByRootAndContext.Clear()
             mirRegistriesByContext.Clear()
             arm64MetadataGroupsByContext.Clear()
