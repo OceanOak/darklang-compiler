@@ -2341,6 +2341,7 @@ let private emptyRegistries (moduleRegistry: AST.ModuleRegistry) : AST_to_ANF.Re
         RecordFieldsReg = Map.empty
         RecordTypeParamsReg = Map.empty
         VariantLookup = Map.empty
+        SumTypeNames = Set.empty
         RcSumShapeReg = Map.empty
         FuncReg = Map.empty
         FuncParams = Map.empty
@@ -2726,6 +2727,7 @@ let private convertTypedProgramToUserOnlyWithMode
                         RecordFieldsReg = registries.RecordFieldsReg
                         RecordTypeParamsReg = registries.RecordTypeParamsReg
                         VariantLookup = registries.VariantLookup
+                        SumTypeNames = registries.SumTypeNames
                         LocalRecordFieldsReg = localRegistries.RecordFieldsReg
                         LocalVariantLookup = localRegistries.VariantLookup
                         RcSumShapeReg = registries.RcSumShapeReg
@@ -3219,6 +3221,10 @@ let buildStdlibSpecializations
                                     externalTypeReg
                             VariantLookup =
                                 Map.fold (fun acc k v -> Map.add k v acc) registries.VariantLookup externalVariantLookup
+                            SumTypeNames =
+                                Set.union
+                                    registries.SumTypeNames
+                                    (AST_to_ANF.sumTypeNamesFromVariantLookup externalVariantLookup)
                     }
                     let localReturnTypes = extractReturnTypes localRegistries.FuncReg
                     let varGen = ANF.VarGen 0
@@ -3831,6 +3837,7 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                             RecordFieldsReg = userOnly.RecordFieldsReg
                             RecordTypeParamsReg = userOnly.RecordTypeParamsReg
                             VariantLookup = userOnly.VariantLookup
+                            SumTypeNames = userOnly.SumTypeNames
                             RcSumShapeReg = userOnly.RcSumShapeReg
                             FuncReg = userOnly.FuncReg
                             FuncParams = userOnly.FuncParams
@@ -4767,6 +4774,7 @@ let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string
                     RecordFieldsReg = userOnly.RecordFieldsReg
                     RecordTypeParamsReg = userOnly.RecordTypeParamsReg
                     VariantLookup = userOnly.VariantLookup
+                    SumTypeNames = userOnly.SumTypeNames
                     RcSumShapeReg = userOnly.RcSumShapeReg
                     FuncReg = userOnly.FuncReg
                     FuncParams = userOnly.FuncParams
