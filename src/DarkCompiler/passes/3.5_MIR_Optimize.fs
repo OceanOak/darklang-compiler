@@ -2574,6 +2574,7 @@ let private clearHeapLoadAndDirectCallAvailability
 
 /// Apply CSE to a CFG, carrying available expressions into dominated blocks.
 let private applyCSEWithEffectFreeCallsAndTopology
+    (existingTopology: DominatorTopology option)
     (effectFreeFunctions: Set<string>)
     (cfg: CFG)
     : CFG * bool * DominatorTopology =
@@ -2671,7 +2672,8 @@ let private applyCSEWithEffectFreeCallsAndTopology
 
         ({ block with Instrs = List.rev instrs' }, exported', changed)
 
-    let dominatorTopology = buildDominatorTopology cfg
+    let dominatorTopology =
+        existingTopology |> Option.defaultWith (fun () -> buildDominatorTopology cfg)
     let idoms = dominatorTopology.ImmediateDominators
     let dominatorChildren =
         idoms
@@ -2721,7 +2723,7 @@ let applyCSEWithEffectFreeCalls
     (cfg: CFG)
     : CFG * bool =
     let (optimized, changed, _) =
-        applyCSEWithEffectFreeCallsAndTopology effectFreeFunctions cfg
+        applyCSEWithEffectFreeCallsAndTopology None effectFreeFunctions cfg
     (optimized, changed)
 
 let applyCSE (cfg: CFG) : CFG * bool =
@@ -2771,8 +2773,9 @@ let private optimizeCFGOnceWithEffectFreeCalls
     (effectFreeFunctions: Set<string>)
     (options: OptimizeOptions)
     (recordTicks: (string -> int64 -> unit) option)
+    (existingTopology: DominatorTopology option)
     (cfg: CFG)
-    : CFG * bool =
+    : CFG * bool * DominatorTopology option =
     let measure name operation =
         match recordTicks with
         | None -> operation ()
@@ -2790,10 +2793,13 @@ let private optimizeCFGOnceWithEffectFreeCalls
         if options.EnableCSE then
             measure "MIR Common Subexpression Elimination" (fun () ->
                 let (optimized, changed, topology) =
-                    applyCSEWithEffectFreeCallsAndTopology effectFreeFunctions cfg1
+                    applyCSEWithEffectFreeCallsAndTopology
+                        existingTopology
+                        effectFreeFunctions
+                        cfg1
                 (optimized, changed, Some topology))
         else
-            (cfg1, false, None)
+            (cfg1, false, existingTopology)
     let (cfg3, changed3) =
         if options.EnableCopyProp then
             measure "MIR Copy Propagation" (fun () ->
@@ -2877,10 +2883,23 @@ let private optimizeCFGOnceWithEffectFreeCalls
         else
             (cfg13, false)
     let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7 || changed8 || changed9 || changed10 || changed11 || changed12 || changed13 || changed14
-    (cfg14, changed)
+    let topologyChanged =
+        changed6
+        || changed7
+        || changed9
+        || changed10
+        || changed11
+        || changed12
+        || changed13
+        || changed14
+    let reusableTopology =
+        if topologyChanged then None else cseTopology
+    (cfg14, changed, reusableTopology)
 
 let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
-    optimizeCFGOnceWithEffectFreeCalls Set.empty options None cfg
+    let (optimized, changed, _) =
+        optimizeCFGOnceWithEffectFreeCalls Set.empty options None None cfg
+    (optimized, changed)
 
 /// Run all optimizations until fixed point
 let private optimizeCFGWithEffectFreeCalls
@@ -2889,17 +2908,22 @@ let private optimizeCFGWithEffectFreeCalls
     (recordTicks: (string -> int64 -> unit) option)
     (cfg: CFG)
     : CFG =
-    let rec loop current remaining =
+    let rec loop current remaining existingTopology =
         if remaining <= 0 then
             current
         else
-            let (next, changed) =
-                optimizeCFGOnceWithEffectFreeCalls effectFreeFunctions options recordTicks current
+            let (next, changed, reusableTopology) =
+                optimizeCFGOnceWithEffectFreeCalls
+                    effectFreeFunctions
+                    options
+                    recordTicks
+                    existingTopology
+                    current
             if changed then
-                loop next (remaining - 1)
+                loop next (remaining - 1) reusableTopology
             else
                 next
-    loop cfg 10
+    loop cfg 10 None
 
 let optimizeCFGWithOptions (options: OptimizeOptions) (cfg: CFG) : CFG =
     optimizeCFGWithEffectFreeCalls Set.empty options None cfg
