@@ -733,9 +733,12 @@ let private rcShapeForType (ctx: TypeContext) (typ: AST.Type) : RcShape =
         (recordTypeParamsRegistry ctx.TypeReg)
         ctx.SumShapeReg
 
-let private rcMetadataForType (ctx: TypeContext) (typ: AST.Type) : RcMetadata =
+let private rcMetadataForTypeAndShape
+    (ctx: TypeContext)
+    (typ: AST.Type)
+    (shape: RcShape)
+    : RcMetadata =
     let canonicalType = canonicalRcSourceType ctx typ
-    let shape = rcShapeForType ctx typ
     let releasePlan = rcShapeReleasePlan shape
     {
         ReleasePlanCacheKey = rcReleasePlanCacheKey canonicalType releasePlan
@@ -746,11 +749,12 @@ let private rcMetadataForType (ctx: TypeContext) (typ: AST.Type) : RcMetadata =
 let private shapeNeedsManagedAliasRootPreservation (ctx: TypeContext) (typ: AST.Type) : bool =
     typ |> rcShapeForType ctx |> rcShapeNeedsManagedAliasRootPreservation
 
-let private shapeNeedsAutomaticBindingDec (ctx: TypeContext) (typ: AST.Type) : bool =
-    typ |> rcShapeForType ctx |> rcShapeNeedsAutomaticBindingDec
-
-let private bindingNeedsShapeAutomaticDec (ctx: TypeContext) (cexpr: CExpr) (typ: AST.Type) : bool =
-    shapeNeedsAutomaticBindingDec ctx typ
+let private bindingNeedsShapeAutomaticDec
+    (cexpr: CExpr)
+    (typ: AST.Type)
+    (shape: RcShape)
+    : bool =
+    rcShapeNeedsAutomaticBindingDec shape
     || match typ, cexpr with
        | AST.TFunction _, ClosureAlloc _ -> true
        | AST.TFunction _, Call (funcName, _) when not (funcName.StartsWith("Stdlib.")) -> true
@@ -769,27 +773,35 @@ let private cexprProducesNonRcSentinel (cexpr: CExpr) : bool =
     | _ ->
         false
 
-type private ReturnDec = TempId * AST.Type * RcKind option
+type private ReturnDec = TempId * AST.Type * RcShape * RcKind option
 
-let private retainExprForType (ctx: TypeContext) (tempId: TempId) (typ: AST.Type) : CExpr =
-    let shape = rcShapeForType ctx typ
+let private retainExprForShape
+    (ctx: TypeContext)
+    (tempId: TempId)
+    (typ: AST.Type)
+    (shape: RcShape)
+    : CExpr =
     match rcShapeRetainOperation shape with
     | Some DynamicStringBuffer ->
         RefCountIncString (Var tempId)
     | Some DynamicBlobBuffer ->
         RefCountIncBlob (Var tempId)
     | Some (FixedSizeRoot (size, kind)) ->
-        RefCountInc (Var tempId, size, kind, Some (rcMetadataForType ctx typ))
+        RefCountInc (
+            Var tempId,
+            size,
+            kind,
+            Some (rcMetadataForTypeAndShape ctx typ shape))
     | None ->
-        Crash.crash $"retainExprForType: type '{typ}' does not have an RC retain operation"
+        Crash.crash $"retainExprForShape: type '{typ}' does not have an RC retain operation"
 
-let private releaseExprForType
+let private releaseExprForShape
     (ctx: TypeContext)
     (tempId: TempId)
     (typ: AST.Type)
+    (shape: RcShape)
     (kindOverride: RcKind option)
     : CExpr =
-    let shape = rcShapeForType ctx typ
     match rcShapeReleaseOperation shape with
     | Some DynamicStringBuffer ->
         RefCountDecString (Var tempId)
@@ -797,12 +809,13 @@ let private releaseExprForType
         RefCountDecBlob (Var tempId)
     | Some (FixedSizeRoot (size, defaultKind)) ->
         let kind = kindOverride |> Option.defaultValue defaultKind
-        RefCountDec (Var tempId, size, kind, Some (rcMetadataForType ctx typ))
+        RefCountDec (
+            Var tempId,
+            size,
+            kind,
+            Some (rcMetadataForTypeAndShape ctx typ shape))
     | None ->
-        Crash.crash $"releaseExprForType: type '{typ}' does not have an RC release operation"
-
-let private shapeNeedsBorrowedRetain (ctx: TypeContext) (typ: AST.Type) : bool =
-    typ |> rcShapeForType ctx |> rcShapeNeedsBorrowedRetain
+        Crash.crash $"releaseExprForShape: type '{typ}' does not have an RC release operation"
 
 let private functionParamReturnTransfersOwnedAccumulator
     (ctx: TypeContext)
@@ -875,7 +888,7 @@ let private isInternalRecordTailAccumulator
 /// Insert RefCountInc for returned parameters at a Return node
 let insertParamIncsAtReturn
     (ctx: TypeContext)
-    (paramIncs: (TempId * AST.Type) list)
+    (paramIncs: (TempId * AST.Type * RcShape) list)
     (returned: Set<TempId>)
     (expr: AExpr)
     (varGen: VarGen)
@@ -883,11 +896,11 @@ let insertParamIncsAtReturn
     : AExpr * VarGen * Map<TempId, AST.Type> =
     let active =
         paramIncs
-        |> List.filter (fun (tempId, _) -> Set.contains tempId returned)
+        |> List.filter (fun (tempId, _, _) -> Set.contains tempId returned)
     List.foldBack
-        (fun (tempId, typ) (accExpr, accVarGen, accTypes) ->
+        (fun (tempId, typ, shape) (accExpr, accVarGen, accTypes) ->
             let (dummyId, varGen') = freshVar accVarGen
-            let incExpr = retainExprForType ctx tempId typ
+            let incExpr = retainExprForShape ctx tempId typ shape
             let accExpr' = Let (dummyId, incExpr, accExpr)
             (accExpr', varGen', Map.add dummyId AST.TUnit accTypes))
         active
@@ -903,9 +916,9 @@ let insertReturnDecs
     : AExpr * VarGen * Map<TempId, AST.Type> =
     let decsInOrder = List.rev returnDecs
     List.fold
-        (fun (accExpr, accVarGen, accTypes) (tempId, typ, kindOverride) ->
+        (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride) ->
             let (dummyId, varGen') = freshVar accVarGen
-            let decExpr = releaseExprForType ctx tempId typ kindOverride
+            let decExpr = releaseExprForShape ctx tempId typ shape kindOverride
             let accExpr' = Let (dummyId, decExpr, accExpr)
             (accExpr', varGen', Map.add dummyId AST.TUnit accTypes))
         (expr, varGen, types)
@@ -915,11 +928,11 @@ let insertReturnDecs
 type LetFrame = {
     TempId: TempId
     CExpr: CExpr
-    TupleIncTargets: (TempId * AST.Type) list
+    TupleIncTargets: (TempId * AST.Type * RcShape) list
     /// The pass owns exactly one pending release for this value, and its next
     /// use transfers that ownership into a closed returned aggregate suffix.
     TransferableOwnership: ReturnDec option
-    ReturnInc: AST.Type option
+    ReturnInc: (AST.Type * RcShape) option
     BranchDec: ReturnDec option
 }
 
@@ -931,9 +944,9 @@ let applyLetFrame
     : AExpr * VarGen * Map<TempId, AST.Type> =
     let (incBindingsRev, varGen1) =
         frame.TupleIncTargets
-        |> List.fold (fun (acc, vg) (tid, typ) ->
+        |> List.fold (fun (acc, vg) (tid, typ, shape) ->
             let (dummyId, vg') = freshVar vg
-            ((dummyId, retainExprForType ctx tid typ) :: acc, vg')) ([], varGen)
+            ((dummyId, retainExprForShape ctx tid typ shape) :: acc, vg')) ([], varGen)
     let incBindings = List.rev incBindingsRev
 
     let typesWithIncs =
@@ -942,9 +955,9 @@ let applyLetFrame
 
     let (returnIncBinding, varGen2, typesWithReturnInc) =
         match frame.ReturnInc with
-        | Some typ ->
+        | Some (typ, shape) ->
             let (incId, vg) = freshVar varGen1
-            let incExpr = retainExprForType ctx frame.TempId typ
+            let incExpr = retainExprForShape ctx frame.TempId typ shape
             ([(incId, incExpr)], vg, Map.add incId AST.TUnit typesWithIncs)
         | None ->
             ([], varGen1, typesWithIncs)
@@ -1089,7 +1102,7 @@ let rec private insertOwnedAccumulatorDecsBeforeSelfTailCalls
                 | _ -> acc) Set.empty
 
         ownedParamDecs
-        |> List.filter (fun (tempId, _, _) -> not (Set.contains tempId argTemps))
+        |> List.filter (fun (tempId, _, _, _) -> not (Set.contains tempId argTemps))
 
     let wrapOwnedAccumulatorDecs
         (decs: ReturnDec list)
@@ -1099,9 +1112,9 @@ let rec private insertOwnedAccumulatorDecsBeforeSelfTailCalls
         : AExpr * VarGen * Map<TempId, AST.Type> =
         decs
         |> List.fold
-            (fun (accExpr, accVarGen, accTypes) (tempId, typ, kindOverride) ->
+            (fun (accExpr, accVarGen, accTypes) (tempId, typ, shape, kindOverride) ->
                 let (dummyId, varGen') = freshVar accVarGen
-                let decExpr = releaseExprForType ctx tempId typ kindOverride
+                let decExpr = releaseExprForShape ctx tempId typ shape kindOverride
                 (Let (dummyId, decExpr, accExpr), varGen', Map.add dummyId AST.TUnit accTypes))
             (tailExpr, varGen, types)
 
@@ -1159,10 +1172,15 @@ let rec private insertClosureMapSourceRetainsBeforeHelperCalls
         match currentIsMapHelper, targetReturnsClosureList targetFunc, args with
         | false, true, Var sourceTemp :: _ ->
             match tryGetType (withTempTypes ctx types) sourceTemp with
-            | Some sourceType when shapeNeedsBorrowedRetain ctx sourceType ->
-                let (dummyId, varGen') = freshVar varGen
-                let incExpr = retainExprForType ctx sourceTemp sourceType
-                (Let (dummyId, incExpr, callExpr), varGen', Map.add dummyId AST.TUnit types)
+            | Some sourceType ->
+                let shape = rcShapeForType ctx sourceType
+                if rcShapeNeedsBorrowedRetain shape then
+                    let (dummyId, varGen') = freshVar varGen
+                    let incExpr =
+                        retainExprForShape ctx sourceTemp sourceType shape
+                    (Let (dummyId, incExpr, callExpr), varGen', Map.add dummyId AST.TUnit types)
+                else
+                    (callExpr, varGen, types)
             | _ ->
                 (callExpr, varGen, types)
         | _ ->
@@ -1201,7 +1219,7 @@ let rec insertRCWithAnalysis
     (varGen: VarGen)
     (returnDecs: ReturnDec list)
     (inheritedTransferableOwnership: ReturnDec list)
-    (paramIncs: (TempId * AST.Type) list)
+    (paramIncs: (TempId * AST.Type * RcShape) list)
     (types: Map<TempId, AST.Type>)
     (typeCache: CExprTypeCache)
     : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
@@ -1232,14 +1250,14 @@ let rec insertRCWithAnalysis
                 |> fun local -> local @ inheritedTransferableOwnership
             let returnDecTemps =
                 returnDecs
-                |> List.map (fun (tempId, _, _) -> tempId)
+                |> List.map (fun (tempId, _, _, _) -> tempId)
                 |> Set.ofList
             let branchLocalDecs (branchReturned: Set<TempId>) : ReturnDec list =
                 let frameDecs =
                     frames
                     |> List.choose (fun frame ->
                         match frame.BranchDec with
-                        | Some (tempId, _, _ as dec)
+                        | Some (tempId, _, _, _ as dec)
                             when not (Set.contains tempId branchReturned)
                                  && not (Set.contains tempId returnDecTemps) ->
                             Some dec
@@ -1376,6 +1394,7 @@ let rec insertRCWithAnalysis
                 match cexpr with
                 | ClosureAlloc (funcName, _) -> addClosureFunc ctxWithTypes tempId funcName
                 | _ -> ctxWithTypes
+            let inferredShape = rcShapeForType ctx inferredType
 
             let bodyReturned = returnedSet bodyInfo
             let consumedByImmediateI64Push =
@@ -1421,7 +1440,7 @@ let rec insertRCWithAnalysis
                     match cexpr with
                     | BorrowedCall _ -> true
                     | _ -> false
-                if bindingNeedsShapeAutomaticDec ctx cexpr inferredType
+                if bindingNeedsShapeAutomaticDec cexpr inferredType inferredShape
                    && (not (isBorrowingExpr cexpr) || materializesBorrowedCall)
                    && not (cexprProducesNonRcSentinel cexpr)
                    && not skipReturnDecForMapHelperLists
@@ -1430,7 +1449,7 @@ let rec insertRCWithAnalysis
                         match inferredType with
                         | AST.TList (AST.TFunction _) -> Some TaggedList
                         | _ -> None
-                    Some (tempId, inferredType, kindOverride)
+                    Some (tempId, inferredType, inferredShape, kindOverride)
                 else
                     None
 
@@ -1498,8 +1517,13 @@ let rec insertRCWithAnalysis
                             match atom with
                             | Var tid ->
                                 match tryGetType ctxWithTypes tid with
-                                | Some t when shapeNeedsBorrowedRetain ctx t && not (tempProducesNonRcSentinel tid) ->
-                                    (tid, t) :: acc
+                                | Some t ->
+                                    let shape = rcShapeForType ctx t
+                                    if rcShapeNeedsBorrowedRetain shape
+                                       && not (tempProducesNonRcSentinel tid) then
+                                        (tid, t, shape) :: acc
+                                    else
+                                        acc
                                 | _ -> acc
                             | _ -> acc
                         ) []
@@ -1511,8 +1535,13 @@ let rec insertRCWithAnalysis
                             match atom with
                             | Var tid ->
                                 match tryGetType ctx tid with
-                                | Some t when shapeNeedsBorrowedRetain ctx t && not (tempProducesNonRcSentinel tid) ->
-                                    (tid, t) :: acc
+                                | Some t ->
+                                    let shape = rcShapeForType ctx t
+                                    if rcShapeNeedsBorrowedRetain shape
+                                       && not (tempProducesNonRcSentinel tid) then
+                                        (tid, t, shape) :: acc
+                                    else
+                                        acc
                                 | _ -> acc
                             | _ -> acc
                         ) []
@@ -1523,8 +1552,13 @@ let rec insertRCWithAnalysis
                             match atom with
                             | Var tid ->
                                 match tryGetType ctxWithTypes tid with
-                                | Some t when shapeNeedsBorrowedRetain ctx t && not (tempProducesNonRcSentinel tid) ->
-                                    (tid, t) :: acc
+                                | Some t ->
+                                    let shape = rcShapeForType ctx t
+                                    if rcShapeNeedsBorrowedRetain shape
+                                       && not (tempProducesNonRcSentinel tid) then
+                                        (tid, t, shape) :: acc
+                                    else
+                                        acc
                                 | _ -> acc
                             | _ -> acc
                         ) []
@@ -1543,10 +1577,13 @@ let rec insertRCWithAnalysis
                             | _ ->
                                 false
                         match transfersImmediateOwnedValue, tryGetType ctxWithTypes valueTemp with
-                        | false, Some valueType when
-                            shapeNeedsBorrowedRetain ctx valueType
-                            && not (tempProducesNonRcSentinel valueTemp) ->
-                            [ valueTemp, valueType ]
+                        | false, Some valueType ->
+                            let shape = rcShapeForType ctx valueType
+                            if rcShapeNeedsBorrowedRetain shape
+                               && not (tempProducesNonRcSentinel valueTemp) then
+                                [ valueTemp, valueType, shape ]
+                            else
+                                []
                         | _ ->
                             []
                     | _ ->
@@ -1559,17 +1596,20 @@ let rec insertRCWithAnalysis
                     // A materialized Stream seeds its RC word at zero; the
                     // first typed slot retain establishes the owning edge.
                     []
-                | RawSlotInit (_, _, Var valueTemp, valueType) when
-                    shapeNeedsBorrowedRetain ctx valueType
-                    && not (tempProducesNonRcSentinel valueTemp) ->
-                    [valueTemp, valueType]
+                | RawSlotInit (_, _, Var valueTemp, valueType) ->
+                    let shape = rcShapeForType ctx valueType
+                    if rcShapeNeedsBorrowedRetain shape
+                       && not (tempProducesNonRcSentinel valueTemp) then
+                        [valueTemp, valueType, shape]
+                    else
+                        []
                 | _ ->
                     []
 
             let transferableOwnership =
                 let pendingForCurrent =
                     returnDecs'
-                    |> List.filter (fun (pendingId, _, _) -> pendingId = tempId)
+                    |> List.filter (fun (pendingId, _, _, _) -> pendingId = tempId)
                 match bindingDec, pendingForCurrent with
                 | Some dec, [ pendingDec ]
                     when dec = pendingDec
@@ -1590,7 +1630,7 @@ let rec insertRCWithAnalysis
 
             let transferredOwnership =
                 (allocationIncTargets @ rawSlotRetainTargets)
-                |> List.fold (fun (transfers, transferredOwners) (targetId, _) ->
+                |> List.fold (fun (transfers, transferredOwners) (targetId, _, _) ->
                     let ownerId = resolveAliasOwner targetId
                     if Set.contains ownerId transferredOwners then
                         (transfers, transferredOwners)
@@ -1598,13 +1638,13 @@ let rec insertRCWithAnalysis
                         frames
                         |> List.tryPick (fun candidate ->
                             match candidate.TransferableOwnership with
-                            | Some ((candidateOwnerId, _, _) as pendingDec) when candidateOwnerId = ownerId ->
+                            | Some ((candidateOwnerId, _, _, _) as pendingDec) when candidateOwnerId = ownerId ->
                                 Some pendingDec
                             | _ ->
                                 None)
                         |> Option.orElseWith (fun () ->
                             inheritedTransferableOwnership
-                            |> List.tryFind (fun (candidateOwnerId, _, _) -> candidateOwnerId = ownerId))
+                            |> List.tryFind (fun (candidateOwnerId, _, _, _) -> candidateOwnerId = ownerId))
                         |> Option.map (fun pendingDec ->
                             ((targetId, pendingDec) :: transfers, Set.add ownerId transferredOwners))
                         |> Option.defaultValue (transfers, transferredOwners)
@@ -1625,18 +1665,18 @@ let rec insertRCWithAnalysis
 
             let transferredOwnerIds =
                 transferredOwnership
-                |> List.map (fun (_, (ownerId, _, _)) -> ownerId)
+                |> List.map (fun (_, (ownerId, _, _, _)) -> ownerId)
                 |> Set.ofList
 
             let allocationIncTargetsAfterTransfers =
                 let removeFirstTarget
                     (targetId: TempId)
-                    (targets: (TempId * AST.Type) list)
-                    : (TempId * AST.Type) list =
+                    (targets: (TempId * AST.Type * RcShape) list)
+                    : (TempId * AST.Type * RcShape) list =
                     let rec loop prefix remaining =
                         match remaining with
                         | [] -> List.rev prefix
-                        | (candidateId, _) :: tail when candidateId = targetId ->
+                        | (candidateId, _, _) :: tail when candidateId = targetId ->
                             List.rev prefix @ tail
                         | head :: tail ->
                             loop (head :: prefix) tail
@@ -1677,11 +1717,16 @@ let rec insertRCWithAnalysis
                         candidate)
 
             let returnInc =
-                let retainedTypeFromAtom (atom: Atom) : AST.Type option =
+                let retainedTypeFromAtom (atom: Atom) : (AST.Type * RcShape) option =
                     match atom with
                     | Var tid ->
                         match tryGetType ctx tid with
-                        | Some t when shapeNeedsBorrowedRetain ctx t -> Some t
+                        | Some t ->
+                            let shape = rcShapeForType ctx t
+                            if rcShapeNeedsBorrowedRetain shape then
+                                Some (t, shape)
+                            else
+                                None
                         | _ -> None
                     | _ -> None
 
@@ -1712,11 +1757,11 @@ let rec insertRCWithAnalysis
                         false
 
                 match cexpr with
-                | BorrowedCall _ when shapeNeedsBorrowedRetain ctx inferredType ->
+                | BorrowedCall _ when rcShapeNeedsBorrowedRetain inferredShape ->
                     // A borrowed call has no owned result edge to transfer from
                     // its callee. Materialize one for the local binding; its
                     // ordinary pending decrement then balances this retain.
-                    Some inferredType
+                    Some (inferredType, inferredShape)
                 | IfValue (_, thenAtom, elseAtom) ->
                     // IfValue selects one of two existing heap values.
                     // Materialize ownership on the selected temp before source temps are decref'd.
@@ -1725,25 +1770,25 @@ let rec insertRCWithAnalysis
                     | None, Some info -> Some info
                     | None, None -> None
                 | _ when borrowedProjectionFeedsSelfTailCall
-                         && shapeNeedsBorrowedRetain ctx inferredType ->
-                    Some inferredType
+                         && rcShapeNeedsBorrowedRetain inferredShape ->
+                    Some (inferredType, inferredShape)
                 | Atom (Var sourceId)
                 | TypedAtom (Var sourceId, _) ->
                     // Returning a pure alias of an already-returned owned value should not inc again.
-                    if shapeNeedsBorrowedRetain ctx inferredType
+                    if rcShapeNeedsBorrowedRetain inferredShape
                        && Set.contains tempId bodyReturned
                        && isBorrowingExpr cexpr then
                         if Set.contains sourceId bodyReturned then
                             None
                         else
-                            Some inferredType
+                            Some (inferredType, inferredShape)
                     else
                         None
                 | _ ->
-                    if shapeNeedsBorrowedRetain ctx inferredType
+                    if rcShapeNeedsBorrowedRetain inferredShape
                        && Set.contains tempId bodyReturned
                        && isBorrowingExpr cexpr then
-                        Some inferredType
+                        Some (inferredType, inferredShape)
                     else
                         None
 
@@ -1806,32 +1851,47 @@ let private insertRCInFunctionInternal
     let ctxWithParams = withTempTypes ctx typesWithParams
 
     let bodyInfo = analyzeReturns Map.empty func.Body
+    let parameterInfos =
+        func.TypedParams
+        |> List.mapi (fun index param -> (index, param))
+        |> List.map (fun (index, param) ->
+            let shape = rcShapeForType ctxWithParams param.Type
+            let transfersOwnedAccumulator =
+                functionParamReturnTransfersOwnedAccumulator
+                    ctxWithParams
+                    func.Name
+                    index
+                    param.Type
+            let internalOwnedAccumulator =
+                isInternalRecordTailAccumulator func index param
+            (param, shape, transfersOwnedAccumulator, internalOwnedAccumulator))
     let internalOwnedParams =
-        func.TypedParams
-        |> List.mapi (fun index param -> (index, param))
-        |> List.choose (fun (index, param) ->
-            if isInternalRecordTailAccumulator func index param then Some param else None)
+        parameterInfos
+        |> List.choose (fun (param, shape, _, isInternalOwned) ->
+            if isInternalOwned then Some (param, shape) else None)
     let internalOwnedParamIds =
-        internalOwnedParams |> List.map (fun param -> param.Id) |> Set.ofList
+        internalOwnedParams |> List.map (fun (param, _) -> param.Id) |> Set.ofList
     let paramIncsRev =
-        func.TypedParams
-        |> List.mapi (fun index param -> (index, param))
-        |> List.fold (fun acc (index, param) ->
-            if shapeNeedsBorrowedRetain ctxWithParams param.Type
-               && not (functionParamReturnTransfersOwnedAccumulator ctxWithParams func.Name index param.Type)
+        parameterInfos
+        |> List.fold (fun acc (param, shape, transfersOwnedAccumulator, _) ->
+            if rcShapeNeedsBorrowedRetain shape
+               && not transfersOwnedAccumulator
                && not (Set.contains param.Id internalOwnedParamIds) then
-                (param.Id, param.Type) :: acc
+                (param.Id, param.Type, shape) :: acc
             else
                 acc
         ) []
     let paramIncs = List.rev paramIncsRev
     let ownedParamDecs =
-        func.TypedParams
-        |> List.mapi (fun index param -> (index, param))
-        |> List.choose (fun (index, param) ->
-            if functionParamReturnTransfersOwnedAccumulator ctxWithParams func.Name index param.Type
+        parameterInfos
+        |> List.choose (fun (param, shape, transfersOwnedAccumulator, _) ->
+            if transfersOwnedAccumulator
                || Set.contains param.Id internalOwnedParamIds then
-                Some (param.Id, param.Type, None)
+                Some (
+                    param.Id,
+                    param.Type,
+                    shape,
+                    None)
             else
                 None)
 
@@ -1850,11 +1910,11 @@ let private insertRCInFunctionInternal
                 varGen'
                 accTypes
     let retainInternalParam
-        (param: TypedParam)
+        ((param, shape): TypedParam * RcShape)
         (body: AExpr, currentVarGen: VarGen, currentTypes: Map<TempId, AST.Type>)
         : AExpr * VarGen * Map<TempId, AST.Type> =
         let (dummyId, nextVarGen) = freshVar currentVarGen
-        let retain = retainExprForType ctxWithParams param.Id param.Type
+        let retain = retainExprForShape ctxWithParams param.Id param.Type shape
         (Let (dummyId, retain, body), nextVarGen, Map.add dummyId AST.TUnit currentTypes)
     let (bodyWithInternalParamRetains, varGen''', accTypes'') =
         List.foldBack
