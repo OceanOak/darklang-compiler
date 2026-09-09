@@ -439,6 +439,18 @@ type internal AnfDependencyKey = {
     NonInlineableFunctionNames: Set<string>
 }
 
+type private AnfDependencyKeyNameHashComparer() =
+    interface IEqualityComparer<AnfDependencyKey> with
+        member _.Equals(left, right) = left = right
+        member _.GetHashCode(key) =
+            let addName hash name =
+                (hash * 397) ^^^ StringComparer.Ordinal.GetHashCode(name)
+            let functionHash =
+                key.Functions
+                |> List.fold (fun hash func -> addName hash func.Name) 17
+            key.NonInlineableFunctionNames
+            |> Set.fold addName functionHash
+
 [<NoComparison>]
 type internal CompiledDependencyConfig = {
     Target: Platform.Target
@@ -671,7 +683,11 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 match anfDependenciesByContext.TryGetValue contextIdentity with
                 | true, entries -> entries
                 | false, _ ->
-                    let entries = Dictionary<AnfDependencyKey, Result<ANF.Function list * ANF.VarGen * obj, string>>()
+                    let entries =
+                        Dictionary<
+                            AnfDependencyKey,
+                            Result<ANF.Function list * ANF.VarGen * obj, string>>(
+                                AnfDependencyKeyNameHashComparer())
                     anfDependenciesByContext.[contextIdentity] <- entries
                     entries
             match contextEntries.TryGetValue key with
