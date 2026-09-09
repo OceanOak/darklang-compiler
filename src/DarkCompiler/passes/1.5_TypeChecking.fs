@@ -1402,7 +1402,7 @@ let private comparisonNumericType (typ: Type) : bool =
 let private equalityComparableType
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
-    (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     : bool =
     let rec comparable (seen: Set<Type>) (candidate: Type) : bool =
@@ -1433,9 +1433,7 @@ let private equalityComparableType
                 recurse keyType && recurse valueType
             | TRecord (recordName, typeArgs) ->
                 match Map.tryFind recordName typeReg with
-                | None when
-                    variantLookup
-                    |> Map.exists (fun _ (ownerName, _, _, _) -> ownerName = recordName) ->
+                | None when Map.containsKey recordName indexedSumTypeReg ->
                     comparable seen (TSum (recordName, typeArgs))
                 | None -> false
                 | Some recordInfo ->
@@ -1445,18 +1443,19 @@ let private equalityComparableType
                         recordInfo.Fields
                         |> List.forall (fun (_, fieldType) -> recurse (applySubst subst fieldType))
             | TSum (sumName, typeArgs) ->
-                variantLookup
-                |> Map.forall (fun _ (ownerName, typeParams, _, payloadType) ->
-                    if ownerName <> sumName then
-                        true
-                    else
-                        match payloadType with
-                        | None -> true
-                        | Some payload ->
-                            if List.length typeParams = List.length typeArgs then
-                                recurse (applySubst (List.zip typeParams typeArgs |> Map.ofList) payload)
-                            else
-                                recurse payload)
+                match Map.tryFind sumName indexedSumTypeReg with
+                | None -> true
+                | Some info ->
+                    let subst =
+                        if List.length info.TypeParams = List.length typeArgs then
+                            List.zip info.TypeParams typeArgs |> Map.ofList
+                        else
+                            Map.empty
+                    info.Variants
+                    |> List.forall (fun variant ->
+                        variant.Payload
+                        |> Option.map (fun payload -> recurse (applySubst subst payload))
+                        |> Option.defaultValue true)
             | TBlob -> true
             | TRawPtr | TRuntimeError -> false
 
@@ -1467,7 +1466,7 @@ let private equalityComparableType
 let private canonicalSortableType
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
-    (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     : bool =
     let rec sortable (seen: Set<Type>) (candidate: Type) : bool =
@@ -1497,18 +1496,19 @@ let private canonicalSortableType
                         recordInfo.Fields
                         |> List.forall (fun (_, fieldType) -> recurse (applySubst subst fieldType))
             | TSum (sumName, typeArgs) ->
-                variantLookup
-                |> Map.forall (fun _ (ownerName, typeParams, _, payloadType) ->
-                    if ownerName <> sumName then
-                        true
-                    else
-                        match payloadType with
-                        | None -> true
-                        | Some payload ->
-                            if List.length typeParams = List.length typeArgs then
-                                recurse (applySubst (List.zip typeParams typeArgs |> Map.ofList) payload)
-                            else
-                                recurse payload)
+                match Map.tryFind sumName indexedSumTypeReg with
+                | None -> true
+                | Some info ->
+                    let subst =
+                        if List.length info.TypeParams = List.length typeArgs then
+                            List.zip info.TypeParams typeArgs |> Map.ofList
+                        else
+                            Map.empty
+                    info.Variants
+                    |> List.forall (fun variant ->
+                        variant.Payload
+                        |> Option.map (fun payload -> recurse (applySubst subst payload))
+                        |> Option.defaultValue true)
             | TDict _ | TFunction _ | TBlob | TRawPtr | TRuntimeError -> false
 
     sortable Set.empty typ
@@ -1516,7 +1516,7 @@ let private canonicalSortableType
 let private validateCanonicalSortableCall
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
-    (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (funcName: string)
     (typeArgs: Type list)
     : Result<unit, TypeError> =
@@ -1529,7 +1529,7 @@ let private validateCanonicalSortableCall
         | "Stdlib.List.sortBy", [valueType; keyType] -> [valueType; keyType]
         | _ -> []
 
-    match requiredTypes |> List.tryFind (canonicalSortableType aliasReg typeReg variantLookup >> not) with
+    match requiredTypes |> List.tryFind (canonicalSortableType aliasReg typeReg indexedSumTypeReg >> not) with
     | None -> Ok ()
     | Some unsupportedType ->
         Error (
@@ -1595,6 +1595,7 @@ let private classifyComparison
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (op: BinOp)
     (leftType: Type)
     (rightType: Type)
@@ -1605,7 +1606,7 @@ let private classifyComparison
     | Eq | Neq ->
         let comparableType = reconcileComparisonTypes aliasReg leftResolved rightResolved
         match comparableType with
-        | Some typ when equalityComparableType aliasReg typeReg variantLookup typ ->
+        | Some typ when equalityComparableType aliasReg typeReg indexedSumTypeReg typ ->
             Ok (EqualityComparison typ)
         | _ ->
             Error (IncompatibleEqualityOperands (leftResolved, rightResolved))
@@ -2167,6 +2168,7 @@ let private paramNameForLegacyError
 let rec private checkExprWithParamNamesAndSumTypeNames
     (funcParamNameReg: Map<string, string list>)
     (sumTypeNames: Set<string>)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (expr: Expr)
     (env: TypeEnv)
     (typeReg: IndexedTypeRegistry)
@@ -2191,6 +2193,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
         checkExprWithParamNamesAndSumTypeNames
             funcParamNameReg
             sumTypeNames
+            indexedSumTypeReg
             innerExpr
             innerEnv
             innerTypeReg
@@ -2620,7 +2623,14 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                                 checkExpr right env typeReg variantLookup genericFuncReg warningSettings moduleRegistry aliasReg (Some leftType)
                         rightResult
                         |> Result.bind (fun (rightType, right') ->
-                            classifyComparison aliasReg typeReg variantLookup op leftType rightType
+                            classifyComparison
+                                aliasReg
+                                typeReg
+                                variantLookup
+                                indexedSumTypeReg
+                                op
+                                leftType
+                                rightType
                             |> Result.bind (fun plan ->
                                 let comparisonExpr =
                                     match plan with
@@ -3428,7 +3438,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                             validateCanonicalSortableCall
                                 aliasReg
                                 typeReg
-                                variantLookup
+                                indexedSumTypeReg
                                 resolvedFuncName
                                 inferredTypeArgs
                             |> Result.bind (fun () ->
@@ -3803,7 +3813,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                         typeArgs
                         |> List.map (canonicalizeBareSumTypeRefsWithNames sumTypeNames)
 
-                    validateCanonicalSortableCall aliasReg typeReg variantLookup resolvedFuncName typeArgs
+                    validateCanonicalSortableCall aliasReg typeReg indexedSumTypeReg resolvedFuncName typeArgs
                     |> Result.bind (fun () ->
                         match resolvedFuncName, typeArgs with
                         | ("Stdlib.Json.serialize" | "Stdlib.Json.parse"), [targetType] ->
@@ -3967,7 +3977,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                         typeArgs
                         |> List.map (canonicalizeBareSumTypeRefsWithNames sumTypeNames)
 
-                    validateCanonicalSortableCall aliasReg typeReg variantLookup resolvedFuncName typeArgs
+                    validateCanonicalSortableCall aliasReg typeReg indexedSumTypeReg resolvedFuncName typeArgs
                     |> Result.bind (fun () -> buildSubstitution typeParams typeArgs |> Result.mapError GenericError)
                     |> Result.bind (fun subst ->
                         // Apply substitution to get concrete types
@@ -6661,7 +6671,7 @@ let rec private ensureCompareHelperForType
     : CompareHelperGenerationState =
     let resolvedType = resolveType aliasReg typ
     let helper = compareHelperName resolvedType
-    if not (canonicalSortableType aliasReg typeReg variantLookup resolvedType)
+    if not (canonicalSortableType aliasReg typeReg indexedSumTypeReg resolvedType)
        || Map.containsKey helper state.Generated
        || Set.contains helper state.InProgress then
         state
@@ -7117,6 +7127,7 @@ let materializeCompareHelpersInTopLevels
 let private checkFunctionDefWithSumTypeNames
     (funcParamNameReg: Map<string, string list>)
     (sumTypeNames: Set<string>)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (funcDef: FunctionDef)
     (env: TypeEnv)
     (typeReg: IndexedTypeRegistry)
@@ -7157,6 +7168,7 @@ let private checkFunctionDefWithSumTypeNames
         checkExprWithParamNamesAndSumTypeNames
             funcParamNameReg
             sumTypeNames
+            indexedSumTypeReg
             funcDef.Body
             paramEnv
             typeReg
@@ -8408,6 +8420,7 @@ let private checkResolvedProgramInternal
     let genericFuncReg = typeCheckEnv.GenericFuncReg
     let mergedAliasReg = typeCheckEnv.AliasReg
     let sumTypeNames = availableSumTypeNames
+    let indexedSumTypeReg = typeCheckEnv.IndexedSumTypeReg
 
     // Third pass: type check all function definitions and collect transformed top-levels
     // The accumulator contains (type option * TopLevel) pairs where the type is Some for expressions
@@ -8417,6 +8430,7 @@ let private checkResolvedProgramInternal
             checkFunctionDefWithSumTypeNames
                 funcParamNameReg
                 sumTypeNames
+                indexedSumTypeReg
                 funcDef
                 funcEnv
                 typeReg
@@ -8432,6 +8446,7 @@ let private checkResolvedProgramInternal
             checkExprWithParamNamesAndSumTypeNames
                 funcParamNameReg
                 sumTypeNames
+                indexedSumTypeReg
                 expr
                 funcEnv
                 typeReg
@@ -8532,6 +8547,7 @@ let private checkResolvedProgramInternal
                     checkFunctionDefWithSumTypeNames
                         funcParamNameReg
                         sumTypeNames
+                        indexedSumTypeReg
                         specializedFunc
                         funcEnv
                         typeReg
@@ -8594,6 +8610,7 @@ let private checkResolvedExpressionWithBaseEnv
     checkExprWithParamNamesAndSumTypeNames
         baseEnv.FuncParamNames
         sumTypeNames
+        baseEnv.IndexedSumTypeReg
         expr
         baseEnv.FuncEnv
         baseEnv.IndexedTypeReg
@@ -8614,6 +8631,7 @@ let private checkResolvedExpressionWithBaseEnv
                     checkFunctionDefWithSumTypeNames
                         baseEnv.FuncParamNames
                         sumTypeNames
+                        baseEnv.IndexedSumTypeReg
                         specializedFunc
                         baseEnv.FuncEnv
                         baseEnv.IndexedTypeReg
