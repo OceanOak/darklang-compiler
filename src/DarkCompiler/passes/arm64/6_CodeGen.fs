@@ -257,6 +257,20 @@ let private generateHeapOverflowTrapBody (target: ARM64.TargetConfig) : ARM64Sym
         ARM64Symbolic.SVC syscalls.SvcImmediate
     ]
 
+// These cold paths depend only on the target ABI. Building their immutable
+// instruction lists once avoids reconstructing the same message and syscall
+// sequence for every executable in a compilation session.
+let private macOSHeapOverflowTrapBody =
+    generateHeapOverflowTrapBody (ARM64.targetConfigFor Platform.MacOSARM64)
+
+let private linuxHeapOverflowTrapBody =
+    generateHeapOverflowTrapBody (ARM64.targetConfigFor Platform.LinuxARM64)
+
+let private preparedHeapOverflowTrapBody (target: ARM64.TargetConfig) =
+    match ARM64.targetOS target with
+    | Platform.MacOS -> macOSHeapOverflowTrapBody
+    | Platform.Linux -> linuxHeapOverflowTrapBody
+
 let private generateHeapOverflowTrapBlock
     (body: ARM64Symbolic.Instr list)
     (label: string)
@@ -8230,24 +8244,13 @@ let private generatePreparedARM64WithOptionsAndCache
     let metadataTimer = startPhase ()
     let (LIR.Program (functions, variantRegistry, recordRegistry)) = program
     let registrySetupTimer = startPhase ()
-    let heapOverflowTrapBody = generateHeapOverflowTrapBody target
+    let heapOverflowTrapBody = preparedHeapOverflowTrapBody target
     let sumShapeRegistry =
         preparedSumShapeRegistry
         |> Option.defaultWith (fun () ->
             rcSumShapeRegistryFromVariantRegistry variantRegistry)
     recordPhase "ARM64 Metadata Registry Setup" registrySetupTimer
-    // The public entry point validates this invariant before reaching the hot
-    // path. No instruction-body fallback is permitted here.
     let functionInventoryTimer = startPhase ()
-    let functionsWithFacts =
-        functions
-        |> List.map (fun func ->
-            let facts =
-                match func.CodegenFacts with
-                | Some facts -> facts
-                | None -> Crash.crash "ARM64 codegen invariant: missing validated function facts"
-            (func, facts))
-
     // Ensure _start is first (entry point)
     let sortedFunctions =
         match List.partition (fun (f: LIR.Function) -> f.Name = "_start") functions with
