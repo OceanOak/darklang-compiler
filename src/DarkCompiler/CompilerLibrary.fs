@@ -2611,16 +2611,18 @@ let private convertTypedProgramToUserOnlyWithMode
             let addMissing baseRegistry rebuildMode =
                 let requested = collectLocalSpecs baseContext.GenericFuncDefs typedProgram
                 let (AST.Program items) = typedProgram
-                let knownFunctionNames =
+                let localFunctionNames =
                     items
                     |> List.choose (function
                         | AST.FunctionDef fn -> Some fn.Name
                         | _ -> None)
                     |> Set.ofList
-                    |> Set.union baseContext.BaseFuncNames
+                let isKnownFunctionName localNames name =
+                    Set.contains name localNames
+                    || Set.contains name baseContext.BaseFuncNames
                 let rec materialize
                     (specRegistry: AST_to_ANF.SpecRegistry)
-                    (knownFunctionNames: Set<string>)
+                    (localFunctionNames: Set<string>)
                     (pendingSpecs: Set<AST_to_ANF.SpecKey>)
                     (accFunctions: AST.FunctionDef list)
                     : AST_to_ANF.SpecRegistry * AST.FunctionDef list =
@@ -2636,7 +2638,8 @@ let private convertTypedProgramToUserOnlyWithMode
                             mergeSpecRegistries specRegistry specialization.SpecRegistry
                         let materializedTopLevels =
                             specialization.SpecializedFuncs
-                            |> List.filter (fun fn -> not (Set.contains fn.Name knownFunctionNames))
+                            |> List.filter (fun fn ->
+                                not (isKnownFunctionName localFunctionNames fn.Name))
                             |> List.map AST.FunctionDef
                             |> TypeChecking.materializeEqHelpersInTopLevelsWithIndexedSums
                                 typeCheckEnv.AliasReg
@@ -2646,23 +2649,25 @@ let private convertTypedProgramToUserOnlyWithMode
                         let newFunctions =
                             materializedTopLevels
                             |> List.choose (function
-                                | AST.FunctionDef fn when not (Set.contains fn.Name knownFunctionNames) -> Some fn
+                                | AST.FunctionDef fn
+                                    when not (isKnownFunctionName localFunctionNames fn.Name) ->
+                                    Some fn
                                 | _ -> None)
-                        let nextKnownFunctionNames =
+                        let nextLocalFunctionNames =
                             newFunctions
-                            |> List.fold (fun names fn -> Set.add fn.Name names) knownFunctionNames
+                            |> List.fold (fun names fn -> Set.add fn.Name names) localFunctionNames
                         let nextSpecs =
                             materializedTopLevels
                             |> AST.Program
                             |> collectLocalSpecs baseContext.GenericFuncDefs
                         materialize
                             combinedRegistry
-                            nextKnownFunctionNames
+                            nextLocalFunctionNames
                             nextSpecs
                             (accFunctions @ newFunctions)
 
                 let (combinedRegistry, newFunctions) =
-                    materialize baseRegistry knownFunctionNames requested []
+                    materialize baseRegistry localFunctionNames requested []
                 let programWithSpecializations =
                     AST.Program ((newFunctions |> List.map AST.FunctionDef) @ items)
                 let specializedFunctionNames =
