@@ -123,6 +123,7 @@ type private ClassifiedBlock = {
     Block: LIR.BasicBlock
     InstrFacts: InstrRegisterFacts array
     TerminatorUses: int list
+    HasPhiNodes: bool
 }
 
 // ============================================================================
@@ -748,10 +749,21 @@ let private classifyInstr (instr: LIR.Instr) : InstrRegisterFacts =
 let private classifyBlocks (blocks: LIR.BasicBlock array) : ClassifiedBlock array =
     blocks
     |> Array.map (fun block ->
+        let mutable hasPhiNodes = false
+        let instrFacts =
+            block.Instrs
+            |> List.map (fun instr ->
+                match instr with
+                | LIR.Phi _
+                | LIR.FPhi _ -> hasPhiNodes <- true
+                | _ -> ()
+                classifyInstr instr)
+            |> List.toArray
         {
             Block = block
-            InstrFacts = block.Instrs |> List.map classifyInstr |> List.toArray
+            InstrFacts = instrFacts
             TerminatorUses = getTerminatorUsedVRegs block.Terminator
+            HasPhiNodes = hasPhiNodes
         })
 
 /// Get successor labels for a terminator
@@ -4223,7 +4235,10 @@ let private allocateRegistersInternal
     // value is allocated to generate the correct moves
     let (blocksWithPhiResolved, timings) =
         timePhase swOpt "RegAlloc: Phi Resolution" timings (fun () ->
-            resolvePhiNodes blockIndex blocks result floatAllocation)
+            if classifiedBlocks |> Array.exists (fun block -> block.HasPhiNodes) then
+                resolvePhiNodes blockIndex blocks result floatAllocation
+            else
+                blocks)
 
     // Step 8: Apply allocation to CFG with liveness info for SaveRegs/RestoreRegs population
     let (allocatedBlocks, timings) =
