@@ -1369,82 +1369,82 @@ let specializeFunction (funcDef: AST.FunctionDef) (typeArgs: AST.Type list) : AS
       Recursion = funcDef.Recursion }
 
 /// Collect all TypeApp call sites from an expression
-let rec collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
-    match expr with
-    | AST.BoundaryRender (_, value) -> collectTypeApps value
-    | AST.UnitLiteral | AST.Int64Literal _ | AST.Int128Literal _ | AST.BigIntLiteral _ | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
-    | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _ | AST.UInt64Literal _ | AST.UInt128Literal _
-    | AST.BoolLiteral _ | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _ | AST.Var _ | AST.FuncRef _ | AST.Closure _ | AST.RuntimeError _ ->
-        Set.empty
-    | AST.BinOp (_, left, right) ->
-        Set.union (collectTypeApps left) (collectTypeApps right)
-    | AST.UnaryOp (_, inner) ->
-        collectTypeApps inner
-    | AST.Let (_, value, body) ->
-        Set.union (collectTypeApps value) (collectTypeApps body)
-    | AST.RecursiveLet (_, value, body) ->
-        Set.union (collectTypeApps value) (collectTypeApps body)
-    | AST.If (cond, thenBranch, elseBranch) ->
-        Set.union (collectTypeApps cond) (Set.union (collectTypeApps thenBranch) (collectTypeApps elseBranch))
-    | AST.Sequence (first, next) ->
-        Set.union (collectTypeApps first) (collectTypeApps next)
-    | AST.Call (_, args) ->
-        args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
-    | AST.TypeApp (funcName, typeArgs, args) ->
-        // This is a generic call - collect this specialization plus any in args
-        let argSpecs = args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
-        let hasTypeVars = List.exists containsTypeVar typeArgs
-        if funcName = eqHelperDispatchMarker || funcName = "__compare" then
-            argSpecs
-        elif hasTypeVars && (funcName = "__hash" || funcName = "__key_eq") then
-            argSpecs
-        elif (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
-             && exprArgsToList args = [AST.ListLiteral []]
-             && not hasTypeVars then
-            // Optimization: avoid building a Dict from an empty list when types are concrete.
-            Set.add ("Stdlib.Dict.empty", typeArgs) argSpecs
-        else
-            Set.add (funcName, typeArgs) argSpecs
-    | AST.TupleLiteral elements ->
-        elements |> List.map collectTypeApps |> List.fold Set.union Set.empty
-    | AST.TupleAccess (tuple, _) ->
-        collectTypeApps tuple
-    | AST.DictLiteral (valueType, entries) ->
-        let entrySpecs =
-            entries |> List.map (snd >> collectTypeApps) |> List.fold Set.union Set.empty
-        if List.isEmpty entries then entrySpecs
-        else Set.add ("Stdlib.Internal.HAMT.__setOverwriting", [AST.TString; valueType]) entrySpecs
-    | AST.RecordLiteral (_, fields) ->
-        fields |> List.map (snd >> collectTypeApps) |> List.fold Set.union Set.empty
-    | AST.RecordUpdate (record, updates) ->
-        let recordSpecs = collectTypeApps record
-        let updatesSpecs = updates |> List.map (snd >> collectTypeApps) |> List.fold Set.union Set.empty
-        Set.union recordSpecs updatesSpecs
-    | AST.RecordAccess (record, _) ->
-        collectTypeApps record
-    | AST.Constructor (_, _, payload) ->
-        payload |> Option.map collectTypeApps |> Option.defaultValue Set.empty
-    | AST.Match (scrutinee, cases) ->
-        let scrutineeSpecs = collectTypeApps scrutinee
-        let caseSpecs = cases |> List.map (fun mc ->
-            let guardSpecs = mc.Guard |> Option.map collectTypeApps |> Option.defaultValue Set.empty
-            Set.union guardSpecs (collectTypeApps mc.Body)) |> List.fold Set.union Set.empty
-        Set.union scrutineeSpecs caseSpecs
-    | AST.ListLiteral elements ->
-        elements |> List.map collectTypeApps |> List.fold Set.union Set.empty
-    | AST.Lambda (_, _, body) ->
-        collectTypeApps body
-    | AST.Apply (func, args)
-    | AST.IndirectApply (func, args) ->
-        let funcSpecs = collectTypeApps func
-        let argsSpecs = args |> exprArgsToList |> List.map collectTypeApps |> List.fold Set.union Set.empty
-        Set.union funcSpecs argsSpecs
-    | AST.InterpolatedString parts ->
-        parts |> List.choose (fun part ->
-            match part with
-            | AST.StringText _ -> None
-            | AST.StringExpr e -> Some (collectTypeApps e))
-        |> List.fold Set.union Set.empty
+let collectTypeApps (expr: AST.Expr) : Set<SpecKey> =
+    let rec visit (specs: Set<SpecKey>) (current: AST.Expr) : Set<SpecKey> =
+        match current with
+        | AST.BoundaryRender (_, value)
+        | AST.UnaryOp (_, value)
+        | AST.TupleAccess (value, _)
+        | AST.RecordAccess (value, _)
+        | AST.Lambda (_, _, value) ->
+            visit specs value
+        | AST.UnitLiteral | AST.Int64Literal _ | AST.Int128Literal _ | AST.BigIntLiteral _
+        | AST.Int8Literal _ | AST.Int16Literal _ | AST.Int32Literal _
+        | AST.UInt8Literal _ | AST.UInt16Literal _ | AST.UInt32Literal _
+        | AST.UInt64Literal _ | AST.UInt128Literal _ | AST.BoolLiteral _
+        | AST.StringLiteral _ | AST.CharLiteral _ | AST.FloatLiteral _
+        | AST.Var _ | AST.FuncRef _ | AST.Closure _ | AST.RuntimeError _ ->
+            specs
+        | AST.BinOp (_, left, right)
+        | AST.Let (_, left, right)
+        | AST.RecursiveLet (_, left, right)
+        | AST.Sequence (left, right) ->
+            visit (visit specs left) right
+        | AST.If (condition, thenBranch, elseBranch) ->
+            visit (visit (visit specs condition) thenBranch) elseBranch
+        | AST.Call (_, args) ->
+            visitMany specs (exprArgsToList args)
+        | AST.TypeApp (funcName, typeArgs, args) ->
+            let argSpecs = visitMany specs (exprArgsToList args)
+            let hasTypeVars = List.exists containsTypeVar typeArgs
+            if funcName = eqHelperDispatchMarker || funcName = "__compare" then
+                argSpecs
+            elif hasTypeVars && (funcName = "__hash" || funcName = "__key_eq") then
+                argSpecs
+            elif (funcName = "Stdlib.Dict.fromList" || funcName = "Dict.fromList")
+                 && exprArgsToList args = [AST.ListLiteral []]
+                 && not hasTypeVars then
+                // Optimization: avoid building a Dict from an empty list when types are concrete.
+                Set.add ("Stdlib.Dict.empty", typeArgs) argSpecs
+            else
+                Set.add (funcName, typeArgs) argSpecs
+        | AST.TupleLiteral elements
+        | AST.ListLiteral elements ->
+            visitMany specs elements
+        | AST.DictLiteral (valueType, entries) ->
+            let entrySpecs =
+                entries |> List.fold (fun acc (_, value) -> visit acc value) specs
+            if List.isEmpty entries then entrySpecs
+            else
+                Set.add
+                    ("Stdlib.Internal.HAMT.__setOverwriting", [AST.TString; valueType])
+                    entrySpecs
+        | AST.RecordLiteral (_, fields) ->
+            fields |> List.fold (fun acc (_, value) -> visit acc value) specs
+        | AST.RecordUpdate (record, updates) ->
+            updates
+            |> List.fold (fun acc (_, value) -> visit acc value) (visit specs record)
+        | AST.Constructor (_, _, payload) ->
+            payload |> Option.map (visit specs) |> Option.defaultValue specs
+        | AST.Match (scrutinee, cases) ->
+            cases
+            |> List.fold (fun acc case ->
+                let acc = case.Guard |> Option.map (visit acc) |> Option.defaultValue acc
+                visit acc case.Body) (visit specs scrutinee)
+        | AST.Apply (func, args)
+        | AST.IndirectApply (func, args) ->
+            visitMany (visit specs func) (exprArgsToList args)
+        | AST.InterpolatedString parts ->
+            parts
+            |> List.fold (fun acc part ->
+                match part with
+                | AST.StringText _ -> acc
+                | AST.StringExpr value -> visit acc value) specs
+
+    and visitMany specs expressions =
+        expressions |> List.fold visit specs
+
+    visit Set.empty expr
 
 /// Collect TypeApps from a function definition
 let collectTypeAppsFromFunc (funcDef: AST.FunctionDef) : Set<SpecKey> =
