@@ -977,6 +977,57 @@ let rec private tryRefCountDecSourceTypeForTemp (target: TempId) (expr: AExpr) :
         | Some typ -> Some typ
         | None -> tryRefCountDecSourceTypeForTemp target elseBranch
 
+let testBranchLocalTempReuseUsesCurrentTypeContext () : TestResult =
+    let listType = AST.TList (AST.TTuple [AST.TInt64; AST.TFloat64])
+    let expectedWrapperType = AST.TTuple [AST.TInt64; listType]
+    let conditionTemp = TempId 0
+    let payloadTemp = TempId 1
+    let wrapperTemp = TempId 2
+    let wrapperExpr = TupleAlloc [IntLiteral (Int64 0L); Var payloadTemp]
+    let branch payloadExpr =
+        Let (
+            payloadTemp,
+            payloadExpr,
+            Let (
+                wrapperTemp,
+                wrapperExpr,
+                Return (IntLiteral (Int64 0L))
+            )
+        )
+    let ctx : TypeContext = {
+        TypeReg = Map.empty
+        VariantLookup = Map.empty
+        SumShapeReg = Map.empty
+        FuncReg = Map.empty
+        FuncParams = Map.empty
+        TempTypes = Map.empty
+        ClosureFuncs = Map.empty
+    }
+    let func : Function = {
+        Name = "branchLocalTypeContext"
+        TypedParams = [{ Id = conditionTemp; Type = AST.TBool }]
+        ReturnType = AST.TInt64
+        ReturnOwnership = OwnedReturn
+        Body =
+            If (
+                Var conditionTemp,
+                branch (Atom (IntLiteral (Int64 1L))),
+                branch (TypedAtom (IntLiteral (Int64 0L), listType))
+            )
+    }
+
+    let (transformed, _, _) = insertRCInFunction ctx func initialVarGen
+    match transformed.Body with
+    | If (_, _, elseBranch) ->
+        match tryRefCountDecSourceTypeForTemp wrapperTemp elseBranch with
+        | Some actual when actual = expectedWrapperType -> Ok ()
+        | Some actual ->
+            Error $"Expected branch-local wrapper type {expectedWrapperType}, got {actual}"
+        | None ->
+            Error "Expected branch-local wrapper to receive an automatic RefCountDec"
+    | _ ->
+        Error "Expected branch-local type fixture to retain its conditional body"
+
 let testReturnedAggregateTransfersOwnedValueThroughAlias () : TestResult =
     let childType = AST.TTuple [AST.TInt64]
     let outerType = AST.TTuple [childType]
@@ -2709,6 +2760,7 @@ let tests = [
     ("fresh owned value transfers into raw slot", testFreshOwnedValueTransfersIntoRawSlot)
     ("raw slot retains value used after initialization", testRawSlotRetainsValueUsedAfterInitialization)
     ("raw slot retains fresh Stream value", testRawSlotRetainsFreshStreamValue)
+    ("branch-local TempId reuse uses current RC type context", testBranchLocalTempReuseUsesCurrentTypeContext)
     ("returned aggregate transfers owned value through alias", testReturnedAggregateTransfersOwnedValueThroughAlias)
     ("returned aggregate transfers owned value through typed alias", testReturnedAggregateTransfersOwnedValueThroughTypedAlias)
     ("returned aggregate retains ownership-producing Stream alias", testReturnedAggregateRetainsOwnershipProducingStreamAlias)

@@ -34,11 +34,6 @@ type TypeContext = {
     ClosureFuncs: Map<TempId, string>
 }
 
-/// Cached CExpr type inference results
-type CExprTypeCache = Map<CExpr, AST.Type option>
-
-let emptyCExprTypeCache : CExprTypeCache = Map.empty
-
 /// Create initial context from conversion result
 let createContext (result: ConversionResult) : TypeContext =
     let (Program (functions, _)) = result.Program
@@ -1250,8 +1245,7 @@ let rec insertRCWithAnalysis
     (inheritedTransferableOwnership: ReturnDec list)
     (paramIncs: (TempId * AST.Type * RcShape) list)
     (types: Map<TempId, AST.Type>)
-    (typeCache: CExprTypeCache)
-    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
+    : AExpr * VarGen * Map<TempId, AST.Type> =
     let ctxWithTypes = withTempTypes ctx types
     let rec descend
         (ctx: TypeContext)
@@ -1261,8 +1255,7 @@ let rec insertRCWithAnalysis
         (inheritedTransferableOwnership: ReturnDec list)
         (frames: LetFrame list)
         (types: Map<TempId, AST.Type>)
-        (typeCache: CExprTypeCache)
-        : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
+        : AExpr * VarGen * Map<TempId, AST.Type> =
         match expr with
         | RReturn (atom, returned) ->
             let baseExpr = Return atom
@@ -1270,7 +1263,7 @@ let rec insertRCWithAnalysis
                 insertParamIncsAtReturn ctx paramIncs returned baseExpr varGen types
             let (withDecs, varGen2, types2) = insertReturnDecs ctx returnDecs withParamIncs varGen1 types1
             let (finalExpr, finalVarGen, finalTypes) = applyLetFrames ctx frames (withDecs, varGen2, types2)
-            (finalExpr, finalVarGen, finalTypes, typeCache)
+            (finalExpr, finalVarGen, finalTypes)
 
         | RIf (cond, thenBranch, elseBranch, _) ->
             let branchTransferableOwnership =
@@ -1293,7 +1286,7 @@ let rec insertRCWithAnalysis
                         | _ ->
                             None)
                 frameDecs
-            let (thenBranch', varGen1, types1, typeCache1) =
+            let (thenBranch', varGen1, types1) =
                 insertRCWithAnalysis
                     ctx
                     currentFuncName
@@ -1303,8 +1296,7 @@ let rec insertRCWithAnalysis
                     branchTransferableOwnership
                     paramIncs
                     types
-                    typeCache
-            let (elseBranch', varGen2, types2, typeCache2) =
+            let (elseBranch', varGen2, types2) =
                 insertRCWithAnalysis
                     ctx
                     currentFuncName
@@ -1314,21 +1306,17 @@ let rec insertRCWithAnalysis
                     branchTransferableOwnership
                     paramIncs
                     types1
-                    typeCache1
             let (finalExpr, finalVarGen, finalTypes) =
                 applyLetFrames ctx frames (If (cond, thenBranch', elseBranch'), varGen2, types2)
-            (finalExpr, finalVarGen, finalTypes, typeCache2)
+            (finalExpr, finalVarGen, finalTypes)
 
         | RLet (tempId, cexpr, bodyInfo, _) ->
             let (TempId tempIdInt) = tempId
 
-            // First, infer the type of this binding and add to context
-            let (maybeType, typeCache1) =
-                match Map.tryFind cexpr typeCache with
-                | Some cached -> (cached, typeCache)
-                | None ->
-                    let inferred = inferCExprType ctx cexpr
-                    (inferred, Map.add cexpr inferred typeCache)
+            // This walk visits each binding once. Do not memoize by CExpr:
+            // sibling branches may reuse TempIds, making structurally equal
+            // expressions resolve to different types in their local contexts.
+            let maybeType = inferCExprType ctx cexpr
 
             // When a temp is aliased through one or more let-bound vars, infer its type
             // from the first concrete use-site (typically a call argument position).
@@ -1844,9 +1832,8 @@ let rec insertRCWithAnalysis
                 inheritedTransferableOwnershipAfterTransfers
                 (frame :: framesAfterTransfers)
                 typesWithBinding
-                typeCache1
 
-    descend ctxWithTypes expr varGen returnDecs inheritedTransferableOwnership [] types typeCache
+    descend ctxWithTypes expr varGen returnDecs inheritedTransferableOwnership [] types
 
 /// Insert reference counting operations into an AExpr
 /// Returns (transformed expr, varGen, accumulated TempTypes)
@@ -1855,50 +1842,90 @@ let private insertRCInternal
     (expr: AExpr)
     (varGen: VarGen)
     (types: Map<TempId, AST.Type>)
-    (typeCache: CExprTypeCache)
-    : AExpr * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
+    : AExpr * VarGen * Map<TempId, AST.Type> =
     let ctxWithTypes = withTempTypes ctx types
     let analyzed = analyzeReturns Map.empty expr
-    let (expr', varGen', types', typeCache') =
-        insertRCWithAnalysis ctxWithTypes None analyzed varGen [] [] [] types typeCache
-    (expr', varGen', types', typeCache')
+    insertRCWithAnalysis ctxWithTypes None analyzed varGen [] [] [] types
 
 /// Insert reference counting operations into an AExpr
 /// Returns (transformed expr, varGen, accumulated TempTypes)
 let insertRC (ctx: TypeContext) (expr: AExpr) (varGen: VarGen) : AExpr * VarGen * Map<TempId, AST.Type> =
-    let (expr', varGen', types', _typeCache) =
-        insertRCInternal ctx expr varGen Map.empty emptyCExprTypeCache
-    (expr', varGen', types')
+    insertRCInternal ctx expr varGen Map.empty
+
+type private FunctionPhaseTimings = {
+    ReturnAnalysisMs: float
+    ParameterAnalysisMs: float
+    BodyInsertionMs: float
+    AccumulatorCleanupMs: float
+    CleanupPlanningMs: float
+    CleanupRewriteMs: float
+}
+
+let private emptyFunctionPhaseTimings = {
+    ReturnAnalysisMs = 0.0
+    ParameterAnalysisMs = 0.0
+    BodyInsertionMs = 0.0
+    AccumulatorCleanupMs = 0.0
+    CleanupPlanningMs = 0.0
+    CleanupRewriteMs = 0.0
+}
+
+let private addFunctionPhaseTimings
+    (left: FunctionPhaseTimings)
+    (right: FunctionPhaseTimings)
+    : FunctionPhaseTimings =
+    {
+        ReturnAnalysisMs = left.ReturnAnalysisMs + right.ReturnAnalysisMs
+        ParameterAnalysisMs = left.ParameterAnalysisMs + right.ParameterAnalysisMs
+        BodyInsertionMs = left.BodyInsertionMs + right.BodyInsertionMs
+        AccumulatorCleanupMs = left.AccumulatorCleanupMs + right.AccumulatorCleanupMs
+        CleanupPlanningMs = left.CleanupPlanningMs + right.CleanupPlanningMs
+        CleanupRewriteMs = left.CleanupRewriteMs + right.CleanupRewriteMs
+    }
+
+let private measureFunctionPhase
+    (enabled: bool)
+    (work: unit -> 'a)
+    : 'a * float =
+    if enabled then
+        let started = System.Diagnostics.Stopwatch.GetTimestamp()
+        let result = work ()
+        let elapsed = System.Diagnostics.Stopwatch.GetElapsedTime started
+        (result, elapsed.TotalMilliseconds)
+    else
+        (work (), 0.0)
 
 /// Insert RC operations into a function
 /// Returns (transformed function, varGen, accumulated TempTypes)
 let private insertRCInFunctionInternal
+    (tracePhases: bool)
     (ctx: TypeContext)
     (func: Function)
     (varGen: VarGen)
     (types: Map<TempId, AST.Type>)
-    (typeCache: CExprTypeCache)
-    : Function * VarGen * Map<TempId, AST.Type> * CExprTypeCache =
+    : Function * VarGen * Map<TempId, AST.Type> * FunctionPhaseTimings =
     let typesWithParams =
         func.TypedParams
         |> List.fold (fun m tp -> Map.add tp.Id tp.Type m) types
     let ctxWithParams = withTempTypes ctx typesWithParams
 
-    let bodyInfo = analyzeReturns Map.empty func.Body
-    let parameterInfos =
-        func.TypedParams
-        |> List.mapi (fun index param -> (index, param))
-        |> List.map (fun (index, param) ->
-            let shape = rcShapeForType ctxWithParams param.Type
-            let transfersOwnedAccumulator =
-                functionParamReturnTransfersOwnedAccumulator
-                    ctxWithParams
-                    func.Name
-                    index
-                    param.Type
-            let internalOwnedAccumulator =
-                isInternalRecordTailAccumulator func index param
-            (param, shape, transfersOwnedAccumulator, internalOwnedAccumulator))
+    let (bodyInfo, returnAnalysisMs) =
+        measureFunctionPhase tracePhases (fun () -> analyzeReturns Map.empty func.Body)
+    let (parameterInfos, parameterAnalysisMs) =
+        measureFunctionPhase tracePhases (fun () ->
+            func.TypedParams
+            |> List.mapi (fun index param -> (index, param))
+            |> List.map (fun (index, param) ->
+                let shape = rcShapeForType ctxWithParams param.Type
+                let transfersOwnedAccumulator =
+                    functionParamReturnTransfersOwnedAccumulator
+                        ctxWithParams
+                        func.Name
+                        index
+                        param.Type
+                let internalOwnedAccumulator =
+                    isInternalRecordTailAccumulator func index param
+                (param, shape, transfersOwnedAccumulator, internalOwnedAccumulator)))
     let internalOwnedParams =
         parameterInfos
         |> List.choose (fun (param, shape, _, isInternalOwned) ->
@@ -1930,19 +1957,17 @@ let private insertRCInFunctionInternal
                 None)
 
     // Process function body with return analysis
-    let (bodyWithRC, varGen', accTypes, typeCache') =
-        insertRCWithAnalysis ctxWithParams (Some func.Name) bodyInfo varGen [] [] paramIncs typesWithParams typeCache
-    let (bodyWithOwnedAccumulatorDecs, varGen'', accTypes') =
-        if List.isEmpty ownedParamDecs then
-            (bodyWithRC, varGen', accTypes)
-        else
-            insertOwnedAccumulatorDecsBeforeSelfTailCalls
+    let ((bodyWithRC, varGen', accTypes), bodyInsertionMs) =
+        measureFunctionPhase tracePhases (fun () ->
+            insertRCWithAnalysis
                 ctxWithParams
-                func.Name
-                ownedParamDecs
-                bodyWithRC
-                varGen'
-                accTypes
+                (Some func.Name)
+                bodyInfo
+                varGen
+                []
+                []
+                paramIncs
+                typesWithParams)
     let retainInternalParam
         ((param, shape): TypedParam * RcShape)
         (body: AExpr, currentVarGen: VarGen, currentTypes: Map<TempId, AST.Type>)
@@ -1950,35 +1975,59 @@ let private insertRCInFunctionInternal
         let (dummyId, nextVarGen) = freshVar currentVarGen
         let retain = retainExprForShape ctxWithParams param.Id param.Type shape
         (Let (dummyId, retain, body), nextVarGen, Map.add dummyId AST.TUnit currentTypes)
-    let (bodyWithInternalParamRetains, varGen''', accTypes'') =
-        List.foldBack
-            retainInternalParam
-            internalOwnedParams
-            (bodyWithOwnedAccumulatorDecs, varGen'', accTypes')
-    let (needsClosureMapRetains, needsTailDecMove) =
-        requiredFunctionCleanups func.Name bodyWithInternalParamRetains
-    let (bodyWithClosureMapSourceRetains, varGen'''', accTypes''') =
-        if needsClosureMapRetains then
-            insertClosureMapSourceRetainsBeforeHelperCalls
-                ctxWithParams
-                func.Name
-                bodyWithInternalParamRetains
-                varGen'''
-                accTypes''
-        else
-            (bodyWithInternalParamRetains, varGen''', accTypes'')
-    let body' =
-        if needsTailDecMove then
-            moveDecsBeforeNonSelfTailCalls func.Name bodyWithClosureMapSourceRetains
-        else
-            bodyWithClosureMapSourceRetains
-    ({ func with Body = body' }, varGen'''', accTypes''', typeCache')
+    let ((bodyWithInternalParamRetains, varGen''', accTypes''), accumulatorCleanupMs) =
+        measureFunctionPhase tracePhases (fun () ->
+            let (bodyWithOwnedAccumulatorDecs, varGen'', accTypes') =
+                if List.isEmpty ownedParamDecs then
+                    (bodyWithRC, varGen', accTypes)
+                else
+                    insertOwnedAccumulatorDecsBeforeSelfTailCalls
+                        ctxWithParams
+                        func.Name
+                        ownedParamDecs
+                        bodyWithRC
+                        varGen'
+                        accTypes
+            List.foldBack
+                retainInternalParam
+                internalOwnedParams
+                (bodyWithOwnedAccumulatorDecs, varGen'', accTypes'))
+    let ((needsClosureMapRetains, needsTailDecMove), cleanupPlanningMs) =
+        measureFunctionPhase tracePhases (fun () ->
+            requiredFunctionCleanups func.Name bodyWithInternalParamRetains)
+    let ((body', varGen'''', accTypes'''), cleanupRewriteMs) =
+        measureFunctionPhase tracePhases (fun () ->
+            let (bodyWithClosureMapSourceRetains, nextVarGen, nextTypes) =
+                if needsClosureMapRetains then
+                    insertClosureMapSourceRetainsBeforeHelperCalls
+                        ctxWithParams
+                        func.Name
+                        bodyWithInternalParamRetains
+                        varGen'''
+                        accTypes''
+                else
+                    (bodyWithInternalParamRetains, varGen''', accTypes'')
+            let rewrittenBody =
+                if needsTailDecMove then
+                    moveDecsBeforeNonSelfTailCalls func.Name bodyWithClosureMapSourceRetains
+                else
+                    bodyWithClosureMapSourceRetains
+            (rewrittenBody, nextVarGen, nextTypes))
+    let timings = {
+        ReturnAnalysisMs = returnAnalysisMs
+        ParameterAnalysisMs = parameterAnalysisMs
+        BodyInsertionMs = bodyInsertionMs
+        AccumulatorCleanupMs = accumulatorCleanupMs
+        CleanupPlanningMs = cleanupPlanningMs
+        CleanupRewriteMs = cleanupRewriteMs
+    }
+    ({ func with Body = body' }, varGen'''', accTypes''', timings)
 
 /// Insert RC operations into a function
 /// Returns (transformed function, varGen, accumulated TempTypes)
 let insertRCInFunction (ctx: TypeContext) (func: Function) (varGen: VarGen) : Function * VarGen * Map<TempId, AST.Type> =
-    let (func', varGen', types', _typeCache) =
-        insertRCInFunctionInternal ctx func varGen Map.empty emptyCExprTypeCache
+    let (func', varGen', types', _timings) =
+        insertRCInFunctionInternal false ctx func varGen Map.empty
     (func', varGen', types')
 
 // ============================================================================
@@ -2080,27 +2129,44 @@ let private insertRCInProgramInternal
         (vg: VarGen)
         (accFuncs: Function list)
         (accTypes: Map<TempId, AST.Type>)
-        : Function list * VarGen * Map<TempId, AST.Type> =
+        (accTimings: FunctionPhaseTimings)
+        : Function list * VarGen * Map<TempId, AST.Type> * FunctionPhaseTimings =
         match funcs with
-        | [] -> (List.rev accFuncs, vg, accTypes)
+        | [] -> (List.rev accFuncs, vg, accTypes, accTimings)
         | f :: rest ->
-            // Cache keys use TempIds from the current function body, so sharing
-            // across functions can reuse stale types for unrelated TempIds.
-            let (f', vg', types, _typeCache) =
-                insertRCInFunctionInternal ctx f vg Map.empty emptyCExprTypeCache
+            let (f', vg', types, timings) =
+                insertRCInFunctionInternal
+                    (Option.isSome phaseRecorder)
+                    ctx
+                    f
+                    vg
+                    Map.empty
             let accTypes' =
                 Map.fold (fun acc tempId typ -> Map.add tempId typ acc) accTypes types
-            processFuncs rest vg' (f' :: accFuncs) accTypes'
+            processFuncs
+                rest
+                vg'
+                (f' :: accFuncs)
+                accTypes'
+                (addFunctionPhaseTimings accTimings timings)
 
     let functionsTimer = startPhase ()
-    let (functions', varGen1, typesFromFuncs) =
-        processFuncs functions varGen [] Map.empty
+    let (functions', varGen1, typesFromFuncs, functionTimings) =
+        processFuncs functions varGen [] Map.empty emptyFunctionPhaseTimings
+    phaseRecorder
+    |> Option.iter (fun record ->
+        record "Reference Count Return Analysis" functionTimings.ReturnAnalysisMs
+        record "Reference Count Parameter Analysis" functionTimings.ParameterAnalysisMs
+        record "Reference Count Body Insertion" functionTimings.BodyInsertionMs
+        record "Reference Count Accumulator Cleanup" functionTimings.AccumulatorCleanupMs
+        record "Reference Count Cleanup Planning" functionTimings.CleanupPlanningMs
+        record "Reference Count Cleanup Rewrite" functionTimings.CleanupRewriteMs)
     recordPhase "Reference Count Functions" functionsTimer
 
     // Process main expression
     let mainTimer = startPhase ()
-    let (mainExpr', _, finalTypeMap, _typeCache) =
-        insertRCInternal ctx mainExpr varGen1 typesFromFuncs emptyCExprTypeCache
+    let (mainExpr', _, finalTypeMap) =
+        insertRCInternal ctx mainExpr varGen1 typesFromFuncs
     recordPhase "Reference Count Main" mainTimer
 
     // Verify TypeMap completeness - all defined TempIds should have types
