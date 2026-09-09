@@ -1084,22 +1084,21 @@ type PhiSourceUpdates = Map<Label * Label * VReg, Operand>
 /// Apply deferred predecessor-specific source versions without disturbing the
 /// instruction or predecessor order established during phi insertion.
 let applyPhiSourceUpdates (updates: PhiSourceUpdates) (block: BasicBlock) : BasicBlock =
-    let instrs =
-        block.Instrs
-        |> List.map (fun instr ->
-            match instr with
-            | Phi (dest, sources, valueType) ->
-                let sources' =
-                    sources
-                    |> List.map (fun (source, fromLabel) ->
-                        match source with
-                        | Register sourceReg ->
-                            match Map.tryFind (block.Label, fromLabel, sourceReg) updates with
-                            | Some renamedSource -> (renamedSource, fromLabel)
-                            | None -> (source, fromLabel)
-                        | _ -> (source, fromLabel))
-                Phi (dest, sources', valueType)
-            | other -> other)
+    let rec updateLeadingPhiSources instrs =
+        match instrs with
+        | Phi (dest, sources, valueType) :: tail ->
+            let sources' =
+                sources
+                |> List.map (fun (source, fromLabel) ->
+                    match source with
+                    | Register sourceReg ->
+                        match Map.tryFind (block.Label, fromLabel, sourceReg) updates with
+                        | Some renamedSource -> (renamedSource, fromLabel)
+                        | None -> (source, fromLabel)
+                    | _ -> (source, fromLabel))
+            Phi (dest, sources', valueType) :: updateLeadingPhiSources tail
+        | tail -> tail
+    let instrs = updateLeadingPhiSources block.Instrs
     { block with Instrs = instrs }
 
 /// Record the renamed values supplied by one predecessor. Applying these
@@ -1125,17 +1124,20 @@ let private collectPhiSourceUpdatesForSuccessors
     terminatorSuccessors
     |> List.collect (fun succLabel ->
         let succBlock = requireBlock "collecting successor phi sources" cfg.Blocks succLabel
-        succBlock.Instrs
-        |> List.collect (fun instr ->
-            match instr with
-            | Phi (_, sources, _) ->
-                sources
-                |> List.choose (fun (source, fromLabel) ->
-                    match source with
-                    | Register sourceReg when fromLabel = currentLabel ->
-                        Some ((succLabel, currentLabel, sourceReg), renameOperand state source)
-                    | _ -> None)
-            | _ -> []))
+        let rec collectLeadingPhiSources instrs updates =
+            match instrs with
+            | Phi (_, sources, _) :: tail ->
+                let updates' =
+                    sources
+                    |> List.fold (fun collected (source, fromLabel) ->
+                        match source with
+                        | Register sourceReg when fromLabel = currentLabel ->
+                            ((succLabel, currentLabel, sourceReg), renameOperand state source)
+                            :: collected
+                        | _ -> collected) updates
+                collectLeadingPhiSources tail updates'
+            | _ -> List.rev updates
+        collectLeadingPhiSources succBlock.Instrs [])
 
 /// Build dominator tree children
 let buildDomTree (idoms: Dominators) : Map<Label, Label list> =

@@ -1,0 +1,7 @@
+// SSA successor phi sources must be updated without changing loop-carried values.
+// The loop body starts with phi nodes and continues with non-phi instructions.
+
+let sumTo(n: Int64, acc: Int64) : Int64 =
+  if n <= 0L then acc else sumTo(n - 1L, acc + n)
+
+sumTo(100L, 0L) = 5050L
