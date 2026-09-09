@@ -1070,6 +1070,8 @@ let private indexSumTypeRegistry
                         { info with Variants = info.Variants @ [variant] }
                         indexed)
         Map.empty
+    |> Map.map (fun _ info ->
+        { info with Variants = info.Variants |> List.sortBy (fun variant -> variant.Tag) })
 
 let private canonicalizeBareSumTypeRefsWithNames
     (sumTypeNames: Set<string>)
@@ -6031,6 +6033,7 @@ let rec private buildEqHelperExpr
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (mode: EqHelperExprMode)
     (typ: Type)
     (leftExpr: Expr)
@@ -6080,6 +6083,7 @@ let rec private buildEqHelperExpr
                 aliasReg
                 typeReg
                 variantLookup
+                indexedSumTypeReg
                 UseHelperCall
                 resolvedElemType
                 (Var leftHead)
@@ -6120,7 +6124,15 @@ let rec private buildEqHelperExpr
         let listType = TList entryType
         let leftEntries = TypeApp ("Stdlib.Dict.toList", [valueType], NonEmptyList.singleton leftExpr)
         let rightEntries = TypeApp ("Stdlib.Dict.toList", [valueType], NonEmptyList.singleton rightExpr)
-        buildEqHelperExpr aliasReg typeReg variantLookup UseHelperCall listType leftEntries rightEntries
+        buildEqHelperExpr
+            aliasReg
+            typeReg
+            variantLookup
+            indexedSumTypeReg
+            UseHelperCall
+            listType
+            leftEntries
+            rightEntries
 
     | ExpandCurrent, TTuple elemTypes ->
         let leftTupleVar = "__dark_eq_helper_tuple_left"
@@ -6132,6 +6144,7 @@ let rec private buildEqHelperExpr
                     aliasReg
                     typeReg
                     variantLookup
+                    indexedSumTypeReg
                     UseHelperCall
                     elemType
                     (TupleAccess (Var leftTupleVar, index))
@@ -6160,6 +6173,7 @@ let rec private buildEqHelperExpr
                         aliasReg
                         typeReg
                         variantLookup
+                        indexedSumTypeReg
                         UseHelperCall
                         fieldType
                         (RecordAccess (Var leftRecordVar, fieldName))
@@ -6171,26 +6185,22 @@ let rec private buildEqHelperExpr
             BinOp (Eq, leftExpr, rightExpr)
         else
             let variantsForType =
-                variantLookup
-                |> Map.toList
-                |> List.choose (fun (variantName, (variantTypeName, typeParams, tag, payloadOpt)) ->
-                    if variantTypeName = sumTypeName then
+                indexedSumTypeReg
+                |> Map.tryFind sumTypeName
+                |> Option.map (fun info ->
+                    info.Variants
+                    |> List.map (fun variant ->
                         let concretePayloadOpt =
-                            match payloadOpt with
-                            | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
-                                let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+                            match variant.Payload with
+                            | Some payloadType when List.length info.TypeParams = List.length sumTypeArgs ->
+                                let subst = List.zip info.TypeParams sumTypeArgs |> Map.ofList
                                 Some (resolveType aliasReg (applySubst subst payloadType))
                             | Some payloadType ->
                                 Some (resolveType aliasReg payloadType)
                             | None ->
                                 None
-                        Some (variantName, tag, concretePayloadOpt)
-                    else
-                        None)
-                |> List.sortBy (fun (variantName, tag, _) ->
-                    (tag, not (variantName.StartsWith($"{sumTypeName}."))))
-                |> List.distinctBy (fun (_, tag, _) -> tag)
-                |> List.sortBy (fun (_, tag, _) -> tag)
+                        ($"{sumTypeName}.{variant.Name}", variant.Tag, concretePayloadOpt)))
+                |> Option.defaultValue []
 
             let variantCases =
                 variantsForType
@@ -6208,6 +6218,7 @@ let rec private buildEqHelperExpr
                                 aliasReg
                                 typeReg
                                 variantLookup
+                                indexedSumTypeReg
                                 UseHelperCall
                                 payloadType
                                 (Var leftPayloadVar)
@@ -6256,6 +6267,7 @@ let rec private buildCompareHelperExpr
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (mode: EqHelperExprMode)
     (typ: Type)
     (leftExpr: Expr)
@@ -6406,21 +6418,20 @@ let rec private buildCompareHelperExpr
 
     | ExpandCurrent, TSum (sumTypeName, sumTypeArgs) ->
         let variants =
-            variantLookup
-            |> Map.toList
-            |> List.choose (fun (qualifiedVariantName, (ownerName, typeParams, _, payloadOpt)) ->
-                let qualifiedPrefix = ownerName + "."
-                if ownerName <> sumTypeName || not (qualifiedVariantName.StartsWith(qualifiedPrefix)) then None
-                else
-                    let caseName = qualifiedVariantName.Substring(qualifiedPrefix.Length)
+            indexedSumTypeReg
+            |> Map.tryFind sumTypeName
+            |> Option.map (fun info ->
+                info.Variants
+                |> List.map (fun variant ->
                     let concretePayload =
-                        match payloadOpt with
-                        | Some payload when List.length typeParams = List.length sumTypeArgs ->
-                            Some (resolveType aliasReg (applySubst (List.zip typeParams sumTypeArgs |> Map.ofList) payload))
+                        match variant.Payload with
+                        | Some payload when List.length info.TypeParams = List.length sumTypeArgs ->
+                            Some (resolveType aliasReg (applySubst (List.zip info.TypeParams sumTypeArgs |> Map.ofList) payload))
                         | Some payload -> Some (resolveType aliasReg payload)
                         | None -> None
-                    Some (caseName, qualifiedVariantName, concretePayload))
-            |> List.sortBy (fun (caseName, _, _) -> caseName)
+                    (variant.Name, $"{sumTypeName}.{variant.Name}", concretePayload))
+                |> List.sortBy (fun (caseName, _, _) -> caseName))
+            |> Option.defaultValue []
         let cases =
             variants
             |> List.collect (fun (leftCaseName, leftVariant, leftPayload) ->
@@ -6462,6 +6473,7 @@ let private collectDirectEqHelperDeps
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     : Type list =
     let addIfHelperType (candidate: Type) : Type option =
@@ -6491,20 +6503,20 @@ let private collectDirectEqHelperDeps
                         fields |> List.map (fun (_, fieldType) -> resolveType aliasReg fieldType)
                 concreteFields |> List.choose addIfHelperType
         | TSum (sumTypeName, sumTypeArgs) ->
-            variantLookup
-            |> Map.toList
-            |> List.choose (fun (_, (variantTypeName, typeParams, _, payloadOpt)) ->
-                if variantTypeName = sumTypeName then
-                    match payloadOpt with
-                    | Some payloadType when List.length typeParams = List.length sumTypeArgs ->
-                        let subst = List.zip typeParams sumTypeArgs |> Map.ofList
+            indexedSumTypeReg
+            |> Map.tryFind sumTypeName
+            |> Option.map (fun info ->
+                info.Variants
+                |> List.choose (fun variant ->
+                    match variant.Payload with
+                    | Some payloadType when List.length info.TypeParams = List.length sumTypeArgs ->
+                        let subst = List.zip info.TypeParams sumTypeArgs |> Map.ofList
                         addIfHelperType (applySubst subst payloadType)
                     | Some payloadType ->
                         addIfHelperType payloadType
                     | None ->
-                        None
-                else
-                    None)
+                        None))
+            |> Option.defaultValue []
         | _ ->
             []
     deps |> List.distinctBy eqHelperName
@@ -6518,6 +6530,7 @@ let rec private ensureEqHelperForType
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     (state: EqHelperGenerationState)
     : EqHelperGenerationState =
@@ -6527,8 +6540,7 @@ let rec private ensureEqHelperForType
         | TRecord (name, typeArgs) ->
             Map.containsKey name typeReg && List.forall referencesKnownNominals typeArgs
         | TSum (name, typeArgs) ->
-            variantLookup
-            |> Map.exists (fun _ (owner, _, _, _) -> owner = name)
+            Map.containsKey name indexedSumTypeReg
             && List.forall referencesKnownNominals typeArgs
         | TList elementType -> referencesKnownNominals elementType
         | TDict (keyType, valueType) ->
@@ -6548,12 +6560,24 @@ let rec private ensureEqHelperForType
             state
         else
             let stateInProgress = { state with InProgress = Set.add helper state.InProgress }
-            let deps = collectDirectEqHelperDeps aliasReg typeReg variantLookup resolvedType
+            let deps =
+                collectDirectEqHelperDeps
+                    aliasReg
+                    typeReg
+                    variantLookup
+                    indexedSumTypeReg
+                    resolvedType
             let stateWithDeps =
                 deps
                 |> List.fold
                     (fun currentState depType ->
-                        ensureEqHelperForType aliasReg typeReg variantLookup depType currentState)
+                        ensureEqHelperForType
+                            aliasReg
+                            typeReg
+                            variantLookup
+                            indexedSumTypeReg
+                            depType
+                            currentState)
                     stateInProgress
 
             let leftParam = "__dark_eq_left"
@@ -6563,6 +6587,7 @@ let rec private ensureEqHelperForType
                     aliasReg
                     typeReg
                     variantLookup
+                    indexedSumTypeReg
                     ExpandCurrent
                     resolvedType
                     (Var leftParam)
@@ -6586,6 +6611,7 @@ let private collectDirectCompareHelperDeps
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     : Type list =
     let resolvedType = resolveType aliasReg typ
@@ -6606,16 +6632,17 @@ let private collectDirectCompareHelperDeps
                 | Error _ ->
                     recordInfo.Fields |> List.map (snd >> resolveType aliasReg)
         | TSum (sumTypeName, sumTypeArgs) ->
-            variantLookup
-            |> Map.toList
-            |> List.choose (fun (_, (ownerName, typeParams, _, payloadOpt)) ->
-                if ownerName <> sumTypeName then None
-                else
-                    match payloadOpt with
-                    | Some payload when List.length typeParams = List.length sumTypeArgs ->
-                        Some (resolveType aliasReg (applySubst (List.zip typeParams sumTypeArgs |> Map.ofList) payload))
+            indexedSumTypeReg
+            |> Map.tryFind sumTypeName
+            |> Option.map (fun info ->
+                info.Variants
+                |> List.choose (fun variant ->
+                    match variant.Payload with
+                    | Some payload when List.length info.TypeParams = List.length sumTypeArgs ->
+                        Some (resolveType aliasReg (applySubst (List.zip info.TypeParams sumTypeArgs |> Map.ofList) payload))
                     | Some payload -> Some (resolveType aliasReg payload)
-                    | None -> None)
+                    | None -> None))
+            |> Option.defaultValue []
         | _ -> []
     deps |> List.distinctBy compareHelperName
 
@@ -6628,6 +6655,7 @@ let rec private ensureCompareHelperForType
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (typ: Type)
     (state: CompareHelperGenerationState)
     : CompareHelperGenerationState =
@@ -6640,10 +6668,21 @@ let rec private ensureCompareHelperForType
     else
         let stateInProgress = { state with InProgress = Set.add helper state.InProgress }
         let stateWithDeps =
-            collectDirectCompareHelperDeps aliasReg typeReg variantLookup resolvedType
+            collectDirectCompareHelperDeps
+                aliasReg
+                typeReg
+                variantLookup
+                indexedSumTypeReg
+                resolvedType
             |> List.fold
                 (fun currentState dependency ->
-                    ensureCompareHelperForType aliasReg typeReg variantLookup dependency currentState)
+                    ensureCompareHelperForType
+                        aliasReg
+                        typeReg
+                        variantLookup
+                        indexedSumTypeReg
+                        dependency
+                        currentState)
                 stateInProgress
         let leftParam = "__dark_compare_left"
         let rightParam = "__dark_compare_right"
@@ -6657,6 +6696,7 @@ let rec private ensureCompareHelperForType
                     aliasReg
                     typeReg
                     variantLookup
+                    indexedSumTypeReg
                     ExpandCurrent
                     resolvedType
                     (Var leftParam)
@@ -6908,6 +6948,7 @@ let private materializeHelpersInTopLevels
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
     (topLevels: TopLevel list)
     : TopLevel list =
     let collectFromTopLevel (topLevel: TopLevel) : Set<Type> =
@@ -6974,7 +7015,13 @@ let private materializeHelpersInTopLevels
             |> List.sortBy typeToString
             |> List.fold
                 (fun currentState helperType ->
-                    ensureEqHelperForType aliasReg typeReg variantLookup helperType currentState)
+                    ensureEqHelperForType
+                        aliasReg
+                        typeReg
+                        variantLookup
+                        indexedSumTypeReg
+                        helperType
+                        currentState)
                 initialEqState
 
         let initialCompareState : CompareHelperGenerationState = {
@@ -6988,7 +7035,13 @@ let private materializeHelpersInTopLevels
             |> List.sortBy typeToString
             |> List.fold
                 (fun currentState helperType ->
-                    ensureCompareHelperForType aliasReg typeReg variantLookup helperType currentState)
+                    ensureCompareHelperForType
+                        aliasReg
+                        typeReg
+                        variantLookup
+                        indexedSumTypeReg
+                        helperType
+                        currentState)
                 initialCompareState
 
         let helperTopLevels =
@@ -7012,13 +7065,35 @@ let private materializeHelpersInTopLevels
 
 /// Materialize equality and canonical comparison dispatches in a complete
 /// concrete program.
+let materializeEqHelpersInTopLevelsWithIndexedSums
+    (aliasReg: AliasRegistry)
+    (typeReg: IndexedTypeRegistry)
+    (variantLookup: VariantLookup)
+    (indexedSumTypeReg: IndexedSumTypeRegistry)
+    (topLevels: TopLevel list)
+    : TopLevel list =
+    materializeHelpersInTopLevels
+        true
+        aliasReg
+        typeReg
+        variantLookup
+        indexedSumTypeReg
+        topLevels
+
+/// Compatibility entry point for callers that do not retain a type-checking
+/// environment. Hot compilation paths pass its existing indexed sum registry.
 let materializeEqHelpersInTopLevels
     (aliasReg: AliasRegistry)
     (typeReg: IndexedTypeRegistry)
     (variantLookup: VariantLookup)
     (topLevels: TopLevel list)
     : TopLevel list =
-    materializeHelpersInTopLevels true aliasReg typeReg variantLookup topLevels
+    materializeEqHelpersInTopLevelsWithIndexedSums
+        aliasReg
+        typeReg
+        variantLookup
+        (indexSumTypeRegistry variantLookup)
+        topLevels
 
 /// Materialize only canonical comparison dispatches in newly-specialized
 /// stdlib functions. Equality dispatches retain the established stdlib
@@ -7029,7 +7104,13 @@ let materializeCompareHelpersInTopLevels
     (variantLookup: VariantLookup)
     (topLevels: TopLevel list)
     : TopLevel list =
-    materializeHelpersInTopLevels false aliasReg typeReg variantLookup topLevels
+    materializeHelpersInTopLevels
+        false
+        aliasReg
+        typeReg
+        variantLookup
+        (indexSumTypeRegistry variantLookup)
+        topLevels
 
 /// Type-check a function definition
 /// Returns the transformed function body (with Call -> TypeApp transformations)
@@ -8475,7 +8556,12 @@ let private checkResolvedProgramInternal
             let checkedTypeCheckEnv =
                 { typeCheckEnv with GenericFuncDefs = checkedGenericFuncDefs }
             let topLevelsWithEqHelpers =
-                materializeEqHelpersInTopLevels mergedAliasReg typeReg variantLookup topLevels'
+                materializeEqHelpersInTopLevelsWithIndexedSums
+                    mergedAliasReg
+                    typeReg
+                    variantLookup
+                    typeCheckEnv.IndexedSumTypeReg
+                    topLevels'
             let entryTypes =
                 topLevelsWithTypes
                 |> List.choose (function (Some typ, Expression _) -> Some typ | _ -> None)
@@ -8548,10 +8634,11 @@ let private checkResolvedExpressionWithBaseEnv
             (Ok ())
         |> Result.map (fun () ->
             let topLevelsWithEqHelpers =
-                materializeEqHelpersInTopLevels
+                materializeEqHelpersInTopLevelsWithIndexedSums
                     baseEnv.AliasReg
                     baseEnv.IndexedTypeReg
                     baseEnv.VariantLookup
+                    baseEnv.IndexedSumTypeReg
                     [Expression typedExpr]
             let checkedEnv = {
                 baseEnv with

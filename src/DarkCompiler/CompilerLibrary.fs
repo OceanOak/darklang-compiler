@@ -2617,10 +2617,11 @@ let private convertTypedProgramToUserOnlyWithMode
                             specialization.SpecializedFuncs
                             |> List.filter (fun fn -> not (Set.contains fn.Name knownFunctionNames))
                             |> List.map AST.FunctionDef
-                            |> TypeChecking.materializeEqHelpersInTopLevels
+                            |> TypeChecking.materializeEqHelpersInTopLevelsWithIndexedSums
                                 typeCheckEnv.AliasReg
                                 typeCheckEnv.IndexedTypeReg
                                 typeCheckEnv.VariantLookup
+                                typeCheckEnv.IndexedSumTypeReg
                         let newFunctions =
                             materializedTopLevels
                             |> List.choose (function
@@ -4365,10 +4366,11 @@ let buildPreambleContextFromAnalysis
     let specializedTopLevels = specialization.SpecializedFuncs |> List.map AST.FunctionDef
     let specializedAndOriginalTopLevels = specializedTopLevels @ items
     let materializedTopLevels =
-        TypeChecking.materializeEqHelpersInTopLevels
+        TypeChecking.materializeEqHelpersInTopLevelsWithIndexedSums
             analysis.TypeCheckEnv.AliasReg
             analysis.TypeCheckEnv.IndexedTypeReg
             analysis.TypeCheckEnv.VariantLookup
+            analysis.TypeCheckEnv.IndexedSumTypeReg
             specializedAndOriginalTopLevels
     let programWithSpecializations = AST.Program materializedTopLevels
 
