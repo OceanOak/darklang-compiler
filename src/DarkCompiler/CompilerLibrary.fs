@@ -1045,6 +1045,7 @@ let private compileMirToLir
     (sw: Stopwatch)
     (passTimingRecorder: PassTimingRecorder option)
     (functionCaches: FunctionCompilationCaches option)
+    (registries: AST_to_ANF.Registries)
     (stageSuffix: string)
     (mirProgram: MIR.Program)
     : Result<LIR.Function list, string> =
@@ -1165,7 +1166,13 @@ let private compileMirToLir
                     Elapsed = TimeSpan.FromMilliseconds elapsedMs
                 })
     let lirResult =
-        MIR_to_LIR.toLIRFunctionsForWithTrace lirPhaseRecorder arch optimizedProgram
+        MIR_to_LIR.toLIRFunctionsForWithTraceAndRcRegistries
+            lirPhaseRecorder
+            arch
+            registries.RecordFieldsReg
+            registries.RecordTypeParamsReg
+            registries.RcSumShapeReg
+            optimizedProgram
     match lirResult with
     | Error err -> Error $"LIR conversion error: {err}"
     | Ok lirFuncs ->
@@ -1308,6 +1315,7 @@ let private lowerToAllocatedLir
                     sw
                     passTimingRecorder
                     functionCaches
+                    registries
                     stageSuffix
                     mirProgram
                 |> Result.bind (fun lirFuncs ->

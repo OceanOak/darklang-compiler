@@ -112,39 +112,49 @@ let private rcSumShapeRegistryFromVariantRegistry (variantRegistry: MIR.VariantR
             |> List.sortBy (fun variant -> variant.Tag)
             |> List.map (fun variant -> variant.Tag, variant.Payload) })
 
-let private rcMetadataForPrintType
+type PrintRcContext = {
+    RecordFields: Map<string, (string * AST.Type) list>
+    RecordTypeParams: Map<string, string list>
+    SumShapes: ANF.RcSumShapeRegistry
+}
+
+let private printRcContextFromMirRegistries
     (variantRegistry: MIR.VariantRegistry)
     (recordRegistry: MIR.RecordRegistry)
-    (typ: AST.Type)
-    : ANF.RcMetadata =
-    let anfRecordRegistry =
+    : PrintRcContext =
+    let recordFields =
         recordRegistry
         |> Map.map (fun _typeName fields ->
             fields |> List.map (fun field -> field.Name, field.Type))
+    {
+        RecordFields = recordFields
+        RecordTypeParams = ANF.inferredRecordTypeParamsRegistry recordFields
+        SumShapes = rcSumShapeRegistryFromVariantRegistry variantRegistry
+    }
+
+let private rcMetadataForPrintType
+    (rcContext: PrintRcContext)
+    (typ: AST.Type)
+    : ANF.RcMetadata =
     let releasePlan =
         ANF.rcReleasePlanOfTypeWithSums
-            anfRecordRegistry
-            (rcSumShapeRegistryFromVariantRegistry variantRegistry)
+            rcContext.RecordFields
+            rcContext.SumShapes
             typ
     { ANF.ReleasePlanCacheKey = ANF.rcReleasePlanCacheKey typ releasePlan
       ANF.ReleasePlan = Some releasePlan
       ANF.SourceType = Some typ }
 
 let private releasePrintedValueFromReg
-    (variantRegistry: MIR.VariantRegistry)
-    (recordRegistry: MIR.RecordRegistry)
+    (rcContext: PrintRcContext)
     (reg: LIR.Reg)
     (typ: AST.Type)
     : LIR.Instr list =
-    let anfRecordRegistry =
-        recordRegistry
-        |> Map.map (fun _typeName fields ->
-            fields |> List.map (fun field -> field.Name, field.Type))
     let shape =
         ANF.rcShapeOfTypeWithSums
-            anfRecordRegistry
-            (ANF.inferredRecordTypeParamsRegistry anfRecordRegistry)
-            (rcSumShapeRegistryFromVariantRegistry variantRegistry)
+            rcContext.RecordFields
+            rcContext.RecordTypeParams
+            rcContext.SumShapes
             typ
     match ANF.rcShapeReleaseOperation shape with
     | Some ANF.DynamicStringBuffer ->
@@ -159,19 +169,22 @@ let private releasePrintedValueFromReg
             | ANF.TaggedList -> LIR.TaggedList
             | ANF.DictHeap -> LIR.DictHeap
             | ANF.ClosureHeap -> LIR.ClosureHeap
-        [LIR.RefCountDec (reg, payloadSize, lirKind, Some (rcMetadataForPrintType variantRegistry recordRegistry typ))]
+        [LIR.RefCountDec (
+            reg,
+            payloadSize,
+            lirKind,
+            Some (rcMetadataForPrintType rcContext typ))]
     | None ->
         []
 
 let private releasePrintedValue
-    (variantRegistry: MIR.VariantRegistry)
-    (recordRegistry: MIR.RecordRegistry)
+    (rcContext: PrintRcContext)
     (src: MIR.Operand)
     (typ: AST.Type)
     : LIR.Instr list =
     match src with
     | MIR.Register vreg ->
-        releasePrintedValueFromReg variantRegistry recordRegistry (vregToLIRReg vreg) typ
+        releasePrintedValueFromReg rcContext (vregToLIRReg vreg) typ
     | _ ->
         []
 
@@ -351,6 +364,7 @@ let selectInstr
     (instr: MIR.Instr)
     (variantRegistry: MIR.VariantRegistry)
     (recordRegistry: MIR.RecordRegistry)
+    (printRcContext: PrintRcContext)
     (floatRegs: Set<int>)
     (state: TempState)
     : Result<LIR.Instr list * TempState, string> =
@@ -1105,9 +1119,9 @@ let selectInstr
     | MIR.Print (src, valueType) ->
         // Generate appropriate print instruction based on type
         let finishPrint instrs =
-            Ok (instrs @ releasePrintedValue variantRegistry recordRegistry src valueType, state)
+            Ok (instrs @ releasePrintedValue printRcContext src valueType, state)
         let finishPrintFromReg reg instrs =
-            Ok (instrs @ releasePrintedValueFromReg variantRegistry recordRegistry reg valueType, state)
+            Ok (instrs @ releasePrintedValueFromReg printRcContext reg valueType, state)
         match valueType with
         | AST.TBool ->
             let lirSrc = convertOperand src
@@ -1875,6 +1889,7 @@ let selectBlocksWithModuloChecks
     (block: MIR.BasicBlock)
     (variantRegistry: MIR.VariantRegistry)
     (recordRegistry: MIR.RecordRegistry)
+    (printRcContext: PrintRcContext)
     (returnType: AST.Type)
     (floatRegs: Set<int>)
     (errorLabels: IntegerErrorLabels)
@@ -1891,7 +1906,7 @@ let selectBlocksWithModuloChecks
             // loop invariant for later optimization passes.
             | MIR.BinOp (_, MIR.Div, _, MIR.Int64Const divisor, operandType)
                 when operandType <> AST.TFloat64 && divisor <> 0L ->
-                match selectInstr arch instr variantRegistry recordRegistry floatRegs currentState with
+                match selectInstr arch instr variantRegistry recordRegistry printRcContext floatRegs currentState with
                 | Error err -> Error err
                 | Ok (lirInstrs, nextState) ->
                     let nextInstrsRev =
@@ -1903,7 +1918,7 @@ let selectBlocksWithModuloChecks
                 match ensureInRegister right currentState with
                 | Error err -> Error err
                 | Ok (rightInstrs, rightReg, stateAfterRight) ->
-                    match selectInstr arch instr variantRegistry recordRegistry floatRegs stateAfterRight with
+                    match selectInstr arch instr variantRegistry recordRegistry printRcContext floatRegs stateAfterRight with
                     | Error err -> Error err
                     | Ok (divInstrs, nextState) ->
                         let nextLabel = LIR.Label $"{baseLabel}_div_cont_{counter}"
@@ -1924,7 +1939,7 @@ let selectBlocksWithModuloChecks
                 when operandType <> AST.TFloat64
                      && ((isUnsignedIntegerType operandType && divisor <> 0L)
                          || (shouldCheckNegativeDivisor operandType && divisor > 0L)) ->
-                match selectInstr arch instr variantRegistry recordRegistry floatRegs currentState with
+                match selectInstr arch instr variantRegistry recordRegistry printRcContext floatRegs currentState with
                 | Error err -> Error err
                 | Ok (lirInstrs, nextState) ->
                     let nextInstrsRev =
@@ -1974,7 +1989,7 @@ let selectBlocksWithModuloChecks
                             zeroCheckBlock :: blocksRev
                     loop rest (counter + 1) nextLabel (List.rev modInstrs) checkBlocksRev nextState
             | _ ->
-                match selectInstr arch instr variantRegistry recordRegistry floatRegs currentState with
+                match selectInstr arch instr variantRegistry recordRegistry printRcContext floatRegs currentState with
                 | Error err -> Error err
                 | Ok (lirInstrs, nextState) ->
                     let nextInstrsRev =
@@ -2003,6 +2018,7 @@ let selectCFG
     (cfg: MIR.CFG)
     (variantRegistry: MIR.VariantRegistry)
     (recordRegistry: MIR.RecordRegistry)
+    (printRcContext: PrintRcContext)
     (returnType: AST.Type)
     (floatRegs: Set<int>)
     (errorLabels: IntegerErrorLabels)
@@ -2018,7 +2034,19 @@ let selectCFG
         match remaining with
         | [] -> Ok (List.rev blocksAcc |> List.concat, labelMapAcc |> Map.ofList, currentState)
         | (_label, block) :: rest ->
-            match selectBlocksWithModuloChecks arch functionName block variantRegistry recordRegistry returnType floatRegs errorLabels currentState with
+            match
+                selectBlocksWithModuloChecks
+                    arch
+                    functionName
+                    block
+                    variantRegistry
+                    recordRegistry
+                    printRcContext
+                    returnType
+                    floatRegs
+                    errorLabels
+                    currentState
+            with
             | Error err -> Error err
             | Ok (lirBlocks, finalLabel, nextState) ->
                 let originalLabel = convertLabel block.Label
@@ -2155,6 +2183,7 @@ let private convertFunctionsForWithTrace
     (mirFuncs: MIR.Function list)
     (variantRegistry: MIR.VariantRegistry)
     (recordRegistry: MIR.RecordRegistry)
+    (printRcContext: PrintRcContext)
     : Result<LIR.Function list, string> =
     let startPhase () =
         phaseRecorder |> Option.map (fun _ -> System.Diagnostics.Stopwatch.StartNew())
@@ -2181,7 +2210,19 @@ let private convertFunctionsForWithTrace
                 ModuloNegativeDivisor = LIR.Label $"__modulo_negative_divisor_error_{mirFunc.Name}"
             }
         let tempState = initTempState mirFunc
-        match selectCFG arch mirFunc.Name mirFunc.CFG variantRegistry recordRegistry mirFunc.ReturnType mirFunc.FloatRegs errorLabels tempState with
+        match
+            selectCFG
+                arch
+                mirFunc.Name
+                mirFunc.CFG
+                variantRegistry
+                recordRegistry
+                printRcContext
+                mirFunc.ReturnType
+                mirFunc.FloatRegs
+                errorLabels
+                tempState
+        with
         | Error err -> Error err
         | Ok lirCFG ->
             // Convert MIR TypedParams to LIR TypedLIRParams
@@ -2211,12 +2252,39 @@ let toLIRFunctionsForWithTrace
     (arch: Platform.Arch)
     (MIR.Program (mirFuncs, variantRegistry, recordRegistry))
     : Result<LIR.Function list, string> =
+    let printRcContext =
+        printRcContextFromMirRegistries variantRegistry recordRegistry
     convertFunctionsForWithTrace
         phaseRecorder
         arch
         mirFuncs
         variantRegistry
         recordRegistry
+        printRcContext
+
+/// Convert MIR functions while reusing the RC registries that produced them.
+/// This avoids reconstructing whole-program print-release registries inside
+/// instruction lowering.
+let toLIRFunctionsForWithTraceAndRcRegistries
+    (phaseRecorder: (string -> float -> unit) option)
+    (arch: Platform.Arch)
+    (recordFields: Map<string, (string * AST.Type) list>)
+    (recordTypeParams: Map<string, string list>)
+    (sumShapes: ANF.RcSumShapeRegistry)
+    (MIR.Program (mirFuncs, variantRegistry, recordRegistry))
+    : Result<LIR.Function list, string> =
+    let printRcContext = {
+        RecordFields = recordFields
+        RecordTypeParams = recordTypeParams
+        SumShapes = sumShapes
+    }
+    convertFunctionsForWithTrace
+        phaseRecorder
+        arch
+        mirFuncs
+        variantRegistry
+        recordRegistry
+        printRcContext
 
 /// Convert a MIR program to LIR for a concrete target architecture.
 let toLIRForWithTrace
