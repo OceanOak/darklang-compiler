@@ -8473,11 +8473,25 @@ let private generatePreparedARM64WithOptionsAndCache
     let mergeMaps left right =
         Map.fold (fun result key value -> Map.add key value result) left right
 
+    let isEmptyMetadata (metadata: Arm64ProgramMetadata) =
+        Map.isEmpty metadata.Facts.ClosurePayloadSizesFromParams
+        && Map.isEmpty metadata.Facts.ClosurePayloadSizesFromAllocs
+        && Map.isEmpty metadata.Facts.ClosureCaptureTypes
+        && Set.isEmpty metadata.Facts.RecursiveReleaseTypes
+        && Set.isEmpty metadata.Facts.CliArgvHelperLabels
+        && not metadata.Facts.NeedsCliExecuteHelper
+        && not (hasRcHelperRequirements metadata.RcHelperRequirements)
+
     let mergeMetadata
         (left: Arm64ProgramMetadata)
         (right: Arm64ProgramMetadata)
         : Arm64ProgramMetadata =
-        {
+        if isEmptyMetadata left then
+            right
+        elif isEmptyMetadata right then
+            left
+        else
+            {
             Facts = {
                 ClosurePayloadSizesFromParams =
                     mergeMaps
@@ -8507,7 +8521,7 @@ let private generatePreparedARM64WithOptionsAndCache
                 mergePrecomputedRcHelperRequirements
                     left.RcHelperRequirements
                     right.RcHelperRequirements
-        }
+            }
 
     let groupCompositionTimer = startPhase ()
     let groups : MetadataGroup list =
