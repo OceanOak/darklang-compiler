@@ -2743,7 +2743,24 @@ let private optimizeCFGOnceWithEffectFreeCalls
             measure "MIR Merge Linear Blocks" (fun () -> mergeLinearBlocks cfg13)
         else
             (cfg13, false)
-    let changed = changed1 || changed2 || changed3 || changed4 || changed5 || changed6 || changed7 || changed8 || changed9 || changed10 || changed11 || changed12 || changed13 || changed14
+    // DCE computes transitive liveness and removes every dead destination in
+    // one pass. Because all CFG cleanup runs after it, a DCE-only change cannot
+    // enable an earlier optimization and does not require another full
+    // fixed-point iteration.
+    let changed =
+        changed1
+        || changed2
+        || changed3
+        || changed4
+        || changed5
+        || changed6
+        || changed7
+        || changed9
+        || changed10
+        || changed11
+        || changed12
+        || changed13
+        || changed14
     (cfg14, changed)
 
 let optimizeCFGOnce (options: OptimizeOptions) (cfg: CFG) : CFG * bool =
