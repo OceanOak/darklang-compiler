@@ -1057,12 +1057,19 @@ let private optimizeBlockWithRegUseCounts
     : BasicBlock * bool =
     let instrs' = optimizeInstrs block.Instrs
     let instrsCopyCleaned = removeRedundantFloatingCopyBackMoves instrs'
-    // Apply multiply-by-constant strength reduction (Mov + Mul → Lsl + Add/Sub)
-    let instrs1 = tryMulByConstant instrsCopyCleaned
-    // Apply MUL + ADD → MADD fusion
-    let instrs2 = tryFuseMulAdd instrs1
-    // Apply MUL + SUB → MSUB fusion
-    let instrs'' = tryFuseMulSub instrs2
+    let containsMultiply =
+        instrsCopyCleaned
+        |> List.exists (function Mul _ -> true | _ -> false)
+    let instrs'' =
+        if not containsMultiply then
+            instrsCopyCleaned
+        else
+            // Apply multiply-by-constant strength reduction (Mov + Mul → Lsl + Add/Sub)
+            let instrs1 = tryMulByConstant instrsCopyCleaned
+            // Apply MUL + ADD → MADD fusion
+            let instrs2 = tryFuseMulAdd instrs1
+            // Apply MUL + SUB → MSUB fusion
+            tryFuseMulSub instrs2
 
     // Drop a materialized Boolean negation when the branch can swap its edges.
     let (instrsBeforeCondBranch, terminatorBeforeCondBranch) =
