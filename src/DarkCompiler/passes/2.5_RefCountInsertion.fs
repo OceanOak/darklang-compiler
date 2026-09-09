@@ -1142,6 +1142,39 @@ let rec private insertOwnedAccumulatorDecsBeforeSelfTailCalls
             insertOwnedAccumulatorDecsBeforeSelfTailCalls ctx currentFuncName ownedParamDecs body varGen types
         (Let (tempId, cexpr, body'), varGen1, types1)
 
+let private isClosureMapHelperTarget (targetFunc: string) : bool =
+    targetFunc = "Stdlib.List.__mapHelper"
+    || targetFunc.StartsWith("Stdlib.List.__mapHelper_")
+
+/// Find the two rare post-RC cleanups with one allocation-free body scan.
+let rec private requiredFunctionCleanups
+    (currentFuncName: string)
+    (expr: AExpr)
+    : bool * bool =
+    match expr with
+    | Return _ -> (false, false)
+    | If (_, thenBranch, elseBranch) ->
+        let (thenNeedsMapRetain, thenNeedsTailDecMove) =
+            requiredFunctionCleanups currentFuncName thenBranch
+        let (elseNeedsMapRetain, elseNeedsTailDecMove) =
+            requiredFunctionCleanups currentFuncName elseBranch
+        (thenNeedsMapRetain || elseNeedsMapRetain,
+         thenNeedsTailDecMove || elseNeedsTailDecMove)
+    | Let (_, cexpr, body) ->
+        let (bodyNeedsMapRetain, bodyNeedsTailDecMove) =
+            requiredFunctionCleanups currentFuncName body
+        let currentNeedsMapRetain =
+            match cexpr with
+            | Call (targetFunc, _)
+            | TailCall (targetFunc, _) -> isClosureMapHelperTarget targetFunc
+            | _ -> false
+        let currentNeedsTailDecMove =
+            match cexpr with
+            | TailCall (targetFunc, _) -> targetFunc <> currentFuncName
+            | _ -> false
+        (currentNeedsMapRetain || bodyNeedsMapRetain,
+         currentNeedsTailDecMove || bodyNeedsTailDecMove)
+
 let rec private insertClosureMapSourceRetainsBeforeHelperCalls
     (ctx: TypeContext)
     (currentFuncName: string)
@@ -1152,10 +1185,6 @@ let rec private insertClosureMapSourceRetainsBeforeHelperCalls
     let currentIsMapHelper =
         currentFuncName = "Stdlib.List.__mapHelper"
         || currentFuncName.StartsWith("Stdlib.List.__mapHelper_")
-
-    let isMapHelperTarget (targetFunc: string) : bool =
-        targetFunc = "Stdlib.List.__mapHelper"
-        || targetFunc.StartsWith("Stdlib.List.__mapHelper_")
 
     let targetReturnsClosureList (targetFunc: string) : bool =
         match tryGetFuncReturnTypeFromReg ctx targetFunc with
@@ -1195,12 +1224,12 @@ let rec private insertClosureMapSourceRetainsBeforeHelperCalls
         let (elseBranch', varGen2, types2) =
             insertClosureMapSourceRetainsBeforeHelperCalls ctx currentFuncName elseBranch varGen1 types1
         (If (cond, thenBranch', elseBranch'), varGen2, types2)
-    | Let (tempId, Call (targetFunc, args), body) when isMapHelperTarget targetFunc ->
+    | Let (tempId, Call (targetFunc, args), body) when isClosureMapHelperTarget targetFunc ->
         let (body', varGen1, types1) =
             insertClosureMapSourceRetainsBeforeHelperCalls ctx currentFuncName body varGen types
         let callExpr = Let (tempId, Call (targetFunc, args), body')
         wrapSourceRetain targetFunc args callExpr varGen1 types1
-    | Let (tempId, TailCall (targetFunc, args), body) when isMapHelperTarget targetFunc ->
+    | Let (tempId, TailCall (targetFunc, args), body) when isClosureMapHelperTarget targetFunc ->
         let (body', varGen1, types1) =
             insertClosureMapSourceRetainsBeforeHelperCalls ctx currentFuncName body varGen types
         let callExpr = Let (tempId, TailCall (targetFunc, args), body')
@@ -1926,14 +1955,23 @@ let private insertRCInFunctionInternal
             retainInternalParam
             internalOwnedParams
             (bodyWithOwnedAccumulatorDecs, varGen'', accTypes')
+    let (needsClosureMapRetains, needsTailDecMove) =
+        requiredFunctionCleanups func.Name bodyWithInternalParamRetains
     let (bodyWithClosureMapSourceRetains, varGen'''', accTypes''') =
-        insertClosureMapSourceRetainsBeforeHelperCalls
-            ctxWithParams
-            func.Name
-            bodyWithInternalParamRetains
-            varGen'''
-            accTypes''
-    let body' = moveDecsBeforeNonSelfTailCalls func.Name bodyWithClosureMapSourceRetains
+        if needsClosureMapRetains then
+            insertClosureMapSourceRetainsBeforeHelperCalls
+                ctxWithParams
+                func.Name
+                bodyWithInternalParamRetains
+                varGen'''
+                accTypes''
+        else
+            (bodyWithInternalParamRetains, varGen''', accTypes'')
+    let body' =
+        if needsTailDecMove then
+            moveDecsBeforeNonSelfTailCalls func.Name bodyWithClosureMapSourceRetains
+        else
+            bodyWithClosureMapSourceRetains
     ({ func with Body = body' }, varGen'''', accTypes''', typeCache')
 
 /// Insert RC operations into a function
