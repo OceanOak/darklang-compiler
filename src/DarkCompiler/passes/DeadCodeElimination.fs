@@ -176,15 +176,31 @@ let buildCallGraph (funcs: LIR.Function list) : Map<string, Set<string>> =
 let findReachable (callGraph: Map<string, Set<string>>) (roots: Set<string>) : Set<string> =
     CallGraphReachability.findReachable callGraph roots
 
+/// Collect the direct calls made by functions already represented in a call graph.
+let directCallsFromFunctions
+    (callGraph: Map<string, Set<string>>)
+    (functions: LIR.Function list)
+    : Set<string> =
+    functions
+    |> List.fold (fun calls func ->
+        match Map.tryFind func.Name callGraph with
+        | Some functionCalls -> Set.union calls functionCalls
+        | None -> calls) Set.empty
+
+/// Filter functions to only include those reachable from a precomputed user call graph.
+let filterFunctionsWithUserCallGraph
+    (callGraph: Map<string, Set<string>>)
+    (userCallGraph: Map<string, Set<string>>)
+    (userFuncs: LIR.Function list)
+    (stdlibFuncs: LIR.Function list)
+    : LIR.Function list =
+    let userCalls = directCallsFromFunctions userCallGraph userFuncs
+    let reachable = findReachable callGraph userCalls
+    stdlibFuncs |> List.filter (fun f -> Set.contains f.Name reachable)
+
 /// Filter functions to only include reachable ones
 let filterFunctions (callGraph: Map<string, Set<string>>)
                     (userFuncs: LIR.Function list)
                     (stdlibFuncs: LIR.Function list) : LIR.Function list =
-    // Get all functions called from user code
-    let userCalls =
-        userFuncs
-        |> List.fold (fun calls func -> addCalledFunctions func calls) Set.empty
-    // Expand to transitive closure
-    let reachable = findReachable callGraph userCalls
-    // Filter stdlib to only reachable
-    stdlibFuncs |> List.filter (fun f -> Set.contains f.Name reachable)
+    let userCallGraph = buildCallGraph userFuncs
+    filterFunctionsWithUserCallGraph callGraph userCallGraph userFuncs stdlibFuncs

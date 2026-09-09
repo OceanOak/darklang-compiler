@@ -825,14 +825,13 @@ type CompilationSession(collectCodegenMetrics: bool) =
 
     member internal _.ReachableStdlibFunctions
         (contextIdentity: obj)
+        (userCallGraph: Map<string, Set<string>>)
         (userFunctions: LIR.Function list)
         (stdlibCallGraph: Map<string, Set<string>>)
         (stdlibFunctions: LIR.Function list)
         : LIR.Function list =
         let directCalls =
-            userFunctions
-            |> List.fold (fun calls func ->
-                Set.union calls (DeadCodeElimination.getCalledFunctions func)) Set.empty
+            DeadCodeElimination.directCallsFromFunctions userCallGraph userFunctions
             // Calls between user functions cannot lead into the stdlib graph:
             // every direct user-to-stdlib edge is already present in this set.
             // Excluding those user-local names makes equivalent stdlib queries
@@ -4081,6 +4080,16 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                         @ allocatedProgramFuncs
                                         @ allocatedDependencyFuncs
                                     let allSymbolicUserFuncs = plan.PrebuiltSymbolicFunctions @ allocatedUserFuncs
+                                    let userCallGraphStart = sw.Elapsed.TotalMilliseconds
+                                    let userCallGraph =
+                                        if plan.Options.DisableFunctionTreeShaking then Map.empty
+                                        else DeadCodeElimination.buildCallGraph allSymbolicUserFuncs
+                                    let userCallGraphElapsed =
+                                        sw.Elapsed.TotalMilliseconds - userCallGraphStart
+                                    recordPassTiming
+                                        plan.PassTimingRecorder
+                                        "Function Tree Shaking"
+                                        userCallGraphElapsed
                                     let finalUserFuncs =
                                         if plan.TreeShakeUserFunctions then
                                             if plan.Verbosity >= 1 then println "  [5.5/7] Function Tree Shaking..."
@@ -4089,7 +4098,10 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                                 if plan.Options.DisableFunctionTreeShaking then
                                                     allSymbolicUserFuncs
                                                 else
-                                                    FunctionTreeShaking.filterUserFunctions (Some "_start") allSymbolicUserFuncs
+                                                    FunctionTreeShaking.filterUserFunctionsWithCallGraph
+                                                        (Some "_start")
+                                                        userCallGraph
+                                                        allSymbolicUserFuncs
                                             let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
                                             recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
                                             shakenUserFuncs
@@ -4112,12 +4124,14 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                                 | Some current ->
                                                     current.ReachableStdlibFunctions
                                                         (box plan.Stdlib)
+                                                        userCallGraph
                                                         finalUserFuncs
                                                         plan.Stdlib.StdlibCallGraph
                                                         plan.Stdlib.AllocatedFunctions
                                                 | None ->
-                                                    FunctionTreeShaking.filterStdlibFunctions
+                                                    FunctionTreeShaking.filterStdlibFunctionsWithUserCallGraph
                                                         plan.Stdlib.StdlibCallGraph
+                                                        userCallGraph
                                                         finalUserFuncs
                                                         plan.Stdlib.AllocatedFunctions
                                             filtered

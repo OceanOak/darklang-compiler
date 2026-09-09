@@ -17,11 +17,32 @@ let private buildUserRoots (entryName: string option) (functions: LIR.Function l
         functions |> List.map (fun f -> f.Name) |> Set.ofList
 
 /// Filter user functions to only include reachable ones
-let filterUserFunctions (entryName: string option) (functions: LIR.Function list) : LIR.Function list =
+let filterUserFunctionsWithCallGraph
+    (entryName: string option)
+    (callGraph: Map<string, Set<string>>)
+    (functions: LIR.Function list)
+    : LIR.Function list =
     let roots = buildUserRoots entryName functions
-    let userCallGraph = DeadCodeElimination.buildCallGraph functions
-    let reachableNames = DeadCodeElimination.findReachable userCallGraph roots
+    let reachableNames = DeadCodeElimination.findReachable callGraph roots
     functions |> List.filter (fun f -> Set.contains f.Name reachableNames)
+
+/// Filter user functions to only include reachable ones
+let filterUserFunctions (entryName: string option) (functions: LIR.Function list) : LIR.Function list =
+    let callGraph = DeadCodeElimination.buildCallGraph functions
+    filterUserFunctionsWithCallGraph entryName callGraph functions
+
+/// Filter stdlib functions using a precomputed user call graph.
+let filterStdlibFunctionsWithUserCallGraph
+    (stdlibCallGraph: Map<string, Set<string>>)
+    (userCallGraph: Map<string, Set<string>>)
+    (userFunctions: LIR.Function list)
+    (stdlibFunctions: LIR.Function list)
+    : LIR.Function list =
+    DeadCodeElimination.filterFunctionsWithUserCallGraph
+        stdlibCallGraph
+        userCallGraph
+        userFunctions
+        stdlibFunctions
 
 /// Filter stdlib functions to only include those reachable from user code
 let filterStdlibFunctions
