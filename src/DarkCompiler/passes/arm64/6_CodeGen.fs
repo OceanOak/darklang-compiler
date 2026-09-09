@@ -57,6 +57,7 @@ type CodeGenContext = {
     Options: CodeGenOptions
     SumShapeRegistry: ANF.RcSumShapeRegistry
     RecordRegistry: LIR.RecordRegistry
+    RawSlotInitRetainTargets: Map<AST.Type, LIR.Arm64SlotInitRootRetainTarget option> option
     ClosurePayloadSizes: Map<string, int>
     ClosureCaptureTypes: Map<string, AST.Type list>
     FunctionName: string
@@ -150,13 +151,6 @@ let private plannedDictDecHelperLabelForReleasePlan (releasePlan: ANF.RcReleaseP
     |> ANF.rcReleasePlanFingerprint
     |> plannedDictDecHelperLabelForFingerprint
 
-type private SlotInitRootRetainTarget =
-    | SlotInitListRootRetain
-    | SlotInitDictRootRetain
-    | SlotInitDynamicBufferRetain
-    | SlotInitClosureRootRetain
-    | SlotInitGenericRootRetain of payloadSize:int
-
 type private RcReleasePlanSummary = LIR.Arm64ReleasePlanSummary
 type private RcHelperRequirements = LIR.Arm64RcHelperRequirements
 
@@ -180,7 +174,7 @@ let private slotInitRootRetainTarget
     (recordRegistry: LIR.RecordRegistry)
     (sumShapeRegistry: ANF.RcSumShapeRegistry)
     (valueType: AST.Type)
-    : SlotInitRootRetainTarget option =
+    : LIR.Arm64SlotInitRootRetainTarget option =
     let shapeOfKnownType (typ: AST.Type) : ANF.RcShape option =
         match typ with
         | AST.TRecord (name, _) when not (Map.containsKey name recordRegistry) ->
@@ -197,26 +191,26 @@ let private slotInitRootRetainTarget
     shapeOfKnownType valueType
     |> Option.bind (function
             | ANF.TaggedListShape _ ->
-                Some SlotInitListRootRetain
+                Some LIR.SlotInitListRootRetain
             | ANF.DictRoot _ ->
-                Some SlotInitDictRootRetain
+                Some LIR.SlotInitDictRootRetain
             | ANF.DynamicString
             | ANF.DynamicBlob ->
-                Some SlotInitDynamicBufferRetain
+                Some LIR.SlotInitDynamicBufferRetain
             | ANF.ClosureShape _ ->
-                Some SlotInitClosureRootRetain
+                Some LIR.SlotInitClosureRootRetain
             | ANF.FixedBlock (payloadSize, _) ->
                 match valueType with
                 | AST.TTuple _
-                | AST.TRecord _ -> Some (SlotInitGenericRootRetain payloadSize)
+                | AST.TRecord _ -> Some (LIR.SlotInitGenericRootRetain payloadSize)
                 | _ -> None
-            | ANF.StreamRoot -> Some (SlotInitGenericRootRetain 24)
+            | ANF.StreamRoot -> Some (LIR.SlotInitGenericRootRetain 24)
             | ANF.BoxedSum (payloadSize, _, _) ->
                 match valueType with
-                | AST.TSum _ -> Some (SlotInitGenericRootRetain payloadSize)
+                | AST.TSum _ -> Some (LIR.SlotInitGenericRootRetain payloadSize)
                 | _ -> None
             | ANF.RecursiveSumRef _ ->
-                Some (SlotInitGenericRootRetain 16)
+                Some (LIR.SlotInitGenericRootRetain 16)
             | ANF.Immediate
             | ANF.StaticString
             | ANF.RawUnmanaged ->
@@ -6224,9 +6218,19 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                         ARM64Symbolic.STR (valueReg, tempReg, 0s)            // [temp] = value
                     ]
 
+                    let retainTarget =
+                        match ctx.RawSlotInitRetainTargets with
+                        | Some targets ->
+                            Map.tryFind valueType targets |> Option.flatten
+                        | None ->
+                            slotInitRootRetainTarget
+                                ctx.RecordRegistry
+                                ctx.SumShapeRegistry
+                                valueType
+
                     let ownershipInc =
-                        match slotInitRootRetainTarget ctx.RecordRegistry ctx.SumShapeRegistry valueType with
-                        | Some SlotInitListRootRetain ->
+                        match retainTarget with
+                        | Some LIR.SlotInitListRootRetain ->
                             [
                                 ARM64Symbolic.STP_pre (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, -64s)
                                 ARM64Symbolic.STP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
@@ -6239,7 +6243,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                                 ARM64Symbolic.LDP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
                                 ARM64Symbolic.LDP_post (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, 64s)
                             ]
-                        | Some SlotInitDictRootRetain ->
+                        | Some LIR.SlotInitDictRootRetain ->
                             [
                                 ARM64Symbolic.STP_pre (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, -80s)
                                 ARM64Symbolic.STP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
@@ -6254,7 +6258,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                                 ARM64Symbolic.LDP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
                                 ARM64Symbolic.LDP_post (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, 80s)
                             ]
-                        | Some SlotInitDynamicBufferRetain ->
+                        | Some LIR.SlotInitDynamicBufferRetain ->
                             [
                                 ARM64Symbolic.MOV_reg (ARM64Symbolic.X12, valueReg)
                                 ARM64Symbolic.LDR (ARM64Symbolic.X15, ARM64Symbolic.X12, 0s)
@@ -6274,7 +6278,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                                 ARM64Symbolic.ADD_imm (ARM64Symbolic.X15, ARM64Symbolic.X15, 1us)
                                 ARM64Symbolic.STR (ARM64Symbolic.X15, ARM64Symbolic.X14, 0s)
                             ]
-                        | Some SlotInitClosureRootRetain ->
+                        | Some LIR.SlotInitClosureRootRetain ->
                             let closureIncCall = [
                                 ARM64Symbolic.STP_pre (ARM64Symbolic.X0, ARM64Symbolic.X1, ARM64Symbolic.SP, -96s)
                                 ARM64Symbolic.STP (ARM64Symbolic.X2, ARM64Symbolic.X3, ARM64Symbolic.SP, 16s)
@@ -6295,7 +6299,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
                                 ARM64Symbolic.CBZ_offset (valueReg, List.length closureIncCall + 1)
                             ]
                             @ closureIncCall
-                        | Some (SlotInitGenericRootRetain payloadSize) ->
+                        | Some (LIR.SlotInitGenericRootRetain payloadSize) ->
                             let rcReg =
                                 if valueReg = ARM64Symbolic.X15 then ARM64Symbolic.X14 else ARM64Symbolic.X15
                             [
@@ -7164,6 +7168,9 @@ let convertFunction
     let funcCtx = {
         ctx with
             FunctionName = func.Name
+            RawSlotInitRetainTargets =
+                func.CodegenFacts
+                |> Option.bind (fun facts -> facts.Arm64RawSlotInitRetainTargets)
             StackSize = func.StackSize
             UsedCalleeSaved = func.UsedCalleeSaved
             HeapOverflowLabel = overflowLabel
@@ -8008,6 +8015,23 @@ let private planFunctionArm64RcRequirements
         facts.RefCountIncRequirements
         |> Set.fold collectPrecomputedRefCountIncRequirement requirements
 
+let private planRawSlotInitRetainTargets
+    (recordRegistry: LIR.RecordRegistry)
+    (sumShapeRegistry: ANF.RcSumShapeRegistry)
+    (facts: LIR.FunctionCodegenFacts)
+    : LIR.FunctionCodegenFacts =
+    let targets =
+        facts.RawSlotInitTypes
+        |> Set.toList
+        |> List.map (fun valueType ->
+            (valueType,
+             slotInitRootRetainTarget
+                 recordRegistry
+                 sumShapeRegistry
+                 valueType))
+        |> Map.ofList
+    { facts with Arm64RawSlotInitRetainTargets = Some targets }
+
 let private mergePrecomputedReleasePlanSummaries left right =
     Map.fold
         (fun acc key summary ->
@@ -8046,6 +8070,8 @@ let private mergePrecomputedRcHelperRequirements
 /// retains only its own semantic requirements for later tree-shaken unions.
 let attachARM64CodegenFactsToFunctionsWithCache
     (summaryCache: ReleasePlanSummaryCache option)
+    (recordRegistry: LIR.RecordRegistry)
+    (sumShapeRegistry: ANF.RcSumShapeRegistry)
     (functions: LIR.Function list)
     : LIR.Function list =
     functions
@@ -8056,18 +8082,23 @@ let attachARM64CodegenFactsToFunctionsWithCache
                 | Some facts -> facts
                 | None ->
                     Crash.crash $"ARM64 metadata planning requires LIR facts for function '{func.Name}'"
+            let plannedSlotInitFacts =
+                planRawSlotInitRetainTargets
+                    recordRegistry
+                    sumShapeRegistry
+                    facts
             let requirementsWithMemo =
                 planFunctionArm64RcRequirements
                     summaryCache
                     releasePlanSummaries
                     func.Name
-                    facts
+                    plannedSlotInitFacts
             let functionRequirements = {
                 requirementsWithMemo with
                     ReleasePlanSummaries = Map.empty
             }
             let plannedFacts = {
-                facts with
+                plannedSlotInitFacts with
                     Arm64RcHelperRequirements = Some functionRequirements
             }
             ({ func with CodegenFacts = Some plannedFacts },
@@ -8078,7 +8109,14 @@ let attachARM64CodegenFactsToFunctionsWithCache
 let attachARM64CodegenFactsToFunctions
     (functions: LIR.Function list)
     : LIR.Function list =
-    attachARM64CodegenFactsToFunctionsWithCache None functions
+    functions
+    |> attachARM64CodegenFactsToFunctionsWithCache None Map.empty Map.empty
+    |> List.map (fun func ->
+        let facts =
+            func.CodegenFacts
+            |> Option.map (fun facts ->
+                { facts with Arm64RawSlotInitRetainTargets = None })
+        { func with CodegenFacts = facts })
 
 let private outlineExpensiveGenericReleasesInFunction
     (func: LIR.Function)
@@ -8127,6 +8165,8 @@ let private outlineExpensiveGenericReleasesInFunction
 let prepareARM64FunctionsForAllocationWithCache
     (summaryCache: ReleasePlanSummaryCache option)
     (phaseRecorder: (string -> float -> unit) option)
+    (recordRegistry: LIR.RecordRegistry)
+    (sumShapeRegistry: ANF.RcSumShapeRegistry)
     (functions: LIR.Function list)
     : LIR.Function list =
     let recordPhase name (timer: System.Diagnostics.Stopwatch) =
@@ -8137,7 +8177,11 @@ let prepareARM64FunctionsForAllocationWithCache
         | None -> ()
     let factsTimer = System.Diagnostics.Stopwatch.StartNew()
     let functionsWithFacts =
-        functions |> attachARM64CodegenFactsToFunctionsWithCache summaryCache
+        functions
+        |> attachARM64CodegenFactsToFunctionsWithCache
+            summaryCache
+            recordRegistry
+            sumShapeRegistry
     recordPhase "ARM64 Function Facts Planning" factsTimer
     let outliningTimer = System.Diagnostics.Stopwatch.StartNew()
     let outlinedFunctions =
@@ -8148,20 +8192,26 @@ let prepareARM64FunctionsForAllocationWithCache
 let prepareARM64FunctionsForAllocation
     (functions: LIR.Function list)
     : LIR.Function list =
-    prepareARM64FunctionsForAllocationWithCache None None functions
+    let functionsWithFacts = attachARM64CodegenFactsToFunctions functions
+    functionsWithFacts |> List.map outlineExpensiveGenericReleasesInFunction
 
 /// Explicit preparation entry point for tools that construct LIR directly.
 /// Production performs the same preparation before register allocation.
 let prepareARM64Program
     (LIR.Program (functions, variants, records))
     : LIR.Program =
+    let sumShapeRegistry = rcSumShapeRegistryFromVariantRegistry variants
     let functionsWithFacts =
         functions
         |> List.map (fun func ->
             match func.CodegenFacts with
             | Some _ -> func
             | None -> LIR.attachFunctionCodegenFacts func)
-        |> prepareARM64FunctionsForAllocation
+        |> prepareARM64FunctionsForAllocationWithCache
+            None
+            None
+            records
+            sumShapeRegistry
     LIR.Program (functionsWithFacts, variants, records)
 
 /// Convert LIR program to ARM64 instructions with options
@@ -8318,16 +8368,19 @@ let private generatePreparedARM64WithOptionsAndCache
     let releasePlanSummary = precomputedReleasePlanSummary
     let addReleasePlanRequirements = addPrecomputedReleasePlanRequirements
 
-    let collectRawSlotInitRequirements (requirements: RcHelperRequirements) valueType =
-        match slotInitRootRetainTarget recordRegistry sumShapeRegistry valueType with
-        | Some SlotInitListRootRetain ->
+    let collectRawSlotInitRequirement
+        (requirements: RcHelperRequirements)
+        (retainTarget: LIR.Arm64SlotInitRootRetainTarget option)
+        : RcHelperRequirements =
+        match retainTarget with
+        | Some LIR.SlotInitListRootRetain ->
             { requirements with NeedsListRcIncHelper = true }
-        | Some SlotInitDictRootRetain ->
+        | Some LIR.SlotInitDictRootRetain ->
             { requirements with NeedsDictRcIncHelper = true }
-        | Some SlotInitClosureRootRetain ->
+        | Some LIR.SlotInitClosureRootRetain ->
             { requirements with NeedsClosureRcIncHelper = true }
-        | Some SlotInitDynamicBufferRetain
-        | Some (SlotInitGenericRootRetain _)
+        | Some LIR.SlotInitDynamicBufferRetain
+        | Some (LIR.SlotInitGenericRootRetain _)
         | None ->
             requirements
 
@@ -8395,8 +8448,21 @@ let private generatePreparedARM64WithOptionsAndCache
             | None ->
                 Crash.crash "ARM64 codegen invariant: missing validated RC helper requirements"
             |> fun requirements ->
-                facts.RawSlotInitTypes
-                |> Set.fold collectRawSlotInitRequirements requirements
+                match facts.Arm64RawSlotInitRetainTargets with
+                | Some targets ->
+                    targets
+                    |> Map.values
+                    |> Seq.fold collectRawSlotInitRequirement requirements
+                | None ->
+                    facts.RawSlotInitTypes
+                    |> Set.fold
+                        (fun current valueType ->
+                            slotInitRootRetainTarget
+                                recordRegistry
+                                sumShapeRegistry
+                                valueType
+                            |> collectRawSlotInitRequirement current)
+                        requirements
 
         {
             withAllocSizes with
@@ -8568,6 +8634,7 @@ let private generatePreparedARM64WithOptionsAndCache
         Options = options
         SumShapeRegistry = sumShapeRegistry
         RecordRegistry = recordRegistry
+        RawSlotInitRetainTargets = None
         ClosurePayloadSizes = closurePayloadSizes
         ClosureCaptureTypes = programMetadata.Facts.ClosureCaptureTypes
         FunctionName = ""

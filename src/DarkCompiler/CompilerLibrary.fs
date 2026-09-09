@@ -732,7 +732,9 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 if func.Name = "_start" then arm64StartContextIdentity
                 elif
                     func.CodegenFacts
-                    |> Option.exists (fun facts -> Set.isEmpty facts.RawSlotInitTypes)
+                    |> Option.exists (fun facts ->
+                        Set.isEmpty facts.RawSlotInitTypes
+                        || Option.isSome facts.Arm64RawSlotInitRetainTargets)
                 then
                     arm64RegistryIndependentFunctionContextIdentity
                 else contextIdentity
@@ -1332,6 +1334,8 @@ let private lowerToAllocatedLir
                                              Pass = name
                                              Elapsed = TimeSpan.FromMilliseconds elapsedMs
                                          }))
+                                registries.RecordFieldsReg
+                                registries.RcSumShapeReg
                                 lirFuncs
                         | Platform.X86_64 ->
                             lirFuncs

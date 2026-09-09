@@ -323,6 +323,16 @@ type Arm64RcHelperRequirements = {
     ReleasePlanSummaries: Map<bool * RcReleasePlanMemoKey, Arm64ReleasePlanSummary>
 }
 
+/// The ownership action emitted after initializing one typed raw slot. ARM64
+/// resolves this from nominal registries during function preparation so the
+/// finalized function no longer depends on a whole-program registry context.
+type Arm64SlotInitRootRetainTarget =
+    | SlotInitListRootRetain
+    | SlotInitDictRootRetain
+    | SlotInitDynamicBufferRetain
+    | SlotInitClosureRootRetain
+    | SlotInitGenericRootRetain of payloadSize:int
+
 /// Compact, register-independent facts needed while assembling native code.
 /// These are computed once from finalized symbolic LIR, then travel with the
 /// function through register allocation and tree shaking. Backends therefore
@@ -338,6 +348,10 @@ type FunctionCodegenFacts = {
     RefCountDecRequirements: Map<RcKind * RcReleasePlanMemoKey, ANF.RcMetadata option>
     RefCountIncRequirements: Set<RcKind>
     RawSlotInitTypes: Set<AST.Type>
+    /// Some after ARM64 preparation. Values are None for slot types that do
+    /// not need a root retain; the outer option distinguishes an empty plan
+    /// from legacy/unprepared LIR.
+    Arm64RawSlotInitRetainTargets: Map<AST.Type, Arm64SlotInitRootRetainTarget option> option
     NeedsCliRuntimeState: bool
     NeedsCliArgvHelper: bool
     NeedsCliExecuteHelper: bool
@@ -421,6 +435,7 @@ let analyzeFunctionCodegenFacts (func: Function) : FunctionCodegenFacts =
         RefCountDecRequirements = refCountDecRequirements
         RefCountIncRequirements = refCountIncRequirements
         RawSlotInitTypes = rawSlotInitTypes
+        Arm64RawSlotInitRetainTargets = None
         NeedsCliRuntimeState = needsCliRuntimeState
         NeedsCliArgvHelper = needsCliArgvHelper
         NeedsCliExecuteHelper = needsCliExecuteHelper

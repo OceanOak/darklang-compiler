@@ -13,6 +13,7 @@ let private context : CodeGen.CodeGenContext = {
     Options = CodeGen.defaultOptions
     SumShapeRegistry = Map.empty
     RecordRegistry = Map.empty
+    RawSlotInitRetainTargets = None
     ClosurePayloadSizes = Map.empty
     ClosureCaptureTypes = Map.empty
     FunctionName = "parallel_move_fixture"
