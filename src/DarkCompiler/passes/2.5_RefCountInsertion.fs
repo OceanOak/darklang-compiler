@@ -1247,6 +1247,37 @@ let rec insertRCWithAnalysis
     (types: Map<TempId, AST.Type>)
     : AExpr * VarGen * Map<TempId, AST.Type> =
     let ctxWithTypes = withTempTypes ctx types
+    let functionReturnsNestedRecordListDict =
+        let isSingleListDictRecord (name: string) : bool =
+            ctx.TypeReg
+            |> Map.tryFind name
+            |> Option.map (fun recordInfo ->
+                match recordInfo.Fields |> List.map snd with
+                | [ AST.TList (AST.TDict _) ] -> true
+                | _ -> false)
+            |> Option.defaultValue false
+
+        match currentFuncName |> Option.bind (tryGetFuncReturnTypeFromReg ctx) with
+        | Some (AST.TList (AST.TRecord (name, _))) ->
+            isSingleListDictRecord name
+        | _ ->
+            false
+    let mapHelperTransfersSecondParam =
+        let isMapHelper (funcName: string) : bool =
+            funcName = "Stdlib.List.__mapHelper"
+            || funcName.StartsWith("Stdlib.List.__mapHelper_")
+        let secondParamTransfersOwnership (funcName: string) : bool =
+            match Map.tryFind funcName ctx.FuncReg with
+            | Some (AST.TFunction (_ :: secondParamType :: _, _)) ->
+                secondParamType
+                |> rcShapeForType ctx
+                |> rcShapeIsOwnershipTransferRoot
+            | _ ->
+                false
+
+        currentFuncName
+        |> Option.exists (fun funcName ->
+            isMapHelper funcName && secondParamTransfersOwnership funcName)
     let rec descend
         (ctx: TypeContext)
         (expr: ReturnAnnotatedExpr)
@@ -1428,29 +1459,11 @@ let rec insertRCWithAnalysis
                     isI64Push funcName && consumesSecondArg args
                 | _ ->
                     false
-            let secondParamNeedsOwnershipTransfer (funcName: string) : bool =
-                let isOwnershipTransferredParamType (typ: AST.Type) : bool =
-                    typ |> rcShapeForType ctx |> rcShapeIsOwnershipTransferRoot
-                match Map.tryFind funcName ctx.FuncReg with
-                | Some (AST.TFunction (paramTypes, _)) ->
-                    match paramTypes with
-                    | _ :: secondParamType :: _ -> isOwnershipTransferredParamType secondParamType
-                    | _ -> false
-                | _ ->
-                    false
             let skipReturnDecForMapHelperLists =
-                match currentFuncName with
-                | Some funcName ->
-                    let isMapHelper =
-                        funcName = "Stdlib.List.__mapHelper"
-                        || funcName.StartsWith("Stdlib.List.__mapHelper_")
-                    isMapHelper
-                    && secondParamNeedsOwnershipTransfer funcName
-                    && match inferredType with
-                       | AST.TList _ -> true
-                       | _ -> false
-                | None ->
-                    false
+                mapHelperTransfersSecondParam
+                && match inferredType with
+                   | AST.TList _ -> true
+                   | _ -> false
 
             let bindingDec =
                 let materializesBorrowedCall =
@@ -1474,21 +1487,6 @@ let rec insertRCWithAnalysis
             // pending-release multiplicity is known while prepending it. Keep
             // that fact instead of rescanning the growing release stack.
             let (returnDecs', currentBindingHasSinglePendingDec) =
-                let functionReturnsNestedRecordListDict =
-                    let isSingleListDictRecord (name: string) : bool =
-                        ctx.TypeReg
-                        |> Map.tryFind name
-                        |> Option.map (fun recordInfo ->
-                            match recordInfo.Fields |> List.map snd with
-                            | [ AST.TList (AST.TDict _) ] -> true
-                            | _ -> false)
-                        |> Option.defaultValue false
-
-                    match currentFuncName |> Option.bind (tryGetFuncReturnTypeFromReg ctx) with
-                    | Some (AST.TList (AST.TRecord (name, _))) ->
-                        isSingleListDictRecord name
-                    | _ ->
-                        false
                 let needsNestedRecordListDictDictDec =
                     functionReturnsNestedRecordListDict
                     && match inferredType with
