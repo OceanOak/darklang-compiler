@@ -669,16 +669,16 @@ let insertPhiNodes (cfg: CFG) (df: DominanceFrontier) (preds: Predecessors) (liv
 /// Each definition gets a fresh version number
 /// Uses dominator tree traversal to maintain scoping
 type RenamingState = {
-    /// Current version for each original VReg
-    CurrentVersion: Map<VReg, int>
-    /// Stack of versions for each VReg (for backtracking)
-    VersionStack: Map<VReg, int list>
+    /// Version stacks for original VRegs, mutated during the dominator walk.
+    VersionStacks: System.Collections.Generic.Dictionary<VReg, System.Collections.Generic.Stack<int>>
+    /// Original VRegs in push order, used to restore the exact scope depth.
+    PushedVersions: System.Collections.Generic.Stack<VReg>
     /// Next available version number
-    NextVersion: int
+    mutable NextVersion: int
     /// Original floatRegs set (VReg IDs that are floats)
     OriginalFloatRegs: Set<int>
     /// Updated floatRegs set (includes SSA renamed VRegs)
-    FloatRegs: Set<int>
+    FloatRegs: System.Collections.Generic.HashSet<int>
 }
 
 let private vregId (VReg id) : int = id
@@ -703,42 +703,41 @@ let createInitialRenamingState (cfg: CFG) (floatRegs: Set<int>) (extraRegs: VReg
         max (cfgMax + 10000) (extraMax + 1)
 
     {
-        CurrentVersion = Map.empty
-        VersionStack = Map.empty
+        VersionStacks =
+            System.Collections.Generic.Dictionary<VReg, System.Collections.Generic.Stack<int>>()
+        PushedVersions = System.Collections.Generic.Stack<VReg>()
         NextVersion = nextVersionStart
         OriginalFloatRegs = floatRegs
-        FloatRegs = floatRegs  // Start with original floatRegs, will be extended
+        FloatRegs = System.Collections.Generic.HashSet<int>(floatRegs)
     }
 
 /// Create new version for a definition
 let newVersion (state: RenamingState) (vreg: VReg) : int * VReg * RenamingState =
     let version = state.NextVersion
-    let newReg = VReg (state.NextVersion)
+    let newReg = VReg version
 
-    // Push onto stack
-    let stack = Map.tryFind vreg state.VersionStack |> Option.defaultValue []
+    let stack =
+        match state.VersionStacks.TryGetValue vreg with
+        | true, stack -> stack
+        | false, _ ->
+            let stack = System.Collections.Generic.Stack<int>()
+            state.VersionStacks.[vreg] <- stack
+            stack
+    stack.Push version
+    state.PushedVersions.Push vreg
 
     // If the original VReg was a float, the new SSA version is also a float
     let (VReg origId) = vreg
-    let updatedFloatRegs =
-        if Set.contains origId state.OriginalFloatRegs then
-            Set.add state.NextVersion state.FloatRegs
-        else
-            state.FloatRegs
+    if Set.contains origId state.OriginalFloatRegs then
+        state.FloatRegs.Add version |> ignore
 
-    let state' = {
-        CurrentVersion = Map.add vreg version state.CurrentVersion
-        VersionStack = Map.add vreg (version :: stack) state.VersionStack
-        NextVersion = state.NextVersion + 1
-        OriginalFloatRegs = state.OriginalFloatRegs
-        FloatRegs = updatedFloatRegs
-    }
-    (version, newReg, state')
+    state.NextVersion <- version + 1
+    (version, newReg, state)
 
 /// Get the renamed VReg for a use
 let getRenamedReg (state: RenamingState) (vreg: VReg) : VReg =
-    match Map.tryFind vreg state.CurrentVersion with
-    | Some version when version <> 0 -> VReg version
+    match state.VersionStacks.TryGetValue vreg with
+    | true, stack when stack.Count > 0 -> VReg (stack.Peek())
     | _ -> vreg
 
 /// Rename operand
@@ -1135,19 +1134,15 @@ let buildDomTree (idoms: Dominators) : Map<Label, Label list> =
         Map.add idom (label :: children) tree
     ) Map.empty
 
-/// Pop versions for definitions in a block (for backtracking)
-let popVersions (state: RenamingState) (block: BasicBlock) : RenamingState =
-    let defs = getBlockDefs block
-    defs
-    |> Set.fold (fun s vreg ->
-        match Map.tryFind vreg s.VersionStack with
-        | Some (_ :: rest) ->
-            let currentVersion = List.tryHead rest |> Option.defaultValue 0
-            { s with
-                VersionStack = Map.add vreg rest s.VersionStack
-                CurrentVersion = Map.add vreg currentVersion s.CurrentVersion }
-        | _ -> s
-    ) state
+/// Restore the version stacks to a dominator scope boundary.
+let private popVersionsToDepth (state: RenamingState) (depth: int) : unit =
+    while state.PushedVersions.Count > depth do
+        let originalReg = state.PushedVersions.Pop()
+        match state.VersionStacks.TryGetValue originalReg with
+        | true, stack when stack.Count > 0 ->
+            stack.Pop() |> ignore
+        | _ ->
+            Crash.crash $"SSA: Missing version stack while restoring {originalReg}"
 
 /// Rename CFG using dominator tree traversal
 /// Rename CFG to SSA form
@@ -1165,6 +1160,7 @@ let renameCFG (cfg: CFG) (idoms: Dominators) (floatRegs: Set<int>) (paramRegs: V
         (phiUpdates: ((Label * Label * VReg) * Operand) list)
         : (Label * BasicBlock) list * ((Label * Label * VReg) * Operand) list * RenamingState =
         let block = requireBlock "renaming CFG block" cfg.Blocks label
+        let scopeDepth = state.PushedVersions.Count
 
         // Rename this block
         let (block', state') = renameBlock state block
@@ -1173,26 +1169,18 @@ let renameCFG (cfg: CFG) (idoms: Dominators) (floatRegs: Set<int>) (paramRegs: V
         let phiUpdates' =
             blockPhiUpdates |> List.fold (fun updates update -> update :: updates) phiUpdates
 
-        // Visit children in dominator tree
-        // Thread the state through to preserve NextVersion across siblings
+        // Child visits restore their own pushes before returning, leaving this
+        // block's versions visible to every dominated sibling.
         let children = Map.tryFind label domTree |> Option.defaultValue []
         let (finalBlocks, finalPhiUpdates, finalState) =
             children
             |> List.fold (fun (blocks, updates, s) child ->
-                // Each child inherits current versions from state', but uses s.NextVersion
-                // Also inherit FloatRegs to accumulate all float VRegs
-                let childState = { state' with NextVersion = s.NextVersion; FloatRegs = s.FloatRegs }
-                visit child childState blocks updates
+                visit child s blocks updates
             ) (renamedBlocks', phiUpdates', state')
 
-        // Pop versions for backtracking (restore CurrentVersion/VersionStack from before this block)
-        // but keep the NextVersion and FloatRegs from children
-        let stateAfterPop =
-            { popVersions finalState block' with
-                NextVersion = finalState.NextVersion
-                FloatRegs = finalState.FloatRegs }
+        popVersionsToDepth finalState scopeDepth
 
-        (finalBlocks, finalPhiUpdates, stateAfterPop)
+        (finalBlocks, finalPhiUpdates, finalState)
 
     // Start from entry with initial state based on CFG's existing VRegs
     let initialState = createInitialRenamingState cfg floatRegs paramRegs
@@ -1208,7 +1196,7 @@ let renameCFG (cfg: CFG) (idoms: Dominators) (floatRegs: Set<int>) (paramRegs: V
                 | None -> originalBlock
             applyPhiSourceUpdates phiUpdates renamedBlock)
     let resultCfg = { cfg with Blocks = finalBlocks }
-    (resultCfg, finalState.FloatRegs)
+    (resultCfg, finalState.FloatRegs |> Set.ofSeq)
 
 /// Convert a function to SSA form
 let private convertFunctionToSSAInternal
