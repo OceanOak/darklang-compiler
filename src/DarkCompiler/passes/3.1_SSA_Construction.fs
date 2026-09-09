@@ -1262,7 +1262,10 @@ let private convertFunctionToSSAInternal
     // need not widen every block bitset.
     let ((liveIn, _), timingsRev) =
         timePhase swOpt "SSA: Liveness" timingsRev (fun () ->
-            computeLivenessForVRegs (Some phiCandidateVRegs) cfg)
+            if Set.isEmpty phiCandidateVRegs then
+                (Map.empty, Map.empty)
+            else
+                computeLivenessForVRegs (Some phiCandidateVRegs) cfg)
 
     // Insert phi nodes (only for live variables)
     // Pass function params so they're treated as defined at entry (for self-recursive functions)
