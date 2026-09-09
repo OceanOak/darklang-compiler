@@ -1557,37 +1557,39 @@ let applyLoopInvariantCodeMotion (cfg: CFG) : CFG * bool =
         (optimized, changed)
 
 /// Build map from SSA destination to the registers used by its defining instruction.
-let private buildDefUseMap (cfg: CFG) : Map<VReg, VReg list> =
-    cfg.Blocks
-    |> Map.fold (fun defUses _ block ->
-        block.Instrs
-        |> List.fold (fun acc instr ->
+let private buildDefUseMap
+    (cfg: CFG)
+    : System.Collections.Generic.Dictionary<VReg, VReg list> =
+    let defUses = System.Collections.Generic.Dictionary<VReg, VReg list>()
+    for KeyValue (_, block) in cfg.Blocks do
+        for instr in block.Instrs do
             match getInstrDest instr with
-            | Some dest -> Map.add dest (foldInstrUses (fun uses vreg -> vreg :: uses) [] instr) acc
-            | None -> acc
-        ) defUses
-    ) Map.empty
+            | Some dest ->
+                defUses.[dest] <-
+                    foldInstrUses (fun uses vreg -> vreg :: uses) [] instr
+            | None -> ()
+    defUses
 
 /// Collect registers that are directly required by side effects and control flow.
-let private collectRootUses (cfg: CFG) : Set<VReg> =
-    cfg.Blocks
-    |> Map.fold (fun roots _ block ->
-        let roots' =
-            block.Instrs
-            |> List.fold (fun acc instr ->
-                if hasSideEffects instr then
-                    foldInstrUses (fun uses vreg -> Set.add vreg uses) acc instr
-                else
-                    acc
-            ) roots
-        foldTerminatorUses (fun uses vreg -> Set.add vreg uses) roots' block.Terminator
-    ) Set.empty
+let private collectRootUses
+    (cfg: CFG)
+    : System.Collections.Generic.HashSet<VReg> =
+    let roots = System.Collections.Generic.HashSet<VReg>()
+    let addRoot (uses: System.Collections.Generic.HashSet<VReg>) vreg =
+        uses.Add vreg |> ignore
+        uses
+    for KeyValue (_, block) in cfg.Blocks do
+        for instr in block.Instrs do
+            if hasSideEffects instr then
+                foldInstrUses addRoot roots instr |> ignore
+        foldTerminatorUses addRoot roots block.Terminator |> ignore
+    roots
 
 /// Mark live SSA destinations by walking backwards from root uses.
 let private collectLiveDestinations
     (recordTicks: (string -> int64 -> unit) option)
     (cfg: CFG)
-    : Set<VReg> =
+    : System.Collections.Generic.HashSet<VReg> =
     let measure name operation =
         match recordTicks with
         | None -> operation ()
@@ -1602,27 +1604,22 @@ let private collectLiveDestinations
     let roots =
         measure "MIR DCE Root Collection" (fun () -> collectRootUses cfg)
 
-    let rec loop (work: VReg list) (seen: Set<VReg>) (live: Set<VReg>) : Set<VReg> =
-        match work with
-        | [] -> live
-        | reg :: rest ->
-            match Map.tryFind reg defUseMap with
-            | None ->
-                // Parameters or registers without a local definition.
-                loop rest seen live
-            | Some uses ->
-                let (rest', seen') =
-                    uses
-                    |> List.fold (fun (pending, seenAcc) usedReg ->
-                        if Set.contains usedReg seenAcc then
-                            (pending, seenAcc)
-                        else
-                            (usedReg :: pending, Set.add usedReg seenAcc)
-                    ) (rest, seen)
-                loop rest' seen' (Set.add reg live)
-
     measure "MIR DCE Reachability" (fun () ->
-        loop (Set.toList roots) roots Set.empty)
+        let work = System.Collections.Generic.Stack<VReg>(roots)
+        let seen = System.Collections.Generic.HashSet<VReg>(roots)
+        let live = System.Collections.Generic.HashSet<VReg>()
+        while work.Count > 0 do
+            let reg = work.Pop()
+            match defUseMap.TryGetValue reg with
+            | true, uses ->
+                live.Add reg |> ignore
+                for usedReg in uses do
+                    if seen.Add usedReg then
+                        work.Push usedReg
+            | false, _ ->
+                // Parameters or registers without a local definition.
+                ()
+        live)
 
 /// Dead Code Elimination
 /// Remove instructions whose destinations are never used (unless they have side effects)
@@ -1650,7 +1647,7 @@ let private eliminateDeadCodeWithTickTrace
                     block.Instrs
                     |> List.fold (fun (acc', ch') instr ->
                         match getInstrDest instr with
-                        | Some dest when not (Set.contains dest liveDests) && not (hasSideEffects instr) ->
+                        | Some dest when not (liveDests.Contains dest) && not (hasSideEffects instr) ->
                             // Dead instruction - remove it
                             (acc', true)
                         | _ ->
