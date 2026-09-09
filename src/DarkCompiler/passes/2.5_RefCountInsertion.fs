@@ -21,6 +21,24 @@ module RefCountInsertion
 open ANF
 open AST_to_ANF
 
+/// Immutable registry projections and memoized type plans shared by every
+/// function processed in one RC insertion pass. TypeContext itself is copied
+/// as local TempId information changes, so keep the reusable planning state in
+/// a reference object carried by those copies.
+type RcTypePlanningContext = {
+    mutable RecordRegistries:
+        (Map<string, (string * AST.Type) list> * Map<string, string list>) option
+    Shapes: System.Collections.Generic.Dictionary<AST.Type, RcShape>
+    Metadata: System.Collections.Generic.Dictionary<AST.Type, RcMetadata>
+}
+
+let createRcTypePlanningContext () : RcTypePlanningContext =
+    {
+        RecordRegistries = None
+        Shapes = System.Collections.Generic.Dictionary<AST.Type, RcShape>()
+        Metadata = System.Collections.Generic.Dictionary<AST.Type, RcMetadata>()
+    }
+
 /// Type context for inferring types during RC insertion
 type TypeContext = {
     TypeReg: TypeRegistry
@@ -32,6 +50,9 @@ type TypeContext = {
     TempTypes: Map<TempId, AST.Type>
     /// Maps TempId -> function name for closures (to resolve closure call return types)
     ClosureFuncs: Map<TempId, string>
+    /// Registry projections and canonical ownership plans shared across local
+    /// TypeContext copies for this pass.
+    TypePlanning: RcTypePlanningContext
 }
 
 /// Create initial context from conversion result
@@ -55,7 +76,8 @@ let createContext (result: ConversionResult) : TypeContext =
       FuncReg = funcReg
       FuncParams = result.FuncParams
       TempTypes = Map.empty
-      ClosureFuncs = Map.empty }
+      ClosureFuncs = Map.empty
+      TypePlanning = createRcTypePlanningContext () }
 
 let private withTempTypes (ctx: TypeContext) (types: Map<TempId, AST.Type>) : TypeContext =
     { ctx with TempTypes = types }
@@ -721,12 +743,27 @@ let private canonicalRcSourceType (ctx: TypeContext) (typ: AST.Type) : AST.Type 
     canonicalize typ
 
 let private rcShapeForType (ctx: TypeContext) (typ: AST.Type) : RcShape =
-    typ
-    |> canonicalRcTypeForShape ctx
-    |> rcShapeOfTypeWithSums
-        (recordFieldsRegistry ctx.TypeReg)
-        (recordTypeParamsRegistry ctx.TypeReg)
-        ctx.SumShapeReg
+    match ctx.TypePlanning.Shapes.TryGetValue typ with
+    | true, shape -> shape
+    | false, _ ->
+        let (recordFieldsReg, recordTypeParamsReg) =
+            match ctx.TypePlanning.RecordRegistries with
+            | Some registries -> registries
+            | None ->
+                let registries =
+                    (recordFieldsRegistry ctx.TypeReg,
+                     recordTypeParamsRegistry ctx.TypeReg)
+                ctx.TypePlanning.RecordRegistries <- Some registries
+                registries
+        let shape =
+            typ
+            |> canonicalRcTypeForShape ctx
+            |> rcShapeOfTypeWithSums
+                recordFieldsReg
+                recordTypeParamsReg
+                ctx.SumShapeReg
+        ctx.TypePlanning.Shapes.[typ] <- shape
+        shape
 
 let private rcMetadataForTypeAndShape
     (ctx: TypeContext)
@@ -734,12 +771,17 @@ let private rcMetadataForTypeAndShape
     (shape: RcShape)
     : RcMetadata =
     let canonicalType = canonicalRcSourceType ctx typ
-    let releasePlan = rcShapeReleasePlan shape
-    {
-        ReleasePlanCacheKey = rcReleasePlanCacheKey canonicalType releasePlan
-        ReleasePlan = Some releasePlan
-        SourceType = Some canonicalType
-    }
+    match ctx.TypePlanning.Metadata.TryGetValue canonicalType with
+    | true, metadata -> metadata
+    | false, _ ->
+        let releasePlan = rcShapeReleasePlan shape
+        let metadata = {
+            ReleasePlanCacheKey = rcReleasePlanCacheKey canonicalType releasePlan
+            ReleasePlan = Some releasePlan
+            SourceType = Some canonicalType
+        }
+        ctx.TypePlanning.Metadata.[canonicalType] <- metadata
+        metadata
 
 let private shapeNeedsManagedAliasRootPreservation (ctx: TypeContext) (typ: AST.Type) : bool =
     typ |> rcShapeForType ctx |> rcShapeNeedsManagedAliasRootPreservation

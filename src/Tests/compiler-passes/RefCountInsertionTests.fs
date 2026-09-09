@@ -700,6 +700,7 @@ let testInferCallReturnsFunctionReturnType () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let cexpr = Call ("mkPair", [IntLiteral (Int64 1L)])
@@ -721,6 +722,7 @@ let testMalformedRawGetIntrinsicDoesNotInferInt64 () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let cexpr = Call ("__raw_get_not_a_mangled_type", [Var (TempId 1); IntLiteral (Int64 0L)])
@@ -871,6 +873,7 @@ let private rawSlotTransferTestFunction
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let valueTemp = TempId 0
@@ -1002,6 +1005,7 @@ let testBranchLocalTempReuseUsesCurrentTypeContext () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
     let func : Function = {
         Name = "branchLocalTypeContext"
@@ -1045,6 +1049,7 @@ let testReturnedAggregateTransfersOwnedValueThroughAlias () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1097,6 +1102,7 @@ let testReturnedAggregateTransfersOwnedValueThroughTypedAlias () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1148,6 +1154,7 @@ let testReturnedAggregateRetainsOwnershipProducingStreamAlias () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let ptrTemp = TempId 0
@@ -1199,6 +1206,7 @@ let testReturnedAggregateTransfersOwnedValueAfterBorrowedUse () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1256,6 +1264,7 @@ let testExplicitReleaseBlocksLaterAggregateTransfer () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1306,6 +1315,7 @@ let testReturnedAggregateTransfersOwnedValueAcrossBranches () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let conditionTemp = TempId 0
@@ -1363,6 +1373,7 @@ let testReturnedAggregateRequiresEveryBranchToTransferOwnedValue () : TestResult
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let conditionTemp = TempId 0
@@ -1424,6 +1435,7 @@ let testReturnedAggregateTransfersNestedOwnedAliases () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1492,6 +1504,7 @@ let testReturnedAggregateDoesNotTransferDuplicatedAliases () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let childTemp = TempId 0
@@ -1542,6 +1555,7 @@ let testStaticStringBindingSkipsNoOpRcTraffic () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let stringTemp = TempId 0
@@ -1580,6 +1594,7 @@ let testKnownEmptyListBindingSkipsNoOpRcTraffic () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let listTemp = TempId 0
@@ -1619,6 +1634,7 @@ let testAggregateSkipsRetainsForKnownNonRcSentinels () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let stringTemp = TempId 0
@@ -1664,6 +1680,7 @@ let testAggregateSkipsRetainForConditionalStaticString () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let conditionTemp = TempId 0
@@ -1712,6 +1729,7 @@ let testNonSelfTailCallDoesNotLeaveDecAfterTailCall () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let p0 = TempId 0
@@ -1756,6 +1774,7 @@ let testAliasReturnMaterializesOwnershipEvenIfFunctionMarkedBorrowed () : TestRe
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let nodeParam = TempId 0
@@ -1803,6 +1822,7 @@ let testMapHelperAccumulatorReturnDoesNotRetainOwnedAccumulator () : TestResult 
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let sourceParam = TempId 0
@@ -1850,6 +1870,7 @@ let testMapHelperSelfTailCallReleasesReplacedAccumulator () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let sourceParam = TempId 0
@@ -1910,6 +1931,7 @@ let private testBorrowedProjectionRecursiveArgsAreRetained (recursiveCExpr: stri
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let state1Param = TempId 0
@@ -1981,6 +2003,7 @@ let testBorrowedProjectionAliasSelfRecursiveCallArgsAreRetained () : TestResult 
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let state1Param = TempId 0
@@ -2057,6 +2080,7 @@ let testBorrowedProjectionIfBranchSelfRecursiveCallArgsAreRetained () : TestResu
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let state1Param = TempId 0
@@ -2165,6 +2189,7 @@ let testBorrowedProjectionFromParameterSelfRecursiveCallStaysBorrowed () : TestR
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let parentParam = TempId 0
@@ -2216,6 +2241,7 @@ let testMapHelperClosureProducingCallRetainsBorrowedSource () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let sourceParam = TempId 0
@@ -2264,6 +2290,7 @@ let testMapHelperClosureSourceToValueKeepsSourceBorrowed () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let sourceParam = TempId 0
@@ -2311,6 +2338,7 @@ let testClosurePushBackRetainsImmediateClosureCallResult () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let makerTemp = TempId 0
@@ -2364,6 +2392,7 @@ let testBorrowedCallMaterializesOwnedLocal () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let nodeParam = TempId 0
@@ -2416,6 +2445,7 @@ let testReturnedBorrowedCallMaterializesOwnership () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let nodeParam = TempId 0
@@ -2457,6 +2487,7 @@ let testCallReturningClosureGetsAutoDecAfterUse () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let closureTemp = TempId 0
@@ -2502,6 +2533,7 @@ let testClosureCallReturningClosureGetsAutoDecAfterUse () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let makerTemp = TempId 0
@@ -2547,6 +2579,7 @@ let testPureEnumBindingDoesNotGetAutomaticDec () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let enumTemp = TempId 0
@@ -2592,6 +2625,7 @@ let testGenericPureEnumBindingDoesNotGetAutomaticDec () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let enumTemp = TempId 0
@@ -2698,6 +2732,7 @@ let testBareSumTypeRefsAreCanonicalizedForRcSourceTypes () : TestResult =
         FuncParams = Map.empty
         TempTypes = Map.empty
         ClosureFuncs = Map.empty
+        TypePlanning = createRcTypePlanningContext ()
     }
 
     let dictTemp = TempId 0
