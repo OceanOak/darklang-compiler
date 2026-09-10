@@ -1065,6 +1065,7 @@ let private computeSaveRegsPreparation
     (floatDomain: VRegDomain)
     (mapping: AllocationResult)
     (block: LIR.BasicBlock)
+    (instrFacts: InstrRegisterFacts array)
     (intLiveOut: BitSet)
     (floatLiveOut: BitSet)
     : (BitSet * BitSet) list * LIR.PhysReg list list =
@@ -1121,18 +1122,19 @@ let private computeSaveRegsPreparation
         |> List.choose (fun (idx, reg) -> if backing.[idx] then Some reg else None)
 
     let rec walkBackwards
-        (instrs: LIR.Instr list)
+        (instrIdx: int)
         (pendingRestores: ((BitSet * BitSet) * bool array) list)
         (snapshots: (BitSet * BitSet) list)
         (backingRegs: LIR.PhysReg list list)
         : (BitSet * BitSet) list * LIR.PhysReg list list =
-        match instrs with
-        | [] ->
+        if instrIdx < 0 then
             if List.isEmpty pendingRestores then
                 (snapshots, backingRegs)
             else
                 Crash.crash "Unmatched RestoreRegs while computing caller-save liveness"
-        | instr :: remaining ->
+        else
+            let facts = instrFacts.[instrIdx]
+            let instr = facts.Instr
             let (pendingRestores, snapshots, backingRegs) =
                 match instr with
                 | LIR.RestoreRegs ([], []) ->
@@ -1154,21 +1156,21 @@ let private computeSaveRegsPreparation
                         Crash.crash "Unmatched SaveRegs while computing caller-save liveness"
                 | _ -> (pendingRestores, snapshots, backingRegs)
 
-            match getDefinedVReg instr with
+            match facts.IntDef with
             | Some id -> bitsetRemoveInPlace intDomain id intLive
             | None -> ()
-            getUsedVRegs instr
+            facts.IntUses
             |> List.iter (fun id -> bitsetAddInPlace intDomain id intLive)
 
-            match getDefinedFVReg instr with
+            match facts.FloatDef with
             | Some id -> bitsetRemoveInPlace floatDomain id floatLive
             | None -> ()
-            getUsedFVRegs instr
+            facts.FloatUses
             |> List.iter (fun id -> bitsetAddInPlace floatDomain id floatLive)
 
-            walkBackwards remaining pendingRestores snapshots backingRegs
+            walkBackwards (instrIdx - 1) pendingRestores snapshots backingRegs
 
-    walkBackwards (List.rev block.Instrs) [] [] []
+    walkBackwards (instrFacts.Length - 1) [] [] []
 
 let private isEmptySaveRegs (instr: LIR.Instr) : bool =
     match instr with
@@ -3448,6 +3450,7 @@ let private prepareBlockAllocation
     (liveOut: BitSet)
     (floatLiveOut: BitSet)
     (block: LIR.BasicBlock)
+    (instrFacts: InstrRegisterFacts array)
     : BlockAllocationPreparation =
     let hasEmptySaveRegs = List.exists isEmptySaveRegs block.Instrs
     let (saveRegsLiveness, argMoveBackingRegs) =
@@ -3458,6 +3461,7 @@ let private prepareBlockAllocation
                 floatAllocation.Domain
                 mapping
                 block
+                instrFacts
                 liveOut
                 floatLiveOut
         else
@@ -3544,8 +3548,10 @@ let applyToBlockWithLiveness
     (floatLiveOut: BitSet)
     (block: LIR.BasicBlock)
     : LIR.BasicBlock =
+    let instrFacts =
+        (classifyBlocks [| block |]).[0].InstrFacts
     let preparation =
-        prepareBlockAllocation arch mapping floatAllocation liveOut floatLiveOut block
+        prepareBlockAllocation arch mapping floatAllocation liveOut floatLiveOut block instrFacts
     applyToPreparedBlock arch mapping floatAllocation preparation block
 
 let private prepareCFGAllocation
@@ -3555,6 +3561,7 @@ let private prepareCFGAllocation
     (floatAllocation: FAllocationResult)
     (liveness: BlockLiveness array)
     (floatLiveness: BlockLiveness array)
+    (classifiedBlocks: ClassifiedBlock array)
     : BlockAllocationPreparation array =
     let emptyFloat = bitsetEmpty floatAllocation.Domain.WordCount
     Array.init blocks.Length (fun idx ->
@@ -3568,7 +3575,8 @@ let private prepareCFGAllocation
             floatAllocation
             blockLiveness.LiveOut
             floatBlockLiveness.LiveOut
-            blocks.[idx])
+            blocks.[idx]
+            classifiedBlocks.[idx].InstrFacts)
 
 let private applyPreparedCFGAllocation
     (arch: Platform.Arch)
@@ -3589,8 +3597,16 @@ let applyToCFGWithLiveness
     (liveness: BlockLiveness array)
     (floatLiveness: BlockLiveness array)
     : LIR.BasicBlock array =
+    let classifiedBlocks = classifyBlocks blocks
     let preparations =
-        prepareCFGAllocation arch blocks mapping floatAllocation liveness floatLiveness
+        prepareCFGAllocation
+            arch
+            blocks
+            mapping
+            floatAllocation
+            liveness
+            floatLiveness
+            classifiedBlocks
     applyPreparedCFGAllocation arch blocks mapping floatAllocation preparations
 
 // ============================================================================
@@ -4201,7 +4217,8 @@ let private allocateRegistersInternal
                 result
                 floatAllocation
                 livenessBits
-                floatLiveness)
+                floatLiveness
+                classifiedBlocks)
     let (allocatedBlocks, timings) =
         timePhase swOpt "RegAlloc: Apply Rewrite" timings (fun () ->
             applyPreparedCFGAllocation
