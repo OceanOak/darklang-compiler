@@ -1056,73 +1056,24 @@ let computeFloatLivenessBits (cfg: LIR.CFG) : VRegDomain * BlockIndex * BlockLiv
     let (domain, liveness) = computeFloatLivenessBitsRaw blockIndex blocks []
     (domain, blockIndex, liveness)
 
-/// Compute integer and floating-point liveness across each call bracketed by
-/// empty SaveRegs/RestoreRegs placeholders. Taking the snapshot at RestoreRegs
-/// excludes argument-only values while retaining values used by the continuation.
-let private computeSaveRegsLiveness
+/// Compute the data needed to populate empty SaveRegs/RestoreRegs placeholders.
+/// A single backward walk captures continuation liveness and, on ARM64, the
+/// caller-saved sources needed to preserve parallel argument moves.
+let private computeSaveRegsPreparation
+    (trackArgMoveBacking: bool)
     (intDomain: VRegDomain)
     (floatDomain: VRegDomain)
+    (mapping: AllocationResult)
     (block: LIR.BasicBlock)
     (intLiveOut: BitSet)
     (floatLiveOut: BitSet)
-    : (BitSet * BitSet) list =
+    : (BitSet * BitSet) list * LIR.PhysReg list list =
     let intLive = bitsetClone intLiveOut
     let floatLive = bitsetClone floatLiveOut
 
     getTerminatorUsedVRegs block.Terminator
     |> List.iter (fun id -> bitsetAddInPlace intDomain id intLive)
 
-    let rec walkBackwards
-        (instrs: LIR.Instr list)
-        (pendingRestores: (BitSet * BitSet) list)
-        (snapshots: (BitSet * BitSet) list)
-        : (BitSet * BitSet) list =
-        match instrs with
-        | [] ->
-            if List.isEmpty pendingRestores then
-                snapshots
-            else
-                Crash.crash "Unmatched RestoreRegs while computing caller-save liveness"
-        | instr :: remaining ->
-            let (pendingRestores, snapshots) =
-                match instr with
-                | LIR.RestoreRegs ([], []) ->
-                    ((bitsetClone intLive, bitsetClone floatLive) :: pendingRestores, snapshots)
-                | LIR.SaveRegs ([], []) ->
-                    match pendingRestores with
-                    | snapshot :: pendingRestores ->
-                        (pendingRestores, snapshot :: snapshots)
-                    | [] ->
-                        Crash.crash "Unmatched SaveRegs while computing caller-save liveness"
-                | _ -> (pendingRestores, snapshots)
-
-            match getDefinedVReg instr with
-            | Some id -> bitsetRemoveInPlace intDomain id intLive
-            | None -> ()
-            getUsedVRegs instr
-            |> List.iter (fun id -> bitsetAddInPlace intDomain id intLive)
-
-            match getDefinedFVReg instr with
-            | Some id -> bitsetRemoveInPlace floatDomain id floatLive
-            | None -> ()
-            getUsedFVRegs instr
-            |> List.iter (fun id -> bitsetAddInPlace floatDomain id floatLive)
-
-            walkBackwards remaining pendingRestores snapshots
-
-    walkBackwards (List.rev block.Instrs) [] []
-
-let private isEmptySaveRegs (instr: LIR.Instr) : bool =
-    match instr with
-    | LIR.SaveRegs ([], []) -> true
-    | _ -> false
-
-/// Caller-saved argument sources that the current ARM64 ArgMoves lowering reads
-/// from the SaveRegs area to preserve parallel-move semantics.
-let private computeArgMoveBackingRegs
-    (mapping: AllocationResult)
-    (block: LIR.BasicBlock)
-    : LIR.PhysReg list list =
     let sourcePhysReg (operand: LIR.Operand) : LIR.PhysReg option =
         match operand with
         | LIR.Reg (LIR.Physical reg) -> Some reg
@@ -1136,44 +1087,93 @@ let private computeArgMoveBackingRegs
             | None -> None
         | _ -> None
 
-    let isCallerSavedArgReg (reg: LIR.PhysReg) : bool =
+    let callerSavedArgIndex (reg: LIR.PhysReg) : int option =
         match reg with
-        | LIR.X1 | LIR.X2 | LIR.X3 | LIR.X4 | LIR.X5 | LIR.X6 | LIR.X7 -> true
-        | _ -> false
+        | LIR.X1 -> Some 0
+        | LIR.X2 -> Some 1
+        | LIR.X3 -> Some 2
+        | LIR.X4 -> Some 3
+        | LIR.X5 -> Some 4
+        | LIR.X6 -> Some 5
+        | LIR.X7 -> Some 6
+        | _ -> None
 
-    let backingForMoves (moves: (LIR.PhysReg * LIR.Operand) list) : LIR.PhysReg list =
-        let destinations = moves |> List.map fst |> Set.ofList
-        moves
-        |> List.choose (fun (dest, source) ->
+    let mergeBackingForMoves
+        (backing: bool array)
+        (moves: (LIR.PhysReg * LIR.Operand) list)
+        : unit =
+        let destinations = Array.create 7 false
+        for (dest, _) in moves do
+            match callerSavedArgIndex dest with
+            | Some idx -> destinations.[idx] <- true
+            | None -> ()
+        for (dest, source) in moves do
             match sourcePhysReg source with
-            | Some sourceReg
-                when sourceReg <> dest
-                     && isCallerSavedArgReg sourceReg
-                     && Set.contains sourceReg destinations ->
-                Some sourceReg
-            | _ -> None)
+            | Some sourceReg when sourceReg <> dest ->
+                match callerSavedArgIndex sourceReg with
+                | Some idx when destinations.[idx] -> backing.[idx] <- true
+                | _ -> ()
+            | _ -> ()
 
-    let mergeBacking (existing: LIR.PhysReg list) (additional: LIR.PhysReg list) =
-        existing @ additional |> List.distinct |> List.sort
+    let finishBacking (backing: bool array) : LIR.PhysReg list =
+        [ LIR.X1; LIR.X2; LIR.X3; LIR.X4; LIR.X5; LIR.X6; LIR.X7 ]
+        |> List.mapi (fun idx reg -> (idx, reg))
+        |> List.choose (fun (idx, reg) -> if backing.[idx] then Some reg else None)
 
-    let (active, completedRev) =
-        block.Instrs
-        |> List.fold (fun (active, completedRev) instr ->
-            match instr, active with
-            | LIR.SaveRegs ([], []), None -> (Some [], completedRev)
-            | LIR.SaveRegs ([], []), Some _ ->
-                Crash.crash "Nested SaveRegs while computing argument-move backing"
-            | LIR.ArgMoves moves, Some backing ->
-                (Some (mergeBacking backing (backingForMoves moves)), completedRev)
-            | LIR.RestoreRegs ([], []), Some backing -> (None, backing :: completedRev)
-            | LIR.RestoreRegs ([], []), None ->
-                Crash.crash "Unmatched RestoreRegs while computing argument-move backing"
-            | _ -> (active, completedRev)
-        ) (None, [])
+    let rec walkBackwards
+        (instrs: LIR.Instr list)
+        (pendingRestores: ((BitSet * BitSet) * bool array) list)
+        (snapshots: (BitSet * BitSet) list)
+        (backingRegs: LIR.PhysReg list list)
+        : (BitSet * BitSet) list * LIR.PhysReg list list =
+        match instrs with
+        | [] ->
+            if List.isEmpty pendingRestores then
+                (snapshots, backingRegs)
+            else
+                Crash.crash "Unmatched RestoreRegs while computing caller-save liveness"
+        | instr :: remaining ->
+            let (pendingRestores, snapshots, backingRegs) =
+                match instr with
+                | LIR.RestoreRegs ([], []) ->
+                    if trackArgMoveBacking && not (List.isEmpty pendingRestores) then
+                        Crash.crash "Nested SaveRegs while computing argument-move backing"
+                    let snapshot = (bitsetClone intLive, bitsetClone floatLive)
+                    ((snapshot, Array.create 7 false) :: pendingRestores, snapshots, backingRegs)
+                | LIR.ArgMoves moves when trackArgMoveBacking ->
+                    match pendingRestores with
+                    | (snapshot, backing) :: rest ->
+                        mergeBackingForMoves backing moves
+                        ((snapshot, backing) :: rest, snapshots, backingRegs)
+                    | [] -> (pendingRestores, snapshots, backingRegs)
+                | LIR.SaveRegs ([], []) ->
+                    match pendingRestores with
+                    | (snapshot, backing) :: pendingRestores ->
+                        (pendingRestores, snapshot :: snapshots, finishBacking backing :: backingRegs)
+                    | [] ->
+                        Crash.crash "Unmatched SaveRegs while computing caller-save liveness"
+                | _ -> (pendingRestores, snapshots, backingRegs)
 
-    match active with
-    | Some _ -> Crash.crash "Unmatched SaveRegs while computing argument-move backing"
-    | None -> List.rev completedRev
+            match getDefinedVReg instr with
+            | Some id -> bitsetRemoveInPlace intDomain id intLive
+            | None -> ()
+            getUsedVRegs instr
+            |> List.iter (fun id -> bitsetAddInPlace intDomain id intLive)
+
+            match getDefinedFVReg instr with
+            | Some id -> bitsetRemoveInPlace floatDomain id floatLive
+            | None -> ()
+            getUsedFVRegs instr
+            |> List.iter (fun id -> bitsetAddInPlace floatDomain id floatLive)
+
+            walkBackwards remaining pendingRestores snapshots backingRegs
+
+    walkBackwards (List.rev block.Instrs) [] [] []
+
+let private isEmptySaveRegs (instr: LIR.Instr) : bool =
+    match instr with
+    | LIR.SaveRegs ([], []) -> true
+    | _ -> false
 
 // ============================================================================
 // Register Definitions
@@ -3428,33 +3428,44 @@ let applyToTerminator (mapping: AllocationResult) (term: LIR.Terminator)
         // CondBranch uses condition flags, not a register - pass through unchanged
         ([], LIR.CondBranch (cond, trueLabel, falseLabel))
 
-/// Apply allocation to a basic block with liveness-aware SaveRegs/RestoreRegs population
-let applyToBlockWithLiveness
+type private BlockAllocationPreparation = {
+    SaveRegsLiveness: (BitSet * BitSet) list
+    ArgMoveBackingRegs: LIR.PhysReg list list
+}
+
+let private prepareBlockAllocation
     (arch: Platform.Arch)
     (mapping: AllocationResult)
     (floatAllocation: FAllocationResult)
     (liveOut: BitSet)
     (floatLiveOut: BitSet)
     (block: LIR.BasicBlock)
-    : LIR.BasicBlock =
-
+    : BlockAllocationPreparation =
     let hasEmptySaveRegs = List.exists isEmptySaveRegs block.Instrs
-    let saveRegsLiveness =
+    let (saveRegsLiveness, argMoveBackingRegs) =
         if hasEmptySaveRegs then
-            computeSaveRegsLiveness
+            computeSaveRegsPreparation
+                (arch = Platform.ARM64)
                 mapping.Domain
                 floatAllocation.Domain
+                mapping
                 block
                 liveOut
                 floatLiveOut
         else
-            []
+            ([], [])
 
-    let argMoveBackingRegs =
-        if arch = Platform.ARM64 && hasEmptySaveRegs then
-            computeArgMoveBackingRegs mapping block
-        else
-            saveRegsLiveness |> List.map (fun _ -> [])
+    { SaveRegsLiveness = saveRegsLiveness
+      ArgMoveBackingRegs = argMoveBackingRegs }
+
+/// Apply allocation to a basic block with precomputed SaveRegs/RestoreRegs data.
+let private applyToPreparedBlock
+    (arch: Platform.Arch)
+    (mapping: AllocationResult)
+    (floatAllocation: FAllocationResult)
+    (preparation: BlockAllocationPreparation)
+    (block: LIR.BasicBlock)
+    : LIR.BasicBlock =
 
     // Find SaveRegs/RestoreRegs pairs and compute the registers to save while
     // emitting allocated instructions directly. The old mapFold produced one
@@ -3462,8 +3473,8 @@ let applyToBlockWithLiveness
     // and then traversed the result again for float allocation.
     let allocatedInstrs = ResizeArray<LIR.Instr>()
     let mutable savedRegsStack : (LIR.PhysReg list * LIR.PhysFPReg list) list = []
-    let mutable remainingLiveness = saveRegsLiveness
-    let mutable remainingArgMoveBacking = argMoveBackingRegs
+    let mutable remainingLiveness = preparation.SaveRegsLiveness
+    let mutable remainingArgMoveBacking = preparation.ArgMoveBackingRegs
 
     let appendAllocated (instrs: LIR.Instr list) : unit =
         for instr in instrs do
@@ -3513,6 +3524,51 @@ let applyToBlockWithLiveness
       Instrs = allocatedInstrs |> Seq.toList
       Terminator = allocatedTerm }
 
+/// Apply allocation to a basic block with liveness-aware SaveRegs/RestoreRegs population
+let applyToBlockWithLiveness
+    (arch: Platform.Arch)
+    (mapping: AllocationResult)
+    (floatAllocation: FAllocationResult)
+    (liveOut: BitSet)
+    (floatLiveOut: BitSet)
+    (block: LIR.BasicBlock)
+    : LIR.BasicBlock =
+    let preparation =
+        prepareBlockAllocation arch mapping floatAllocation liveOut floatLiveOut block
+    applyToPreparedBlock arch mapping floatAllocation preparation block
+
+let private prepareCFGAllocation
+    (arch: Platform.Arch)
+    (blocks: LIR.BasicBlock array)
+    (mapping: AllocationResult)
+    (floatAllocation: FAllocationResult)
+    (liveness: BlockLiveness array)
+    (floatLiveness: BlockLiveness array)
+    : BlockAllocationPreparation array =
+    let emptyFloat = bitsetEmpty floatAllocation.Domain.WordCount
+    Array.init blocks.Length (fun idx ->
+        let blockLiveness = liveness.[idx]
+        let floatBlockLiveness =
+            if idx < floatLiveness.Length then floatLiveness.[idx]
+            else { LiveIn = emptyFloat; LiveOut = emptyFloat }
+        prepareBlockAllocation
+            arch
+            mapping
+            floatAllocation
+            blockLiveness.LiveOut
+            floatBlockLiveness.LiveOut
+            blocks.[idx])
+
+let private applyPreparedCFGAllocation
+    (arch: Platform.Arch)
+    (blocks: LIR.BasicBlock array)
+    (mapping: AllocationResult)
+    (floatAllocation: FAllocationResult)
+    (preparations: BlockAllocationPreparation array)
+    : LIR.BasicBlock array =
+    Array.init blocks.Length (fun idx ->
+        applyToPreparedBlock arch mapping floatAllocation preparations.[idx] blocks.[idx])
+
 /// Apply allocation to CFG with liveness info
 let applyToCFGWithLiveness
     (arch: Platform.Arch)
@@ -3522,14 +3578,9 @@ let applyToCFGWithLiveness
     (liveness: BlockLiveness array)
     (floatLiveness: BlockLiveness array)
     : LIR.BasicBlock array =
-    let emptyFloat = bitsetEmpty floatAllocation.Domain.WordCount
-    Array.init blocks.Length (fun idx ->
-        let block = blocks.[idx]
-        let blockLiveness = liveness.[idx]
-        let floatBlockLiveness =
-            if idx < floatLiveness.Length then floatLiveness.[idx]
-            else { LiveIn = emptyFloat; LiveOut = emptyFloat }
-        applyToBlockWithLiveness arch mapping floatAllocation blockLiveness.LiveOut floatBlockLiveness.LiveOut block)
+    let preparations =
+        prepareCFGAllocation arch blocks mapping floatAllocation liveness floatLiveness
+    applyPreparedCFGAllocation arch blocks mapping floatAllocation preparations
 
 // ============================================================================
 // Float Move Generation (used by both phi resolution and param copies)
@@ -4130,15 +4181,29 @@ let private allocateRegistersInternal
                 blocks)
 
     // Step 8: Apply allocation to CFG with liveness info for SaveRegs/RestoreRegs population
-    let (allocatedBlocks, timings) =
-        timePhase swOpt "RegAlloc: Apply Allocation" timings (fun () ->
-            applyToCFGWithLiveness
+    let applyStart = swOpt |> Option.map (fun sw -> sw.Elapsed.TotalMilliseconds)
+    let (blockPreparations, timings) =
+        timePhase swOpt "RegAlloc: Apply Preparation" timings (fun () ->
+            prepareCFGAllocation
                 arch
                 blocksWithPhiResolved
                 result
                 floatAllocation
                 livenessBits
                 floatLiveness)
+    let (allocatedBlocks, timings) =
+        timePhase swOpt "RegAlloc: Apply Rewrite" timings (fun () ->
+            applyPreparedCFGAllocation
+                arch
+                blocksWithPhiResolved
+                result
+                floatAllocation
+                blockPreparations)
+    let timings =
+        match swOpt, applyStart with
+        | Some sw, Some start ->
+            appendTiming "RegAlloc: Apply Allocation" (sw.Elapsed.TotalMilliseconds - start) timings
+        | _ -> timings
 
     let ((cfgWithParamCopies, allocatedTypedParams), timings) =
         timePhase swOpt "RegAlloc: Finalize" timings (fun () ->
