@@ -3484,9 +3484,12 @@ let private applyToPreparedBlock
     let mutable remainingLiveness = preparation.SaveRegsLiveness
     let mutable remainingArgMoveBacking = preparation.ArgMoveBackingRegs
 
+    let appendOneAllocated (instr: LIR.Instr) : unit =
+        allocatedInstrs.Add(applyFloatAllocationToInstr floatAllocation instr)
+
     let appendAllocated (instrs: LIR.Instr list) : unit =
         for instr in instrs do
-            allocatedInstrs.Add(applyFloatAllocationToInstr floatAllocation instr)
+            appendOneAllocated instr
 
     for instr in block.Instrs do
         match instr with
@@ -3502,7 +3505,7 @@ let private applyToPreparedBlock
                 let liveCallerSavedFloat =
                     getLiveCallerSavedFloatRegs arch floatLiveAfter floatAllocation
                 let regs = (intRegs, liveCallerSavedFloat)
-                appendAllocated (applyToInstr arch mapping (LIR.SaveRegs regs))
+                appendOneAllocated (LIR.SaveRegs regs)
                 savedRegsStack <- regs :: savedRegsStack
                 remainingLiveness <- restLiveness
                 remainingArgMoveBacking <- restArgMoveBacking
@@ -3513,7 +3516,7 @@ let private applyToPreparedBlock
         | LIR.RestoreRegs ([], []) ->
             match savedRegsStack with
             | regs :: restSavedRegs ->
-                appendAllocated (applyToInstr arch mapping (LIR.RestoreRegs regs))
+                appendOneAllocated (LIR.RestoreRegs regs)
                 savedRegsStack <- restSavedRegs
             | [] ->
                 Crash.crash "Unmatched RestoreRegs: SaveRegs stack is empty"
