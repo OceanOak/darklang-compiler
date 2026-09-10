@@ -88,20 +88,9 @@ type RegisterAllocationTiming = {
     ElapsedMs: float
 }
 
-type private InterferenceGraphTiming = {
-    LiveIterationMs: float
-    AdjacencyUpdatesMs: float
-}
-
-type private McsTiming = {
-    SelectMs: float
-    UpdateMs: float
-}
-
 type private ChordalColoringTiming = {
     CoalesceMs: float
-    McsSelectMs: float
-    McsUpdateMs: float
+    McsMs: float
     GreedyMs: float
     ExpandMs: float
 }
@@ -1241,34 +1230,16 @@ let getAllocatableRegs (arch: Platform.Arch) (blocks: LIR.BasicBlock array) : LI
 // ============================================================================
 
 let private buildInterferenceGraphBitsetFastWithLivenessInternal
-    (trackTiming: bool)
-    (swOpt: System.Diagnostics.Stopwatch option)
     (blockIndex: BlockIndex)
     (classifiedBlocks: ClassifiedBlock array)
     (domain: VRegDomain)
     (liveness: BlockLiveness array)
     (entryDefs: BitSet)
-    : InterferenceGraph * InterferenceGraphTiming =
+    : InterferenceGraph =
     let n = domain.Ids.Length
     let wordCount = domain.WordCount
     let adjacency = Array.init n (fun _ -> bitsetEmpty wordCount)
     let present = bitsetEmpty wordCount
-    let mutable liveIterMs = 0.0
-    let mutable adjacencyMs = 0.0
-
-    let timeBlock (accumulate: float -> unit) (f: unit -> 'a) : 'a =
-        if not trackTiming then
-            f ()
-        else
-            match swOpt with
-            | None -> f ()
-            | Some sw ->
-                let start = sw.Elapsed.TotalMilliseconds
-                let result = f ()
-                let delta = sw.Elapsed.TotalMilliseconds - start
-                accumulate delta
-                result
-
     let markPresentIdx (idx: int) =
         if idx >= 0 && idx < n then
             bitsetAddIndexInPlace idx present
@@ -1279,26 +1250,11 @@ let private buildInterferenceGraphBitsetFastWithLivenessInternal
         | None -> ()
 
     let addEdgesToLive (defIdx: int) (live: BitSet) =
-        if trackTiming then
-            let liveIndices =
-                timeBlock (fun delta -> liveIterMs <- liveIterMs + delta) (fun () ->
-                    let mutable acc = []
-                    bitsetIterIndices live (fun idx ->
-                        if idx <> defIdx then
-                            acc <- idx :: acc)
-                    List.rev acc)
-
-            timeBlock (fun delta -> adjacencyMs <- adjacencyMs + delta) (fun () ->
-                bitsetUnionInPlace adjacency.[defIdx] live
-                bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
-                for idx in liveIndices do
-                    bitsetAddIndexInPlace defIdx adjacency.[idx])
-        else
-            bitsetUnionInPlace adjacency.[defIdx] live
-            bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
-            bitsetIterIndices live (fun idx ->
-                if idx <> defIdx then
-                    bitsetAddIndexInPlace defIdx adjacency.[idx])
+        bitsetUnionInPlace adjacency.[defIdx] live
+        bitsetRemoveIndexInPlace defIdx adjacency.[defIdx]
+        bitsetIterIndices live (fun idx ->
+            if idx <> defIdx then
+                bitsetAddIndexInPlace defIdx adjacency.[idx])
 
     for blockIdx in 0 .. classifiedBlocks.Length - 1 do
         let blockFacts = classifiedBlocks.[blockIdx]
@@ -1308,8 +1264,7 @@ let private buildInterferenceGraphBitsetFastWithLivenessInternal
         for v in blockFacts.TerminatorUses do
             bitsetAddInPlace domain v live
 
-        timeBlock (fun delta -> liveIterMs <- liveIterMs + delta) (fun () ->
-            bitsetIterIndices live markPresentIdx)
+        bitsetIterIndices live markPresentIdx
 
         for instrIdx in blockFacts.InstrFacts.Length - 1 .. -1 .. 0 do
             let facts = blockFacts.InstrFacts.[instrIdx]
@@ -1335,11 +1290,7 @@ let private buildInterferenceGraphBitsetFastWithLivenessInternal
                     markPresentIdx defIdx
                     addEdgesToLive defIdx live)
 
-    let timing = {
-        LiveIterationMs = liveIterMs
-        AdjacencyUpdatesMs = adjacencyMs
-    }
-    ({ Domain = domain; Vertices = present; Neighbors = adjacency }, timing)
+    { Domain = domain; Vertices = present; Neighbors = adjacency }
 
 /// Build interference graph from CFG using bitset liveness
 let private buildInterferenceGraphBitsetWithLiveness
@@ -1349,18 +1300,7 @@ let private buildInterferenceGraphBitsetWithLiveness
     (liveness: BlockLiveness array)
     (entryDefs: BitSet)
     : InterferenceGraph =
-    buildInterferenceGraphBitsetFastWithLivenessInternal false None blockIndex classifiedBlocks domain liveness entryDefs
-    |> fst
-
-let private buildInterferenceGraphBitsetWithLivenessProfile
-    (sw: System.Diagnostics.Stopwatch)
-    (blockIndex: BlockIndex)
-    (classifiedBlocks: ClassifiedBlock array)
-    (domain: VRegDomain)
-    (liveness: BlockLiveness array)
-    (entryDefs: BitSet)
-    : InterferenceGraph * InterferenceGraphTiming =
-    buildInterferenceGraphBitsetFastWithLivenessInternal true (Some sw) blockIndex classifiedBlocks domain liveness entryDefs
+    buildInterferenceGraphBitsetFastWithLivenessInternal blockIndex classifiedBlocks domain liveness entryDefs
 
 /// Build interference graph from CFG using bitset liveness
 let buildInterferenceGraphBitsetFast
@@ -1543,18 +1483,13 @@ let collectPhiPreferences (blocks: LIR.BasicBlock array) : (int * int) list =
 /// Uses a bucket queue for linear-time selection in terms of vertices + edges.
 let private maximumCardinalitySearchCore
     (graph: InterferenceGraph)
-    (swOpt: System.Diagnostics.Stopwatch option)
-    : int list * McsProfile * McsTiming option =
+    : int list * McsProfile =
     let domain = graph.Domain
     let n = domain.Ids.Length
     let vertexCount = bitsetCount graph.Vertices
     if vertexCount = 0 then
         let profile = { VertexCount = 0; SelectionChecks = 0; WeightUpdates = 0; BucketSkips = 0 }
-        let timing =
-            match swOpt with
-            | None -> None
-            | Some _ -> Some { SelectMs = 0.0; UpdateMs = 0.0 }
-        ([], profile, timing)
+        ([], profile)
     else
         let inGraph = Array.create n false
         bitsetIterIndices graph.Vertices (fun idx -> inGraph.[idx] <- true)
@@ -1596,52 +1531,36 @@ let private maximumCardinalitySearchCore
             if head <> -1 then prev.[head] <- idx
             bucketHeads.[weight] <- idx
 
-        let timeBlock (accumulate: float -> unit) (f: unit -> 'a) : 'a =
-            match swOpt with
-            | None -> f ()
-            | Some sw ->
-                let start = sw.Elapsed.TotalMilliseconds
-                let result = f ()
-                let delta = sw.Elapsed.TotalMilliseconds - start
-                accumulate delta
-                result
-
         let mutable currentMax = 0
         let mutable ordering = []
         let mutable selectionChecks = 0
         let mutable weightUpdates = 0
         let mutable bucketSkips = 0
-        let mutable selectMs = 0.0
-        let mutable updateMs = 0.0
 
         for _ in 0 .. vertexCount - 1 do
-            let idx =
-                timeBlock (fun delta -> selectMs <- selectMs + delta) (fun () ->
-                    while currentMax >= 0 && bucketHeads.[currentMax] = -1 do
-                        currentMax <- currentMax - 1
-                        bucketSkips <- bucketSkips + 1
-                    if currentMax < 0 then
-                        Crash.crash "MCS bucket queue empty before selecting all vertices"
+            while currentMax >= 0 && bucketHeads.[currentMax] = -1 do
+                currentMax <- currentMax - 1
+                bucketSkips <- bucketSkips + 1
+            if currentMax < 0 then
+                Crash.crash "MCS bucket queue empty before selecting all vertices"
 
-                    let idx = bucketHeads.[currentMax]
-                    selectionChecks <- selectionChecks + 1
-                    removeFromBucket idx currentMax
-                    ordered.[idx] <- true
-                    ordering <- domain.Ids.[idx] :: ordering
-                    idx)
+            let idx = bucketHeads.[currentMax]
+            selectionChecks <- selectionChecks + 1
+            removeFromBucket idx currentMax
+            ordered.[idx] <- true
+            ordering <- domain.Ids.[idx] :: ordering
 
-            timeBlock (fun delta -> updateMs <- updateMs + delta) (fun () ->
-                bitsetIterIndices graph.Neighbors.[idx] (fun nidx ->
-                    if inGraph.[nidx] && not ordered.[nidx] then
-                        let oldWeight = weights.[nidx]
-                        removeFromBucket nidx oldWeight
-                        let newWeight = oldWeight + 1
-                        if newWeight >= vertexCount then
-                            Crash.crash $"MCS weight overflow: {newWeight} >= {vertexCount}"
-                        weights.[nidx] <- newWeight
-                        addToBucket nidx newWeight
-                        if newWeight > currentMax then currentMax <- newWeight
-                        weightUpdates <- weightUpdates + 1))
+            bitsetIterIndices graph.Neighbors.[idx] (fun nidx ->
+                if inGraph.[nidx] && not ordered.[nidx] then
+                    let oldWeight = weights.[nidx]
+                    removeFromBucket nidx oldWeight
+                    let newWeight = oldWeight + 1
+                    if newWeight >= vertexCount then
+                        Crash.crash $"MCS weight overflow: {newWeight} >= {vertexCount}"
+                    weights.[nidx] <- newWeight
+                    addToBucket nidx newWeight
+                    if newWeight > currentMax then currentMax <- newWeight
+                    weightUpdates <- weightUpdates + 1)
 
         let profile = {
             VertexCount = vertexCount
@@ -1649,26 +1568,10 @@ let private maximumCardinalitySearchCore
             WeightUpdates = weightUpdates
             BucketSkips = bucketSkips
         }
-        let timing =
-            match swOpt with
-            | None -> None
-            | Some _ -> Some { SelectMs = selectMs; UpdateMs = updateMs }
-        (List.rev ordering, profile, timing)
+        (List.rev ordering, profile)
 
 let maximumCardinalitySearchWithProfile (graph: InterferenceGraph) : int list * McsProfile =
-    let (ordering, profile, _timing) = maximumCardinalitySearchCore graph None
-    (ordering, profile)
-
-let private maximumCardinalitySearchWithTiming
-    (graph: InterferenceGraph)
-    (sw: System.Diagnostics.Stopwatch)
-    : int list * McsTiming =
-    let (ordering, _profile, timingOpt) = maximumCardinalitySearchCore graph (Some sw)
-    let timing =
-        match timingOpt with
-        | Some value -> value
-        | None -> { SelectMs = 0.0; UpdateMs = 0.0 }
-    (ordering, timing)
+    maximumCardinalitySearchCore graph
 
 let maximumCardinalitySearch (graph: InterferenceGraph) : int list =
     let (ordering, _profile) = maximumCardinalitySearchWithProfile graph
@@ -2050,8 +1953,7 @@ let private chordalGraphColorWithTiming
     if bitsetIsEmpty graph.Vertices then
         (emptyColoringResult graph.Domain,
          { CoalesceMs = 0.0
-           McsSelectMs = 0.0
-           McsUpdateMs = 0.0
+           McsMs = 0.0
            GreedyMs = 0.0
            ExpandMs = 0.0 })
     elif List.isEmpty movePairs && List.isEmpty preferencePairs then
@@ -2059,14 +1961,15 @@ let private chordalGraphColorWithTiming
         let (precolored, preferences) =
             uncoalescedColoringInputs graph precoloredPairs
         let prepMs = sw.Elapsed.TotalMilliseconds - start
-        let (peo, mcsTiming) = maximumCardinalitySearchWithTiming graph sw
+        let mcsStart = sw.Elapsed.TotalMilliseconds
+        let peo = maximumCardinalitySearch graph
+        let mcsMs = sw.Elapsed.TotalMilliseconds - mcsStart
         let greedyStart = sw.Elapsed.TotalMilliseconds
         let result = greedyColorReverse graph peo precolored numColors preferences
         let greedyMs = sw.Elapsed.TotalMilliseconds - greedyStart
         (result,
          { CoalesceMs = prepMs
-           McsSelectMs = mcsTiming.SelectMs
-           McsUpdateMs = mcsTiming.UpdateMs
+           McsMs = mcsMs
            GreedyMs = greedyMs
            ExpandMs = 0.0 })
     else
@@ -2078,7 +1981,8 @@ let private chordalGraphColorWithTiming
 
         let (coalesced, coalesceMs) =
             timePhase (fun () -> coalesceGraphFast graph precoloredPairs movePairs preferencePairs)
-        let (peo, mcsTiming) = maximumCardinalitySearchWithTiming coalesced.Graph sw
+        let (peo, mcsMs) =
+            timePhase (fun () -> maximumCardinalitySearch coalesced.Graph)
         let (result, greedyMs) =
             timePhase (fun () ->
                 greedyColorReverse coalesced.Graph peo coalesced.Precolored numColors coalesced.Preferences)
@@ -2087,8 +1991,7 @@ let private chordalGraphColorWithTiming
 
         let timing = {
             CoalesceMs = coalesceMs
-            McsSelectMs = mcsTiming.SelectMs
-            McsUpdateMs = mcsTiming.UpdateMs
+            McsMs = mcsMs
             GreedyMs = greedyMs
             ExpandMs = expandMs
         }
@@ -4044,32 +3947,13 @@ let private allocateRegistersInternal
 
     // Step 2: Build interference graph
     let (graph, timings) =
-        match swOpt with
-        | None ->
-            timePhase swOpt "RegAlloc: Interference Graph" timings (fun () ->
-                buildInterferenceGraphBitsetWithLiveness
-                    blockIndex
-                    classifiedBlocks
-                    domain
-                    livenessBits
-                    intParamBits)
-        | Some sw ->
-            let start = sw.Elapsed.TotalMilliseconds
-            let (graph, igTiming) =
-                buildInterferenceGraphBitsetWithLivenessProfile
-                    sw
-                    blockIndex
-                    classifiedBlocks
-                    domain
-                    livenessBits
-                    intParamBits
-            let totalMs = sw.Elapsed.TotalMilliseconds - start
-            let timings =
-                timings
-                |> appendTiming "RegAlloc: Interference Graph" totalMs
-                |> appendTiming "RegAlloc: Interference Graph - Live Iteration" igTiming.LiveIterationMs
-                |> appendTiming "RegAlloc: Interference Graph - Adjacency Updates" igTiming.AdjacencyUpdatesMs
-            (graph, timings)
+        timePhase swOpt "RegAlloc: Interference Graph" timings (fun () ->
+            buildInterferenceGraphBitsetWithLiveness
+                blockIndex
+                classifiedBlocks
+                domain
+                livenessBits
+                intParamBits)
 
     // Step 2b: Collect coalescing preferences and move pairs
     let ((preferences, movePairs), timings) =
@@ -4102,8 +3986,7 @@ let private allocateRegistersInternal
                 timings
                 |> appendTiming "RegAlloc: Coloring" totalMs
                 |> appendTiming "RegAlloc: Coloring - Coalesce" colorTiming.CoalesceMs
-                |> appendTiming "RegAlloc: Coloring - MCS Select" colorTiming.McsSelectMs
-                |> appendTiming "RegAlloc: Coloring - MCS Bucket Update" colorTiming.McsUpdateMs
+                |> appendTiming "RegAlloc: Coloring - MCS" colorTiming.McsMs
                 |> appendTiming "RegAlloc: Coloring - Greedy" colorTiming.GreedyMs
                 |> appendTiming "RegAlloc: Coloring - Expand" colorTiming.ExpandMs
             (result, timings)
