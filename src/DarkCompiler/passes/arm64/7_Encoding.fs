@@ -1373,6 +1373,18 @@ let encodeWithLabels
         (LabelOffsets (stringLabels, floatLabels))
         dataLabels
 
+let private tryLocalCodeTarget (instr: ARM64Symbolic.Instr) : string option =
+    match instr with
+    | ARM64Symbolic.CBZ (_, label)
+    | ARM64Symbolic.CBNZ (_, label)
+    | ARM64Symbolic.B_label label
+    | ARM64Symbolic.B_cond_label (_, label)
+    | ARM64Symbolic.TBZ_label (_, _, label)
+    | ARM64Symbolic.TBNZ_label (_, _, label)
+    | ARM64Symbolic.BL label -> Some label
+    | ARM64Symbolic.ADR (_, ARM64Symbolic.CodeLabel label) -> Some label
+    | _ -> None
+
 let prepareSymbolicChunk
     (instructions: ARM64Symbolic.Instr list)
     : PreparedChunk =
@@ -1429,19 +1441,9 @@ let prepareSymbolicChunk
         match localCodeLabels.TryGetValue label with
         | true, offset -> Some offset
         | false, _ -> None
-    let localTarget = function
-        | ARM64Symbolic.CBZ (_, label)
-        | ARM64Symbolic.CBNZ (_, label)
-        | ARM64Symbolic.B_label label
-        | ARM64Symbolic.B_cond_label (_, label)
-        | ARM64Symbolic.TBZ_label (_, _, label)
-        | ARM64Symbolic.TBNZ_label (_, _, label)
-        | ARM64Symbolic.BL label -> Some label
-        | ARM64Symbolic.ADR (_, ARM64Symbolic.CodeLabel label) -> Some label
-        | _ -> None
     let unresolvedRelocations = ResizeArray<struct (int * ARM64Symbolic.Instr)>()
     for struct (wordIndex, instr) in relocations do
-        match localTarget instr with
+        match tryLocalCodeTarget instr with
         | Some label when localCodeLabels.ContainsKey label ->
             machineCodeTemplate.[wordIndex] <-
                 encodeSymbolicWithLabels
@@ -1459,6 +1461,89 @@ let prepareSymbolicChunk
         CodeLabels = codeLabelArray
         PoolLabelRefs = poolLabelRefs.ToArray()
     }
+
+/// Compose prepared function chunks into one position-independent group.
+/// Fixed words are copied from their cached templates, while calls and branches
+/// whose targets are inside the group are resolved once for every later use of
+/// that exact group shape.
+let combinePreparedChunks (chunks: PreparedChunk list) : PreparedChunk =
+    match chunks with
+    | [] ->
+        {
+            MachineCodeTemplate = [||]
+            Relocations = [||]
+            CodeLabels = [||]
+            PoolLabelRefs = [||]
+        }
+    | [chunk] -> chunk
+    | chunks ->
+        let wordCount =
+            chunks |> List.sumBy (fun chunk -> chunk.MachineCodeTemplate.Length)
+        let machineCodeTemplate = Array.zeroCreate<ARM64.MachineCode> wordCount
+        let codeLabels = ResizeArray<struct (string * int)>()
+        let relocations = ResizeArray<struct (int * ARM64Symbolic.Instr)>()
+        let poolLabelRefs = ResizeArray<ARM64Symbolic.LabelRef>()
+        let stringLiterals =
+            System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal)
+        let floatLiterals = System.Collections.Generic.HashSet<int64>()
+
+        let recordPoolLabelRef labelRef =
+            match labelRef with
+            | ARM64Symbolic.DataLabel (ARM64Symbolic.StringLiteral value) ->
+                if stringLiterals.Add value then poolLabelRefs.Add labelRef
+            | ARM64Symbolic.DataLabel (ARM64Symbolic.FloatLiteral value) ->
+                let bits = System.BitConverter.DoubleToInt64Bits value
+                if floatLiterals.Add bits then poolLabelRefs.Add labelRef
+            | ARM64Symbolic.CodeLabel _
+            | ARM64Symbolic.DataLabel (ARM64Symbolic.Named _) -> ()
+
+        chunks
+        |> List.fold (fun outputIndex chunk ->
+            Array.blit
+                chunk.MachineCodeTemplate
+                0
+                machineCodeTemplate
+                outputIndex
+                chunk.MachineCodeTemplate.Length
+            for struct (name, relativeOffset) in chunk.CodeLabels do
+                codeLabels.Add(struct (name, (outputIndex * 4) + relativeOffset))
+            for struct (relativeIndex, instr) in chunk.Relocations do
+                relocations.Add(struct (outputIndex + relativeIndex, instr))
+            for labelRef in chunk.PoolLabelRefs do
+                recordPoolLabelRef labelRef
+            outputIndex + chunk.MachineCodeTemplate.Length) 0
+        |> ignore
+
+        let codeLabelArray = codeLabels.ToArray()
+        let localCodeLabels =
+            System.Collections.Generic.Dictionary<string, int>(System.StringComparer.Ordinal)
+        for struct (name, offset) in codeLabelArray do
+            localCodeLabels.[name] <- offset
+        let tryFindLocalCodeLabel label =
+            match localCodeLabels.TryGetValue label with
+            | true, offset -> Some offset
+            | false, _ -> None
+
+        let unresolvedRelocations = ResizeArray<struct (int * ARM64Symbolic.Instr)>()
+        for struct (wordIndex, instr) in relocations do
+            match tryLocalCodeTarget instr with
+            | Some label when localCodeLabels.ContainsKey label ->
+                machineCodeTemplate.[wordIndex] <-
+                    encodeSymbolicWithLabels
+                        instr
+                        (wordIndex * 4)
+                        tryFindLocalCodeLabel
+                        (LiteralOffsets (Map.empty, Map.empty))
+                        Map.empty
+            | _ ->
+                unresolvedRelocations.Add(struct (wordIndex, instr))
+
+        {
+            MachineCodeTemplate = machineCodeTemplate
+            Relocations = unresolvedRelocations.ToArray()
+            CodeLabels = codeLabelArray
+            PoolLabelRefs = poolLabelRefs.ToArray()
+        }
 
 /// Compute the size of concrete code in bytes.
 let getCodeSize (instructions: ARM64.Instr list) : int =

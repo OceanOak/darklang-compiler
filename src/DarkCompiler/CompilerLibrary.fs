@@ -502,6 +502,12 @@ type private Arm64InstructionChunkReferenceComparer() =
         member _.GetHashCode(instructions) =
             System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(instructions)
 
+type private Arm64InstructionChunkGroupReferenceComparer() =
+    interface IEqualityComparer<ARM64Symbolic.Instr list list> with
+        member _.Equals(left, right) = Object.ReferenceEquals(left, right)
+        member _.GetHashCode(instructionParts) =
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(instructionParts)
+
 [<NoComparison>]
 type private Arm64MetadataGroupKey = {
     Functions: LIR.Function list
@@ -629,6 +635,10 @@ type CompilationSession(collectCodegenMetrics: bool) =
         Dictionary<
             ARM64Symbolic.Instr list,
             ARM64_Encoding.PreparedChunk>(Arm64InstructionChunkReferenceComparer())
+    let arm64EmissionChunkGroups =
+        Dictionary<
+            ARM64Symbolic.Instr list list,
+            ARM64_Encoding.PreparedChunk>(Arm64InstructionChunkGroupReferenceComparer())
     let arm64ReleasePlanSummaries =
         Dictionary<
             bool * string,
@@ -1162,6 +1172,19 @@ type CompilationSession(collectCodegenMetrics: bool) =
                 arm64EmissionChunks.[instructions] <- prepared
                 prepared
 
+    member _.PrepareArm64EmissionChunkGroup
+        (instructionParts: ARM64Symbolic.Instr list list)
+        (prepare: unit -> ARM64_Encoding.PreparedChunk)
+        : ARM64_Encoding.PreparedChunk =
+        if disposed then prepare ()
+        else
+            match arm64EmissionChunkGroups.TryGetValue instructionParts with
+            | true, prepared -> prepared
+            | false, _ ->
+                let prepared = prepare ()
+                arm64EmissionChunkGroups.[instructionParts] <- prepared
+                prepared
+
     member _.CachedArm64FunctionCount =
         if disposed then 0
         else arm64FunctionsByContext.Values |> Seq.sumBy (fun entries -> entries.Count)
@@ -1190,7 +1213,8 @@ type CompilationSession(collectCodegenMetrics: bool) =
         if disposed then 0
         else arm64FunctionGroupsByContext.Values |> Seq.sumBy (fun entries -> entries.Count)
     member _.CachedArm64EmissionChunkCount =
-        if disposed then 0 else arm64EmissionChunks.Count
+        if disposed then 0
+        else arm64EmissionChunks.Count + arm64EmissionChunkGroups.Count
     member _.CachedArm64ReleasePlanSummaryCount =
         if disposed then 0
         else arm64ReleasePlanSummaries.Values |> Seq.sumBy List.length
@@ -1259,6 +1283,7 @@ type CompilationSession(collectCodegenMetrics: bool) =
             arm64HelpersByContext.Clear()
             arm64FunctionsByReferenceAndContext.Clear()
             arm64EmissionChunks.Clear()
+            arm64EmissionChunkGroups.Clear()
             arm64ReleasePlanSummaries.Clear()
             arm64CodegenMetrics.Clear()
             arm64LirOpMetrics.Clear()
@@ -2089,12 +2114,16 @@ let private generateBinary
             let prepareCachedChunk =
                 session
                 |> Option.map (fun current -> current.PrepareArm64EmissionChunk)
+            let prepareCachedChunkGroup =
+                session
+                |> Option.map (fun current -> current.PrepareArm64EmissionChunkGroup)
             let emit =
                 ARM64_Emit.emitBinary
                     arm64Program
                     os
                     options.EnableLeakCheck
                     prepareCachedChunk
+                    prepareCachedChunkGroup
                     codegenPhaseRecorder
             let emitElapsed = sw.Elapsed.TotalMilliseconds - emitStart
             recordPassTiming passTimingRecorder "ARM64 Emit" emitElapsed

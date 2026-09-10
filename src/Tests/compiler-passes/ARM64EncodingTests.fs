@@ -237,11 +237,23 @@ let testPreparedChunksPreserveWholeProgramEncoding () : TestResult =
             actualFloats
             Platform.Linux
             false
+    let combined = combinePreparedChunks prepared
+    let combinedActual =
+        encodePreparedChunksWithPools
+            [combined]
+            actualStrings
+            actualFloats
+            Platform.Linux
+            false
     let localRelocationWasPrepared = prepared.Head.Relocations.Length = 3
-    if actual = expected && localRelocationWasPrepared then
+    let crossChunkRelocationWasPrepared = combined.Relocations.Length = 2
+    if actual = expected
+       && combinedActual = expected
+       && localRelocationWasPrepared
+       && crossChunkRelocationWasPrepared then
         Ok ()
     else
-        Error $"Prepared chunks changed whole-program encoding or retained a local relocation: expected={expected}, actual={actual}, first relocations={prepared.Head.Relocations.Length}"
+        Error $"Prepared chunk composition changed whole-program encoding or retained a group-local relocation: expected={expected}, actual={actual}, combined={combinedActual}, first relocations={prepared.Head.Relocations.Length}, combined relocations={combined.Relocations.Length}"
 
 let testInvalidAssertDifferentValueIsRejected () : TestResult =
     let content =

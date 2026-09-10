@@ -8250,7 +8250,7 @@ type HelperCodegenCache =
         -> ARM64Symbolic.Instr list
 
 type GeneratedChunk = {
-    Instructions: ARM64Symbolic.Instr list
+    InstructionParts: ARM64Symbolic.Instr list list
     ReusableAcrossCompilations: bool
 }
 
@@ -8265,7 +8265,9 @@ type GeneratedProgram = private GeneratedProgram of GeneratedChunk list
 let generatedProgramChunks (GeneratedProgram chunks) : GeneratedChunk list = chunks
 
 let generatedProgramInstructions (GeneratedProgram chunks) : ARM64Symbolic.Instr list =
-    chunks |> List.collect (fun chunk -> chunk.Instructions)
+    chunks
+    |> List.collect (fun chunk ->
+        chunk.InstructionParts |> List.collect id)
 
 let private generatePreparedARM64WithOptionsAndCache
     (target: ARM64.TargetConfig)
@@ -8668,7 +8670,7 @@ let private generatePreparedARM64WithOptionsAndCache
             | _ -> generate ()
         converted
         |> Result.map (fun instructions -> {
-            Instructions = instructions
+            InstructionParts = [instructions]
             ReusableAcrossCompilations = reusableAcrossCompilations
         })
 
@@ -8693,7 +8695,22 @@ let private generatePreparedARM64WithOptionsAndCache
             |> List.map (fun group -> (Some group, group.Functions))
 
     let convertRun (group: FunctionGroup option, runFunctions) =
-        let generate () = ResultList.mapResults convertCached runFunctions
+        let generate () =
+            ResultList.mapResults convertCached runFunctions
+            |> Result.map (fun chunks ->
+                match group, functionGroupCache, chunks with
+                | Some group, Some _, _ :: _ when group.ReusableAcrossCompilations ->
+                    // Retain the cached function instruction lists as separate
+                    // preparation parts. Emission can compose their already-
+                    // encoded templates once per reusable group without
+                    // re-encoding every fixed instruction in each group shape.
+                    [{
+                        InstructionParts =
+                            chunks
+                            |> List.collect (fun chunk -> chunk.InstructionParts)
+                        ReusableAcrossCompilations = true
+                    }]
+                | _ -> chunks)
         match group, functionGroupCache with
         | Some group, Some cache when group.ReusableAcrossCompilations ->
             cache group.ContextIdentity runFunctions generate
@@ -9047,7 +9064,7 @@ let private generatePreparedARM64WithOptionsAndCache
             GeneratedProgram (
                 functionChunks
                 @ [{
-                    Instructions = optimizedHelperInstructions
+                    InstructionParts = [optimizedHelperInstructions]
                     ReusableAcrossCompilations = Option.isSome helperCache
                 }])
         recordPhase "ARM64 Codegen Assembly" assemblyTimer

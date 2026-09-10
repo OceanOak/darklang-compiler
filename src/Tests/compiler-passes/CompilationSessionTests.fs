@@ -438,6 +438,38 @@ let testArm64EmissionChunkCacheUsesChunkIdentity (_: CompilerLibrary.StdlibResul
     else
         Error $"Expected identity-based prepared chunk reuse, got preparations={preparations.Count}, cached={session.CachedArm64EmissionChunkCount}, repeated={System.Object.ReferenceEquals(first, repeated)}, structural={System.Object.ReferenceEquals(first, structurallyEquivalent)}"
 
+let testArm64EmissionChunkGroupCacheUsesGroupIdentity (_: CompilerLibrary.StdlibResult) () : TestResult =
+    use session = new CompilerLibrary.CompilationSession()
+    let instructionParts =
+        [[ARM64Symbolic.MOVZ (ARM64.X0, 42us, 0)]; [ARM64Symbolic.RET]]
+    let structurallyEquivalentParts =
+        [[ARM64Symbolic.MOVZ (ARM64.X0, 42us, 0)]; [ARM64Symbolic.RET]]
+    let preparations = ResizeArray<unit>()
+    let prepare parts () =
+        preparations.Add ()
+        parts
+        |> List.map ARM64_Encoding.prepareSymbolicChunk
+        |> ARM64_Encoding.combinePreparedChunks
+    let first =
+        session.PrepareArm64EmissionChunkGroup
+            instructionParts
+            (prepare instructionParts)
+    let repeated =
+        session.PrepareArm64EmissionChunkGroup
+            instructionParts
+            (prepare instructionParts)
+    let structurallyEquivalent =
+        session.PrepareArm64EmissionChunkGroup
+            structurallyEquivalentParts
+            (prepare structurallyEquivalentParts)
+    if preparations.Count = 2
+       && System.Object.ReferenceEquals(first, repeated)
+       && not (System.Object.ReferenceEquals(first, structurallyEquivalent))
+       && session.CachedArm64EmissionChunkCount = 2 then
+        Ok ()
+    else
+        Error $"Expected identity-based prepared chunk-group reuse, got preparations={preparations.Count}, cached={session.CachedArm64EmissionChunkCount}, repeated={System.Object.ReferenceEquals(first, repeated)}, structural={System.Object.ReferenceEquals(first, structurallyEquivalent)}"
+
 let testArm64ReleasePlanSummaryCacheConfirmsPlanShape (_: CompilerLibrary.StdlibResult) () : TestResult =
     use session = new CompilerLibrary.CompilationSession()
     let firstPlan = ANF.NoReleasePlan
@@ -660,6 +692,7 @@ let tests (stdlib: CompilerLibrary.StdlibResult) = [
     ("compilation session reuses registry-independent ARM64 functions", testArm64CodegenCacheReusesContextIndependentFunctions stdlib)
     ("compilation session reuses planned ARM64 slot-init functions", testArm64CodegenCacheReusesPlannedSlotInitFunctions stdlib)
     ("compilation session reuses prepared ARM64 chunks by identity", testArm64EmissionChunkCacheUsesChunkIdentity stdlib)
+    ("compilation session reuses prepared ARM64 chunk groups by identity", testArm64EmissionChunkGroupCacheUsesGroupIdentity stdlib)
     ("compilation session confirms ARM64 release-plan cache shapes", testArm64ReleasePlanSummaryCacheConfirmsPlanShape stdlib)
     ("expression-only type checking reuses base registries", testExpressionTypeCheckingReusesBaseRegistries stdlib)
     ("compilation session isolates and disposes registries", testSessionIsolationAndDisposal stdlib)

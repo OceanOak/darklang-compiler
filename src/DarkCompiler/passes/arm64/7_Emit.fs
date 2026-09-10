@@ -19,6 +19,10 @@ let emitBinary
         (ARM64Symbolic.Instr list
             -> (unit -> ARM64_Encoding.PreparedChunk)
             -> ARM64_Encoding.PreparedChunk) option)
+    (prepareCachedChunkGroup:
+        (ARM64Symbolic.Instr list list
+            -> (unit -> ARM64_Encoding.PreparedChunk)
+            -> ARM64_Encoding.PreparedChunk) option)
     (phaseRecorder: (string -> float -> unit) option)
     : EmitResult =
     let startPhase () =
@@ -35,12 +39,24 @@ let emitBinary
         program
         |> CodeGen.generatedProgramChunks
         |> List.map (fun chunk ->
-            let prepare () =
-                ARM64_Encoding.prepareSymbolicChunk chunk.Instructions
-            match prepareCachedChunk with
-            | Some cache when chunk.ReusableAcrossCompilations ->
-                cache chunk.Instructions prepare
-            | _ -> prepare ())
+            let preparePart instructions =
+                let prepare () =
+                    ARM64_Encoding.prepareSymbolicChunk instructions
+                match prepareCachedChunk with
+                | Some cache when chunk.ReusableAcrossCompilations ->
+                    cache instructions prepare
+                | _ -> prepare ()
+            match chunk.InstructionParts with
+            | [instructions] -> preparePart instructions
+            | instructionParts ->
+                let prepareGroup () =
+                    instructionParts
+                    |> List.map preparePart
+                    |> ARM64_Encoding.combinePreparedChunks
+                match prepareCachedChunkGroup with
+                | Some cache when chunk.ReusableAcrossCompilations ->
+                    cache instructionParts prepareGroup
+                | _ -> prepareGroup ())
     recordPhase "ARM64 Emit Chunk Preparation" prepareTimer
 
     let poolTimer = startPhase ()
