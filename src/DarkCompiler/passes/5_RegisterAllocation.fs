@@ -2371,14 +2371,20 @@ let private tryFloatAllocation (floatAllocation: FAllocationResult) (fvregId: in
 
 /// Get the caller-saved physical registers that contain live values
 let getLiveCallerSavedRegs (allocation: AllocationResult) (liveVRegs: BitSet) : LIR.PhysReg list =
-    bitsetToList allocation.Domain liveVRegs
-    |> List.choose (fun vregId ->
-        match tryAllocation allocation vregId with
-        | Some (PhysReg reg) when List.contains reg callerSavedRegs ->
-            Some reg
-        | _ -> None)
-    |> List.distinct
-    |> List.sort  // Keep consistent order for deterministic output
+    let used = Array.create 7 false
+    bitsetIterIndices liveVRegs (fun idx ->
+        match allocation.Allocations.[idx] with
+        | Some (PhysReg LIR.X1) -> used.[0] <- true
+        | Some (PhysReg LIR.X2) -> used.[1] <- true
+        | Some (PhysReg LIR.X3) -> used.[2] <- true
+        | Some (PhysReg LIR.X4) -> used.[3] <- true
+        | Some (PhysReg LIR.X5) -> used.[4] <- true
+        | Some (PhysReg LIR.X6) -> used.[5] <- true
+        | Some (PhysReg LIR.X7) -> used.[6] <- true
+        | _ -> ())
+    callerSavedRegs
+    |> List.mapi (fun idx reg -> (idx, reg))
+    |> List.choose (fun (idx, reg) -> if used.[idx] then Some reg else None)
 
 /// Get the caller-saved physical float registers that contain live values
 let getLiveCallerSavedFloatRegs
@@ -2387,14 +2393,13 @@ let getLiveCallerSavedFloatRegs
     (floatAllocation: FAllocationResult)
     : LIR.PhysFPReg list =
     let callerSaved = floatCallerSavedRegsFor arch
-    bitsetToList floatAllocation.Domain liveFVRegs
-    |> List.choose (fun vregId ->
-        match tryFloatAllocation floatAllocation vregId with
-        | Some reg when List.contains reg callerSaved ->
-            Some reg
-        | _ -> None)
-    |> List.distinct
-    |> List.sort
+    let used = Array.create 16 false
+    bitsetIterIndices liveFVRegs (fun idx ->
+        match floatAllocation.Allocations.[idx] with
+        | Some reg -> used.[physFPRegToInt reg] <- true
+        | None -> ())
+    callerSaved
+    |> List.filter (fun reg -> used.[physFPRegToInt reg])
 
 // ============================================================================
 // Apply Allocation to LIR
