@@ -3535,8 +3535,9 @@ let applyToBlockWithLiveness
     (block: LIR.BasicBlock)
     : LIR.BasicBlock =
 
+    let hasEmptySaveRegs = List.exists isEmptySaveRegs block.Instrs
     let saveRegsLiveness =
-        if List.exists isEmptySaveRegs block.Instrs then
+        if hasEmptySaveRegs then
             computeSaveRegsLiveness
                 mapping.Domain
                 floatAllocation.Domain
@@ -3547,7 +3548,7 @@ let applyToBlockWithLiveness
             []
 
     let argMoveBackingRegs =
-        if arch = Platform.ARM64 && List.exists isEmptySaveRegs block.Instrs then
+        if arch = Platform.ARM64 && hasEmptySaveRegs then
             computeArgMoveBackingRegs mapping block
         else
             saveRegsLiveness |> List.map (fun _ -> [])
