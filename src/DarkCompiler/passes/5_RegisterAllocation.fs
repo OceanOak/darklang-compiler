@@ -2263,14 +2263,22 @@ let applyFloatAllocationToCFG (floatAllocation: FAllocationResult) (cfg: LIR.CFG
 // ============================================================================
 
 let private tryAllocation (allocation: AllocationResult) (vregId: int) : Allocation option =
-    match tryIndexOf allocation.Domain vregId with
-    | Some idx -> allocation.Allocations.[idx]
-    | None -> None
+    let domain = allocation.Domain
+    let offset = vregId - domain.IndexOffset
+    if offset < 0 || offset >= domain.IndexOf.Length then
+        None
+    else
+        let idx = domain.IndexOf.[offset]
+        if idx >= 0 then allocation.Allocations.[idx] else None
 
 let private tryFloatAllocation (floatAllocation: FAllocationResult) (fvregId: int) : LIR.PhysFPReg option =
-    match tryIndexOf floatAllocation.Domain fvregId with
-    | Some idx -> floatAllocation.Allocations.[idx]
-    | None -> None
+    let domain = floatAllocation.Domain
+    let offset = fvregId - domain.IndexOffset
+    if offset < 0 || offset >= domain.IndexOf.Length then
+        None
+    else
+        let idx = domain.IndexOf.[offset]
+        if idx >= 0 then floatAllocation.Allocations.[idx] else None
 
 /// Get the caller-saved physical registers that contain live values
 let getLiveCallerSavedRegs (allocation: AllocationResult) (liveVRegs: BitSet) : LIR.PhysReg list =
