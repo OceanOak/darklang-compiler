@@ -764,6 +764,21 @@ let sinkImmediateCounterUpdate (instrs: Instr list) : Instr list option =
             Sub (counter, counter, Imm amount)
         ]
     | [Sub (temp, counter, Imm amount)
+       Msub (accDest, mulLeft, mulRight, sub)
+       Mov (copyDest, Reg copySource)]
+        when sameReg temp copySource
+             && sameReg counter copyDest
+             && not (sameReg temp counter)
+             && not (sameReg accDest temp)
+             && not (sameReg accDest counter)
+             && not (sameReg mulLeft temp)
+             && not (sameReg mulRight temp)
+             && not (sameReg sub temp) ->
+        Some [
+            Msub (accDest, mulLeft, mulRight, sub)
+            Sub (counter, counter, Imm amount)
+        ]
+    | [Sub (temp, counter, Imm amount)
        Eor (accDest, accLeft, accRight)
        Mov (copyDest, Reg copySource)]
         when sameReg temp copySource
