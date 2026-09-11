@@ -14,13 +14,9 @@
 #  3. Sets GDB watchpoints on the callee-saved register save locations.
 #  4. Reports which function corrupts the saved registers.
 #
-# Requires gdb and objdump — run via scripts/run-in-container (auto-detects
-# the devcontainer if invoked from the host).
+# Requires gdb and objdump from the sbx development template.
 
 set -euo pipefail
-
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN="$HERE/../run-in-container"
 
 EXPR="${1:-}"
 WATCH_FUNC="${2:-}"
@@ -30,9 +26,9 @@ if [ -z "$EXPR" ]; then
     exit 1
 fi
 
-if ! "$RUN" objdump -i 2>/dev/null | grep -q 'i386:x86-64'; then
-    echo "debug-stack.sh: x86_64 objdump support is unavailable in this container." >&2
-    echo "Run this x64 debugging helper from an x86_64 devcontainer." >&2
+if ! objdump -i 2>/dev/null | grep -q 'i386:x86-64'; then
+    echo "debug-stack.sh: x86_64 objdump support is unavailable in this sandbox." >&2
+    echo "Run this x64 debugging helper from an x86_64 sandbox." >&2
     exit 1
 fi
 
@@ -41,20 +37,20 @@ rm -f "$BINPATH"
 
 if [ -f "$EXPR" ]; then
     echo "=== Compiling file: $EXPR ==="
-    "$RUN" ./dark "$EXPR" -o "$BINPATH" 2>&1 | tail -1
+    ./dark "$EXPR" -o "$BINPATH" 2>&1 | tail -1
 else
     echo "=== Compiling expression ==="
-    "$RUN" ./dark -e "$EXPR" -o "$BINPATH" 2>&1 | tail -1
+    ./dark -e "$EXPR" -o "$BINPATH" 2>&1 | tail -1
 fi
 
 echo ""
 echo "=== Finding function entry points ==="
-"$RUN" objdump -D -M intel -b binary -m i386:x86-64 --adjust-vma=0x400000 "$BINPATH" 2>&1 | \
+objdump -D -M intel -b binary -m i386:x86-64 --adjust-vma=0x400000 "$BINPATH" 2>&1 | \
     awk '/push.*rbp$/ { gsub(":", "", $1); print "  Function at 0x" $1 }'
 
 echo ""
 echo "=== Running with GDB crash analysis ==="
-"$RUN" gdb -batch \
+gdb -batch \
     -ex 'run' \
     -ex 'printf "CRASH at RIP=%p\n", $rip' \
     -ex 'printf "Registers: RAX=%p RBX=%p R12=%p R13=%p R14=%p R15=%p\n", $rax, $rbx, $r12, $r13, $r14, $r15' \
@@ -71,7 +67,7 @@ if [ -n "$WATCH_FUNC" ]; then
     # Entry prologue: push rbp; mov rbp,rsp; push rbx; push r12; push r13
     # After prologue: [RBP-8]=RBX, [RBP-16]=R12, [RBP-24]=R13
 
-    "$RUN" gdb -batch \
+    gdb -batch \
         -ex "break *0x${WATCH_FUNC}" \
         -ex 'run' \
         -ex 'finish' \

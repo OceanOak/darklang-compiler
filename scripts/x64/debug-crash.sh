@@ -19,9 +19,6 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN="$HERE/../run-in-container"
-
 BIN="/tmp/debug_crash_test"
 MODE="crash"
 WATCH_ADDR=""
@@ -57,16 +54,16 @@ fi
 
 echo "=== Compiling ==="
 if [ -f "$EXPR" ]; then
-    "$RUN" ./dark "$EXPR" -o "$BIN" 2>&1 | tail -1
+    ./dark "$EXPR" -o "$BIN" 2>&1 | tail -1
 else
-    "$RUN" ./dark -e "$EXPR" -o "$BIN" 2>&1 | tail -1
+    ./dark -e "$EXPR" -o "$BIN" 2>&1 | tail -1
 fi
 
 case "$MODE" in
     crash)
         echo ""
         echo "=== Running with crash analysis ==="
-        "$RUN" gdb -batch \
+        gdb -batch \
             -ex 'run' \
             -ex 'printf "\n=== CRASH INFO ===\n"' \
             -ex 'printf "RIP=%p (crash instruction)\n", $rip' \
@@ -89,7 +86,7 @@ case "$MODE" in
         echo ""
         echo "=== Watching callee-saved regs at function 0x$WATCH_ADDR ==="
         echo "Setting watchpoints on [RBP-8] (RBX), [RBP-16] (R12), [RBP-24] (R13)"
-        "$RUN" gdb -batch \
+        gdb -batch \
             -ex "break *0x${WATCH_ADDR}" \
             -ex 'run' \
             -ex 'printf "Function entered: RBP=%p\n", $rbp' \
@@ -111,14 +108,14 @@ case "$MODE" in
     trace)
         echo ""
         echo "=== Finding function entry points ==="
-        "$RUN" objdump -D -M intel -b binary -m i386:x86-64 \
+        objdump -D -M intel -b binary -m i386:x86-64 \
             --adjust-vma=0x400000 "$BIN" 2>&1 | \
             awk '/push.*rbp$/ {addr=$1; getline; if (/mov.*rbp,.*rsp/) print "func @ " addr}' | \
             head -40
 
         echo ""
         echo "=== Valgrind check ==="
-        "$RUN" valgrind --tool=memcheck "$BIN" 2>&1 | \
+        valgrind --tool=memcheck "$BIN" 2>&1 | \
             grep -E "Invalid|ERROR SUMMARY|Address"
         ;;
 esac

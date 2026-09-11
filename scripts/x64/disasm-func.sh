@@ -10,9 +10,6 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN="$HERE/../run-in-container"
-
 BIN="${1:-}"
 ADDR="${2:-}"
 ADDR_HEX="${ADDR#0x}"
@@ -23,7 +20,7 @@ if [ -z "$BIN" ]; then
 fi
 
 disasm() {
-    "$RUN" objdump -D -M intel -b binary -m i386:x86-64 --adjust-vma=0x400000 "$BIN"
+    objdump -D -M intel -b binary -m i386:x86-64 --adjust-vma=0x400000 "$BIN"
 }
 
 if [ -z "$ADDR" ]; then

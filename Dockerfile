@@ -1,17 +1,28 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
+ARG SANDBOX_TEMPLATE=codex
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS dotnet
+FROM docker.io/docker/sandbox-templates:${SANDBOX_TEMPLATE}
 
-# Dockerfile - Build a fixed non-root development shell image for local compiler work.
+# Dockerfile - Build the sbx development template for local compiler work.
 
-# Install development tools, benchmarking dependencies, and curl for Codex CLI installation
+USER root
+
+# Reuse the official SDK installation while retaining the sbx template's agent runtime.
+COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
+
+# Trust an enclosing sandbox's proxy when this template is built from another sbx environment.
+ARG PROXY_CA_CERT_B64
+RUN if [ -n "$PROXY_CA_CERT_B64" ]; then \
+      printf '%s' "$PROXY_CA_CERT_B64" | base64 --decode > /usr/local/share/ca-certificates/proxy-ca.crt && \
+      update-ca-certificates; \
+    fi
+
+# Install development tools and benchmarking dependencies.
 RUN apt-get update && apt-get install -y \
     git \
     vim \
     file \
     less \
     curl \
-    sudo \
-    nodejs \
-    npm \
     htop \
     jq \
     sqlite3 \
@@ -29,32 +40,21 @@ RUN apt-get update && apt-get install -y \
     ocaml \
     opam \
     # Emulation for running compiled binaries on non-native hosts
-    qemu-user-static \
+    qemu-user-binfmt \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Codex CLI + Claude Code
-RUN npm install -g @openai/codex @anthropic-ai/claude-code
-
-# Repurpose the base image's ubuntu user (UID/GID 1000) as 'dark'.
-# UID 1000 matches the default host user on Linux; macOS bind-mounts are permissive.
-RUN mkdir -p /workspace && \
-    usermod -l dark -d /home/dark -m ubuntu && \
-    groupmod -n dark ubuntu && \
-    echo "dark ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    mkdir -p /home/dark/.nuget/packages /home/dark/.codex /home/dark/.claude && \
-    chown -R dark:dark /home/dark /workspace
-
-# Switch to dark user
-USER dark
+# The sbx base image provides the non-root agent user and passwordless sudo.
+RUN mkdir -p /home/agent/.nuget/packages && chown -R agent:agent /home/agent/.nuget
+USER agent
 
 # Use the image-provided .NET installation as the system runtime/SDK
-ENV HOME="/home/dark"
+ENV HOME="/home/agent"
 ENV DOTNET_ROOT="/usr/share/dotnet"
-ENV DOTNET_CLI_HOME="/home/dark"
+ENV DOTNET_CLI_HOME="/home/agent"
 ENV DOTNET_MULTILEVEL_LOOKUP="0"
 
 # Add .NET, dotnet tools and local bin to PATH
-ENV PATH="${DOTNET_ROOT}:/home/dark/.dotnet/tools:/home/dark/.local/bin:/home/dark/.cargo/bin:${PATH}"
+ENV PATH="${DOTNET_ROOT}:/home/agent/.dotnet/tools:/home/agent/.local/bin:/home/agent/.cargo/bin:${PATH}"
 
 # Pin the native Rust toolchain and install the Linux x86_64 standard library
 # used to build audited reference binaries for QEMU instruction measurement.
@@ -63,7 +63,7 @@ RUN rustup toolchain install 1.89.0 --profile minimal --target x86_64-unknown-li
 
 # Pre-download workload advertising manifests so first-run commands don't fail workload verification.
 # Needs elevated privileges because the SDK is installed system-wide under /usr/share/dotnet.
-RUN sudo dotnet workload update --advertising-manifests-only --ignore-failed-sources
+RUN sudo /usr/share/dotnet/dotnet workload update --advertising-manifests-only --ignore-failed-sources
 
 # Coverage tooling for ./run-coverage
 RUN dotnet tool install -g coverlet.console && \
@@ -76,7 +76,7 @@ RUN opam init --disable-sandboxing --auto-setup --yes && \
     echo 'eval $(opam env)' >> ~/.bashrc
 
 # Install darklang interpreter from latest GitHub release
-COPY --chown=dark:dark scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
+COPY --chown=agent:agent scripts/install-darklang-interpreter.sh /tmp/install-darklang-interpreter.sh
 RUN bash /tmp/install-darklang-interpreter.sh && \
     rm /tmp/install-darklang-interpreter.sh
 
@@ -93,8 +93,8 @@ RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"
 # Enable bash completion for git and other installed tools
 RUN echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
 
-# Set working directory to the bind-mounted checkout.
-WORKDIR /workspace
+# sbx replaces this with the primary host workspace when the sandbox is created.
+WORKDIR /home/agent/workspace
 
 # Default command: bash shell
 CMD ["bash"]

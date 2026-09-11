@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN="$HERE/run-in-container"
 EXPR="${1:-}"
 FUNC="${2:-}"
 
@@ -35,13 +33,13 @@ trap cleanup EXIT
 # Compile and dump LIR. Keep the captured compiler output for filtering on
 # success, but print it when the dump itself fails.
 if [ -f "$EXPR" ]; then
-    if "$RUN" ./dark --dump-lir "$EXPR" -o "$OUTFILE" > "$TMPFILE" 2>&1; then
+    if ./dark --dump-lir "$EXPR" -o "$OUTFILE" > "$TMPFILE" 2>&1; then
         compile_status=0
     else
         compile_status=$?
     fi
 else
-    if "$RUN" ./dark --dump-lir -e "$EXPR" -o "$OUTFILE" > "$TMPFILE" 2>&1; then
+    if ./dark --dump-lir -e "$EXPR" -o "$OUTFILE" > "$TMPFILE" 2>&1; then
         compile_status=0
     else
         compile_status=$?

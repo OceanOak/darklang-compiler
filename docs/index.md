@@ -7,7 +7,6 @@ canonical source. Link to that source instead of copying its instructions.
 |---|---|---|
 | Project overview and navigation | [`README.md`](../README.md) | Maintainers; update when project entry points change |
 | CLI use | [`quick-start.md`](quick-start.md) | CLI implementation and `./dark --help` |
-| Development environment and worktrees | [`docker.md`](docker.md) | `.devcontainer/`, `docker-compose.yml`, and `scripts/run-in-container` |
 | Contributor implementation workflow | [`adding-features.md`](adding-features.md) | Compiler pass structure and E2E test DSL |
 | Verification and performance gates | [`verification.md`](verification.md) | `run-tests`, benchmark verifier, and integration policy |
 | Compiler architecture and passes | [`architecture.md`](architecture.md), [`compiler-passes.md`](compiler-passes.md) | Compiler pipeline source under `src/DarkCompiler/` |
