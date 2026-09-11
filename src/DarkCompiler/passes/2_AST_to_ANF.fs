@@ -10458,6 +10458,15 @@ let toANF
 /// Convert a function definition to ANF
 /// VarGen is passed in and out to maintain globally unique TempIds across functions
 /// (needed for TypeMap which maps TempId -> Type across the whole program)
+let allocateTypedParams
+    (loweredParams: (string * AST.Type) list)
+    (varGen: ANF.VarGen)
+    : ANF.TypedParam list * ANF.VarGen =
+    loweredParams
+    |> List.mapFold (fun vg (_, typ) ->
+        let (tempId, vg') = ANF.freshVar vg
+        ({ ANF.TypedParam.Id = tempId; Type = typ }, vg')) varGen
+
 let private convertFunctionWithSumTypeNames
     (sumTypeNames: Set<string>)
     (funcDef: AST.FunctionDef)
@@ -10471,10 +10480,7 @@ let private convertFunctionWithSumTypeNames
 
     // Allocate TempIds for parameters, bundled with their types
     let (typedParams, varGen1) =
-        loweredParams
-        |> List.fold (fun (acc, vg) (_, typ) ->
-            let (tempId, vg') = ANF.freshVar vg
-            (acc @ [{ ANF.TypedParam.Id = tempId; Type = typ }], vg')) ([], varGen)
+        allocateTypedParams loweredParams varGen
 
     // Build environment mapping param names to (TempId, Type)
     let paramEnv : VarEnv =

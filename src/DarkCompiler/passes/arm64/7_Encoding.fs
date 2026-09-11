@@ -78,6 +78,28 @@ let private encodeMoveWideShift (instructionName: string) (shift: int) : uint32 
     | 48 -> 3u <<< 21
     | _ -> Crash.crash $"{instructionName}: shift must be one of 0, 16, 32, or 48, got {shift}"
 
+/// Encode a 64-bit AArch64 logical immediate whose bits form one circular run
+/// of ones. N=1 selects a 64-bit element; immr rotates the low run into place.
+let private tryEncode64BitLogicalImmediate (imm: uint64) : (uint32 * uint32) option =
+    let onesCount = System.Numerics.BitOperations.PopCount imm
+
+    if onesCount = 0 || onesCount = 64 then
+        None
+    else
+        let lowOnes = (1UL <<< onesCount) - 1UL
+        let rotateRight (rotation: int) : uint64 =
+            if rotation = 0 then
+                lowOnes
+            else
+                (lowOnes >>> rotation) ||| (lowOnes <<< (64 - rotation))
+
+        [0..63]
+        |> List.tryPick (fun rotation ->
+            if rotateRight rotation = imm then
+                Some (uint32 rotation, uint32 (onesCount - 1))
+            else
+                None)
+
 /// Encode one symbolic ARM64 instruction to one 32-bit machine-code word.
 /// Symbolic branches and labels are resolved by encodeSymbolicWithLabels.
 let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode =
@@ -522,18 +544,16 @@ let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode 
 
     | ARM64Symbolic.AND_imm (dest, src, imm) ->
         // AND immediate: sf=1 opc=00 100100 N(1) immr(6) imms(6) Rn(5) Rd(5)
-        // For 64-bit (sf=1, N=1), logical immediate encoding:
-        // - immr = rotation amount
-        // - imms = ones run length - 1
-        // For power-of-2 minus 1 masks (0x1, 0x3, 0x7, etc.): immr=0, imms=popcount-1
+        let immrValue, immsValue =
+            match tryEncode64BitLogicalImmediate imm with
+            | Some fields -> fields
+            | None -> Crash.crash $"AND immediate is not an encodable 64-bit single-run mask: 0x{imm:X16}"
         let sf = 1u <<< 31
         let opc = 0u <<< 29  // AND
         let op = 0b100100u <<< 23
         let n = 1u <<< 22  // N=1 for 64-bit element size
-        // Calculate imms from the mask (assumes power-of-2 minus 1)
-        let popcount = System.Numerics.BitOperations.PopCount(imm)
-        let immr = 0u <<< 16
-        let imms = (uint32 (popcount - 1)) <<< 10
+        let immr = immrValue <<< 16
+        let imms = immsValue <<< 10
         let rn = (encodeReg src) <<< 5
         let rd = encodeReg dest
         sf ||| opc ||| op ||| n ||| immr ||| imms ||| rn ||| rd
@@ -929,6 +949,11 @@ let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode 
         | None ->
             Crash.crash $"FMOV immediate does not support {value}"
 
+    | ARM64Symbolic.FMOV_zero dest ->
+        // FMOV Dd, XZR copies the zero register's bits into a double register.
+        // Register 31 denotes XZR in this instruction encoding.
+        0x9E6703E0u ||| encodeFReg dest
+
     | ARM64Symbolic.FMOV_to_gp (dest, src) ->
         // FMOV (scalar to GP, double): 1001 1110 01 1 00110 000000 Vn Rd
         // sf=1, ftype=01 (double), rmode=00, opcode=110
@@ -952,6 +977,20 @@ let private encodeSymbolicWord (instr: ARM64Symbolic.Instr) : ARM64.MachineCode 
         let rn = (encodeReg src) <<< 5
         let rd = encodeFReg dest
         sf ||| fixedBits ||| opcode1 ||| opcode2 ||| rn ||| rd
+
+    | ARM64Symbolic.CNT_8B (dest, src) ->
+        // CNT Vd.8B, Vn.8B. The SIMD register number occupies the same
+        // encoding field as its scalar D-register view.
+        0x0E205800u ||| ((encodeFReg src) <<< 5) ||| encodeFReg dest
+
+    | ARM64Symbolic.ADDV_8B (dest, src) ->
+        // ADDV Bd, Vn.8B horizontally sums the eight byte lanes.
+        0x0E31B800u ||| ((encodeFReg src) <<< 5) ||| encodeFReg dest
+
+    | ARM64Symbolic.UMOV_byte (dest, src) ->
+        // UMOV Wd, Vn.B[0] zero-extends the selected byte and, by writing Wd,
+        // clears the upper half of the corresponding X register.
+        0x0E013C00u ||| ((encodeFReg src) <<< 5) ||| encodeReg dest
 
     | ARM64Symbolic.SCVTF (dest, src) ->
         // SCVTF (scalar, integer to FP, double): 1001 1110 01 1 00010 000000 Rn Rd

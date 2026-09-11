@@ -4188,6 +4188,9 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                                 recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
                                                 shakenStdlib
 
+                                    let reachableStdlib = reachableStdlib |> List.map LIR_Peephole.optimizeAllocatedCounterUpdates
+                                    let finalUserFuncs = finalUserFuncs |> List.map LIR_Peephole.optimizeAllocatedCounterUpdates
+
                                     // Combine reachable stdlib functions with user functions
                                     let allFuncs =
                                         reachableStdlib @ finalUserFuncs

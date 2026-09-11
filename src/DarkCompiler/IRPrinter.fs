@@ -577,6 +577,9 @@ let private prettyPrintLIRInstr (instr: LIR.Instr) : string =
         $"{prettyPrintLIRReg dest} <- Lsr_imm({prettyPrintLIRReg src}, #{shift})"
     | LIR.Asr_imm (dest, src, shift) ->
         $"{prettyPrintLIRReg dest} <- Asr_imm({prettyPrintLIRReg src}, #{shift})"
+
+    | LIR.Neg (dest, src) ->
+        $"{prettyPrintLIRReg dest} <- Neg({prettyPrintLIRReg src})"
     | LIR.Mvn (dest, src) ->
         $"{prettyPrintLIRReg dest} <- Mvn({prettyPrintLIRReg src})"
     | LIR.Sxtb (dest, src) ->

@@ -235,11 +235,10 @@ loop:
     CondBranch(GE, Label "loop_L2_unroll_remainder", Label "loop_L1_unroll_second")
   Label "loop_L1_unroll_second":
     v10038 <- Add(v10026, Imm 1)
-    fv10039 <- FAdd(fv10027, fv10028)
+    fv10043 <- FAdd(fv10027, fv10028)
     fv10040 <- FNeg(fv10028)
     v10041 <- Mov(Reg v10038)
     v10042 <- Mov(Reg v10023)
-    fv10043 <- FMov(fv10039)
     fv10044 <- FMov(fv10040)
     Jump(Label "loop_body")
   Label "loop_L2":
@@ -259,6 +258,40 @@ loop:
     Jump(Label "loop_body")
 
 ---NAME---
+
+direct_integer_negation
+---INPUT---
+let negate(value: Int64) : Int64 =
+    0L - value
+---EXPECTED---
+negate:
+  StackSize: 0
+  UsedCalleeSaved: []
+  Label "negate_entry":
+    v10001 <- Neg(v0)
+    X0 <- Mov(Reg v10001)
+    Ret
+
+---NAME---
+positive_constant_modulo_skips_dynamic_sign_checks
+---INPUT---
+let reduce(value: Int64) : Int64 =
+    value % 10L
+---EXPECTED---
+reduce:
+  StackSize: 0
+  UsedCalleeSaved: []
+  Label "reduce_entry":
+    v10002 <- Mov(Imm 10)
+    v10003 <- Sdiv(v0, Reg v10002)
+    v10001 <- Msub(v10003, v10002, v0)
+    v10003 <- Asr_imm(v10001, #63)
+    v10003 <- And(v10002, v10003)
+    v10001 <- Add(v10001, Reg v10003)
+    X0 <- Mov(Reg v10001)
+    Ret
+
+---NAME---
 retarget_dead_float_arithmetic_move
 ---INPUT---
 let add(left: Float, right: Float) : Float =
@@ -270,6 +303,32 @@ add:
   Label "add_entry":
     D0 <- FAdd(fv0, fv1)
     Ret
+
+---NAME---
+retarget_dead_float_add_across_independent_move
+---INPUT---
+let sum(n: Int64, acc: Float) : Float =
+    if n == 0L then acc
+    else sum(n - 1L, acc + 1.5)
+---EXPECTED---
+sum:
+  StackSize: 0
+  UsedCalleeSaved: []
+  Label "sum_L1":
+    v10012 <- Sub(v10010, Imm 1)
+    fv10015 <- FAdd(fv10009, fv10017)
+    v10014 <- Mov(Reg v10012)
+    Jump(Label "sum_body")
+  Label "sum_L2":
+    D0 <- FMov(fv10009)
+    Ret
+  Label "sum_body":
+    fv10009 <- FPhi([(fv1, sum_entry), (fv10015, sum_L1)])
+    v10010 <- Phi([(Reg v0, sum_entry), (Reg v10014, sum_L1)])
+    BranchZero(v10010, Label "sum_L2", Label "sum_L1")
+  Label "sum_entry":
+    fv10017 <- FLoad(float[1.5])
+    Jump(Label "sum_body")
 
 ---NAME---
 licm_hoist_loop_constant
@@ -322,9 +381,8 @@ sum:
   UsedCalleeSaved: []
   Label "sum_L1":
     v10012 <- Sub(v10010, Imm 1)
-    fv10013 <- FAdd(fv10009, fv10017)
+    fv10015 <- FAdd(fv10009, fv10017)
     v10014 <- Mov(Reg v10012)
-    fv10015 <- FMov(fv10013)
     Jump(Label "sum_body")
   Label "sum_L2":
     D0 <- FMov(fv10009)

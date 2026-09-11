@@ -255,6 +255,33 @@ let testPreparedChunksPreserveWholeProgramEncoding () : TestResult =
     else
         Error $"Prepared chunk composition changed whole-program encoding or retained a group-local relocation: expected={expected}, actual={actual}, combined={combinedActual}, first relocations={prepared.Head.Relocations.Length}, combined relocations={combined.Relocations.Length}"
 
+let testRotatedLogicalImmediateEncoding () : TestResult =
+    match encode (AND_imm (X2, X0, 0xFFFFFFFFFFFFFFF8UL)) with
+    | [word] when word = 0x927DF002u -> Ok ()
+    | [word] -> Error $"AND_imm #~7: expected 0x927DF002, got 0x{word:X8}"
+    | words -> Error $"AND_imm #~7: expected 1 word, got {List.length words}"
+
+let testBytePopcountSequenceEncoding () : TestResult =
+    let instrs = [
+        ARM64Symbolic.FMOV_from_gp (D16, X6)
+        ARM64Symbolic.CNT_8B (D16, D16)
+        ARM64Symbolic.ADDV_8B (D16, D16)
+        ARM64Symbolic.UMOV_byte (X5, D16)
+    ]
+    let expected = [|0x9E6700D0u; 0x0E205A10u; 0x0E31BA10u; 0x0E013E05u|]
+    let actual =
+        encodeSymbolicWithPools
+            instrs
+            LiteralPool.emptyStringPool
+            LiteralPool.emptyFloatPool
+            Platform.Linux
+            false
+
+    if actual = expected then
+        Ok ()
+    else
+        Error $"Byte popcount: expected {expected}, got {actual}"
+
 let testInvalidAssertDifferentValueIsRejected () : TestResult =
     let content =
         """---INPUT-ARM64---
@@ -283,6 +310,9 @@ let tests = [
     ("FMOV immediate encoding", testFMOVImmediateEncoding)
     ("BIC register encoding", testBICRegisterEncoding)
     ("prepared chunks preserve whole-program encoding", testPreparedChunksPreserveWholeProgramEncoding)
+
+    ("rotated logical immediate encoding", testRotatedLogicalImmediateEncoding)
+    ("byte popcount sequence encoding", testBytePopcountSequenceEncoding)
     ("invalid ASSERT-DIFFERENT value is rejected", testInvalidAssertDifferentValueIsRejected)
 ]
 

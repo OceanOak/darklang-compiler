@@ -203,6 +203,22 @@ let testSyntheticUnitParamLowersFunctionToZeroParams () : TestResult =
         | typedParams ->
             Error $"Expected 0 lowered params, got {List.length typedParams}"
 
+let testTypedParamAllocationPreservesOrder () : TestResult =
+    let loweredParams =
+        [("first", AST.TInt64); ("second", AST.TBool); ("third", AST.TString)]
+
+    let (typedParams, nextVarGen) =
+        allocateTypedParams loweredParams ANF.initialVarGen
+
+    match typedParams, nextVarGen with
+    | [ { ANF.TypedParam.Id = ANF.TempId 0; Type = AST.TInt64 }
+        { ANF.TypedParam.Id = ANF.TempId 1; Type = AST.TBool }
+        { ANF.TypedParam.Id = ANF.TempId 2; Type = AST.TString } ],
+      ANF.VarGen 3 ->
+        Ok ()
+    | _ ->
+        Error $"Expected ordered typed params t0, t1, t2 and next VarGen 3, got {typedParams} and {nextVarGen}"
+
 let tests = [
     ("Missing constructor payload type errors", testMissingVariantPayloadTypeErrors)
     ("Lambda lowering ignores shadowed functions", testNeedsLambdaLoweringIgnoresShadowedFunc)
@@ -214,4 +230,6 @@ let tests = [
     ("Synthetic unit param lowers function to zero params", testSyntheticUnitParamLowersFunctionToZeroParams)
     ("Erased list-head pattern lowers to borrowed call", testErasedListHeadPatternLowersToBorrowedCall)
     ("Typed list-head pattern remains owned call", testTypedListHeadPatternRemainsOwnedCall)
+
+    ("Typed parameter allocation preserves order", testTypedParamAllocationPreservesOrder)
 ]

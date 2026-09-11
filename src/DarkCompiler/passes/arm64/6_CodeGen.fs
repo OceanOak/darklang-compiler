@@ -315,9 +315,8 @@ let private generateListRefCountIncHelper () : ARM64Symbolic.Instr list =
         ARM64Symbolic.CBZ (ARM64Symbolic.X1, helperRet)  // Untagged pointer => not a skew-list node
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X1, 3us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, helperRet)
-        // Clear low tag bits via shifts (AND #~7 is not always encodable as a logical immediate).
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X2, ARM64Symbolic.X2, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
 
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X1, 1us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.EQ, size32)
@@ -381,8 +380,8 @@ let private generateListRefCountDecHelperWith
             ARM64Symbolic.CBZ (ARM64Symbolic.X9, doneLabel)
             ARM64Symbolic.CMP_imm (ARM64Symbolic.X9, 3us)
             ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, doneLabel)
-            ARM64Symbolic.LSR_imm (ARM64Symbolic.X10, ARM64Symbolic.X8, 3)
-            ARM64Symbolic.LSL_imm (ARM64Symbolic.X10, ARM64Symbolic.X10, 3)
+            // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+            ARM64Symbolic.AND_imm (ARM64Symbolic.X10, ARM64Symbolic.X8, 0xFFFFFFFFFFFFFFF8UL)
             ARM64Symbolic.CMP_reg (ARM64Symbolic.X10, ARM64Symbolic.X27)
             ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, doneLabel)
             ARM64Symbolic.CMP_reg (ARM64Symbolic.X10, ARM64Symbolic.X28)
@@ -877,9 +876,8 @@ let private generateListRefCountDecHelperWith
         ARM64Symbolic.CBZ (ARM64Symbolic.X0, popOrRet)
         ARM64Symbolic.AND_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 7UL)
         ARM64Symbolic.CBZ (ARM64Symbolic.X2, popOrRet)
-        // Clear low tag bits via shifts (AND #~7 is not always encodable as a logical immediate).
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X27)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, popOrRet)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X28)
@@ -1375,6 +1373,7 @@ let private generateRecursiveSumRefCountDecHelper
             let doneLabel = label $"{path}_variant_done"
             let cases =
                 variants
+                |> List.filter (fun variant -> not (List.isEmpty variant.FieldReleases))
                 |> List.mapi (fun index variant ->
                     let nextLabel = label $"{path}_variant_{index}_next"
                     [
@@ -2058,8 +2057,6 @@ let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
     let internalTag = label "internal"
     let leafTag = label "leaf"
     let collisionTag = label "collision"
-    let popcountLoop = label "popcount_loop"
-    let popcountDone = label "popcount_done"
     let haveOffset = label "have_offset"
     let helperRet = label "ret"
 
@@ -2071,8 +2068,8 @@ let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
         ARM64Symbolic.CBZ (ARM64Symbolic.X1, helperRet)
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X1, 3us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, helperRet)
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X2, ARM64Symbolic.X2, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X2, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X2, ARM64Symbolic.X27)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, helperRet)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X2, ARM64Symbolic.X28)
@@ -2096,14 +2093,12 @@ let private generateDictRefCountIncHelper () : ARM64Symbolic.Instr list =
 
         ARM64Symbolic.Label internalTag
         ARM64Symbolic.LDR (ARM64Symbolic.X4, ARM64Symbolic.X2, 0s) // bitmap
-        ARM64Symbolic.MOVZ (ARM64Symbolic.X3, 0us, 0)              // child count
-        ARM64Symbolic.Label popcountLoop
-        ARM64Symbolic.CBZ (ARM64Symbolic.X4, popcountDone)
-        ARM64Symbolic.SUB_imm (ARM64Symbolic.X5, ARM64Symbolic.X4, 1us)
-        ARM64Symbolic.AND_reg (ARM64Symbolic.X4, ARM64Symbolic.X4, ARM64Symbolic.X5)
-        ARM64Symbolic.ADD_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 1us)
-        ARM64Symbolic.B_label popcountLoop
-        ARM64Symbolic.Label popcountDone
+        // D16 is reserved scratch: count the bitmap bytes, horizontally add
+        // them, and zero-extend the resulting byte into the child count.
+        ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D16, ARM64Symbolic.X4)
+        ARM64Symbolic.CNT_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.ADDV_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.UMOV_byte (ARM64Symbolic.X3, ARM64Symbolic.D16)
         ARM64Symbolic.LSL_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 3)
         ARM64Symbolic.ADD_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 8us)
 
@@ -2154,8 +2149,8 @@ let private generateDictRefCountDecHelper
             ARM64Symbolic.CBZ (ARM64Symbolic.X9, doneLabel)
             ARM64Symbolic.CMP_imm (ARM64Symbolic.X9, 3us)
             ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, doneLabel)
-            ARM64Symbolic.LSR_imm (ARM64Symbolic.X10, ARM64Symbolic.X8, 3)
-            ARM64Symbolic.LSL_imm (ARM64Symbolic.X10, ARM64Symbolic.X10, 3)
+            // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+            ARM64Symbolic.AND_imm (ARM64Symbolic.X10, ARM64Symbolic.X8, 0xFFFFFFFFFFFFFFF8UL)
             ARM64Symbolic.CMP_reg (ARM64Symbolic.X10, ARM64Symbolic.X27)
             ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, doneLabel)
             ARM64Symbolic.CMP_reg (ARM64Symbolic.X10, ARM64Symbolic.X28)
@@ -2176,8 +2171,6 @@ let private generateDictRefCountDecHelper
     let internalTag = label "internal"
     let leafTag = label "leaf"
     let collisionTag = label "collision"
-    let popcountLoop = label "popcount_loop"
-    let popcountDone = label "popcount_done"
     let haveOffset = label "have_offset"
     let collectInternal = label "collect_internal"
     let collectLoop = label "collect_loop"
@@ -2846,8 +2839,8 @@ let private generateDictRefCountDecHelper
         ARM64Symbolic.CBZ (ARM64Symbolic.X2, popOrRet)
         ARM64Symbolic.CMP_imm (ARM64Symbolic.X2, 3us)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.GT, popOrRet)
-        ARM64Symbolic.LSR_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 3)
-        ARM64Symbolic.LSL_imm (ARM64Symbolic.X3, ARM64Symbolic.X3, 3)
+        // This contiguous all-ones mask is an encodable AArch64 logical immediate.
+        ARM64Symbolic.AND_imm (ARM64Symbolic.X3, ARM64Symbolic.X0, 0xFFFFFFFFFFFFFFF8UL)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X27)
         ARM64Symbolic.B_cond_label (ARM64Symbolic.LT, popOrRet)
         ARM64Symbolic.CMP_reg (ARM64Symbolic.X3, ARM64Symbolic.X28)
@@ -2873,14 +2866,12 @@ let private generateDictRefCountDecHelper
 
         ARM64Symbolic.Label internalTag
         ARM64Symbolic.LDR (ARM64Symbolic.X6, ARM64Symbolic.X3, 0s) // bitmap
-        ARM64Symbolic.MOVZ (ARM64Symbolic.X5, 0us, 0)              // child count
-        ARM64Symbolic.Label popcountLoop
-        ARM64Symbolic.CBZ (ARM64Symbolic.X6, popcountDone)
-        ARM64Symbolic.SUB_imm (ARM64Symbolic.X7, ARM64Symbolic.X6, 1us)
-        ARM64Symbolic.AND_reg (ARM64Symbolic.X6, ARM64Symbolic.X6, ARM64Symbolic.X7)
-        ARM64Symbolic.ADD_imm (ARM64Symbolic.X5, ARM64Symbolic.X5, 1us)
-        ARM64Symbolic.B_label popcountLoop
-        ARM64Symbolic.Label popcountDone
+        // D16 is reserved scratch: count the bitmap bytes, horizontally add
+        // them, and zero-extend the resulting byte into the child count.
+        ARM64Symbolic.FMOV_from_gp (ARM64Symbolic.D16, ARM64Symbolic.X6)
+        ARM64Symbolic.CNT_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.ADDV_8B (ARM64Symbolic.D16, ARM64Symbolic.D16)
+        ARM64Symbolic.UMOV_byte (ARM64Symbolic.X5, ARM64Symbolic.D16)
         ARM64Symbolic.LSL_imm (ARM64Symbolic.X4, ARM64Symbolic.X5, 3)
         ARM64Symbolic.ADD_imm (ARM64Symbolic.X4, ARM64Symbolic.X4, 8us)
 
@@ -3146,7 +3137,7 @@ let lirFRegToARM64FReg (freg: LIR.FReg) : Result<ARM64Symbolic.FReg, string> =
     // Special temp registers for specific purposes
     | LIR.FVirtual 1000 -> Ok ARM64Symbolic.D18  // Left temp for binary ops
     | LIR.FVirtual 1001 -> Ok ARM64Symbolic.D17  // Right temp for binary ops
-    | LIR.FVirtual 2000 -> Ok ARM64Symbolic.D16  // Temp for FPhi cycle resolution
+    | LIR.FVirtual 2000 -> Ok ARM64Symbolic.D16  // Reserved scratch for FPhi cycles and runtime helpers
     | LIR.FVirtual n when n >= 3000 && n < 4000 ->
         // Temps for float call arguments - use D19-D26 (8 registers)
         // These must not collide with each other since up to 8 floats
@@ -3873,6 +3864,12 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
             lirRegToARM64Reg src
             |> Result.map (fun srcReg -> [ARM64Symbolic.ASR_imm (destReg, srcReg, shift)]))
 
+    | LIR.Neg (dest, src) ->
+        lirRegToARM64Reg dest
+        |> Result.bind (fun destReg ->
+            lirRegToARM64Reg src
+            |> Result.map (fun srcReg -> [ARM64Symbolic.NEG (destReg, srcReg)]))
+
     | LIR.Mvn (dest, src) ->
         lirRegToARM64Reg dest
         |> Result.bind (fun destReg ->
@@ -4597,8 +4594,7 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
             let actions = ParallelMoves.resolve armMoves getSrcReg
 
             // Convert actions to ARM64 instructions
-            // Use D16 as temp register for cycle breaking
-            // D16-D31 are the upper half of the SIMD register file, not used elsewhere
+            // Use reserved D16 as the temporary register for cycle breaking.
             actions
             |> List.collect (function
                 | ParallelMoves.SaveToTemp srcReg ->
@@ -4871,7 +4867,9 @@ let rec convertInstr (ctx: CodeGenContext) (instr: LIR.Instr) : Result<ARM64Symb
     | LIR.FLoad (dest, value) ->
         lirFRegToARM64FReg dest
         |> Result.map (fun destReg ->
-            if ARM64.tryEncodeFmovFloatImmediate value |> Option.isSome then
+            if System.BitConverter.DoubleToInt64Bits(value) = 0L then
+                [ARM64Symbolic.FMOV_zero destReg]
+            elif ARM64.tryEncodeFmovFloatImmediate value |> Option.isSome then
                 [ARM64Symbolic.FMOV_imm (destReg, value)]
             else
                 let labelRef = floatDataLabel value
@@ -7239,6 +7237,7 @@ let private registerLifetimeStep
     | ARM64Symbolic.ADRP (dest, _)
     | ARM64Symbolic.ADR (dest, _)
     | ARM64Symbolic.FMOV_to_gp (dest, _)
+    | ARM64Symbolic.UMOV_byte (dest, _)
     | ARM64Symbolic.FCVTZS (dest, _) ->
         classify [] [dest]
     | ARM64Symbolic.MOVK (dest, _, _) ->
@@ -7323,7 +7322,10 @@ let private registerLifetimeStep
     | ARM64Symbolic.FSQRT _
     | ARM64Symbolic.FCMP _
     | ARM64Symbolic.FMOV_reg _
-    | ARM64Symbolic.FMOV_imm _ ->
+    | ARM64Symbolic.FMOV_zero _
+    | ARM64Symbolic.FMOV_imm _
+    | ARM64Symbolic.CNT_8B _
+    | ARM64Symbolic.ADDV_8B _ ->
         Unrelated
     | ARM64Symbolic.BL _
     | ARM64Symbolic.BLR _
@@ -7360,6 +7362,20 @@ let private overwrittenBeforeReadOrEnd
 
     check instrs
 
+/// Return the condition that selects the complementary control-flow edge.
+let private invertCondition (condition: ARM64.Condition) : ARM64.Condition =
+    match condition with
+    | ARM64.EQ -> ARM64.NE
+    | ARM64.NE -> ARM64.EQ
+    | ARM64.LT -> ARM64.GE
+    | ARM64.GT -> ARM64.LE
+    | ARM64.LE -> ARM64.GT
+    | ARM64.GE -> ARM64.LT
+    | ARM64.LO -> ARM64.HS
+    | ARM64.HI -> ARM64.LS
+    | ARM64.LS -> ARM64.HI
+    | ARM64.HS -> ARM64.LO
+
 /// Peephole optimization pass
 /// Patterns:
 /// 1. SUB_imm + CMP #0 → SUBS (fuse subtract and compare)
@@ -7373,6 +7389,7 @@ let private overwrittenBeforeReadOrEnd
 /// 9. AND Xn, Xn, Xn → MOV (AND with self is identity)
 /// 10. ORR Xn, Xn, Xn → MOV (OR with self is identity)
 /// 11. MOVN #0 + EOR + AND → BIC (bit clear when the inverted temporary is overwritten)
+/// 12. B.cond true + B false + true: → B.!cond false + true: (fall through)
 let peepholeOptimize (instrs: ARM64Symbolic.Instr list) : ARM64Symbolic.Instr list =
     let rec optimize acc remaining =
         match remaining with
@@ -7426,6 +7443,15 @@ let peepholeOptimize (instrs: ARM64Symbolic.Instr list) : ARM64Symbolic.Instr li
         // Remove subtract zero
         | ARM64Symbolic.SUB_imm (dest, src, 0us) :: rest when dest = src ->
             optimize acc rest
+        // Make an immediately following true target the fallthrough edge.
+        | ARM64Symbolic.B_cond_label (condition, trueTarget)
+          :: ARM64Symbolic.B_label falseTarget
+          :: ARM64Symbolic.Label label
+          :: rest
+            when trueTarget = label ->
+            let branch =
+                ARM64Symbolic.B_cond_label (invertCondition condition, falseTarget)
+            optimize (ARM64Symbolic.Label label :: branch :: acc) rest
         // AND with self is identity - simplify to MOV if dest differs from operand
         | ARM64Symbolic.AND_reg (dest, src1, src2) :: rest when src1 = src2 ->
             if dest = src1 then

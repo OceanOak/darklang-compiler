@@ -2902,6 +2902,10 @@ let private translateInstr
         resolveReg dest |> Result.bind (fun d -> resolveReg src |> Result.map (fun s ->
             (if d <> s then [X86_64.MOV_reg (d, s)] else []) @ [X86_64.SAR_imm (d, shift)]))
 
+    | LIR.Neg (dest, src) ->
+        resolveReg dest |> Result.bind (fun d -> resolveReg src |> Result.map (fun s ->
+            (if d <> s then [X86_64.MOV_reg (d, s)] else []) @ [X86_64.NEG d]))
+
     | LIR.Mvn (dest, src) ->
         resolveReg dest |> Result.bind (fun d -> resolveReg src |> Result.map (fun s ->
             (if d <> s then [X86_64.MOV_reg (d, s)] else []) @ [X86_64.NOT d]))

@@ -514,11 +514,20 @@ let selectInstr
                     Ok (leftInstrs @ [LIR.Add (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
 
             | MIR.Sub ->
-                // SUB can have immediate or register as right operand
-                match ensureInRegister left state with
-                | Error err -> Error err
-                | Ok (leftInstrs, leftReg, nextState) ->
-                    Ok (leftInstrs @ [LIR.Sub (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
+                // Negation is subtraction from zero and maps directly to a native
+                // instruction on both supported architectures.
+                match left with
+                | MIR.Int64Const 0L ->
+                    match ensureInRegister right state with
+                    | Error err -> Error err
+                    | Ok (rightInstrs, rightReg, nextState) ->
+                        Ok (rightInstrs @ [LIR.Neg (lirDest, rightReg)] @ truncInstrs, nextState)
+                | _ ->
+                    // SUB can have immediate or register as right operand
+                    match ensureInRegister left state with
+                    | Error err -> Error err
+                    | Ok (leftInstrs, leftReg, nextState) ->
+                        Ok (leftInstrs @ [LIR.Sub (lirDest, leftReg, rightOp)] @ truncInstrs, nextState)
 
             | MIR.Mul ->
                 // MUL requires both operands in registers
@@ -1530,10 +1539,7 @@ let selectInstr
         match ensureInRegister list state with
         | Error err -> Error err
         | Ok (listInstrs, listReg, stateAfterList) ->
-        match ensureInRegister (MIR.Int64Const -8L) stateAfterList with
-        | Error err -> Error err
-        | Ok (maskInstrs, maskReg, nextState) ->
-            Ok (listInstrs @ maskInstrs @ [LIR.And (vregToLIRReg dest, listReg, maskReg)], nextState)
+            Ok (listInstrs @ [LIR.And_imm (vregToLIRReg dest, listReg, -8L)], stateAfterList)
 
     | MIR.RawPtrToList (dest, ptr, tag) ->
         match ensureInRegister ptr state with

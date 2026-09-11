@@ -178,6 +178,193 @@ let testFloatingArithmeticMoveChainKeepsLiveTemp () : TestResult =
     else
         Error $"Expected live floating arithmetic temporary to stay available, got: {optimized}"
 
+let testSeparatedFloatAddKeepsLiveTemporary () : TestResult =
+    let instrs = [
+        FAdd (FVirtual 1, FVirtual 2, FVirtual 3)
+        Mov (Virtual 10, Imm 1L)
+        FMov (FVirtual 4, FVirtual 1)
+        PrintFloat (FVirtual 1)
+    ]
+
+    let optimized = retargetSeparatedDeadFAdds instrs
+    if optimized = instrs then
+        Ok ()
+    else
+        Error $"Expected separated FAdd with a live temporary to stay unchanged, got: {optimized}"
+
+let testSinkSeparatedAllocatedFloatAdd () : TestResult =
+    let instrs = [
+        FAdd (FPhysical D4, FPhysical D4, FPhysical D0)
+        FAdd (FPhysical D2, FPhysical D2, FPhysical D2)
+        FMul (FPhysical D2, FPhysical D2, FPhysical D3)
+        FAdd (FPhysical D3, FPhysical D2, FPhysical D1)
+        Add (Physical X1, Physical X1, Imm 1L)
+        FMov (FPhysical D2, FPhysical D4)
+    ]
+    let expected = [
+        FAdd (FPhysical D2, FPhysical D2, FPhysical D2)
+        FMul (FPhysical D2, FPhysical D2, FPhysical D3)
+        FAdd (FPhysical D3, FPhysical D2, FPhysical D1)
+        Add (Physical X1, Physical X1, Imm 1L)
+        FAdd (FPhysical D2, FPhysical D4, FPhysical D0)
+    ]
+
+    let optimized = sinkSeparatedAllocatedFAdds instrs
+    if optimized = expected then
+        Ok ()
+    else
+        Error $"Expected allocated FAdd to replace its separated copy, got: {optimized}"
+
+let testSinkImmediateCounterUpdatePastAccumulator () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Add (Physical X2, Physical X2, Reg (Physical X1))
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Add (Physical X2, Physical X2, Reg (Physical X1))
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastSubtraction () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Sub (Physical X2, Physical X2, Reg (Physical X1))
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Sub (Physical X2, Physical X2, Reg (Physical X1))
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected subtraction counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastDivision () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Sdiv (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Sdiv (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected division counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastProduct () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Mul (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Mul (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected product counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastMultiplyAdd () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Madd (Physical X2, Physical X1, Physical X1, Physical X2)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Madd (Physical X2, Physical X1, Physical X1, Physical X2)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected multiply-add counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastXor () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Eor (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Eor (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected XOR counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastAnd () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        And (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        And (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected AND counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastOr () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Orr (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Orr (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected OR counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastLeftShift () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Lsl (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Lsl (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected left-shift counter update to replace its copy-back move, got: {other}"
+
+let testSinkImmediateCounterUpdatePastRightShift () : TestResult =
+    let instrs = [
+        Sub (Physical X3, Physical X1, Imm 1L)
+        Lsr (Physical X2, Physical X2, Physical X1)
+        Mov (Physical X1, Reg (Physical X3))
+    ]
+    let expected = [
+        Lsr (Physical X2, Physical X2, Physical X1)
+        Sub (Physical X1, Physical X1, Imm 1L)
+    ]
+
+    match sinkImmediateCounterUpdate instrs with
+    | Some optimized when optimized = expected -> Ok ()
+    | other -> Error $"Expected right-shift counter update to replace its copy-back move, got: {other}"
+
 let testMulAddFusionKeepsLiveTempForPrint () : TestResult =
     let instrs = [
         Mul (Virtual 1, Virtual 2, Virtual 3)
@@ -327,6 +514,18 @@ let tests = [
     ("LIR peephole fuses FNeg followed by dead-temp FMov", testFNegMoveChainFusesWhenTempDies)
     ("LIR peephole folds dead floating arithmetic copies", testFloatingArithmeticMoveChainsFuseWhenTempsDie)
     ("LIR peephole keeps live floating arithmetic temporaries", testFloatingArithmeticMoveChainKeepsLiveTemp)
+    ("LIR peephole keeps live separated FAdd temporaries", testSeparatedFloatAddKeepsLiveTemporary)
+    ("LIR peephole sinks separated allocated FAdd", testSinkSeparatedAllocatedFloatAdd)
+    ("LIR peephole sinks immediate counter update", testSinkImmediateCounterUpdatePastAccumulator)
+    ("LIR peephole sinks immediate counter update past subtraction", testSinkImmediateCounterUpdatePastSubtraction)
+    ("LIR peephole sinks immediate counter update past division", testSinkImmediateCounterUpdatePastDivision)
+    ("LIR peephole sinks immediate counter update past product", testSinkImmediateCounterUpdatePastProduct)
+    ("LIR peephole sinks immediate counter update past multiply-add", testSinkImmediateCounterUpdatePastMultiplyAdd)
+    ("LIR peephole sinks immediate counter update past XOR", testSinkImmediateCounterUpdatePastXor)
+    ("LIR peephole sinks immediate counter update past AND", testSinkImmediateCounterUpdatePastAnd)
+    ("LIR peephole sinks immediate counter update past OR", testSinkImmediateCounterUpdatePastOr)
+    ("LIR peephole sinks immediate counter update past left shift", testSinkImmediateCounterUpdatePastLeftShift)
+    ("LIR peephole sinks immediate counter update past right shift", testSinkImmediateCounterUpdatePastRightShift)
     ("LIR peephole keeps MUL temp used by later print", testMulAddFusionKeepsLiveTempForPrint)
     ("LIR peephole fuses dead MUL/SUB temporary into MSUB", testMulSubFusionReplacesDeadTemp)
     ("LIR peephole keeps MUL/SUB temporary used by later print", testMulSubFusionKeepsLiveTempForPrint)

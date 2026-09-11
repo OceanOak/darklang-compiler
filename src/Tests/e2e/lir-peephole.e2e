@@ -6,6 +6,19 @@
 // - Loop invariant code motion (LICM)
 // - Bit position calculations
 
+// Direct integer negation must preserve two's-complement wraparound semantics.
+let directNegate(x: Int64) : Int64 = 0L - x
+directNegate(0L) = 0L
+directNegate(42L) = -42L
+directNegate(-42L) = 42L
+directNegate(-9223372036854775808L) = -9223372036854775808L
+
+// A statically positive divisor uses the specialized Euclidean correction.
+let positiveConstantModulo(x: Int64) : Int64 = x % 10L
+positiveConstantModulo(-21L) = 9L
+positiveConstantModulo(0L) = 0L
+positiveConstantModulo(21L) = 1L
+
 // ===================================================================
 // Bit Position Tests (exercises bitPosition function in LIR_Peephole)
 // ===================================================================

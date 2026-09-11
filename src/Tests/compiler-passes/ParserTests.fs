@@ -75,6 +75,14 @@ let private testTopLevelExpressionFollowsFunctionDeclaration () : TestResult =
     | Ok program -> Error $"Expected a function declaration followed by an expression, got {program}"
     | Error err -> Error err
 
+let private testFlattenParamGroupsRestoresSourceOrder () : TestResult =
+    let groupsRev =
+        [[("third", AST.TString)]; [("second", AST.TBool)]; [("first", AST.TInt64)]]
+
+    match InterpreterParser.flattenParamGroups groupsRev with
+    | [("first", AST.TInt64); ("second", AST.TBool); ("third", AST.TString)] -> Ok ()
+    | parameters -> Error $"Expected parameter groups in source order, got {parameters}"
+
 let tests : (string * (unit -> TestResult)) list = [
     ("Long numeric token streams are stack safe", testLongNumericTokenStreamIsStackSafe)
     ("Tuple lets do not open nested function layout", testTupleLetDoesNotOpenNestedFunctionLayout)
@@ -82,4 +90,6 @@ let tests : (string * (unit -> TestResult)) list = [
     ("Subtraction follows a parenthesized call", testSubtractionFollowsParenthesizedCall)
     ("Adjacent call groups stay curried", testAdjacentCallGroupsStayCurried)
     ("Top-level expressions follow function declarations", testTopLevelExpressionFollowsFunctionDeclaration)
+
+    ("Flattened parameter groups retain source order", testFlattenParamGroupsRestoresSourceOrder)
 ]

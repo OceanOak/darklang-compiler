@@ -1213,12 +1213,18 @@ let private generatedUnitParam (index: int) : string * Type =
 let private ensureParamGroupNonEmpty (paramIndex: int) (parameters: (string * Type) list) : (string * Type) list =
     if List.isEmpty parameters then [generatedUnitParam paramIndex] else parameters
 
+/// Restore parameter groups accumulated in reverse order without repeatedly
+/// copying the complete parameter prefix as each curried group is parsed.
+let flattenParamGroups (paramGroupsRev: (string * Type) list list) : (string * Type) list =
+    paramGroupsRev |> List.rev |> List.concat
+
 /// Parse a function declaration after `let` has been normalized to the private
 /// TFunctionDeclaration marker. Declaration names are unqualified.
 let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr * Token list, string>) : Result<FunctionDef * Token list, string> =
     let rec parseAdditionalParamGroups
         (parseGroup: Token list -> Result<(string * Type) list * Token list, string>)
-        (accParams: (string * Type) list)
+        (paramGroupsRev: (string * Type) list list)
+        (paramCount: int)
         (remaining: Token list)
         : Result<(string * Type) list * Token list, string> =
         match remaining with
@@ -1230,10 +1236,14 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
 
             nextGroupResult
             |> Result.bind (fun (nextParams, nextRemaining) ->
-                let normalizedNextParams = ensureParamGroupNonEmpty (List.length accParams) nextParams
-                parseAdditionalParamGroups parseGroup (accParams @ normalizedNextParams) nextRemaining)
+                let normalizedNextParams = ensureParamGroupNonEmpty paramCount nextParams
+                parseAdditionalParamGroups
+                    parseGroup
+                    (normalizedNextParams :: paramGroupsRev)
+                    (paramCount + List.length normalizedNextParams)
+                    nextRemaining)
         | _ ->
-            Ok (accParams, remaining)
+            Ok (flattenParamGroups paramGroupsRev, remaining)
 
     match tokens with
     | TFunctionDeclaration :: TIdent firstName :: rest ->
@@ -1262,7 +1272,8 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
                         let normalizedParameters = ensureParamGroupNonEmpty 0 parameters
                         parseAdditionalParamGroups
                             (fun toks -> parseParamsWithContext typeParamsSet toks [])
-                            normalizedParameters
+                            [normalizedParameters]
+                            (List.length normalizedParameters)
                             remaining
                         |> Result.bind (fun (allParameters, remainingWithGroups) ->
                             match remainingWithGroups with
@@ -1303,7 +1314,8 @@ let parseFunctionDef (tokens: Token list) (parseExpr: Token list -> Result<Expr 
                 let normalizedParameters = ensureParamGroupNonEmpty 0 parameters
                 parseAdditionalParamGroups
                     (fun toks -> parseParams toks [])
-                    normalizedParameters
+                    [normalizedParameters]
+                    (List.length normalizedParameters)
                     remaining
                 |> Result.bind (fun (allParameters, remainingWithGroups) ->
                     match remainingWithGroups with
