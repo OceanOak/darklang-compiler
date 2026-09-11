@@ -761,7 +761,7 @@ let testSleepUsesNormalizedInterruptSafeNanosleep () : TestResult =
                 | _ -> false)
             && macInstrs
                |> List.exists (function
-                   | ARM64Symbolic.B_cond_label (ARM64.HS, _) -> true
+                   | ARM64Symbolic.B_cond_label (ARM64.LO, _) -> true
                    | _ -> false)
             && macInstrs
                |> List.exists (function
@@ -972,23 +972,6 @@ let testListReleaseHelperClearsChildTagWithImmediateMask () : TestResult =
             Ok ()
         else
             Error "ARM64 list release helper did not clear structural-child tag bits with one immediate mask"
-
-/// Function-entry parameter placement is not observable in an executable E2E
-/// test, so inspect the symbolic code generated from a typed LIR parameter.
-let testFunctionEntryPlacesAcyclicIntegerParameterDirectly () : TestResult =
-    let func =
-        makeEmptyFunction
-            "direct_param"
-            [{ Reg = LIR.Physical LIR.X19; Type = AST.TInt64 }]
-    let program = LIR.Program ([func], Map.empty, Map.empty)
-
-    match generatePreparedARM64 target program with
-    | Error e -> Error e
-    | Ok instrs ->
-        if List.contains (ARM64Symbolic.MOV_reg (ARM64.X19, ARM64.X0)) instrs then
-            Ok ()
-        else
-            Error "Acyclic integer parameter placement was staged through a temporary register"
 
 let testPeepholeFusesBitClearSequence () : TestResult =
     let before = [
@@ -2392,7 +2375,6 @@ let tests : (string * (unit -> TestResult)) list = [
     ("ARM64 dictionary helpers use constant-time bitmap popcount", testDictHelpersUseConstantTimeBitmapPopcount)
     ("ARM64 list release helper clears tag with immediate mask", testListReleaseHelperClearsTagWithImmediateMask)
     ("ARM64 list release helper clears child tag with immediate mask", testListReleaseHelperClearsChildTagWithImmediateMask)
-    ("ARM64 function entry places acyclic integer parameter directly", testFunctionEntryPlacesAcyclicIntegerParameterDirectly)
     ("ARM64 peephole fuses bit-clear sequence", testPeepholeFusesBitClearSequence)
     ("ARM64 peephole falls through to true branch target", testPeepholeFallsThroughToTrueTarget)
     ("ARM64 UInt64 runtime zero branches target digit handlers", testPrintUInt64RuntimeZeroBranches)

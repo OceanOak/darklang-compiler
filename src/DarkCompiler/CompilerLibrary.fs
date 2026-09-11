@@ -1547,7 +1547,9 @@ let private compileMirToLir
             if options.DisableLIROpt || options.DisableLIRPeephole then
                 lirFuncs
             else
-                lirFuncs |> List.map LIR_Peephole.optimizeFunction
+                lirFuncs
+                |> LIR_Peephole.optimizeConstantReturnCallsInFunctions
+                |> List.map LIR_Peephole.optimizeFunction
         let lirOptElapsed = sw.Elapsed.TotalMilliseconds - lirOptStart
         recordPassTiming passTimingRecorder "LIR Peephole" lirOptElapsed
         if verbosity >= 2 then
@@ -4187,9 +4189,6 @@ let private compileUserWithPlan (plan: UserCompilePlan) : CompileReport =
                                                 let treeShakeElapsed = sw.Elapsed.TotalMilliseconds - treeShakeStart
                                                 recordPassTiming plan.PassTimingRecorder "Function Tree Shaking" treeShakeElapsed
                                                 shakenStdlib
-
-                                    let reachableStdlib = reachableStdlib |> List.map LIR_Peephole.optimizeAllocatedCounterUpdates
-                                    let finalUserFuncs = finalUserFuncs |> List.map LIR_Peephole.optimizeAllocatedCounterUpdates
 
                                     // Combine reachable stdlib functions with user functions
                                     let allFuncs =

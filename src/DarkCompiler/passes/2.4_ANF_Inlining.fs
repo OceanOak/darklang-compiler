@@ -442,6 +442,15 @@ let private shouldUseExternalCandidate (info: FunctionInfo) (config: InliningCon
     && Set.isEmpty info.Calls
     && isSimpleExternalExpr info.Func.Body
 
+let private isZeroArgConstantReturn (func: Function) : bool =
+    match func.TypedParams, func.Body with
+    | [], Return (IntLiteral _)
+    | [], Return (BoolLiteral _)
+    | [], Return (FloatLiteral _)
+    | [], Return (StringLiteral _)
+    | [], Return UnitLiteral -> true
+    | _ -> false
+
 /// Analyze and qualify external functions once so user-program inlining can
 /// reuse the metadata without traversing stdlib bodies on every compilation.
 let buildExternalCandidateInfoMap
@@ -860,11 +869,16 @@ let inlineProgramWithExternalCandidatesAndExclusions
         Map.fold (fun acc name info -> Map.add name info acc) localInfoMap externalInfoMap
     let externalNames =
         externalInfoMap |> Map.toList |> List.map fst |> Set.ofList
+    let mandatoryExternalInfoMap =
+        externalInfoMap
+        |> Map.filter (fun _ info -> isZeroArgConstantReturn info.Func)
+    let localAndMandatoryInfoMap =
+        Map.fold (fun acc name info -> Map.add name info acc) localInfoMap mandatoryExternalInfoMap
     let funcsForBody body =
         if countCallsToNames externalNames body <= config.MaxExternalInlineSites then
             funcInfoMap
         else
-            localInfoMap
+            localAndMandatoryInfoMap
 
     // Start above every existing TempId, collected during inlining analysis.
     let startVarGen = VarGen (max localMaxTempId mainAnalysis.MaxTempId + 1)

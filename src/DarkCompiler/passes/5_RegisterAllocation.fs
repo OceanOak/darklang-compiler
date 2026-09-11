@@ -4292,7 +4292,9 @@ let private allocateRegistersInternal
         CodegenFacts = func.CodegenFacts
     }
 
-    (LIR_Peephole.removePostAllocationMovesFromFunction allocatedFunc, timings)
+    (allocatedFunc
+     |> LIR_Peephole.removePostAllocationMovesFromFunction
+     |> LIR_Peephole.optimizeAllocatedCounterUpdates, timings)
 
 /// Allocate registers for a function
 let allocateRegisters (arch: Platform.Arch) (func: LIR.Function) : LIR.Function =

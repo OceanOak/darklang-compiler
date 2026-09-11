@@ -316,6 +316,32 @@ let testExternalInliningHonorsCallerBudget () : TestResult =
     else
         Error $"Expected 9 external calls to remain over caller budget, but found {remainingCalls}"
 
+let testExternalConstantCandidateBypassesCallerBudget () : TestResult =
+    let tagFunction =
+        { Name = "Stdlib.__FingerTree.__TAG_SINGLE"
+          TypedParams = []
+          ReturnType = AST.TInt64
+          ReturnOwnership = OwnedReturn
+          Body = Return (intAtom 1L) }
+    let rec calls remaining nextTid body =
+        if remaining = 0 then
+            body
+        else
+            calls
+                (remaining - 1)
+                (nextTid + 1)
+                (Let (TempId nextTid, Call ("Stdlib.__FingerTree.__TAG_SINGLE", []), body))
+    let main = calls 9 2 (Return (Var (TempId 10)))
+    let (Program (_, inlinedMain)) =
+        ANF_Inlining.inlineProgramWithExternalCandidates
+            ANF_Inlining.defaultConfig
+            (ANF_Inlining.buildExternalCandidateInfoMap ANF_Inlining.defaultConfig [tagFunction])
+            (Program ([], main))
+    if containsCall "Stdlib.__FingerTree.__TAG_SINGLE" inlinedMain then
+        Error "Expected zero-argument external constant candidate to inline even when caller exceeds external budget"
+    else
+        Ok ()
+
 let testBorrowedSelfCallBlocksInlining () : TestResult =
     let param = { Id = TempId 0; Type = AST.TString }
     let borrowedSelf =
@@ -510,6 +536,7 @@ let tests = [
     ("External raw allocation candidates are not inlined", testExternalInlineCandidateRejectsRawAllocBody)
     ("External control-flow candidates are not inlined", testExternalInlineCandidateRejectsControlFlowBody)
     ("External inlining honors caller budget", testExternalInliningHonorsCallerBudget)
+    ("External constant candidates bypass caller budget", testExternalConstantCandidateBypassesCallerBudget)
     ("Borrowed self-call blocks inlining", testBorrowedSelfCallBlocksInlining)
     ("Bounded recursive loops unroll eight iterations", testBoundedRecursiveLoopUnrollsEightIterations)
     ("Bounded recursive loops honor iteration limit", testBoundedRecursiveLoopHonorsIterationLimit)
