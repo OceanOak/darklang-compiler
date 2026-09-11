@@ -230,7 +230,7 @@ history; regression changes only history and returns failure. Thus snapshots are
 the best-known compatible complete run, not necessarily the newest compiler
 commit. `--verify-fresh` is the integration variant: unlike ordinary read-only
 verification, it fails on an improvement because that better run must first be
-recorded. `scripts/land-on-main.sh` uses this freshness check.
+recorded.
 
 `--refresh-baseline=rust` is separate from Dark reset/advancement. It refreshes
 only the audited reference data in `BASELINES.md` after a complete successful

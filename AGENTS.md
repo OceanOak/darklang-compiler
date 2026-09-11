@@ -27,7 +27,7 @@ contains only rules specific to agents changing this repository.
 - Rebase on local `main` before new work. Never push.
 - Do not land without explicit permission. Before requesting landing, commit
   intended changes and report whether the full test and routine benchmark gates
-  passed. On `land`, run `./scripts/land-on-main.sh` after committing.
+  passed.
 
 For CLI commands, development setup, architecture, feature work, and complete
 verification requirements, use the canonical sources in `docs/index.md`.
