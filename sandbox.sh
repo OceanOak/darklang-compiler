@@ -36,7 +36,7 @@ build_template() {
   done
 
   mapfile -t agent_versions < <(
-    docker run --rm node:22-bookworm-slim sh -c \
+    docker run --rm node:26-bookworm-slim sh -c \
       'npm view @openai/codex version && npm view @anthropic-ai/claude-code version'
   )
   if [[ "${#agent_versions[@]}" -ne 2 ]] || \

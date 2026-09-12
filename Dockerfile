@@ -5,7 +5,7 @@ ARG QEMU_VERSION=11.1.1
 ARG QEMU_COMMIT=c3d48b7d1e89604920e5b81b91140c2ad39a1943
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS dotnet
-FROM node:22-bookworm-slim AS node
+FROM node:26-bookworm-slim AS node
 FROM rust:1.89.0-slim-bookworm AS rust
 RUN --mount=type=cache,target=/usr/local/rustup/downloads \
     rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu && \
@@ -74,10 +74,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
       bash-completion \
+      build-essential \
       ca-certificates \
       curl \
       file \
-      gcc \
       git \
       gzip \
       htop \
@@ -113,6 +113,8 @@ RUN mkdir -p /home/agent/.nuget/packages /workspace && \
     chown -R agent:agent /home/agent /workspace
 
 RUN --mount=type=cache,target=/root/.npm \
+    npm install --global --no-audit --no-fund npm@latest && \
+    npm config set allow-scripts=@anthropic-ai/claude-code,node-pty,msgpackr-extract --location=global && \
     npm install --global --no-audit --no-fund \
       "@openai/codex@${CODEX_VERSION}" \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
