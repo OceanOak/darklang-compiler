@@ -35,7 +35,10 @@ build_template() {
     fi
   done
 
-  mapfile -t agent_versions < <(
+  agent_versions=()
+  while IFS= read -r agent_version; do
+    agent_versions+=("$agent_version")
+  done < <(
     docker run --rm node:26-bookworm-slim sh -c \
       'npm view @openai/codex version && npm view @anthropic-ai/claude-code version'
   )
