@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sandbox.sh - Explicitly build a development template or run an agent using one.
+# sandbox.sh - Build or run the single-container development environment.
 # Usage: ./sandbox.sh build [codex|claude|shell] or ./sandbox.sh [codex|claude|shell]
 
 set -euo pipefail
@@ -9,26 +9,22 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 configure_agent() {
   agent="${1:-codex}"
   case "$agent" in
-    claude) template_variant="claude-code" ;;
-    codex | shell) template_variant="$agent" ;;
+    claude) command=(claude) ;;
+    codex) command=(codex) ;;
+    shell) command=(bash) ;;
     *)
       echo "Unsupported agent: $agent (expected claude, codex, or shell)" >&2
       return 1
       ;;
   esac
 
-  template="dark-compiler:$agent"
+  image="dark-compiler:dev"
   worktree="$(basename "$repo_root" | tr -c '[:alnum:]_.-' '-')"
-  sandbox="dark-compiler-$worktree-$agent"
+  container="dark-compiler-$worktree-$agent"
 }
 
-build_template() {
-  command -v docker >/dev/null || { echo "docker is required to build the template" >&2; return 1; }
-
-  archive="$(mktemp "${TMPDIR:-/tmp}/dark-compiler-template.XXXXXX")"
-  trap 'rm -f "$archive"' EXIT
-
-  build_args=(--build-arg "SANDBOX_TEMPLATE=$template_variant")
+build_image() {
+  build_args=()
   for variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PROXY_CA_CERT_B64; do
     if [[ -n "${!variable:-}" ]]; then
       build_args+=(--build-arg "$variable=${!variable}")
@@ -37,19 +33,25 @@ build_template() {
 
   docker build \
     "${build_args[@]}" \
-    --tag "$template" \
+    --tag "$image" \
     "$repo_root"
-  docker image save "$template" --output "$archive"
-  sbx template load "$archive"
 }
 
-command -v sbx >/dev/null || { echo "sbx is required" >&2; exit 1; }
+command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 
 if [[ "${1:-}" == "build" ]]; then
   configure_agent "${2:-codex}"
-  build_template
+  build_image
 else
   configure_agent "${1:-codex}"
-  # Template creation is explicit: a failed probe does not establish absence.
-  exec sbx run --name "$sandbox" "$agent" "$repo_root"
+  docker image inspect "$image" >/dev/null 2>&1 || build_image
+  exec docker run --rm --interactive --tty \
+    --name "$container" \
+    --volume "$repo_root:$repo_root" \
+    --volume dark-compiler-codex-home:/home/agent/.codex \
+    --volume dark-compiler-claude-home:/home/agent/.claude \
+    --volume dark-compiler-nuget-packages:/home/agent/.nuget/packages \
+    --workdir "$repo_root" \
+    "$image" \
+    "${command[@]}"
 fi
