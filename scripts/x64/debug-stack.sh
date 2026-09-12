@@ -14,7 +14,7 @@
 #  3. Sets GDB watchpoints on the callee-saved register save locations.
 #  4. Reports which function corrupts the saved registers.
 #
-# Requires gdb and objdump from the sbx development template.
+# Requires gdb and objdump in the development environment.
 
 set -euo pipefail
 
