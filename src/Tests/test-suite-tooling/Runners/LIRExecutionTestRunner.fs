@@ -57,7 +57,8 @@ let private writeAndRun binary =
         let startInfo =
             match Platform.detectArch () with
             | Ok Platform.X86_64 -> ProcessStartInfo(tempPath)
-            | _ -> ProcessStartInfo("qemu-x86_64-static", tempPath)
+            | _ ->
+                ProcessStartInfo("/opt/dcb/qemu/qemu-x86_64", tempPath)
         startInfo.UseShellExecute <- false
         startInfo.RedirectStandardOutput <- true
         startInfo.RedirectStandardError <- true

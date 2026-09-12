@@ -66,7 +66,7 @@ let testElfIdentHelper () : Result<unit, string> =
     else
         Error "ELF ident helper produced unexpected bytes"
 
-/// Run an ELF binary, using qemu-user-static if on a different architecture.
+/// Run an ELF binary, using the pinned QEMU when on a different architecture.
 /// Returns the exit code.
 let internal runElfBinary (binary: byte array) : Result<int, string> =
     let tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString("N"))
@@ -79,13 +79,16 @@ let internal runElfBinary (binary: byte array) : Result<int, string> =
         let permissions = System.IO.File.GetUnixFileMode(tempPath)
         System.IO.File.SetUnixFileMode(tempPath, permissions ||| System.IO.UnixFileMode.UserExecute)
 
-        // On non-x86_64 hosts, use qemu-x86_64-static to run the binary
+        // On non-x86_64 hosts, use the image's pinned QEMU build.
         let psi =
             match Platform.detectArch () with
             | Ok Platform.X86_64 ->
                 System.Diagnostics.ProcessStartInfo(tempPath)
             | _ ->
-                let p = System.Diagnostics.ProcessStartInfo("qemu-x86_64-static", tempPath)
+                let p =
+                    System.Diagnostics.ProcessStartInfo(
+                        "/opt/dcb/qemu/qemu-x86_64",
+                        tempPath)
                 p
         psi.UseShellExecute <- false
         psi.RedirectStandardOutput <- true

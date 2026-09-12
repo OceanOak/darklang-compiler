@@ -26,6 +26,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 python3 --version
 ```
 
+The development image builds QEMU 11.1.1 user-mode emulators and its instruction
+plugin under `/opt/dcb/qemu`. It installs an ARM64 linker and sysroot on x86_64,
+and an x86_64 linker and sysroot on ARM64, so either image architecture can run
+the compiler's other Linux target.
+
 ## Quick Start
 
 ```bash

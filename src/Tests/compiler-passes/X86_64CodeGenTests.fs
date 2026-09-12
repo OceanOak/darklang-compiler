@@ -224,7 +224,9 @@ let private runLIRProgramFullWithOptionsAndArgs
                         args |> List.iter value.ArgumentList.Add
                         value
                     | _ ->
-                        let value = System.Diagnostics.ProcessStartInfo("qemu-x86_64-static")
+                        let value =
+                            System.Diagnostics.ProcessStartInfo(
+                                "/opt/dcb/qemu/qemu-x86_64")
                         value.ArgumentList.Add(tempPath)
                         args |> List.iter value.ArgumentList.Add
                         value

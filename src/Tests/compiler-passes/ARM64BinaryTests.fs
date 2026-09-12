@@ -1,4 +1,4 @@
-// ARM64BinaryTests.fs - Unit tests for ARM64 Mach-O binary generation.
+// ARM64BinaryTests.fs - Unit and execution tests for ARM64 Mach-O and ELF generation.
 
 module ARM64BinaryTests
 
@@ -407,6 +407,54 @@ let testCompleteEncodingPipeline () : TestResult =
             else
                 Ok ()
 
+/// Execute a Linux ARM64 ELF directly on Linux ARM64 and through the pinned
+/// QEMU build on every other supported development host.
+let testExecuteLinuxElf () : TestResult =
+    let machineCode =
+        [ MOVZ (X0, 42us, 0)
+          MOVZ (X8, Platform.linuxARM64SyscallNumbers.Exit, 0)
+          SVC 0us ]
+        |> List.collect encode
+        |> List.toArray
+    let binary = Binary_Generation_ELF.createExecutable machineCode
+    let tempPath =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            System.Guid.NewGuid().ToString("N"))
+
+    try
+        System.IO.File.WriteAllBytes(tempPath, binary)
+        let permissions = System.IO.File.GetUnixFileMode(tempPath)
+        System.IO.File.SetUnixFileMode(
+            tempPath,
+            permissions ||| System.IO.UnixFileMode.UserExecute)
+
+        let startInfo =
+            match Platform.detectOS (), Platform.detectArch () with
+            | Ok Platform.Linux, Ok Platform.ARM64 ->
+                System.Diagnostics.ProcessStartInfo(tempPath)
+            | _ ->
+                System.Diagnostics.ProcessStartInfo(
+                    "/opt/dcb/qemu/qemu-aarch64",
+                    tempPath)
+        startInfo.UseShellExecute <- false
+        startInfo.RedirectStandardError <- true
+        use proc = System.Diagnostics.Process.Start(startInfo)
+
+        if not (proc.WaitForExit(10000)) then
+            proc.Kill(true)
+            Error "Timed out executing Linux ARM64 ELF binary"
+        elif proc.ExitCode = 42 then
+            Ok ()
+        else
+            Error
+                $"Expected Linux ARM64 ELF exit code 42, got {proc.ExitCode}: {proc.StandardError.ReadToEnd()}"
+    with ex ->
+        Error $"Failed to execute Linux ARM64 ELF binary: {ex.Message}"
+    |> fun result ->
+        try System.IO.File.Delete(tempPath) with _ -> ()
+        result
+
 let testWriteToFileReturnsErrorForInvalidPath () : TestResult =
     let missingDir =
         System.IO.Path.Combine(
@@ -436,6 +484,7 @@ let tests = [
     ("serializeMachO reports invalid code offset", testSerializeMachOReportsInvalidCodeOffset)
     ("serializeMachO reports undersized __TEXT segment", testSerializeMachOReportsTextSegmentTooSmall)
     ("complete encoding pipeline", testCompleteEncodingPipeline)
+    ("execute Linux ARM64 ELF", testExecuteLinuxElf)
     ("writeToFile returns Error for invalid path", testWriteToFileReturnsErrorForInvalidPath)
 ]
 

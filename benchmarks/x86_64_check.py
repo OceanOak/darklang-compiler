@@ -161,7 +161,7 @@ def measure_binary(repository: Path, name: str, binary: Path) -> tuple[int | Non
     counter = repository / "benchmarks" / "infrastructure" / "qemu_instruction_count.sh"
     try:
         result = command_result(
-            [str(counter), str(binary), *invocation.args], repository, timeout=30
+            [str(counter), "x86_64", str(binary), *invocation.args], repository, timeout=30
         )
     except subprocess.TimeoutExpired:
         return None, "execution exceeded 30 seconds"

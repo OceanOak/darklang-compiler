@@ -147,7 +147,7 @@ shape-driven story, and raw-memory policy remains deferred.
 - tagged-list nested boxed sum dynamic-buffer payload release
 
 The x64 tests run generated x64 ELF binaries directly on x64 hosts and through
-`qemu-x86_64-static` on non-x64 hosts.
+`/opt/dcb/qemu/qemu-x86_64` on non-x64 hosts.
 
 ## Tagged Lists
 
