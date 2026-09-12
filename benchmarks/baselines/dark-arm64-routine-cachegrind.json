@@ -10,10 +10,10 @@
     "measurement_policy": "cachegrind-ir-v1:cache-sim=yes,branch-sim=yes,extract=summary-I-refs"
   },
   "contract_sha256": "b4e6ba180a5f68f107005cf8867371144b93d3ed5326517cea45284c74fa6cc2",
-  "generated_at": "2026-09-09T19:10:34+00:00",
+  "generated_at": "2026-09-12T06:53:55+00:00",
   "compiler": {
-    "commit": "e34e66c5c701647f8aba2a6d67f1e282584874eb",
-    "subject": "Accumulate generic type applications in one traversal"
+    "commit": "648f7e2392aa78c202c4e014312d5039880998f3",
+    "subject": "Integrate archived multiply-subtract loop copy-back optimization"
   },
   "benchmarks": [
     {
@@ -22,7 +22,7 @@
     },
     {
       "name": "binary_trees",
-      "instructions": 547528440
+      "instructions": 537698640
     },
     {
       "name": "collatz",
@@ -30,15 +30,15 @@
     },
     {
       "name": "edigits",
-      "instructions": 3528831129
+      "instructions": 3364448919
     },
     {
       "name": "factorial",
-      "instructions": 67450
+      "instructions": 67431
     },
     {
       "name": "fasta",
-      "instructions": 477020357
+      "instructions": 458941566
     },
     {
       "name": "fib",
@@ -46,15 +46,15 @@
     },
     {
       "name": "leibniz",
-      "instructions": 850009239
+      "instructions": 850009237
     },
     {
       "name": "mandelbrot",
-      "instructions": 16367530
+      "instructions": 15230955
     },
     {
       "name": "matmul",
-      "instructions": 1941542486
+      "instructions": 931429268
     },
     {
       "name": "merkletrees",
@@ -62,15 +62,15 @@
     },
     {
       "name": "nbody",
-      "instructions": 883009464
+      "instructions": 883009458
     },
     {
       "name": "nqueen",
-      "instructions": 212398464
+      "instructions": 207723575
     },
     {
       "name": "pisum",
-      "instructions": 40029693
+      "instructions": 40027691
     },
     {
       "name": "primes",
@@ -78,15 +78,15 @@
     },
     {
       "name": "quicksort",
-      "instructions": 187792899
+      "instructions": 179366191
     },
     {
       "name": "spectral_norm",
-      "instructions": 69747736
+      "instructions": 63964730
     },
     {
       "name": "sum_to_n",
-      "instructions": 75679
+      "instructions": 65679
     },
     {
       "name": "tak",
@@ -94,7 +94,7 @@
     },
     {
       "name": "tinytemplate",
-      "instructions": 1115858537
+      "instructions": 1087365441
     }
   ]
 }
