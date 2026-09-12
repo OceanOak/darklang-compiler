@@ -3,6 +3,7 @@
 
 ARG QEMU_VERSION=11.1.1
 ARG QEMU_COMMIT=c3d48b7d1e89604920e5b81b91140c2ad39a1943
+ARG SANDBOX_TEMPLATE=shell
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS dotnet
 FROM node:26-bookworm-slim AS node
@@ -52,11 +53,11 @@ RUN strip --strip-unneeded qemu-aarch64 qemu-x86_64 tests/tcg/plugins/libinsn.so
     mkdir -p /opt/dcb/qemu && \
     cp qemu-aarch64 qemu-x86_64 tests/tcg/plugins/libinsn.so /opt/dcb/qemu/
 
-FROM ubuntu:noble
+FROM docker.io/docker/sandbox-templates:${SANDBOX_TEMPLATE}
 ARG TARGETARCH
 ARG PROXY_CA_CERT_B64
-ARG CODEX_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
+
+USER root
 
 COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
 COPY --from=node /usr/local /usr/local
@@ -86,7 +87,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       less \
       libatomic1 \
       libglib2.0-0t64 \
-      libicu74 \
       libssl3t64 \
       libstdc++6 \
       ocaml \
@@ -105,19 +105,8 @@ RUN if [ -n "$PROXY_CA_CERT_B64" ]; then \
       update-ca-certificates; \
     fi
 
-RUN usermod --login agent --home /home/agent --move-home ubuntu && \
-    groupmod --new-name agent ubuntu
-RUN echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent && \
-    chmod 0440 /etc/sudoers.d/agent
 RUN mkdir -p /home/agent/.nuget/packages /workspace && \
     chown -R agent:agent /home/agent /workspace
-
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --global --no-audit --no-fund npm@latest && \
-    npm config set allow-scripts=@anthropic-ai/claude-code,node-pty,msgpackr-extract --location=global && \
-    npm install --global --no-audit --no-fund \
-      "@openai/codex@${CODEX_VERSION}" \
-      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 USER agent
 ENV HOME=/home/agent
@@ -140,4 +129,3 @@ RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"
     echo 'if [ -f /etc/bash_completion ]; then . /etc/bash_completion; fi' >> ~/.bashrc
 
 WORKDIR /workspace
-CMD ["bash"]
