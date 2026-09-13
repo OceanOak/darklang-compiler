@@ -24,14 +24,23 @@ contains only rules specific to agents changing this repository.
 
 ## Git workflow
 
-- Perform all work in a dedicated git worktree, never in the primary checkout,
-  and rebase the worktree branch on local `main` before starting. Never push.
-- When work is complete, commit the intended changes automatically. Run the
-  relevant test gates and verify that relevant benchmarks have not regressed,
-  then integrate the commit into local `main` automatically without waiting for
-  explicit permission.
-- Report the commit and integration result, the exact verification commands run,
-  and any test or benchmark gate that was not relevant or could not be run.
+Use this checklist for every change and include a completed copy in the final
+report:
+
+```markdown
+- [ ] Worktree: Create a dedicated git worktree; do not modify files in the
+      primary checkout.
+- [ ] Rebase: Rebase the worktree branch on local `main` before modifying files.
+- [ ] Tests: Run every relevant test gate and record each exact command and
+      result, or state why tests are not relevant.
+- [ ] Benchmarks: Run every relevant benchmark gate and confirm that benchmarks
+      have not regressed, or state why benchmarks are not relevant.
+- [ ] Commit: Commit the intended changes automatically and record the commit
+      hash and subject.
+- [ ] Integration: After relevant gates pass, integrate the commit into local
+      `main` automatically without waiting for explicit permission.
+- [ ] Push: Never push.
+```
 
 For CLI commands, development setup, architecture, feature work, and complete
 verification requirements, use the canonical sources in `docs/index.md`.
