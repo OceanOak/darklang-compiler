@@ -20,7 +20,7 @@ let private plannedSource
         |> Result.mapError TypeChecking.typeErrorToString)
     |> Result.map (fun (_, typedProgram, env) ->
         JsonPlanning.rewriteProgram env typedProgram
-        |> ASTPrettyPrinter.formatProgram ASTPrettyPrinter.InterpreterSyntax)
+        |> ASTPrettyPrinter.formatProgram)
 
 let testTypedDecodingUsesSharedViews
     (stdlib: CompilerLibrary.StdlibResult)

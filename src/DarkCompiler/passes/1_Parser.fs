@@ -1,4 +1,4 @@
-// 1_InterpreterParser.fs - Canonical lexer and parser for Dark syntax
+// 1_Parser.fs - Canonical lexer and parser for Dark syntax
 //
 // Transforms interpreter-compatible Dark source code into the compiler's
 // shared Abstract Syntax Tree (AST). This is the compiler's only parser.
@@ -14,7 +14,7 @@
 // Example:
 //   "2 + 3 * 4" → BinOp(Add, BigIntLiteral(2), BinOp(Mul, BigIntLiteral(3), BigIntLiteral(4)))
 
-module InterpreterParser
+module Parser
 
 open AST
 
@@ -62,7 +62,7 @@ and Token =
     | TAt          // @ (list append)
     | TColon       // : (type annotation)
     | TComma       // , (parameter separator)
-    | TSemicolon   // ; (interpreter-style list separator)
+    | TSemicolon   // ; (canonical list separator)
     | TDot         // . (tuple/record access)
     | TLBrace      // { (record literal)
     | TRBrace      // } (record literal)
@@ -70,7 +70,7 @@ and Token =
     | TOf          // of (sum type payload)
     | TMatch       // match (pattern matching)
     | TWith        // with (pattern matching)
-    | TFun         // fun (interpreter-style lambda)
+    | TFun         // fun (lambda)
     | TArrow       // -> (pattern matching)
     | TUnderscore  // _ (wildcard pattern)
     | TWhen        // when (guard clause in pattern matching)
@@ -106,7 +106,7 @@ type private LayoutScanMode =
     | Quoted of escaped: bool
     | LineComment
 
-/// Materialize the interpreter formatter's indentation-separated list
+/// Materialize the formatter's indentation-separated list
 /// elements before lexing discards source columns. Continuation lines are
 /// deliberately left unseparated, even when the preceding token is an
 /// identifier that could otherwise end an element.
@@ -223,7 +223,7 @@ let lex (input: string) : Result<Token list, string> =
         | '+' :: rest -> lexHelper rest (TPlus :: acc)
         | '-' :: '>' :: rest -> lexHelper rest (TArrow :: acc)
         | '-' :: rest -> lexHelper rest (TMinus :: acc)
-        | '=' :: '>' :: _ -> Error "Interpreter syntax does not use '=>'; use 'fun <args> -> <body>'"
+        | '=' :: '>' :: _ -> Error "Dark syntax does not use '=>'; use 'fun <args> -> <body>'"
         | '*' :: rest -> lexHelper rest (TStar :: acc)
         | '/' :: '/' :: rest ->
             // Skip line comment: // ... until end of line
@@ -379,7 +379,7 @@ let lex (input: string) : Result<Token list, string> =
                         | (true, value) -> finishNumber remaining (TFloat value)
                         | (false, _) -> Error $"Invalid float literal: {numStr}"
                 | _ ->
-                    // Current interpreter syntax uses arbitrary-precision Int for
+                    // Current Dark syntax uses arbitrary-precision Int for
                     // every unsuffixed integer literal. The legacy I suffix remains
                     // accepted as a compiler extension; L selects Int64 explicitly.
                     let numStr = System.String(List.toArray intDigits)
@@ -789,7 +789,7 @@ and parseTypeBase (typeParams: Set<string>) (tokens: Token list) : Result<Type *
         Ok (TVar typeName, rest)
     | TIdent typeName :: rest when
         typeName.Length > 0 && (System.Char.IsLower(typeName.[0]) || typeName.StartsWith "_") ->
-        // The interpreter permits bare lowercase type-variable references;
+        // The upstream interpreter permits bare lowercase type-variable references;
         // declaration binders themselves still require apostrophes.
         Ok (TVar typeName, rest)
     | TIdent "List" :: TLt :: rest ->
@@ -931,7 +931,7 @@ let rec parseTypeParams (tokens: Token list) (acc: string list) : Result<string 
         // More type parameters to come
         parseTypeParams rest (name :: acc)
     | TIdent name :: _ ->
-        Error $"Interpreter type parameters require an apostrophe: '{name}"
+        Error $"Dark type parameters require an apostrophe: '{name}"
     | TGt :: rest when List.isEmpty acc ->
         // Empty type parameters: <>
         Ok ([], rest)
@@ -1388,7 +1388,7 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
             // Integer literal pattern (Int64)
             Ok (PInt64 n, rest)
         | TBigInt n :: rest ->
-            // Unsuffixed interpreter literals are arbitrary-precision Ints.
+            // Unsuffixed Dark literals are arbitrary-precision Ints.
             Ok (PBigInt n, rest)
         | TInt128 n :: rest ->
             Ok (PInt128Literal n, rest)
@@ -1454,7 +1454,7 @@ let rec parsePattern (tokens: Token list) : Result<Pattern * Token list, string>
         | TIdent typeName :: TLBrace :: _ when typeName.Length > 0 && System.Char.IsUpper(typeName.[0]) ->
             Error "Record patterns are not supported"
         | TIdent name :: rest when name.Length > 0 && System.Char.IsUpper(name.[0]) ->
-            // Constructor pattern, optionally with interpreter-style payload: Some x
+            // Constructor pattern, optionally with a space-applied payload: Some x
             if canStartPatternPayload rest then
                 parsePattern rest
                 |> Result.map (fun (payloadPattern, remaining) ->
@@ -1646,7 +1646,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
             match callee with
             // Keep subtraction precedence for bare variables (`x - 1L`),
             // but allow negative numeric literals as call args in contexts
-            // that are clearly call-like in interpreter syntax.
+            // that are clearly call-like in space-application syntax.
             | Var funcName when funcName.Contains "." -> true
             | Call _ | TypeApp _ | Apply _ | Constructor _ -> true
             | _ -> false
@@ -1775,11 +1775,11 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
         | TSemicolon :: rest ->
             parseExpr rest
         | TLet :: TIdent firstName :: TLParen :: rest ->
-            // Interpreter-style nested function declaration:
+            // Nested function declaration:
             // let name(args) : ReturnType = fnBody body
             parseNestedFunctionLet (TFunctionDeclaration :: TIdent firstName :: TLParen :: rest)
         | TLet :: TIdent firstName :: TLt :: rest ->
-            // Interpreter-style generic nested function declaration.
+            // Generic nested function declaration.
             parseNestedFunctionLet (TFunctionDeclaration :: TIdent firstName :: TLt :: rest)
         | TLet :: rest ->
             // Parse: let pattern = value in body
@@ -2148,7 +2148,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
 
     and parsePrimary (toks: Token list) : Result<Expr * Token list, string> =
         // Parse a primary expression, then handle postfix operations and
-        // interpreter-style space application: f x y
+        // Space application: f x y
         parsePrimaryBase toks
         |> Result.bind (fun (expr, remaining) ->
             parsePostfix false expr remaining
@@ -2250,7 +2250,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
         | TTrue :: rest -> Ok (BoolLiteral true, rest)
         | TFalse :: rest -> Ok (BoolLiteral false, rest)
         | TFun :: rest ->
-            // Interpreter lambda syntax: fun x y -> body
+            // Lambda syntax: fun x y -> body
             let rec parseFunParameters
                 (toks: Token list)
                 (acc: LetPattern list)
@@ -2327,7 +2327,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
                 if looksLikeTypeArgs typeArgsStart then
                     parseTypeArgs typeArgsStart []
                     |> Result.map (fun (typeArgs, afterTypes) ->
-                        // Interpreter parser always expects argument application to be
+                        // The parser expects argument application to be
                         // space-based (handled by parseApplication).
                         (TypeApp (fullName, typeArgs, NonEmptyList.singleton UnitLiteral), afterTypes))
                 else
@@ -2360,7 +2360,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
                 // Parse as generic call
                 parseTypeArgs rest []
                 |> Result.map (fun (typeArgs, afterTypes) ->
-                    // Interpreter parser always expects argument application to be
+                    // The parser expects argument application to be
                     // space-based (handled by parseApplication).
                     (TypeApp (name, typeArgs, NonEmptyList.singleton UnitLiteral), afterTypes))
             else
@@ -2664,7 +2664,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
                 | _ ->
                     // Constructors remain compatible with the established
                     // parenthesized payload spelling (`Some(value)`). Regular
-                    // functions retain interpreter space-application for a
+                    // functions retain space application for a
                     // single parenthesized argument.
                     match expr with
                     | Constructor _ -> true
@@ -2733,7 +2733,7 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
         : Result<NameSyntax.ParsedSource, string> =
         match toks with
         | TSemicolon :: rest ->
-            // Optional top-level separator in interpreter pretty-printed programs.
+            // Optional top-level separator in pretty-printed programs.
             parseTopLevels rest acc
         | TLBracket :: TLt :: rest ->
             // Top-level attributes (for example `[<DB>]`) are metadata markers.
@@ -2763,14 +2763,14 @@ let parse (tokens: Token list) : Result<NameSyntax.ParsedSource, string> =
             Error "Legacy 'def' declarations are not supported; use 'let'"
 
         | TLet :: TIdent firstName :: TLParen :: rest ->
-            // Interpreter-style top-level function definition:
+            // Top-level function definition:
             // let name(args) : ReturnType = body
             parseFunctionDef (TFunctionDeclaration :: TIdent firstName :: TLParen :: rest) parseExpr
             |> Result.bind (fun (funcDef, remaining) ->
                 parseTopLevels remaining (NameSyntax.SourceFunction (NameSyntax.identifierFromText firstName, funcDef) :: acc))
 
         | TLet :: TIdent firstName :: TLt :: rest ->
-            // Interpreter-style generic top-level function definition:
+            // Generic top-level function definition:
             // let name<'t>(args) : ReturnType = body
             parseFunctionDef (TFunctionDeclaration :: TIdent firstName :: TLt :: rest) parseExpr
             |> Result.bind (fun (funcDef, remaining) ->

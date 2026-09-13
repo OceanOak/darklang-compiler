@@ -55,6 +55,7 @@
     <Compile Include="test-suite-tooling-tests/TypeCheckingFormatTests.fs" />
     <Compile Include="test-suite-tooling-tests/ProgressBarTests.fs" />
     <Compile Include="test-suite-tooling-tests/FormattingRoundtripTests.fs" />
+    <Compile Include="test-suite-tooling-tests/SyntaxDSLTests.fs" />
     <Compile Include="test-suite-tooling-tests/EncodingDSLTests.fs" />
     <Compile Include="test-suite-tooling-tests/GraphColorDSLTests.fs" />
     <Compile Include="test-suite-tooling-tests/ParallelMoveDSLTests.fs" />

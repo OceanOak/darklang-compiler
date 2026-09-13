@@ -1,4 +1,4 @@
-// Pinned interpreter String conformance cases adapted to compiler syntax.
+// Pinned interpreter String conformance cases adapted to compiler-supported Dark syntax.
 
 let c (arg: String) : Char =
   arg |> Stdlib.String.head |> Builtin.unwrap

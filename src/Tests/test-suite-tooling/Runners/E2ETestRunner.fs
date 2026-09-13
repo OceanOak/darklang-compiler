@@ -44,7 +44,7 @@ let private tryFormatProgramIfStable
     (allowInternal: bool)
     (program: Program)
     : string option =
-    let formatted = ASTPrettyPrinter.formatProgram ASTPrettyPrinter.InterpreterSyntax program
+    let formatted = ASTPrettyPrinter.formatProgram program
     match CompilerLibrary.parseProgram allowInternal formatted with
     | Ok _ ->
         // Stable recursive identities include structural declaration paths.
@@ -1312,7 +1312,7 @@ let private tryBuildReducedPreambleForTest
         let reducedTopLevels =
             reducePreambleTopLevelsToRequiredFunctions requiredFunctions preambleTopLevels
 
-        let reducedPreambleSource = ASTPrettyPrinter.formatProgram ASTPrettyPrinter.InterpreterSyntax (Program reducedTopLevels)
+        let reducedPreambleSource = ASTPrettyPrinter.formatProgram (Program reducedTopLevels)
         Some reducedPreambleSource
     | _ ->
         None

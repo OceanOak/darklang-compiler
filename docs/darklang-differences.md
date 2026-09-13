@@ -30,8 +30,9 @@ python3 scripts/validate-darklang.py              # Run validation
 
 ## 1. Syntactic Differences
 
-Features supported in both with different syntax. The validation script automatically
-converts from compiler syntax to interpreter syntax.
+Features supported in both with different spellings. The validation script
+automatically converts compiler-only extensions into source accepted by the
+upstream interpreter.
 
 | Feature | Compiler | Interpreter | Conversion |
 |---------|----------|-------------|------------|

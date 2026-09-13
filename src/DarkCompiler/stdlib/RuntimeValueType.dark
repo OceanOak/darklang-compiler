@@ -1,4 +1,4 @@
-// RuntimeValueType.dark - minimal canonical runtime value-type declarations copied in interpreter syntax.
+// RuntimeValueType.dark - Minimal canonical runtime value-type declarations in Dark syntax.
 
 module Darklang.LanguageTools.RuntimeTypes
 

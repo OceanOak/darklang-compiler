@@ -569,6 +569,7 @@ let private runTestsWithProgressReporter (completedTestReporter: (int -> unit) o
         { Name = "Monomorphization Tests"; Tests = MonomorphizationTests.tests }
         { Name = "Lambda Lifting Tests"; Tests = LambdaLiftingTests.tests }
         { Name = "Formatting Roundtrip Tests"; Tests = FormattingRoundtripTests.tests formattingRoundtripTestFiles }
+        { Name = "Syntax DSL Tests"; Tests = SyntaxDSLTests.tests }
         { Name = "Syntax Fixture Tests"; Tests = TestDSL.SyntaxTestRunner.tests syntaxTestFiles }
         { Name = "E2E Format Tests"; Tests = E2EFormatTests.tests }
     |]

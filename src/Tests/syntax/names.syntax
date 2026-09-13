@@ -2,91 +2,61 @@
 
 ---NAME---
 def rec private and internal are ordinary identifiers
----PARSE-AS---
-interpreter
 ---SOURCE---
 let def(rec: Int64, private: Int64, internal: Int64) : Int64 = rec
 def(1, 2, 3)
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 quoted reserved identifiers roundtrip
----PARSE-AS---
-interpreter
 ---SOURCE---
 let ``let``(``val``: Int64, ``elif``: Int64, ``fun``: Int64) : Int64 = ``val``
 ``let``(1, 2, 3)
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 identifier apostrophe suffix roundtrips bare
----PARSE-AS---
-interpreter
 ---SOURCE---
 let next'(value': Int64) : Int64 = value'
 next'(1)
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 empty quoted identifier is the blank name
----PARSE-AS---
-interpreter
 ---SOURCE---
 let ```` = 1 in 2
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 blank spelling roundtrips canonically
----PARSE-AS---
-interpreter
 ---SOURCE---
 let ___ = 1 in 2
----FORMAT-AS---
-interpreter
 ---EXPECTED---
 let ___ = 1I in 2I
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 quoted dot remains one qualified segment
----PARSE-AS---
-interpreter
 ---SOURCE---
 A.``b.c``
----FORMAT-AS---
-interpreter
 ---EXPECTED---
 A.``b.c``
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 qualification stops before lowercase field access
----PARSE-AS---
-interpreter
 ---SOURCE---
 A.value.field
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 keyword prefixes stay identifiers
----PARSE-AS---
-interpreter
 ---SOURCE---
 let lettuce = 1 in lettuce
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 glued integer and identifier reject as one literal
----PARSE-AS---
-interpreter
 ---SOURCE---
 123abc
 ---EXPECT-ERROR---
@@ -94,8 +64,6 @@ invalid number literal: 123abc
 
 ---NAME---
 glued float and identifier reject as one literal
----PARSE-AS---
-interpreter
 ---SOURCE---
 1.5abc
 ---EXPECT-ERROR---
@@ -103,18 +71,13 @@ invalid number literal: 1.5abc
 
 ---NAME---
 public function declaration uses let and apostrophe parameters
----PARSE-AS---
-interpreter
 ---SOURCE---
 let identity<'a>(value: 'a) : 'a = value
 identity<Int64>(1)
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 legacy def declaration is removed
----PARSE-AS---
-interpreter
 ---SOURCE---
 def old(value: Int64) : Int64 = value
 ---EXPECT-ERROR---
@@ -122,8 +85,6 @@ Expected ')', ',', or ';' in tuple/parenthesized expression
 
 ---NAME---
 qualified declaration name is removed
----PARSE-AS---
-interpreter
 ---SOURCE---
 let A.f(value: Int64) : Int64 = value
 ---EXPECT-ERROR---
@@ -131,36 +92,26 @@ Expected a let binding pattern
 
 ---NAME---
 bare declaration type parameter is removed
----PARSE-AS---
-interpreter
 ---SOURCE---
 let identity<a>(value: a) : a = value
 ---EXPECT-ERROR---
-Interpreter type parameters require an apostrophe: 'a
+Dark type parameters require an apostrophe: 'a
 
 ---NAME---
 module is contextual outside declaration position
----PARSE-AS---
-interpreter
 ---SOURCE---
 let module = 1 in module
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 all reserved spellings work when quoted
----PARSE-AS---
-interpreter
 ---SOURCE---
 let names(``let``: Int64, ``val``: Int64, ``in``: Int64, ``if``: Int64, ``elif``: Int64, ``then``: Int64, ``else``: Int64, ``type``: Int64, ``of``: Int64, ``match``: Int64, ``with``: Int64, ``fun``: Int64, ``when``: Int64, ``true``: Int64, ``false``: Int64, ``_``: Int64) : Int64 = ``let``
 names(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 spaced declaration generic is not adjacent
----PARSE-AS---
-interpreter
 ---SOURCE---
 let identity <'a>(value: a) : a = value
 ---EXPECT-ERROR---
@@ -168,18 +119,6 @@ Expected '=' after let binding pattern
 
 ---NAME---
 comment-separated declaration generic is not adjacent
----PARSE-AS---
-interpreter
----SOURCE---
-let identity// comment breaks adjacency
-<'a>(value: a) : a = value
----EXPECT-ERROR---
-Expected '=' after let binding pattern
-
----NAME---
-interpreter comment-separated declaration generic is not adjacent
----PARSE-AS---
-interpreter
 ---SOURCE---
 let identity// comment breaks adjacency
 <'a>(value: a) : a = value
@@ -188,29 +127,21 @@ Expected '=' after let binding pattern
 
 ---NAME---
 module header normalizes public declarations
----PARSE-AS---
-interpreter
 ---SOURCE---
 module Example
 let identity<'a>(value: a) : a = value
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 nested module blocks normalize public declarations
----PARSE-AS---
-interpreter
 ---SOURCE---
 module Outer =
   module Inner =
     let identity<'a>(value: a) : a = value
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
 top level val reaches the unsupported execution boundary
----PARSE-AS---
-interpreter
 ---SOURCE---
 val answer = 42
 ---EXPECT-ERROR---

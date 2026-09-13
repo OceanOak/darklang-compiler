@@ -12,23 +12,23 @@ open TestDSL.FormattingRoundtripFormat
 
 type TestResult = Result<unit, string>
 
-let private roundtripInterpreterSyntax (testCase: FormattingRoundtripCase) : TestResult =
-    match InterpreterParser.parseString false testCase.Source with
+let private roundtripSyntax (testCase: FormattingRoundtripCase) : TestResult =
+    match Parser.parseString false testCase.Source with
     | Error err ->
         Error (
             $"Initial parse failed.\nFile: {testCase.SourceFile}\nTest: {testCase.Name}\n"
             + $"Source: {testCase.Source}\nError: {err}"
         )
     | Ok ast0 ->
-        let printed0 = ASTPrettyPrinter.formatProgram InterpreterSyntax ast0
-        match InterpreterParser.parseString false printed0 with
+        let printed0 = ASTPrettyPrinter.formatProgram ast0
+        match Parser.parseString false printed0 with
         | Error err ->
             Error (
                 $"Re-parse failed.\nFile: {testCase.SourceFile}\nTest: {testCase.Name}\n"
                 + $"Source: {testCase.Source}\nPretty: {printed0}\nError: {err}"
             )
         | Ok ast1 ->
-            let printed1 = ASTPrettyPrinter.formatProgram InterpreterSyntax ast1
+            let printed1 = ASTPrettyPrinter.formatProgram ast1
             if ast0 <> ast1 then
                 Error (
                     "AST changed after roundtrip.\n"
@@ -62,6 +62,6 @@ let tests (testFiles: string array) : (string * (unit -> TestResult)) list =
         match parseFormattingRoundtripFile path with
         | Ok parsed ->
             parsed
-            |> List.map (fun caseData -> (caseData.Name, fun () -> roundtripInterpreterSyntax caseData))
+            |> List.map (fun caseData -> (caseData.Name, fun () -> roundtripSyntax caseData))
         | Error msg ->
             [ parseFailureTest path msg ])

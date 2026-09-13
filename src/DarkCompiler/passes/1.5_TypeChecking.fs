@@ -3546,7 +3546,7 @@ let rec private checkExprWithParamNamesAndSumTypeNames
                                 | _ -> Ok (origReturnType, Call (resolvedFuncName, toCallArgs args')))
                 )
             | Some (TVar funcTypeVar, resolvedFuncName) ->
-                // In interpreter syntax, higher-order generic parameters may reach call sites
+                // In public source, higher-order generic parameters may reach call sites
                 // before their function shape is concretized (for example in nested List.map).
                 // Keep the call typable and let surrounding generic reconciliation specialize it.
                 let rec checkArgsWithUnknownCallableType remaining accArgs =
@@ -8821,10 +8821,10 @@ let checkProgram (program: Program) : Result<Type * Program, TypeError> =
     checkProgramInternal None false false true true AST.defaultWarningSettings program
     |> Result.map (fun (typ, prog, _env) -> (typ, prog))
 
-/// Type-check the public interpreter syntax policy without a base environment.
+/// Type-check the public source policy without a base environment.
 /// Used by focused declaration tests and tools that already parsed an isolated
-/// interpreter program.
-let checkInterpreterProgram (program: Program) : Result<Type * Program, TypeError> =
+/// public program.
+let checkPublicProgram (program: Program) : Result<Type * Program, TypeError> =
     checkProgramInternal None false true true true AST.defaultWarningSettings program
     |> Result.map (fun (typ, prog, _env) -> (typ, prog))
 

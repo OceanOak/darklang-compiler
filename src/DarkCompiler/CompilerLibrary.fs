@@ -2839,7 +2839,7 @@ let analyzePreamble
     (stdlib: StdlibResult)
     (preamble: string)
     : Result<PreambleAnalysis, string> =
-    InterpreterParser.parseString allowInternal preamble
+    Parser.parseString allowInternal preamble
     |> Result.mapError (fun err -> $"Preamble parse error: {err}")
     |> Result.bind (fun preambleAst ->
         checkSyntheticPreambleWithBaseEnv
@@ -2871,7 +2871,7 @@ let private loadDarkFileAllowInternal (filename: string) : Result<AST.Program, s
         Error $"Could not find {filename} in any of: {pathsStr}"
     | Some path ->
         let source = File.ReadAllText(path)
-        InterpreterParser.parseString true source
+        Parser.parseString true source
         |> Result.mapError (fun err -> $"Error parsing {filename}: {err}")
 
 /// Load the stdlib and unicode_data.dark files
@@ -3385,18 +3385,18 @@ type private UserCompilePlan = {
     Sources: AST.NonEmptyList<SourceUnit>
 }
 
-/// Parse source text into AST using the canonical interpreter syntax.
+/// Parse canonical Dark source text into the compiler AST.
 let parseProgram
     (allowInternal: bool)
     (source: string)
     : Result<AST.Program, string> =
-    InterpreterParser.parseString allowInternal source
+    Parser.parseString allowInternal source
 
 let private parseSourceTree
     (allowInternal: bool)
     (source: string)
     : Result<NameSyntax.ParsedSource, string> =
-    InterpreterParser.parseSourceString allowInternal source
+    Parser.parseSourceString allowInternal source
 
 let private applyDeclarationOverlays (topLevels: AST.TopLevel list) : AST.TopLevel list =
     let declarationKey topLevel =
@@ -3442,7 +3442,7 @@ let parseSourceProgram
             |> Result.bind (fun name ->
                 parseSourceTree allowInternal sourceUnit.Source
                 |> Result.bind (fun parsed ->
-                    InterpreterParser.lowerParsedSource allowInternal parsed
+                    Parser.lowerParsedSource allowInternal parsed
                     |> Result.bind (fun (AST.Program topLevels) ->
                         let parsedUnit : NameSyntax.ParsedSourceUnit =
                             { Name = name
@@ -4312,7 +4312,7 @@ let buildPreambleContext
         }
         Ok (stdlib, emptyContext)
     else
-    match InterpreterParser.parseString allowInternal preamble with
+    match Parser.parseString allowInternal preamble with
         | Error err ->
             let msg = $"Preamble parse error: {err}"
             Error msg
@@ -4822,7 +4822,7 @@ let getAllStdlibFunctionNamesFromStdlib (stdlib: StdlibResult) : Set<string> =
 /// Used for coverage analysis without re-compiling stdlib
 let getReachableStdlibFunctionsFromStdlib (stdlib: StdlibResult) (source: string) : Result<Set<string>, string> =
     // Parse user code
-    match InterpreterParser.parseString false source with
+    match Parser.parseString false source with
     | Error err -> Error $"Parse error: {err}"
     | Ok userAst ->
         // Type check with stdlib environment

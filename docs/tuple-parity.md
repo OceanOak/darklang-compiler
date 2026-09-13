@@ -16,12 +16,13 @@ construction and recursive matching, plus
 `backend/testfiles/execution/stdlib/tuple.dark` for same-source construction,
 access, destructuring, matching, equality, and evaluation-order probes.
 
-Compiler evidence is `passes/1_Parser.fs` and `1_InterpreterParser.fs` for
-grouping, unit, tuple construction, and public syntax; `1.5_TypeChecking.fs`
-for ordered positional types and exact bounds; `2_AST_to_ANF.fs` for ordered
-allocation, recursive patterns, and structural equality; `Runtime.fs` and
-`passes/1.6_ValueRendering.fs` for rendering; and `tuples.e2e` together with
-`tuple-parity.e2e` for executable coverage.
+At the pinned compiler revision, parser evidence came from the legacy
+`passes/1_Parser.fs` and the then-distinct `passes/1_InterpreterParser.fs`.
+The sole current parser now occupies `passes/1_Parser.fs`. Remaining compiler
+evidence is `1.5_TypeChecking.fs` for ordered positional types and exact bounds,
+`2_AST_to_ANF.fs` for ordered allocation, recursive patterns, and structural
+equality, `Runtime.fs` and `passes/1.6_ValueRendering.fs` for rendering, and
+`tuples.e2e` together with `tuple-parity.e2e` for executable coverage.
 
 Public behavior is an ordered heterogeneous tuple of two or more elements.
 `()` is primitive unit, `(value)` is grouping, singleton/trailing-comma input is
@@ -29,10 +30,10 @@ rejected, nested tuple patterns destructure recursively, and equality is
 structural. Tuple allocation checks elements in source order and ANF preserves
 that left-to-right order. Tuple types use `A * B`; parenthesized comma tuple
 types are rejected in annotations and call-site type arguments. Bare comma
-tuples are accepted only as match scrutinees. Interpreter syntax rejects numeric
+tuples are accepted only as match scrutinees. Public syntax rejects numeric
 projection; callers use destructuring or `Stdlib.Tuple2`/`Stdlib.Tuple3`.
 
-Both public parsers reject numeric projection and comma tuple types.
+The public parser rejects numeric projection and comma tuple types.
 Tuple-bearing compiler sources use star tuple types and destructuring or
 `Stdlib.Tuple2`/`Stdlib.Tuple3`, matching the interpreter.
 Internal-mode parser input and generated compiler AST retain `TupleAccess` as an

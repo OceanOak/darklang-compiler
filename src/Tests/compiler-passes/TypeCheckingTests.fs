@@ -248,7 +248,7 @@ let testComplexExpression () : TestResult =
     expectType expr TInt64
 
 let private expectDeclarationError (program: Program) (expectedMessage: string) : TestResult =
-    match checkInterpreterProgram program with
+    match checkPublicProgram program with
     | Error (GenericError actual) when actual = expectedMessage -> Ok ()
     | Error err -> Error $"Expected '{expectedMessage}', got: {typeErrorToString err}"
     | Ok _ -> Error $"Expected declaration error: {expectedMessage}"
@@ -259,7 +259,7 @@ let testDuplicateNominalTypeDeclarationUsesLastOverlay () : TestResult =
         TypeDef (SumTypeDef ("DuplicateNominalTc", [], [{ Name = "B"; Payload = None }]))
         Expression (Constructor (UnresolvedConstructor (Some "DuplicateNominalTc"), "B", None))
     ]
-    match checkInterpreterProgram program with
+    match checkPublicProgram program with
     | Ok (TSum ("DuplicateNominalTc", []), _) -> Ok ()
     | Ok (typ, _) -> Error $"Expected overlaid nominal type, got: {typeToString typ}"
     | Error error -> Error $"Expected last nominal declaration to win, got: {typeErrorToString error}"
@@ -339,7 +339,7 @@ let testRecursiveGroupsReceiveStableTypedIdentities () : TestResult =
         "let groupEven(n: Int64) : Int64 = if n == 0L then 1L else groupOdd(n - 1L) "
         + "let groupOdd(n: Int64) : Int64 = if n == 0L then 0L else groupEven(n - 1L) "
         + "let completed(n: Int64) : Int64 = n + 1L completed(1L)"
-    InterpreterParser.parseString false source
+    Parser.parseString false source
     |> Result.mapError (fun error -> $"Recursive group parse failed: {error}")
     |> Result.bind (fun program ->
         checkProgram program

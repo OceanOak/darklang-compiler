@@ -63,7 +63,7 @@ checking even where the interpreter would reach an equivalent error during
 evaluation. That timing is the intentional phase difference; presentation
 functions do not add runtime type dispatch to imitate it.
 
-The packaged implementations are copied into compiler syntax with fully
+The packaged implementations are copied into compiler-supported Dark syntax with fully
 qualified names, parenthesized comma-separated applications, and explicit
 generic arguments where required. Compiler integer literal suffixes such as
 `0I`, plus the private Int-to-Int64 adapters used by the compiler's current

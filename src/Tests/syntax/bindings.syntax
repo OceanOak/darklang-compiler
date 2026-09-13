@@ -1,174 +1,82 @@
-// Public binding syntax parity across both compiler entry parsers.
+// Public binding syntax acceptance, rejection, and roundtrip coverage.
 
 ---NAME---
-compiler accepts public let without in
----PARSE-AS---
-interpreter
+public let without in is accepted
 ---SOURCE---
 let x = 5
 x + 1
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
-interpreter accepts public let without in
----PARSE-AS---
-interpreter
----SOURCE---
-let x = 5
-x + 1
----ROUNDTRIP-AS---
-interpreter
-
----NAME---
-compiler accepts nested tuple let pattern
----PARSE-AS---
-interpreter
+nested tuple let pattern is accepted
 ---SOURCE---
 let ((a, _), (b, ())) = ((1, 2), (3, ())) in a + b
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
-interpreter accepts nested tuple let pattern
----PARSE-AS---
-interpreter
----SOURCE---
-let ((a, _), (b, ())) = ((1, 2), (3, ())) in a + b
----ROUNDTRIP-AS---
-interpreter
-
----NAME---
-compiler accepts public lambda binders
----PARSE-AS---
-interpreter
+public lambda binders are accepted
 ---SOURCE---
 fun ((a, _), b) -> a + b
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
-interpreter accepts public lambda binders
----PARSE-AS---
-interpreter
----SOURCE---
-fun ((a, _), b) -> a + b
----ROUNDTRIP-AS---
-interpreter
-
----NAME---
-compiler rejects literal let pattern
----PARSE-AS---
-interpreter
+literal let pattern is rejected
 ---SOURCE---
 let 5 = 5 in 6
 ---EXPECT-ERROR---
 Expected a let binding pattern
 
 ---NAME---
-interpreter rejects literal let pattern
----PARSE-AS---
-interpreter
----SOURCE---
-let 5 = 5 in 6
----EXPECT-ERROR---
-Expected a let binding pattern
-
----NAME---
-compiler rejects constructor let pattern
----PARSE-AS---
-interpreter
+parenthesized constructor let pattern is rejected
 ---SOURCE---
 let Some(x) = value in x
 ---EXPECT-ERROR---
 Expected parameter
 
 ---NAME---
-interpreter rejects constructor let pattern
----PARSE-AS---
-interpreter
+space-applied constructor let pattern is rejected
 ---SOURCE---
 let Some x = value in x
 ---EXPECT-ERROR---
 Expected a let binding pattern
 
 ---NAME---
-compiler rejects typed lambda binder
----PARSE-AS---
-interpreter
+typed lambda binder is rejected
 ---SOURCE---
 fun (x: Int64) -> x
 ---EXPECT-ERROR---
 Lambda parameter annotations are not supported
 
 ---NAME---
-interpreter rejects typed lambda binder
----PARSE-AS---
-interpreter
----SOURCE---
-fun (x: Int64) -> x
----EXPECT-ERROR---
-Lambda parameter annotations are not supported
-
----NAME---
-compiler rejects fat arrow lambda
----PARSE-AS---
-interpreter
+fat arrow lambda is rejected
 ---SOURCE---
 (x: Int64) => x
 ---EXPECT-ERROR---
 does not use '=>'
 
 ---NAME---
-interpreter rejects fat arrow lambda
----PARSE-AS---
-interpreter
----SOURCE---
-(x: Int64) => x
----EXPECT-ERROR---
-does not use '=>'
-
----NAME---
-interpreter local function annotations remain accepted
----PARSE-AS---
-interpreter
+local function annotations remain accepted
 ---SOURCE---
 let add (x: Int64) (y: Int64) : Int64 = x + y
 add 2L 3L
----ROUNDTRIP-AS---
-interpreter
+---ROUNDTRIP---
 
 ---NAME---
-compiler rejects duplicate let binders
----PARSE-AS---
-interpreter
+duplicate unsuffixed Int let binders are rejected
 ---SOURCE---
 let (x, x) = (1, 2) in x
 ---EXPECT-ERROR---
 Duplicate binding 'x' in the same pattern
 
 ---NAME---
-interpreter rejects duplicate let binders
----PARSE-AS---
-interpreter
+duplicate Int64 let binders are rejected
 ---SOURCE---
 let (x, x) = (1L, 2L) in x
 ---EXPECT-ERROR---
 Duplicate binding 'x' in the same pattern
 
 ---NAME---
-compiler rejects duplicates across lambda parameters
----PARSE-AS---
-interpreter
----SOURCE---
-fun x (x, y) -> x + y
----EXPECT-ERROR---
-Duplicate binding 'x' in the same pattern
-
----NAME---
-interpreter rejects duplicates across lambda parameters
----PARSE-AS---
-interpreter
+duplicates across lambda parameters are rejected
 ---SOURCE---
 fun x (x, y) -> x + y
 ---EXPECT-ERROR---

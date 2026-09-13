@@ -85,7 +85,7 @@ not public recursion syntax.
 
 ## Source anchors
 
-- Parsing: `passes/1_InterpreterParser.fs`
+- Parsing: `passes/1_Parser.fs`
 - Stable parsed identities: `NameSyntax.fs`
 - Resolution, SCCs, monomorphic checking, and diagnostics:
   `passes/1.5_TypeChecking.fs`

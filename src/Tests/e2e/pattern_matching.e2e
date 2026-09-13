@@ -158,7 +158,7 @@ match false with | false -> 99L | true -> 1L = 99L
 // Simple 2-tuple extraction
 match (1L, 2L) with | (a, b) -> a + b = 3L
 
-// Tuple patterns use the interpreter parser's parenthesized form.
+// Tuple patterns use the parser's parenthesized form.
 
 // 3-tuple extraction
 match (10L, 20L, 30L) with | (a, b, c) -> a + b + c = 60L

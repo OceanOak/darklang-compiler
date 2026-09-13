@@ -36,7 +36,7 @@ pinned surface; void-tag detection is internal to Html serialization.
 
 ## Executable coverage and AOT boundaries
 
-`src/Tests/e2e/html_http.e2e` covers compiler syntax, public records and sums,
+`src/Tests/e2e/html_http.e2e` covers compiler-supported Dark syntax, public records and sums,
 qualified aliases, every constructor, rendering boundaries, parser quirks,
 request accessors, Blob bodies, every response helper, ordered duplicate
 `Set-Cookie` headers, and Cookie construction. The exact pinned upstream Html

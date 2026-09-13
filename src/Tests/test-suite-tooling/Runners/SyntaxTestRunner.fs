@@ -1,15 +1,14 @@
-// SyntaxTestRunner.fs - Runs canonical interpreter syntax fixtures.
+// SyntaxTestRunner.fs - Runs canonical Dark syntax fixtures.
 module TestDSL.SyntaxTestRunner
 open System.IO
-open System.Text.RegularExpressions
 open AST
 open TestDSL.Common
 open TestDSL.PassTestRunner
 open TestDSL.SyntaxFormat
 
-let private parse source = InterpreterParser.parseString false source
-let private format program = ASTPrettyPrinter.formatProgram ASTPrettyPrinter.InterpreterSyntax program
-let private normalized (program: Program) = Regex.Replace(sprintf "%A" program, "__interp_lambda_[0-9]+_", "__interp_lambda_N_")
+let private parse source = Parser.parseString false source
+let private format program = ASTPrettyPrinter.formatProgram program
+let private normalized (program: Program) = sprintf "%A" program
 let private result success message expected actual : PassTestResult = { Success = success; Message = message; Expected = expected; Actual = actual }
 
 let runSyntaxTest test =

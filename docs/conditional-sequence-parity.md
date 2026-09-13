@@ -20,7 +20,7 @@ HEAD. Compiler history is reproducible with `git show <revision>:<path>`.
 ## Source map
 
 Compiler ownership is split between the canonical
-[parser](../src/DarkCompiler/passes/1_InterpreterParser.fs),
+[parser](../src/DarkCompiler/passes/1_Parser.fs),
 [type checker](../src/DarkCompiler/passes/1.5_TypeChecking.fs), and
 [AST-to-ANF lowering](../src/DarkCompiler/passes/2_AST_to_ANF.fs). The ANF `If`
 is converted to a typed shared result register and CFG join in

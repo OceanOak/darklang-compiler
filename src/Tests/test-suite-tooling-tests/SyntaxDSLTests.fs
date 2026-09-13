@@ -12,65 +12,53 @@ type TestResult = Result<unit, string>
 let testParsesMultipleSyntaxCases () : TestResult =
     let content =
         """---NAME---
-compiler to interpreter
----PARSE-AS---
-compiler
+canonical formatting
 ---SOURCE---
 let x = 5 in x
----FORMAT-AS---
-interpreter
 ---EXPECTED---
-let x = 5L in x
----ROUNDTRIP-AS---
-compiler, interpreter
+let x = 5I in x
+---ROUNDTRIP---
 
 ---NAME---
-reject compiler lambda
----PARSE-AS---
-interpreter
+reject fat-arrow lambda
 ---SOURCE---
 let inc = (x: Int64) => x + 1
 ---EXPECT-ERROR---
-Unexpected
+does not use
 """
 
     match parseSyntaxFileContent "syntax.syntax" content with
     | Ok [ first; second ]
-        when first.Name = "compiler to interpreter"
-             && first.ParseAs = Compiler
-             && first.FormatAs = Some Interpreter
-             && first.RoundtripAs = [ Compiler; Interpreter ]
-             && second.ExpectedError = Some "Unexpected" ->
+        when first.Name = "canonical formatting"
+             && first.ExpectedFormat = Some "\nlet x = 5I in x\n"
+             && first.Roundtrip
+             && second.ExpectedError = Some "does not use" ->
         Ok ()
     | Ok cases -> Error $"Expected two fully parsed syntax cases, got {cases}"
     | Error msg -> Error $"Expected syntax cases to parse, got: {msg}"
 
-let testRejectsExpectedWithoutFormatTarget () : TestResult =
+let testRejectsLegacySyntaxSelector () : TestResult =
     let content =
         """---NAME---
-missing format target
+legacy selector
 ---PARSE-AS---
 compiler
 ---SOURCE---
 1
----EXPECTED---
-1
 """
 
     match parseSyntaxFileContent "invalid.syntax" content with
-    | Error msg when msg.Contains "FORMAT-AS" -> Ok ()
-    | Error msg -> Error $"Expected FORMAT-AS validation error, got: {msg}"
-    | Ok _ -> Error "Expected EXPECTED without FORMAT-AS to be rejected"
+    | Error msg when msg.Contains "Unknown syntax section: PARSE-AS" -> Ok ()
+    | Error msg -> Error $"Expected legacy selector validation error, got: {msg}"
+    | Ok _ -> Error "Expected the legacy parser selector to be rejected"
 
 let testRunsFormattingAndRoundtripChecks () : TestResult =
     let testCase =
-        { Name = "compiler to interpreter"
-          ParseAs = Compiler
+        { Name = "canonical formatting"
           Source = "let x = 5 in Stdlib.Int64.add(x, 1)"
           ExpectedError = None
-          FormatAs = Some Interpreter
-          ExpectedFormat = Some "let x = 5L in Stdlib.Int64.add x 1L"
-          RoundtripAs = [ Compiler; Interpreter ]
+          ExpectedFormat = Some "let x = 5I in Stdlib.Int64.add x 1I"
+          Roundtrip = true
           SourceFile = "syntax.syntax" }
 
     let result = runSyntaxTest testCase
@@ -79,6 +67,6 @@ let testRunsFormattingAndRoundtripChecks () : TestResult =
 
 let tests = [
     ("syntax DSL parses multiple cases", testParsesMultipleSyntaxCases)
-    ("syntax DSL validates formatting sections", testRejectsExpectedWithoutFormatTarget)
+    ("syntax DSL rejects legacy parser selectors", testRejectsLegacySyntaxSelector)
     ("syntax DSL runs format and roundtrip checks", testRunsFormattingAndRoundtripChecks)
 ]

@@ -2693,7 +2693,7 @@ let rec simpleInferType
             else
                 None
         | Some (AST.TVar funcTypeVar) ->
-            // Higher-order generic values can remain unresolved in interpreter syntax.
+            // Higher-order generic values can remain unresolved in public source.
             // Keep lambda lifting moving by modeling a symbolic return type.
             Some (AST.TVar $"__call_result_{funcTypeVar}")
         | _ ->

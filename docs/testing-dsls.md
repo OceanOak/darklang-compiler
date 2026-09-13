@@ -12,22 +12,17 @@ cases, each beginning with `NAME`:
 
 ```text
 ---NAME---
-compiler to interpreter
----PARSE-AS---
-compiler
+canonical formatting
 ---SOURCE---
 let x = 5 in x
----FORMAT-AS---
-interpreter
 ---EXPECTED---
-let x = 5L in x
----ROUNDTRIP-AS---
-compiler, interpreter
+let x = 5I in x
+---ROUNDTRIP---
 ```
 
-`PARSE-AS` is `compiler` or `interpreter`. A case can assert an exact formatted
-result with `FORMAT-AS` and `EXPECTED`, structural AST roundtrips with
-`ROUNDTRIP-AS`, or a parser diagnostic substring with `EXPECT-ERROR`.
+Every case uses the canonical parser and can assert an exact formatted result
+with `EXPECTED`, a structural AST roundtrip with `ROUNDTRIP`, or a parser
+diagnostic substring with `EXPECT-ERROR`.
 
 Use F# tests when the assertion depends on a particular internal AST shape or
 test-runner behavior rather than syntax acceptance, formatting, or roundtrips.

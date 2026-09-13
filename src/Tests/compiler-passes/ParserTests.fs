@@ -12,7 +12,7 @@ type TestResult = Result<unit, string>
 let private testLongNumericTokenStreamIsStackSafe () : TestResult =
     let literalCount = 2000
     let source = List.replicate literalCount "0" |> String.concat " "
-    match InterpreterParser.lex source with
+    match Parser.lex source with
     | Ok tokens when List.length tokens = literalCount + 1 -> Ok ()
     | Ok tokens ->
         Error $"Expected {literalCount + 1} tokens including TEOF, got {List.length tokens}"
@@ -23,13 +23,13 @@ let private testTupleLetDoesNotOpenNestedFunctionLayout () : TestResult =
         """let pairsToStrings(pairs: List<(String, String)>) : List<String> =
     Stdlib.List.map<(String, String), String>(pairs, fun pair -> let (key, value) = pair in key ++ value)
 let identity(value: String) : String = value"""
-    match InterpreterParser.parseString false source with
+    match Parser.parseString false source with
     | Ok _ -> Ok ()
     | Error err -> Error err
 
 let private testParenthesizedCallKeepsMultipleArguments () : TestResult =
     let source = "let recurse(a: Int8, b: Int8) : Int8 = recurse(a, b)"
-    match InterpreterParser.parseString false source with
+    match Parser.parseString false source with
     | Ok (Program [FunctionDef definition]) ->
         match definition.Body with
         | Call ("recurse", args) when NonEmptyList.toList args = [Var "a"; Var "b"] -> Ok ()
@@ -40,7 +40,7 @@ let private testParenthesizedCallKeepsMultipleArguments () : TestResult =
 let private testSubtractionFollowsParenthesizedCall () : TestResult =
     let source =
         "let dropLast(value: String) : Int64 = Stdlib.String.__byteLength(value) - 1L"
-    match InterpreterParser.parseString true source with
+    match Parser.parseString true source with
     | Ok (Program [FunctionDef definition]) ->
         match definition.Body with
         | BinOp (Sub, Call ("Stdlib.String.__byteLength", args), Int64Literal 1L)
@@ -52,7 +52,7 @@ let private testSubtractionFollowsParenthesizedCall () : TestResult =
 let private testAdjacentCallGroupsStayCurried () : TestResult =
     let source =
         "let apply(fn: (Int64) -> (Int64) -> Int64) : Int64 = fn(1L)(2L)"
-    match InterpreterParser.parseString false source with
+    match Parser.parseString false source with
     | Ok (Program [FunctionDef definition]) ->
         match definition.Body with
         | Apply (Call ("fn", firstArgs), secondArgs)
@@ -65,7 +65,7 @@ let private testAdjacentCallGroupsStayCurried () : TestResult =
 let private testTopLevelExpressionFollowsFunctionDeclaration () : TestResult =
     let source =
         "let identity(value: Int64) : Int64 = value\nidentity(1L)"
-    match InterpreterParser.parseString false source with
+    match Parser.parseString false source with
     | Ok (Program [FunctionDef definition; Expression expression]) ->
         match definition.Body, expression with
         | Var "value", Call ("identity", args)
@@ -79,7 +79,7 @@ let private testFlattenParamGroupsRestoresSourceOrder () : TestResult =
     let groupsRev =
         [[("third", AST.TString)]; [("second", AST.TBool)]; [("first", AST.TInt64)]]
 
-    match InterpreterParser.flattenParamGroups groupsRev with
+    match Parser.flattenParamGroups groupsRev with
     | [("first", AST.TInt64); ("second", AST.TBool); ("third", AST.TString)] -> Ok ()
     | parameters -> Error $"Expected parameter groups in source order, got {parameters}"
 

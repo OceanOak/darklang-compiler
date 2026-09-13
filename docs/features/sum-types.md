@@ -31,7 +31,7 @@ not presented as results from a different installed interpreter revision.
 
 ## Public syntax
 
-Interpreter syntax is the public parity surface:
+Canonical Dark syntax, aligned with the interpreter, is the public parity surface:
 
 ```dark
 type Color = | Red | Green | Blue
@@ -143,7 +143,7 @@ operands once, and produces `false` for `==` (`true` for `!=`).
 
 | File | Responsibility |
 |---|---|
-| `src/DarkCompiler/passes/1_InterpreterParser.fs` | Interpreter declaration grammar, field shape, constructor reference syntax |
+| `src/DarkCompiler/passes/1_Parser.fs` | Canonical Dark declaration grammar, field shape, constructor reference syntax |
 | `src/DarkCompiler/AST.fs` | Enum field shape, unresolved/resolved references, canonical runtime identity |
 | `src/DarkCompiler/passes/1.5_TypeChecking.fs` | Pure declaration validation, nominal resolution, generic/recursive typing, arity, equality |
 | `src/DarkCompiler/passes/1.6_ValueRendering.fs` | Public enum rendering |
@@ -159,5 +159,5 @@ recursive types, multiple fields versus a tuple field, qualification,
 same-case collisions across nominal types, exact arity, left-to-right payload
 failure, rendering, and nominal equality. Compiler-pass tests cover duplicate
 types, parameters, constructors and fields, undeclared parameters, empty
-declarations, unknown type references, generic reference arity, removed
-compiler-only interpreter syntax, and resolved-reference AST shape.
+declarations, unknown type references, generic reference arity, removed legacy
+compiler dialect forms, and resolved-reference AST shape.

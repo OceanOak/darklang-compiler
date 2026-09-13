@@ -36,10 +36,10 @@ compiler statically distinguishes `Option<a>` from the declared `Option<b>`
 result. Neither adaptation changes an accepted program's observable value.
 
 Enabling the exact upstream `Option.and(None, None)` case also exposed a
-compiler interpreter-syntax association error: the parser attached the second
+compiler parser association error: the parser attached the second
 nullary constructor as a payload of the first. Constructor payload application
 now follows the same left-associative path as other calls at
-`passes/1_InterpreterParser.fs:2202-2208,2267-2270`. This is required for the
+`passes/1_Parser.fs:2202-2208,2267-2270`. This is required for the
 unchanged pinned source, not a compiler-only syntax extension.
 
 ## Pinned source anchors

@@ -111,7 +111,7 @@ unavailable values, and failed evaluation all have the interpreter-observable
 results described above. Performance-only differences are outside this
 contract.
 
-`RuntimeTypes.KnownType` is loaded from interpreter syntax so its custom-type
+`RuntimeTypes.KnownType` is loaded from canonical Dark syntax so its custom-type
 case preserves the interpreter's canonical two-field declaration. The private
 hash/empty-argument matcher and the recursive replacement for the interpreter's
 generic `filterMap` are compiler-source adaptations only; they preserve the

@@ -10,11 +10,11 @@ evidence only; every retained row below was revalidated at the pinned revisions.
 Pinned interpreter evidence is `backend/src/LibParser/Lexer.fs:477-501,
 689-824,905-965`, `backend/src/LibParser/Parser.fs:529-554,1148-1219,
 1305-1355,1917-2038,2511-3054`, and `backend/src/LibParser/GRAMMAR.md:23-33,
-108-111,172-174,224-281`. Historical compiler evidence began in the now-removed
-`src/DarkCompiler/passes/1_Parser.fs` at the pinned compiler revision. The
-implemented contract is centralized in `src/DarkCompiler/NameSyntax.fs` and
-consumed by the sole compiler parser,
-`src/DarkCompiler/passes/1_InterpreterParser.fs`.
+108-111,172-174,224-281`. At the pinned compiler revision, historical evidence
+came from the legacy `Parser` implementation then stored at
+`src/DarkCompiler/passes/1_Parser.fs`. That implementation was removed; the
+path is now reused by the sole canonical parser, which consumes the contract
+centralized in `src/DarkCompiler/NameSyntax.fs`.
 
 ## Revalidated matrix
 
