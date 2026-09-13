@@ -24,23 +24,35 @@ contains only rules specific to agents changing this repository.
 
 ## Git workflow
 
-Use this checklist for every change and include a completed copy in the final
-report:
+- Perform all work in a dedicated git worktree, never in the primary checkout,
+  and rebase the worktree branch on local `main` before starting. Never push.
+- When work is complete, commit the intended changes automatically. Run the
+  relevant test gates and verify that relevant benchmarks have not regressed,
+  then integrate the commit into local `main` automatically without waiting for
+  explicit permission.
+
+## Completion report
+
+Use this standard format when reporting completed work. Keep the summary brief,
+include exact commands, and omit optional lines that add no useful information.
+Use `✅` for success, `⏭️` for a skipped or irrelevant gate, and `❌` for a
+failure or incomplete step, followed by the reason.
 
 ```markdown
-- [ ] Worktree: Create a dedicated git worktree; do not modify files in the
-      primary checkout.
-- [ ] Rebase: Rebase the worktree branch on local `main` before modifying files.
-- [ ] Tests: Run every relevant test gate and record each exact command and
-      result, or state why tests are not relevant.
-- [ ] Benchmarks: Run every relevant benchmark gate and confirm that benchmarks
-      have not regressed, or state why benchmarks are not relevant.
-- [ ] Commit: Commit the intended changes automatically and record the commit
-      hash and subject.
-- [ ] Integration: After relevant gates pass, integrate the commit into local
-      `main` automatically without waiting for explicit permission.
-- [ ] Push: Never push.
+Work complete: <brief description of the outcome and important details>
+
+Committed: `<short hash>` — <commit subject>
+Merged into main: ✅ `<main HEAD>`
+Tests: ✅ <passed>/<total> passed — `<exact command>`
+Benchmarks: ✅ no regression, ratio <ratio> — `<exact command>`
+Other validation: ✅ <result> — `<exact command>`
+Working tree: ✅ clean
+Notes: <residual risk, preserved pre-existing changes, or other useful context>
 ```
+
+For multiple commits or verification commands, put bullet points beneath the
+corresponding label. A skipped gate must say why, for example:
+`Tests: ⏭️ skipped — documentation-only change`.
 
 For CLI commands, development setup, architecture, feature work, and complete
 verification requirements, use the canonical sources in `docs/index.md`.
