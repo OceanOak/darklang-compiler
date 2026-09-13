@@ -3,10 +3,9 @@
 
 ARG QEMU_VERSION=11.1.1
 ARG QEMU_COMMIT=c3d48b7d1e89604920e5b81b91140c2ad39a1943
-ARG SANDBOX_TEMPLATE=shell
-
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS dotnet
 FROM node:26-bookworm-slim AS node
+FROM docker.io/docker/sandbox-templates:claude-code AS claude
 FROM rust:1.89.0-slim-bookworm AS rust
 RUN --mount=type=cache,target=/usr/local/rustup/downloads \
     rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu && \
@@ -53,7 +52,7 @@ RUN strip --strip-unneeded qemu-aarch64 qemu-x86_64 tests/tcg/plugins/libinsn.so
     mkdir -p /opt/dcb/qemu && \
     cp qemu-aarch64 qemu-x86_64 tests/tcg/plugins/libinsn.so /opt/dcb/qemu/
 
-FROM docker.io/docker/sandbox-templates:${SANDBOX_TEMPLATE}
+FROM docker.io/docker/sandbox-templates:codex
 ARG TARGETARCH
 ARG PROXY_CA_CERT_B64
 
@@ -61,6 +60,8 @@ USER root
 
 COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
 COPY --from=node /usr/local /usr/local
+COPY --from=claude --chown=agent:agent /home/agent/.local/bin/claude /home/agent/.local/bin/claude
+COPY --from=claude --chown=agent:agent /home/agent/.local/share/claude /home/agent/.local/share/claude
 COPY --from=rust /usr/local/cargo /usr/local/cargo
 COPY --from=rust /usr/local/rustup /usr/local/rustup
 COPY --from=qemu-builder /opt/dcb/qemu /opt/dcb/qemu
