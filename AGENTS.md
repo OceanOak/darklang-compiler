@@ -26,10 +26,14 @@ contains only rules specific to agents changing this repository.
 
 - Perform all work in a dedicated git worktree, never in the primary checkout,
   and rebase the worktree branch on local `main` before starting. Never push.
-- When work is complete, commit the intended changes automatically. Run the
-  relevant test gates and verify that relevant benchmarks have not regressed,
-  then integrate the commit into local `main` automatically without waiting for
-  explicit permission.
+- When work is complete, commit the intended changes automatically.
+- Integrate the commit into local `main` automatically only when it is ready:
+  the requested scope is complete, the final diff has been substantively
+  reviewed, all relevant tests pass, relevant benchmarks show no regression,
+  and no known issue or unresolved uncertainty remains.
+- If readiness cannot be established, leave the commit on its worktree branch
+  and report `Merged into main: ❌ not ready — <reason>`. Do not use a
+  low-value mechanical check as a substitute for relevant validation.
 
 ## Completion report
 
