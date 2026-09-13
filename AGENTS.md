@@ -24,10 +24,14 @@ contains only rules specific to agents changing this repository.
 
 ## Git workflow
 
-- Rebase on local `main` before new work. Never push.
-- Do not land without explicit permission. Before requesting landing, commit
-  intended changes and report whether the full test and routine benchmark gates
-  passed.
+- Perform all work in a dedicated git worktree, never in the primary checkout,
+  and rebase the worktree branch on local `main` before starting. Never push.
+- When work is complete, commit the intended changes automatically. Run the
+  relevant test gates and verify that relevant benchmarks have not regressed,
+  then integrate the commit into local `main` automatically without waiting for
+  explicit permission.
+- Report the commit and integration result, the exact verification commands run,
+  and any test or benchmark gate that was not relevant or could not be run.
 
 For CLI commands, development setup, architecture, feature work, and complete
 verification requirements, use the canonical sources in `docs/index.md`.
